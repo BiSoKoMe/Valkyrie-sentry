@@ -54,6 +54,7 @@ from enum import Enum
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Optional
+import concurrent.futures
 
 try:
     import psutil
@@ -84,8 +85,8 @@ EVENT_DB_PATH = SCRIPT_DIR / "valkyrie_events.db"
 DEFAULT_DNS_PORT = 5353
 DEFAULT_DNS_UPSTREAM = "8.8.8.8"
 WATCH_INTERVAL = 2.5
-SHIELD_SCAN_INTERVAL = 30   # seconds between connection sweeps in Shield mode
-ALERT_COOLDOWN_SEC = 90
+SHIELD_SCAN_INTERVAL = 5    # seconds between connection sweeps in Shield mode
+ALERT_COOLDOWN_SEC = 15
 
 # ── Feature: Active Firewall Mitigation ──────────────────────────────────────
 # Prefix for every firewall rule Valkyrie creates.  All rules are named
@@ -93,9 +94,34 @@ ALERT_COOLDOWN_SEC = 90
 # bulk-deleted on clean shutdown without touching any pre-existing rules.
 FW_RULE_PREFIX = "Valkyrie_Block_"
 
+# Known DoH/DoT provider IPs blocked at TCP:443 and TCP:853 during Shield mode
+# so Chrome, Firefox, Edge, Windows 11 cannot bypass the local sinkhole.
+_DOH_PROVIDERS = [
+    "1.1.1.1", "1.0.0.1",              # Cloudflare
+    "8.8.8.8", "8.8.4.4",              # Google
+    "9.9.9.9", "149.112.112.112",      # Quad9
+    "208.67.222.222", "208.67.220.220",# OpenDNS
+    "45.90.28.0", "45.90.30.0",        # NextDNS
+    "194.242.2.2", "194.242.2.3",      # Mullvad
+    "94.140.14.14", "94.140.15.15",    # AdGuard
+    "96.113.151.145",                  # Comcast DoH
+]
+
+# Known tracker/ad-network IP subnets pre-blocked at Shield startup
+_KNOWN_TRACKER_SUBNETS = [
+    "157.240.0.0/16",   # Facebook/Meta ads
+    "69.171.250.0/24",  # Meta infrastructure
+    "31.13.64.0/18",    # Meta EMEA
+]
+
 # ── Feature: Automated DNS Switcher ──────────────────────────────────────────
-DNS_SWITCH_INTERFACE_WIN   = "Wi-Fi"   # Windows adapter name — edit if yours differs
+DNS_SWITCH_INTERFACE_WIN   = "Wi-Fi"   # Windows adapter name — fallback if enum fails
 DNS_SWITCH_INTERFACE_MAC   = "Wi-Fi"   # macOS service name — edit if yours differs
+
+# ── Hosts file constants ──────────────────────────────────────────────────────
+HOSTS_FILE_WIN     = Path(r"C:\Windows\System32\drivers\etc\hosts")
+HOSTS_MARKER_START = "# Valkyrie-start"
+HOSTS_MARKER_END   = "# Valkyrie-end"
 
 # ── Feature: REST API log server ─────────────────────────────────────────────
 API_SERVER_HOST = "127.0.0.1"
@@ -148,10 +174,11 @@ class FirewallMitigator:
         """Strip characters that could break the netsh rule name or command."""
         return re.sub(r"[^\w\-.]", "_", value)[:40]
 
-    def _rule_name(self, process_name: str, remote_ip: str, remote_port: int) -> str:
+    def _rule_name(self, process_name: str, remote_ip: str,
+                   remote_port: int, protocol: str = "TCP") -> str:
         proc = self._sanitize(process_name)
         ip   = self._sanitize(remote_ip)
-        return f"{FW_RULE_PREFIX}{proc}_{ip}_{remote_port}"
+        return f"{FW_RULE_PREFIX}{proc}_{ip}_{remote_port}_{protocol}"
 
     def _run_netsh(self, args: list[str], timeout: int = 8) -> tuple[bool, str]:
         """Execute a netsh advfirewall subcommand. Returns (success, output)."""
@@ -173,57 +200,62 @@ class FirewallMitigator:
     # ── Public API ────────────────────────────────────────────────────────────
 
     def mitigate_threat(self, process_name: str, remote_ip: str,
-                        remote_port: int) -> bool:
+                        remote_port: int,
+                        protocols: tuple = ("TCP", "UDP")) -> bool:
         """
-        Inject a temporary outbound firewall block for the given connection.
+        Inject temporary outbound firewall blocks for the given connection.
 
-        Silently succeeds (returns True) on non-Windows platforms so callers
-        require no platform guard.  Always call this from a background thread.
+        Injects one rule per protocol (TCP + UDP by default) so both TCP
+        telemetry and UDP-based trackers are covered.
 
-        Returns True if a rule was created (or already existed), False on error.
+        Silently succeeds (returns True) on non-Windows so callers need no
+        platform guard.  Always call from a background thread.
         """
         if not self._is_windows:
-            return True  # safe no-op on macOS / Linux
+            return True
 
-        rule_name = self._rule_name(process_name, remote_ip, remote_port)
+        all_ok = True
+        first_new = True
 
-        # Deduplicate — don't add the same rule twice per session
-        with self._lock:
-            if rule_name in self._created_rules:
-                return True
-
-        # Build the netsh command that adds the block rule.
-        # dir=out  → outbound traffic only (we never block inbound here)
-        # protocol=TCP  → most tracker/telemetry traffic is TCP
-        # enable=yes    → rule is active immediately
-        add_args = [
-            "add", "rule",
-            f"name={rule_name}",
-            "dir=out",
-            "action=block",
-            "protocol=TCP",
-            f"remoteip={remote_ip}",
-            f"remoteport={remote_port}",
-            "enable=yes",
-        ]
-
-        ok, output = self._run_netsh(add_args)
-
-        if ok:
+        for proto in protocols:
+            rule_name = self._rule_name(process_name, remote_ip, remote_port, proto)
             with self._lock:
-                self._created_rules.append(rule_name)
+                if rule_name in self._created_rules:
+                    continue
 
-            # Console feedback
-            print(
-                f"\n  {Color.RED}{Color.BOLD}[FIREWALL] ✓ BLOCKED{Color.RESET}  "
-                f"{Color.MAGENTA}{process_name}{Color.RESET} → "
-                f"{Color.CYAN}{remote_ip}:{remote_port}{Color.RESET}"
-            )
-            print(
-                f"     {Color.DIM}Rule: {rule_name}{Color.RESET}\n"
-            )
+            add_args = [
+                "add", "rule",
+                f"name={rule_name}",
+                "dir=out",
+                "action=block",
+                f"protocol={proto}",
+                f"remoteip={remote_ip}",
+                f"remoteport={remote_port}",
+                "enable=yes",
+            ]
+            ok, output = self._run_netsh(add_args)
 
-            # Persist to SQLite so the REST API / dashboard picks it up
+            if ok:
+                with self._lock:
+                    self._created_rules.append(rule_name)
+                if first_new:
+                    first_new = False
+                    print(
+                        f"\n  {Color.RED}{Color.BOLD}[FIREWALL] ✓ BLOCKED{Color.RESET}  "
+                        f"{Color.MAGENTA}{process_name}{Color.RESET} → "
+                        f"{Color.CYAN}{remote_ip}:{remote_port}{Color.RESET} "
+                        f"{Color.DIM}(TCP+UDP){Color.RESET}"
+                    )
+            else:
+                all_ok = False
+                if "Access is denied" in output or "5)" in output:
+                    print(
+                        f"\n  {Color.YELLOW}[FIREWALL] ✗ Access denied — "
+                        f"run as Administrator{Color.RESET}"
+                    )
+
+        if not first_new:
+            # At least one new rule was injected — log it
             self._event_log.log(
                 action="firewall_block",
                 domain=remote_ip,
@@ -232,27 +264,12 @@ class FirewallMitigator:
                 category="ACTIVE-MITIGATION",
                 severity=5,
                 details=(
-                    f"Outbound TCP block rule injected → "
-                    f"{remote_ip}:{remote_port} (rule: {rule_name})"
+                    f"Outbound TCP+UDP block injected → "
+                    f"{remote_ip}:{remote_port}"
                 ),
             )
-            return True
 
-        else:
-            # Rule creation failed — log the error but don't crash the scan loop
-            print(
-                f"\n  {Color.YELLOW}[FIREWALL] ✗ Could not block "
-                f"{process_name} → {remote_ip}:{remote_port}{Color.RESET}"
-            )
-            print(
-                f"     {Color.DIM}netsh error: {output}{Color.RESET}"
-            )
-            if "Access is denied" in output or "5)" in output:
-                print(
-                    f"     {Color.YELLOW}→ Run Valkyrie as Administrator "
-                    f"to enable firewall mitigation.{Color.RESET}\n"
-                )
-            return False
+        return all_ok
 
     def cleanup_all_rules(self) -> int:
         """
@@ -300,6 +317,131 @@ class FirewallMitigator:
 
         return removed
 
+    def block_doh_providers(self) -> int:
+        """
+        Block TCP:443 (DoH) and TCP:853 (DoT) to all known DoH provider IPs.
+        Called once at Shield startup so Chrome, Firefox, Edge, and Windows 11
+        cannot use encrypted DNS to bypass the local sinkhole.
+        Rules are auto-removed by cleanup_all_rules() on exit.
+        """
+        if not self._is_windows:
+            return 0
+
+        created = 0
+        for ip in _DOH_PROVIDERS:
+            if ":" in ip:
+                continue  # skip IPv6 — handled by block_ipv6_outbound()
+            for port, label in ((443, "DoH"), (853, "DoT")):
+                rule_name = f"Valkyrie_Block_{label}_{self._sanitize(ip)}_{port}"
+                with self._lock:
+                    if rule_name in self._created_rules:
+                        continue
+                ok, _ = self._run_netsh([
+                    "add", "rule", f"name={rule_name}",
+                    "dir=out", "action=block", "protocol=TCP",
+                    f"remoteip={ip}", f"remoteport={port}", "enable=yes",
+                ])
+                if ok:
+                    with self._lock:
+                        self._created_rules.append(rule_name)
+                    created += 1
+
+        ipv4_count = len([ip for ip in _DOH_PROVIDERS if ":" not in ip])
+        print(
+            f"  {Color.GREEN}[FIREWALL] DoH/DoT blocked: {created} rules "
+            f"across {ipv4_count} provider IPs{Color.RESET}"
+        )
+        return created
+
+    def block_ipv6_outbound(self) -> bool:
+        """
+        Inject a blanket outbound IPv6 block for the Shield session.
+        Prevents apps from using IPv6 to reach tracker servers, bypassing
+        both the DNS sinkhole and IPv4 firewall rules.
+        Removed by cleanup_all_rules() on exit.
+        """
+        if not self._is_windows:
+            return True
+
+        rule_name = "Valkyrie_Block_IPv6_Outbound"
+        ok, output = self._run_netsh([
+            "add", "rule", f"name={rule_name}",
+            "dir=out", "action=block", "protocol=ANY",
+            "remoteip=::/0", "enable=yes",
+        ])
+        if ok:
+            with self._lock:
+                if rule_name not in self._created_rules:
+                    self._created_rules.append(rule_name)
+            print(f"  {Color.GREEN}[FIREWALL] IPv6 outbound blocked{Color.RESET}")
+            return True
+        else:
+            print(f"  {Color.YELLOW}[FIREWALL] IPv6 block failed: {output}{Color.RESET}")
+            return False
+
+    def preload_blocklist_ips(self, domains: list, max_workers: int = 20) -> int:
+        """
+        Resolve curated tracker domains in parallel and pre-inject firewall rules
+        before the first scan tick — closes the window where connections complete
+        before the reactive scanner sees them.
+        Also injects subnet rules for known stable tracker IP ranges.
+        Designed to run in a background daemon thread.
+        """
+        if not self._is_windows:
+            return 0
+
+        def _resolve(domain: str):
+            try:
+                return socket.getaddrinfo(domain, None, socket.AF_INET,
+                                          socket.SOCK_STREAM)[0][4][0]
+            except (socket.gaierror, OSError, IndexError):
+                return None
+
+        injected = 0
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(_resolve, d): d for d in domains}
+            try:
+                for future in concurrent.futures.as_completed(futures, timeout=30):
+                    ip = future.result()
+                    if not ip or ip in ("0.0.0.0", "127.0.0.1"):
+                        continue
+                    for port in (80, 443):
+                        proto = "TCP"
+                        rule_name = f"Valkyrie_Preload_{self._sanitize(ip)}_{port}_{proto}"
+                        with self._lock:
+                            if rule_name in self._created_rules:
+                                continue
+                        ok, _ = self._run_netsh([
+                            "add", "rule", f"name={rule_name}",
+                            "dir=out", "action=block", f"protocol={proto}",
+                            f"remoteip={ip}", f"remoteport={port}", "enable=yes",
+                        ])
+                        if ok:
+                            with self._lock:
+                                self._created_rules.append(rule_name)
+                            injected += 1
+            except concurrent.futures.TimeoutError:
+                pass
+
+        # Inject stable subnet rules
+        for subnet in _KNOWN_TRACKER_SUBNETS:
+            rule_name = f"Valkyrie_Block_Subnet_{self._sanitize(subnet)}"
+            with self._lock:
+                if rule_name in self._created_rules:
+                    continue
+            ok, _ = self._run_netsh([
+                "add", "rule", f"name={rule_name}",
+                "dir=out", "action=block", "protocol=ANY",
+                f"remoteip={subnet}", "enable=yes",
+            ])
+            if ok:
+                with self._lock:
+                    self._created_rules.append(rule_name)
+                injected += 1
+
+        print(f"  {Color.GREEN}[FIREWALL] Preloaded {injected} IP-based block rules{Color.RESET}")
+        return injected
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # NEW FEATURE 1: AUTOMATED OS DNS SWITCHER
@@ -331,9 +473,10 @@ class DNSSwitcher:
     def __init__(self,
                  win_interface: str = DNS_SWITCH_INTERFACE_WIN,
                  mac_interface: str = DNS_SWITCH_INTERFACE_MAC):
-        self._win_iface = win_interface
+        self._win_iface_fallback = win_interface  # used if enum fails
         self._mac_iface = mac_interface
-        self._original_dns: list[str] = []   # saved before we change anything
+        self._original_dns: list[str] = []        # kept for non-Windows compat
+        self._interface_dns_map: dict = {}         # iface → original DNS list
         self._active = False
         self._os = platform.system()
 
@@ -351,19 +494,41 @@ class DNSSwitcher:
             return False, str(e)
 
     def _read_current_dns_windows(self) -> list[str]:
-        """Return the current DNS server list for the Windows Wi-Fi adapter."""
+        """Return the current DNS server list for the Windows fallback adapter."""
+        return self._read_current_dns_windows_iface(self._win_iface_fallback)
+
+    def _read_current_dns_windows_iface(self, iface: str) -> list[str]:
+        """Return current DNS for a specific Windows interface."""
         ok, out = self._run([
-            "netsh", "interface", "ip", "show", "dns",
-            f"name={self._win_iface}"
+            "netsh", "interface", "ip", "show", "dns", f"name={iface}"
         ])
         if not ok:
-            return []
+            return ["dhcp"]
         servers = []
         for line in out.splitlines():
             m = re.search(r"(\d{1,3}(?:\.\d{1,3}){3})", line)
             if m and m.group(1) != "127.0.0.1":
                 servers.append(m.group(1))
-        return servers or ["dhcp"]   # "dhcp" is our sentinel for auto-config
+        return servers or ["dhcp"]
+
+    @staticmethod
+    def _get_connected_interfaces() -> list:
+        """Return names of all Connected network interfaces on Windows."""
+        try:
+            r = subprocess.run(
+                ["netsh", "interface", "show", "interface"],
+                capture_output=True, text=True, timeout=8,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            ifaces = []
+            for line in r.stdout.splitlines():
+                if "Connected" in line:
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        ifaces.append(" ".join(parts[3:]))
+            return ifaces
+        except (OSError, subprocess.TimeoutExpired):
+            return []
 
     def _read_current_dns_macos(self) -> list[str]:
         """Return the current DNS server list for the macOS Wi-Fi service."""
@@ -414,11 +579,26 @@ class DNSSwitcher:
         print(f"  {Color.CYAN}[DNS-SWITCH] Reading current DNS settings...{Color.RESET}")
 
         if self._os == "Windows":
-            self._original_dns = self._read_current_dns_windows()
-            ok, err = self._run([
-                "netsh", "interface", "ip", "set", "dns",
-                f"name={self._win_iface}", "source=static", "address=127.0.0.1"
-            ])
+            ifaces = self._get_connected_interfaces()
+            if not ifaces:
+                ifaces = [self._win_iface_fallback]
+            ok = False
+            for iface in ifaces:
+                original = self._read_current_dns_windows_iface(iface)
+                self._interface_dns_map[iface] = original
+                _ok, err = self._run([
+                    "netsh", "interface", "ip", "set", "dns",
+                    f"name={iface}", "source=static", "address=127.0.0.1"
+                ])
+                if _ok:
+                    ok = True
+                    orig_str = ", ".join(original)
+                    print(f"  {Color.GREEN}[DNS-SWITCH] ✓ {iface} → 127.0.0.1  "
+                          f"(was: {orig_str}){Color.RESET}")
+                else:
+                    print(f"  {Color.YELLOW}[DNS-SWITCH] ✗ {iface}: {err}{Color.RESET}")
+            self._original_dns = list(self._interface_dns_map.get(ifaces[0], ["dhcp"]))
+            err = "" if ok else "all interfaces failed"
         elif self._os == "Darwin":
             self._original_dns = self._read_current_dns_macos()
             ok, err = self._run([
@@ -464,22 +644,32 @@ class DNSSwitcher:
         print(f"{Color.CYAN}[DNS-SWITCH] Restoring original DNS settings...{Color.RESET}")
 
         if self._os == "Windows":
-            if self._original_dns == ["dhcp"]:
-                ok, err = self._run([
-                    "netsh", "interface", "ip", "set", "dns",
-                    f"name={self._win_iface}", "source=dhcp"
-                ])
-            else:
-                ok, err = self._run([
-                    "netsh", "interface", "ip", "set", "dns",
-                    f"name={self._win_iface}", "source=static",
-                    f"address={self._original_dns[0]}"
-                ])
-                for extra in self._original_dns[1:]:
-                    self._run([
-                        "netsh", "interface", "ip", "add", "dns",
-                        f"name={self._win_iface}", f"address={extra}", "index=2"
+            iface_map = self._interface_dns_map or {
+                self._win_iface_fallback: self._original_dns or ["dhcp"]
+            }
+            ok = True
+            for iface, original in iface_map.items():
+                if original == ["dhcp"]:
+                    _ok, err = self._run([
+                        "netsh", "interface", "ip", "set", "dns",
+                        f"name={iface}", "source=dhcp"
                     ])
+                else:
+                    _ok, err = self._run([
+                        "netsh", "interface", "ip", "set", "dns",
+                        f"name={iface}", "source=static",
+                        f"address={original[0]}"
+                    ])
+                    for extra in original[1:]:
+                        self._run([
+                            "netsh", "interface", "ip", "add", "dns",
+                            f"name={iface}", f"address={extra}", "index=2"
+                        ])
+                if not _ok:
+                    ok = False
+                else:
+                    print(f"  {Color.GREEN}[DNS-SWITCH] ✓ {iface} restored → "
+                          f"{', '.join(original)}{Color.RESET}")
 
         elif self._os == "Darwin":
             if self._original_dns in (["empty"], []):
@@ -514,6 +704,92 @@ class DNSSwitcher:
         else:
             print(f"  {Color.RED}[DNS-SWITCH] ✗ Restore failed: {err}{Color.RESET}")
             print(f"  {Color.YELLOW}  → Manually set your DNS back to automatic / your ISP's DNS{Color.RESET}")
+            return False
+
+
+class HostsFileManager:
+    """
+    Injects tracker domain entries into the OS hosts file as a secondary
+    blocking layer. Even if the DNS sinkhole is bypassed (stale cache, DoH,
+    hardcoded IPs that got through), the OS checks the hosts file before any
+    DNS query on every platform.
+
+    Writes a clearly-marked block between HOSTS_MARKER_START / HOSTS_MARKER_END.
+    restore() removes only that block — the rest of the file is untouched.
+    """
+
+    def __init__(self):
+        self._active = False
+        self._path = (
+            HOSTS_FILE_WIN if sys.platform == "win32"
+            else Path("/etc/hosts")
+        )
+
+    def inject(self, domains: list) -> int:
+        """
+        Append a Valkyrie-marked block to the hosts file.
+        Calls restore() first to avoid duplicate entries.
+        Returns the number of domains written.
+        """
+        self.restore()  # idempotent — remove any leftover block first
+
+        lines = [HOSTS_MARKER_START + "\n"]
+        for domain in domains:
+            domain = domain.strip().lower()
+            if domain and "." in domain and not domain.startswith("#"):
+                lines.append(f"0.0.0.0 {domain}\n")
+        lines.append(HOSTS_MARKER_END + "\n")
+
+        count = len(lines) - 2
+        if count == 0:
+            return 0
+
+        try:
+            with open(self._path, "a", encoding="utf-8") as f:
+                f.writelines(lines)
+            self._active = True
+            print(
+                f"  {Color.GREEN}[HOSTS] Injected {count} tracker domains "
+                f"into {self._path}{Color.RESET}"
+            )
+            return count
+        except PermissionError:
+            print(
+                f"  {Color.YELLOW}[HOSTS] Cannot write — "
+                f"run as Administrator{Color.RESET}"
+            )
+            return 0
+        except OSError as exc:
+            print(f"  {Color.YELLOW}[HOSTS] Write failed: {exc}{Color.RESET}")
+            return 0
+
+    def restore(self) -> bool:
+        """Remove the Valkyrie-marked block from the hosts file."""
+        try:
+            text = self._path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            self._active = False
+            return True
+
+        if HOSTS_MARKER_START not in text:
+            self._active = False
+            return True
+
+        pattern = (
+            re.escape(HOSTS_MARKER_START)
+            + r".*?"
+            + re.escape(HOSTS_MARKER_END)
+            + r"\n?"
+        )
+        cleaned = re.sub(pattern, "", text, flags=re.DOTALL)
+
+        try:
+            self._path.write_text(cleaned, encoding="utf-8")
+            self._active = False
+            print(f"  {Color.GREEN}[HOSTS] Tracker entries removed from hosts file{Color.RESET}")
+            return True
+        except (PermissionError, OSError) as exc:
+            print(f"  {Color.YELLOW}[HOSTS] Restore failed: {exc}{Color.RESET}")
             return False
 
 
@@ -1755,8 +2031,14 @@ class WiFiGuard:
     itself neutralises local DNS hijacking.
     """
 
-    _CANARY_DOMAIN = "dns-canary.cloudflare-dns.com"
-    _CANARY_EXPECTED_IP = "162.159.36.1"
+    # (domain, expected_ip_or_None, label)
+    # None means "check it returns a plausible public IP" (not 127.x / 0.x / RFC-1918)
+    _CANARIES = [
+        ("dns-canary.cloudflare-dns.com", "162.159.36.1", "Cloudflare canary"),
+        ("dns.google",                    "8.8.8.8",       "Google DNS self"),
+        ("one.one.one.one",               "1.1.1.1",       "Cloudflare 1.1.1.1"),
+        ("whoami.cloudflare.com",         None,             "Cloudflare EDNS whoami"),
+    ]
 
     def __init__(self, event_log: EventLog):
         self._checker = WiFiChecker()
@@ -1765,18 +2047,45 @@ class WiFiGuard:
         self._lock = threading.Lock()
 
     def _check_dns_hijack(self) -> tuple:
-        try:
-            actual = socket.gethostbyname(self._CANARY_DOMAIN)
-            hijacked = actual != self._CANARY_EXPECTED_IP
-            return hijacked, self._CANARY_EXPECTED_IP, actual
-        except (socket.gaierror, OSError):
-            return False, self._CANARY_EXPECTED_IP, "resolution_failed"
+        """
+        Query all canary domains. Returns (hijacked, detail_str, first_actual).
+        Flags as hijacked if ANY canary returns an unexpected or implausible IP.
+        """
+        failures = []
+        for domain, expected_ip, label in self._CANARIES:
+            try:
+                actual = socket.gethostbyname(domain)
+            except (socket.gaierror, OSError):
+                continue  # transient — don't alarm on single failure
+            if expected_ip is not None:
+                if actual != expected_ip:
+                    failures.append(
+                        f"{label}: {domain} → {actual} (expected {expected_ip})"
+                    )
+            else:
+                # whoami-style: should be a routable public IP
+                parts = actual.split(".")
+                is_private = (
+                    len(parts) != 4
+                    or actual.startswith(("0.", "127.", "10."))
+                    or (actual.startswith("192.168."))
+                    or (actual.startswith("172.") and 16 <= int(parts[1]) <= 31)
+                )
+                if is_private:
+                    failures.append(
+                        f"{label}: {domain} returned suspicious IP {actual}"
+                    )
+
+        hijacked = bool(failures)
+        detail = "; ".join(failures) if failures else "OK"
+        first_actual = failures[0].split("→")[-1].strip() if failures else "OK"
+        return hijacked, detail, first_actual
 
     def check(self) -> WiFiGuardStatus:
         wifi_info = self._checker.get_wifi_info()
         security_level, _ = self._checker.security_rating(wifi_info)
         is_open = security_level in ("Open", "Unknown", "WEP", "WPA")
-        hijacked, expected_ip, actual_ip = self._check_dns_hijack()
+        hijacked, hijack_detail, actual_ip = self._check_dns_hijack()
 
         warnings = []
         if security_level == "Open":
@@ -1788,10 +2097,7 @@ class WiFiGuard:
         if wifi_info.signal_dbm is not None and wifi_info.signal_dbm < -75:
             warnings.append("Very weak signal — possible evil-twin AP nearby")
         if hijacked:
-            warnings.append(
-                f"DNS hijack detected: {self._CANARY_DOMAIN} → {actual_ip} "
-                f"(expected {expected_ip})"
-            )
+            warnings.append(f"DNS hijack detected: {hijack_detail}")
 
         for w in warnings:
             severity = 5 if (hijacked or security_level == "Open") else 3
@@ -1803,13 +2109,14 @@ class WiFiGuard:
                 details=w,
             )
 
+        canary_domains = ", ".join(c[0] for c in self._CANARIES)
         status = WiFiGuardStatus(
             ssid=wifi_info.ssid,
             security_level=security_level,
             is_open=is_open,
             dns_hijacked=hijacked,
-            dns_check_domain=self._CANARY_DOMAIN,
-            dns_expected_ip=expected_ip,
+            dns_check_domain=canary_domains,
+            dns_expected_ip=hijack_detail,
             dns_actual_ip=actual_ip,
             warnings=warnings,
             checked_at=datetime.datetime.now().isoformat(timespec="seconds"),
@@ -1998,6 +2305,45 @@ class Console:
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION 8: COMMANDS
 # ─────────────────────────────────────────────────────────────────────────────
+
+def flush_dns_cache() -> bool:
+    """
+    Flush the OS DNS resolver cache so cached tracker IPs are evicted before
+    the sinkhole takes over. Called at startup of Shield, DNS, and Monitor modes.
+    """
+    if sys.platform == "win32":
+        try:
+            r = subprocess.run(
+                ["ipconfig", "/flushdns"],
+                capture_output=True, text=True, timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            if r.returncode == 0:
+                print(f"  {Color.GREEN}[DNS] OS DNS cache flushed{Color.RESET}")
+                return True
+            print(f"  {Color.YELLOW}[DNS] Cache flush failed{Color.RESET}")
+            return False
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+    elif sys.platform == "darwin":
+        try:
+            subprocess.run(["dscacheutil", "-flushcache"],
+                           capture_output=True, timeout=5)
+            subprocess.run(["killall", "-HUP", "mDNSResponder"],
+                           capture_output=True, timeout=5)
+            print(f"  {Color.GREEN}[DNS] OS DNS cache flushed (macOS){Color.RESET}")
+            return True
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+    else:
+        try:
+            subprocess.run(["resolvectl", "flush-caches"],
+                           capture_output=True, timeout=5)
+            print(f"  {Color.GREEN}[DNS] OS DNS cache flushed (Linux){Color.RESET}")
+            return True
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+
 
 def init_blocklist() -> BlocklistDB:
     bl = BlocklistDB()
@@ -2310,7 +2656,10 @@ def run_dns(blocklist: BlocklistDB, event_log: EventLog, port: int = DEFAULT_DNS
     console.banner()
     console.print_blocklist_info(blocklist)
 
-    # ── Feature 1: Auto-switch OS DNS to 127.0.0.1 ──────────────────────────
+    # ── Flush stale OS DNS cache before sinkhole starts ──────────────────────
+    flush_dns_cache()
+
+    # ── Feature 1: Auto-switch OS DNS to 127.0.0.1 on ALL interfaces ────────
     dns_switcher = DNSSwitcher()
     dns_switcher.activate()
 
@@ -2351,7 +2700,10 @@ def run_monitor(blocklist: BlocklistDB, event_log: EventLog,
     console.print_blocklist_info(blocklist)
     print(f"  {Color.DIM}Mode: notify on trackers/data collection — does NOT block{Color.RESET}")
 
-    # ── Feature 1: Auto-switch OS DNS to 127.0.0.1 ──────────────────────────
+    # ── Flush stale OS DNS cache before sinkhole starts ──────────────────────
+    flush_dns_cache()
+
+    # ── Feature 1: Auto-switch OS DNS to 127.0.0.1 on ALL interfaces ────────
     dns_switcher = DNSSwitcher()
     dns_switcher.activate()
 
@@ -2432,9 +2784,20 @@ def run_shield(blocklist: BlocklistDB, event_log: EventLog,
     console.print_blocklist_info(blocklist)
     print(f"  {Color.CYAN}Mode: SHIELD — DNS sinkhole + firewall injection + WiFi guard{Color.RESET}\n")
 
-    # ── Layer 1: Switch OS DNS → local sinkhole ──────────────────────────────
+    # ── Flush stale OS DNS cache before sinkhole takes over ──────────────────
+    flush_dns_cache()
+
+    # ── Layer 1: Switch OS DNS → local sinkhole on ALL interfaces ───────────
     dns_switcher = DNSSwitcher()
     dns_switcher.activate()
+
+    # ── Layer 1.5: Hosts file — secondary DNS bypass barrier ────────────────
+    hosts_mgr = HostsFileManager()
+    high_value_domains = [
+        d for d, e in blocklist._index.items()
+        if getattr(e, "source", "") == "curated" or getattr(e, "severity", 0) >= 4
+    ]
+    hosts_mgr.inject(high_value_domains)
 
     # ── Layer 2: Start DNS sinkhole in background (auto-restart on failure) ──
     alert_state = AlertState()
@@ -2442,8 +2805,22 @@ def run_shield(blocklist: BlocklistDB, event_log: EventLog,
     dns_monitor.start_background()
     console.print_monitor_setup("127.0.0.1", dns_port, blocklist.size)
 
-    # ── Layer 3: Firewall mitigator (blocks tracker IPs at network level) ────
+    # ── Layer 3: Firewall — DoH block + IPv6 block + proactive IP preload ────
     firewall = FirewallMitigator(event_log)
+    if sys.platform == "win32":
+        firewall.block_doh_providers()
+        firewall.block_ipv6_outbound()
+        # Resolve curated domains and pre-inject rules (background — non-blocking)
+        curated_domains = [
+            d for d, e in blocklist._index.items()
+            if getattr(e, "source", "") == "curated"
+        ]
+        threading.Thread(
+            target=firewall.preload_blocklist_ips,
+            args=(curated_domains,),
+            daemon=True,
+            name="valkyrie-preload",
+        ).start()
 
     # ── Layer 4: Connection scanner ──────────────────────────────────────────
     scanner = LiveScanner(blocklist)
@@ -2465,9 +2842,12 @@ def run_shield(blocklist: BlocklistDB, event_log: EventLog,
         signal.signal(signal.SIGTERM, _stop)
 
     console.section("SHIELD ACTIVE — ALL LAYERS RUNNING")
-    print(f"  {Color.GREEN}DNS Sinkhole{Color.RESET}  → tracking domains resolve to 0.0.0.0")
-    print(f"  {Color.GREEN}Firewall{Color.RESET}      → tracker IPs blocked at network level")
-    print(f"  {Color.GREEN}WiFi Guard{Color.RESET}    → monitors network security every 5 min")
+    print(f"  {Color.GREEN}DNS Sinkhole{Color.RESET}    → all interfaces → 127.0.0.1, tracker domains → 0.0.0.0")
+    print(f"  {Color.GREEN}Hosts File{Color.RESET}      → {len(high_value_domains)} high-value trackers hardcoded to 0.0.0.0")
+    print(f"  {Color.GREEN}DoH/DoT Block{Color.RESET}   → encrypted DNS bypasses blocked at firewall")
+    print(f"  {Color.GREEN}IPv6 Block{Color.RESET}      → IPv6 outbound blocked")
+    print(f"  {Color.GREEN}Firewall{Color.RESET}        → TCP+UDP rules injected per tracker connection")
+    print(f"  {Color.GREEN}WiFi Guard{Color.RESET}      → 4-canary DNS hijack detection, network security check")
     print(f"  {Color.DIM}Scan interval: {SHIELD_SCAN_INTERVAL}s   Press Ctrl+C to stop{Color.RESET}\n")
 
     # Initial WiFi check
@@ -2513,7 +2893,7 @@ def run_shield(blocklist: BlocklistDB, event_log: EventLog,
 
             # WiFi guard every 5 minutes (10 × 30s ticks)
             wifi_tick += 1
-            if wifi_tick % 10 == 0:
+            if wifi_tick % 60 == 0:  # every 60 × 5s = 5 minutes
                 try:
                     wifi_status = wifi_guard.check()
                     if wifi_status.warnings:
@@ -2533,8 +2913,9 @@ def run_shield(blocklist: BlocklistDB, event_log: EventLog,
         firewall.cleanup_all_rules()
         dns_monitor.stop()
         dns_switcher.restore()
+        hosts_mgr.restore()
         api.stop()
-        print(f"\n  {Color.DIM}Shield stopped. All firewall rules removed. DNS restored.{Color.RESET}\n")
+        print(f"\n  {Color.DIM}Shield stopped. Firewall rules removed. DNS restored. Hosts file cleaned.{Color.RESET}\n")
 
 
 def run_wifi_check(event_log: EventLog):
