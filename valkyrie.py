@@ -2961,6 +2961,85 @@ def run_wifi_check(event_log: EventLog):
     print(json.dumps(dataclasses.asdict(status), indent=2))
 
 
+def run_recover():
+    """
+    Emergency recovery: undo every change Shield mode makes to the OS.
+    Run this if Shield crashes, WiFi breaks, or you need a clean slate.
+    Requires Administrator privileges.
+    """
+    console = Console()
+    console.banner()
+    console.section("EMERGENCY RECOVERY")
+    print(f"  {Color.YELLOW}Undoing all Shield mode OS changes...{Color.RESET}\n")
+
+    def _ps(cmd: str) -> bool:
+        try:
+            r = subprocess.run(
+                ["powershell", "-NonInteractive", "-Command", cmd],
+                capture_output=True, text=True, timeout=20,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            )
+            return r.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+
+    def _run(cmd: list) -> bool:
+        try:
+            r = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=15,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            )
+            return r.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+
+    # 1. Re-enable IPv6
+    print(f"  {Color.CYAN}[1/5] Re-enabling IPv6 on all adapters...{Color.RESET}")
+    ok = _ps("Enable-NetAdapterBinding -Name '*' -ComponentID ms_tcpip6 -ErrorAction SilentlyContinue")
+    print(f"       {'OK' if ok else 'failed (may already be enabled)'}")
+
+    # 2. Restore DNS to DHCP on all interfaces
+    print(f"  {Color.CYAN}[2/5] Restoring DNS to DHCP on all interfaces...{Color.RESET}")
+    ok = _ps("Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object { Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ResetServerAddresses }")
+    if not ok:
+        # Fallback: use netsh for each connected interface
+        try:
+            r = subprocess.run(
+                ["netsh", "interface", "show", "interface"],
+                capture_output=True, text=True, timeout=8,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            )
+            for line in r.stdout.splitlines():
+                if "Connected" in line:
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        iface = " ".join(parts[3:])
+                        _run(["netsh", "interface", "ip", "set", "dns",
+                              f"name={iface}", "source=dhcp"])
+                        print(f"       {iface} → DHCP")
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    print(f"       {'OK' if ok else 'done via netsh'}")
+
+    # 3. Remove all Valkyrie firewall rules
+    print(f"  {Color.CYAN}[3/5] Removing Valkyrie firewall rules...{Color.RESET}")
+    ok = _ps("Get-NetFirewallRule | Where-Object { $_.DisplayName -like 'Valkyrie*' } | Remove-NetFirewallRule -ErrorAction SilentlyContinue")
+    print(f"       {'OK' if ok else 'failed — check Windows Firewall manually'}")
+
+    # 4. Clean hosts file
+    print(f"  {Color.CYAN}[4/5] Cleaning hosts file...{Color.RESET}")
+    hosts_mgr = HostsFileManager()
+    hosts_mgr.restore()
+
+    # 5. Flush DNS cache
+    print(f"  {Color.CYAN}[5/5] Flushing DNS cache...{Color.RESET}")
+    flush_dns_cache()
+
+    print(f"\n  {Color.GREEN}Recovery complete.{Color.RESET}")
+    print(f"  {Color.DIM}WiFi, DNS, IPv6, and firewall rules all restored.{Color.RESET}")
+    print(f"  {Color.DIM}If WiFi still has issues run: netsh winsock reset  then restart.{Color.RESET}\n")
+
+
 def run_alerts(event_log: EventLog, hours: int = 24):
     console = Console()
     console.banner()
@@ -3026,6 +3105,10 @@ Examples:
 
     sub.add_parser("wifi-check", help="One-shot WiFi security check (JSON output)")
 
+    sub.add_parser("recover",
+                   help="Emergency recovery: undo all Shield mode OS changes "
+                        "(IPv6, DNS, firewall rules, hosts file)")
+
     return parser
 
 
@@ -3062,6 +3145,8 @@ def main():
                    api_bind=api_bind)
     elif command == "wifi-check":
         run_wifi_check(event_log)
+    elif command == "recover":
+        run_recover()
 
 
 if __name__ == "__main__":
