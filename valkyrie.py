@@ -355,29 +355,63 @@ class FirewallMitigator:
 
     def block_ipv6_outbound(self) -> bool:
         """
-        Inject a blanket outbound IPv6 block for the Shield session.
-        Prevents apps from using IPv6 to reach tracker servers, bypassing
-        both the DNS sinkhole and IPv4 firewall rules.
-        Removed by cleanup_all_rules() on exit.
+        Disable the IPv6 network stack on all adapters for the Shield session.
+        More effective than a firewall rule — removes IPv6 entirely so apps
+        cannot use it to reach tracker servers.
+        Call restore_ipv6() on Shield exit to re-enable.
         """
         if not self._is_windows:
             return True
 
-        rule_name = "Valkyrie_Block_IPv6_Outbound"
-        ok, output = self._run_netsh([
-            "add", "rule", f"name={rule_name}",
-            "dir=out", "action=block", "protocol=ANY",
-            "remoteip=::/0", "enable=yes",
-        ])
-        if ok:
-            with self._lock:
-                if rule_name not in self._created_rules:
-                    self._created_rules.append(rule_name)
-            print(f"  {Color.GREEN}[FIREWALL] IPv6 outbound blocked{Color.RESET}")
+        try:
+            # Collect which adapters currently have IPv6 enabled so we can restore them
+            result = subprocess.run(
+                ["powershell", "-NonInteractive", "-Command",
+                 "(Get-NetAdapterBinding -ComponentID ms_tcpip6 | "
+                 "Where-Object Enabled -eq $true).Name -join ','"],
+                capture_output=True, text=True, timeout=15,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            self._ipv6_adapters = [
+                a.strip() for a in result.stdout.strip().split(",") if a.strip()
+            ]
+
+            # Disable IPv6 on all adapters
+            disable_result = subprocess.run(
+                ["powershell", "-NonInteractive", "-Command",
+                 "Disable-NetAdapterBinding -Name '*' -ComponentID ms_tcpip6 "
+                 "-ErrorAction SilentlyContinue"],
+                capture_output=True, text=True, timeout=15,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            print(f"  {Color.GREEN}[IPv6] Disabled on all adapters "
+                  f"({len(self._ipv6_adapters)} were active){Color.RESET}")
             return True
-        else:
-            print(f"  {Color.YELLOW}[FIREWALL] IPv6 block failed: {output}{Color.RESET}")
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            print(f"  {Color.YELLOW}[IPv6] Could not disable: {exc}{Color.RESET}")
+            self._ipv6_adapters = []
             return False
+
+    def restore_ipv6(self):
+        """Re-enable IPv6 on the adapters that had it active before block_ipv6_outbound()."""
+        if not self._is_windows:
+            return
+        adapters = getattr(self, "_ipv6_adapters", [])
+        if not adapters:
+            return
+        try:
+            for adapter in adapters:
+                subprocess.run(
+                    ["powershell", "-NonInteractive", "-Command",
+                     f"Enable-NetAdapterBinding -Name '{adapter}' "
+                     "-ComponentID ms_tcpip6 -ErrorAction SilentlyContinue"],
+                    capture_output=True, text=True, timeout=10,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+            print(f"  {Color.GREEN}[IPv6] Re-enabled on {len(adapters)} adapter(s){Color.RESET}")
+            self._ipv6_adapters = []
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
     def preload_blocklist_ips(self, domains: list, max_workers: int = 20) -> int:
         """
@@ -2911,11 +2945,12 @@ def run_shield(blocklist: BlocklistDB, event_log: EventLog,
             time.sleep(SHIELD_SCAN_INTERVAL)
     finally:
         firewall.cleanup_all_rules()
+        firewall.restore_ipv6()
         dns_monitor.stop()
         dns_switcher.restore()
         hosts_mgr.restore()
         api.stop()
-        print(f"\n  {Color.DIM}Shield stopped. Firewall rules removed. DNS restored. Hosts file cleaned.{Color.RESET}\n")
+        print(f"\n  {Color.DIM}Shield stopped. Firewall rules removed. IPv6 restored. DNS restored. Hosts file cleaned.{Color.RESET}\n")
 
 
 def run_wifi_check(event_log: EventLog):
