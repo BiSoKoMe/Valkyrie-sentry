@@ -155,7 +155,9 @@ async def start_mode(req: StartRequest):
         raise HTTPException(status_code=400, detail=f"Valkyrie already running in {proc_state.mode} mode (PID {proc_state.pid})")
 
     cmd = _build_cmd(req.mode, req.dns_port, req.api_bind, req.with_dns)
-    log_path = SCRIPT_DIR / f"valkyrie_{req.mode}_{int(time.time())}.log"
+    logs_dir = SCRIPT_DIR / "logs"
+    logs_dir.mkdir(exist_ok=True)
+    log_path = logs_dir / f"valkyrie_{req.mode}_{int(time.time())}.log"
 
     try:
         proc = subprocess.Popen(
