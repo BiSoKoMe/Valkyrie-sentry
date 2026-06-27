@@ -1,0 +1,16 @@
+[Unit]
+Description=Valkyrie Privacy Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/valkyrie
+ExecStart=/usr/bin/python3 /home/pi/valkyrie/valkyrie.py dns --api-bind 0.0.0.0 --dns-port 53
+Restart=on-failure
+RestartSec=5
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=multi-user.target
