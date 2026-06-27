@@ -1,164 +1,221 @@
 # Valkyrie
-**Enterprise Privacy Ecosystem — Prototype**
+**Local Privacy Engine — DNS sinkhole, firewall blocker, WiFi guard**
 
-Stop corporate tracking at the gateway. Valkyrie is a local DNS sinkhole, connection scanner, and firewall mitigator that intercepts telemetry, data-broker traffic, and ad-tracking before it leaves your machine — or your entire home network.
+Stops corporate tracking at the network level. Valkyrie intercepts telemetry, ad-tracking, and data-broker traffic before it leaves your machine — across every app, every website, and every WiFi network.
 
-## What It Does
-- **DNS Sinkhole** — Intercepts DNS queries and returns `0.0.0.0` for known surveillance domains
-- **Live Scanner** — Shows exactly which app/process is making every outbound connection
-- **Active Mitigation** — Automatically injects Windows Firewall rules to block established tracker connections
-- **OS DNS Switcher** — Automatically points your system DNS to 127.0.0.1 when in DNS/monitor mode
-- **REST API** — JSON API on `localhost:8080` for dashboards and integrations
-- **LAN Mapper** — Discovers devices on your local network via ARP + DHCP leases
+---
 
-## Requirements
-- Python 3.8+
-- `pip install -r requirements.txt`
-- **Administrator / sudo** for DNS sinkhole on port 53, firewall mitigation, and OS DNS switching
+## Terminal Commands (All Modes)
 
-## Quick Start
+### 1. Install dependencies
 ```bash
-# Install dependencies
 pip install -r requirements.txt
+pip install -r requirements_web.txt
+```
 
-# One-shot scan: Wi-Fi check + live connections + privacy scores
-python valkyrie.py scan
+### 2. Build the web UI (first time / after updates)
+```bash
+cd ui
+npm install
+npm run build
+cd ..
+```
 
-# Continuous monitor with DNS blocking
-python valkyrie.py watch --dns
+### 3. Start the backend server
+```bash
+python -m uvicorn valkyrie_api:app --host 127.0.0.1 --port 8000
+```
+Then open `http://localhost:8000` in your browser.
 
-# DNS sinkhole only
+---
+
+### Protection Modes (run in a separate admin terminal)
+
+#### Shield Mode — Maximum protection (recommended)
+Combines DNS sinkhole + firewall injection + WiFi guard simultaneously.
+```bash
+python valkyrie.py shield
+```
+
+#### DNS Sinkhole only
+Blocks tracker domains at the DNS level. All tracker queries return `0.0.0.0`.
+```bash
 python valkyrie.py dns
+```
 
-# Monitor mode: alerts only, no blocking
+#### Watch Mode — Connection monitor + firewall
+Continuously scans live connections and injects firewall rules for trackers.
+```bash
+python valkyrie.py watch
+```
+
+#### Watch + DNS (combined)
+```bash
+python valkyrie.py watch --dns
+```
+
+#### Monitor Mode — Alerts only, no blocking
+Logs tracking activity but does not block anything.
+```bash
 python valkyrie.py monitor
+```
 
-# View recent tracking alerts
+#### Live Scanner — one-shot audit
+Scans current connections and shows per-app privacy scores.
+```bash
+python valkyrie.py scan
+```
+
+#### WiFi Security Check
+One-shot check: detects open networks and DNS hijacking.
+```bash
+python valkyrie.py wifi-check
+```
+
+#### View alert history
+```bash
+python valkyrie.py alerts
 python valkyrie.py alerts --hours 168
 ```
 
-## Modes
-
-| Mode | What It Does | Blocking? |
-|------|-------------|-----------|
-| `scan` | One-shot Wi-Fi check + live connection audit + per-app privacy scores | No |
-| `watch` | Continuous monitoring, names and shames trackers | Yes (Windows firewall) |
-| `watch --dns` | Watch + DNS sinkhole for domain-level blocking | Yes |
-| `dns` | DNS sinkhole only, log queries | Yes |
-| `monitor` | DNS monitor + connection alerts, no blocking | No |
-| `alerts` | Print SQLite alert log | N/A |
-
-## Dashboard
-Open `index.html` in a browser while Valkyrie is running. It polls `http://127.0.0.1:8080/stats` every 2 seconds.
-
-For LAN access from phones/tablets:
+#### Update blocklists (~1M+ domains)
+Downloads Steven Black, OISD, AdGuard DNS, HaGeZi Pro++, URLhaus malware, EasyPrivacy.
 ```bash
-python valkyrie.py dns --api-bind 0.0.0.0
-```
-Then open `http://<your-pi-ip>:8080` from any device on the network.
-
-## Blocklist Management
-- Curated tracker domains are hardcoded in `valkyrie.py`
-- Additional domains can be added as `.txt` files in `blocklists/`
-- Hosts-format files are auto-imported on startup
-
-## Pi / Hardware Gateway Deployment
-
-### systemd Service
-Create `/etc/systemd/system/valkyrie.service`:
-```ini
-[Unit]
-Description=Valkyrie Privacy Gateway
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=pi
-WorkingDirectory=/home/pi/valkyrie
-ExecStart=/usr/bin/python3 /home/pi/valkyrie/valkyrie.py dns --api-bind 0.0.0.0 --dns-port 53
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
+python valkyrie.py update
 ```
 
+---
+
+### Custom DNS port (if port 5353 is taken)
 ```bash
-sudo systemctl enable valkyrie
-sudo systemctl start valkyrie
-sudo systemctl status valkyrie
+python valkyrie.py shield --dns-port 53
+python valkyrie.py dns --dns-port 53
 ```
 
-### Network Setup (Router Mode)
-To use a Pi as a dedicated gateway:
-1. Enable IP forwarding: `sudo sysctl -w net.ipv4.ip_forward=1`
-2. Set up iptables NAT: `sudo iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE`
-3. Connect Pi WAN port to your modem, LAN port to your router/switch
-4. Set Pi DNS (port 5353 default) or use port 53 with the systemd service above
-
-## Troubleshooting
-- **"Could not start API on 127.0.0.1:8080"** — Another process is using port 8080. Kill it or change `API_SERVER_PORT` in the script.
-- **"dnslib not installed"** — Run `pip install -r requirements.txt`
-- **DNS not switching on macOS** — Grant Terminal/iTerm Full Disk Access and try again with sudo.
-- **"Access is denied" for firewall rules** — Run `python valkyrie.py watch` as Administrator on Windows.
-- **No connections shown in scan** — Close/reopen an app or browse a website, then scan again.
-
-## Web Dashboard (React + FastAPI)
-The modern web control panel provides real-time monitoring, device management, and one-click mode switching.
-
-### Setup
+### LAN access (expose UI to other devices on your network)
 ```bash
-# From the valkyrie/ directory
-pip install -r requirements_web.txt
-cd ui && npm install && npm run build && cd ..
-
-# Start the API server
-python valkyrie_api.py
+python -m uvicorn valkyrie_api:app --host 0.0.0.0 --port 8000
+python valkyrie.py shield --api-bind 0.0.0.0
 ```
 
-Open `http://localhost:8000/api/dashboard` in your browser.
+---
 
-### Features
-- **Overview** — System status, protection stats, quick actions
-- **Live Activity** — Real-time DNS events, tracker detections, firewall blocks
-- **Devices** — LAN device map with privacy scores
-- **Applications** — Per-app privacy scoring and flagged connections
-- **Blocklist** — Add/remove domains, import hosts files, reload
-- **Settings** — Service control, configuration, export logs
-- **Terminal** — Live log streaming via WebSocket, auto-scroll, color-coded output
+### Build standalone .exe (Windows)
+Packages everything into a single `dist/Valkyrie.exe` — no Python needed.
+```bash
+build.bat
+```
+
+### Start in dev mode (all terminals at once)
+```bash
+start.bat
+```
+
+---
+
+## Quick Reference
+
+| Command | What it does | Blocks? |
+|---|---|---|
+| `python valkyrie.py shield` | DNS + firewall + WiFi guard | Yes |
+| `python valkyrie.py dns` | DNS sinkhole only | Yes (DNS) |
+| `python valkyrie.py watch --dns` | Connections + DNS sinkhole | Yes |
+| `python valkyrie.py watch` | Connection firewall only | Yes (FW) |
+| `python valkyrie.py monitor` | Alerts with no blocking | No |
+| `python valkyrie.py scan` | One-shot connection audit | No |
+| `python valkyrie.py wifi-check` | WiFi security check | No |
+| `python valkyrie.py update` | Download ~1M+ blocklist domains | — |
+| `python valkyrie.py alerts` | View recent alert log | — |
+
+> **All blocking modes require Administrator / sudo** — right-click the terminal and run as Administrator on Windows.
+
+---
+
+## What It Protects Against
+
+- **DNS tracking** — returns `0.0.0.0` for 1M+ surveillance domains so requests never reach trackers
+- **App telemetry** — blocks Spotify, Steam, Discord, Epic Games, Sentry, and other app-level phone-home connections
+- **Ad networks** — Google Ads, Meta Pixel, Twitter/X Ads, Snap, TikTok, LinkedIn Insight Tag, Bing Ads
+- **Data brokers** — Segment, Amplitude, Mixpanel, Hotjar, FullStory, Datadog, New Relic
+- **Malware C2** — URLhaus live threat feed of known command-and-control hosts
+- **Open WiFi attacks** — detects unencrypted/WEP/WPA networks and DNS hijacking by rogue access points
+
+---
+
+## Requirements
+
+- Python 3.8+
+- Windows (firewall rules use `netsh`; DNS switching uses `netsh interface`)
+- Node.js 18+ (for building the UI)
+- Administrator rights (for DNS switching and firewall rules)
+
+---
+
+## Web Dashboard
+
+Start the backend, then open `http://localhost:8000`.
+
+| Section | What it shows |
+|---|---|
+| Overview | Status, Shield button, live protection stats |
+| Live Activity | Real-time DNS events, tracker detections, firewall blocks |
+| Applications | Per-app privacy score and flagged connections |
+| Blocklist | Add/remove domains, download community lists |
+| Devices | LAN device map |
+| Settings | Config, log export |
+| Terminal | Live log stream via WebSocket |
+
+---
 
 ## Project Structure
+
 ```
 valkyrie/
-├── valkyrie.py              # Main CLI entry point
-├── valkyrie_api.py          # FastAPI backend for web dashboard
-├── requirements.txt         # Python dependencies (core)
-├── requirements_web.txt     # Python dependencies (web stack)
-├── valkyrie.service         # systemd unit for Pi deployment
-├── index.html               # Legacy dashboard (replaced by React UI)
-├── README.md                # This file
-├── valkyrie_events.db       # SQLite event log (auto-created)
-├── ui/                      # React + TypeScript + Tailwind frontend
-│   ├── src/components/      # Dashboard sections
-│   ├── src/lib/api.ts       # API client
-│   └── dist/                # Production build (served by FastAPI)
-└── blocklists/
-    └── tracker-domains.txt  # Additional importable domains
+├── valkyrie.py          # Core engine — all modes (shield, dns, watch, scan, ...)
+├── valkyrie_api.py      # FastAPI backend — serves the web UI and REST API
+├── launcher.py          # PyInstaller entry point for the .exe bundle
+├── valkyrie.spec        # PyInstaller build config
+├── build.bat            # One-click .exe builder
+├── start.bat            # Dev launcher (opens backend + UI terminals)
+├── requirements.txt     # Python core dependencies
+├── requirements_web.txt # Python web stack dependencies
+├── blocklists/          # Downloaded and custom domain lists
+├── logs/                # Per-session log files
+├── ui/                  # React + TypeScript + Tailwind frontend
+│   ├── src/components/  # Dashboard pages
+│   ├── src/lib/api.ts   # API client
+│   └── dist/            # Production build (auto-served by FastAPI)
+└── valkyrie_events.db   # SQLite event log (auto-created)
 ```
 
+---
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `Access is denied` on firewall rules | Run terminal as Administrator |
+| `dnslib not installed` | `pip install -r requirements.txt` |
+| Port 5353 already in use | Add `--dns-port 53` (requires admin) |
+| Port 8000 already in use | Change port: `--port 8001` |
+| UI shows blank page | Run `cd ui && npm run build` first |
+| DNS not switching | Must run as Administrator; check `netsh interface ip show dns` |
+| `ECONNREFUSED` in browser | Backend isn't running — start `python -m uvicorn valkyrie_api:app` first |
+
+---
+
 ## Roadmap
-- [x] DNS sinkhole with dnslib
+
+- [x] DNS sinkhole (dnslib)
 - [x] Live connection scanner with process attribution
-- [x] Windows firewall active mitigation
+- [x] Windows Firewall active mitigation
 - [x] OS DNS auto-switcher (Windows/macOS/Linux)
-- [x] REST API + web dashboard
-- [x] LAN device mapper (ARP/DHCP)
-- [x] Web dashboard (React + FastAPI + WebSocket)
-- [x] Real-time terminal log streaming
-- [x] Blocklist auto-update (`valkyrie.py update`)
-- [x] `--api-bind` flag for LAN access
-- [ ] Cloud threat feed subscription
-- [ ] systemd service + Pi router integration
-- [ ] iptables/nftables network-layer blocking
+- [x] Shield Mode — all layers combined
+- [x] WiFi Guard — open network + DNS hijack detection
+- [x] REST API + React web dashboard
+- [x] Real-time terminal log streaming (WebSocket)
+- [x] Blocklist auto-update (6 sources, ~1M+ domains)
+- [x] Standalone .exe via PyInstaller
+- [ ] iptables/nftables for Linux/Pi gateway blocking
 - [ ] Multi-device cloud dashboard with auth
+- [ ] iOS/Android companion app
