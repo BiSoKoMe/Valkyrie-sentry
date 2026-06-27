@@ -12,3 +12,5 @@ winotify>=1.1.0
 # force windows Set-DnsClientServerAddress -InterfaceAlias "Wi-Fi" -ServerAddresses "127.0.0.1"
 
 # back to normal Clear-DnsClientServerAddress -InterfaceAlias "Wi-Fi"
+ 
+ #  python valkyrie.py monitor --dns-port 5353
