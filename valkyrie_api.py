@@ -31,12 +31,21 @@ from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-SCRIPT_DIR = Path(__file__).resolve().parent
+# When bundled with PyInstaller, read-only resources live in _MEIPASS;
+# writable user data (db, logs, blocklists) lives next to the .exe.
+if hasattr(sys, '_MEIPASS'):
+    _RESOURCE_DIR = Path(sys._MEIPASS)
+    _DATA_DIR = Path(sys.executable).parent
+else:
+    _RESOURCE_DIR = Path(__file__).resolve().parent
+    _DATA_DIR = Path(__file__).resolve().parent
+
+SCRIPT_DIR = _DATA_DIR
 PYTHON = sys.executable
-VALKYRIE_PY = SCRIPT_DIR / "valkyrie.py"
-DB_PATH = SCRIPT_DIR / "valkyrie_events.db"
-BLOCKLIST_DIR = SCRIPT_DIR / "blocklists"
-UI_DIST = SCRIPT_DIR / "ui" / "dist"
+VALKYRIE_PY = _RESOURCE_DIR / "valkyrie.py"
+DB_PATH = _DATA_DIR / "valkyrie_events.db"
+BLOCKLIST_DIR = _DATA_DIR / "blocklists"
+UI_DIST = _RESOURCE_DIR / "ui" / "dist"
 
 app = FastAPI(title="Valkyrie API", version="1.0.0")
 
@@ -80,20 +89,24 @@ class StopResponse(BaseModel):
 
 # ── Subprocess Helpers ─────────────────────────────────────────────────────────
 def _build_cmd(mode: str, dns_port: int = 5353, api_bind: str = "127.0.0.1", with_dns: bool = False) -> list[str]:
-    cmd = [PYTHON, str(VALKYRIE_PY)]
+    # When bundled, invoke the same exe with --engine so we don't need a separate python.exe
+    if hasattr(sys, '_MEIPASS'):
+        base = [sys.executable, "--engine"]
+    else:
+        base = [PYTHON, str(VALKYRIE_PY)]
+
+    cmd = base[:]
     if mode in ("sinkhole", "dns"):
-        cmd.append("dns")
-        cmd += [f"--dns-port", str(dns_port), f"--api-bind", api_bind]
+        cmd += ["dns", "--dns-port", str(dns_port), "--api-bind", api_bind]
     elif mode == "monitor":
-        cmd.append("monitor")
-        cmd += [f"--dns-port", str(dns_port), f"--api-bind", api_bind]
+        cmd += ["monitor", "--dns-port", str(dns_port), "--api-bind", api_bind]
     elif mode == "watch":
-        cmd.append("watch")
+        cmd += ["watch"]
         if with_dns:
             cmd.append("--dns")
-        cmd += [f"--dns-port", str(dns_port), f"--api-bind", api_bind]
+        cmd += ["--dns-port", str(dns_port), "--api-bind", api_bind]
     elif mode == "scan":
-        cmd.append("scan")
+        cmd += ["scan"]
     else:
         raise ValueError(f"Unknown mode: {mode}")
     return cmd
@@ -361,8 +374,13 @@ async def reload_blocklists():
 @app.post("/api/blocklist/update")
 async def update_blocklists():
     try:
+        update_cmd = (
+            [sys.executable, "--engine", "update"]
+            if hasattr(sys, '_MEIPASS')
+            else [PYTHON, str(VALKYRIE_PY), "update"]
+        )
         proc = subprocess.Popen(
-            [PYTHON, str(VALKYRIE_PY), "update"],
+            update_cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -496,21 +514,21 @@ async def log_tailer():
             pass
 
 # ── Serve Frontend ─────────────────────────────────────────────────────────────
+# Mount the React build's /assets directory so JS/CSS loads correctly.
+# The catch-all below serves index.html for all other paths (SPA routing).
 
-@app.get("/api/dashboard", response_class=HTMLResponse)
-async def serve_dashboard():
-    if UI_DIST.exists():
-        index = UI_DIST / "index.html"
-        if index.exists():
-            return FileResponse(index)
-    return HTMLResponse("<h1>Valkyrie Dashboard — build UI first: cd ui && npm install && npm run build</h1>", status_code=503)
+if (UI_DIST / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=UI_DIST / "assets"), name="static_assets")
 
-@app.get("/api/dashboard/assets/{path:path}")
-async def serve_ui_assets(path: str):
-    asset = UI_DIST / "assets" / path
-    if asset.exists():
-        return FileResponse(asset)
-    raise HTTPException(status_code=404)
+@app.get("/{full_path:path}")
+async def serve_spa(full_path: str):
+    index = UI_DIST / "index.html"
+    if index.exists():
+        return FileResponse(index)
+    return HTMLResponse(
+        "<h1>Valkyrie</h1><p>Build the UI first: <code>cd ui &amp;&amp; npm run build</code></p>",
+        status_code=503,
+    )
 
 
 if __name__ == "__main__":
