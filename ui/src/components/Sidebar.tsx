@@ -50,14 +50,24 @@ export default function Sidebar() {
           </div>
         </div>
         {/* Live status badge */}
-        <div className={`flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs font-medium border ${
-          running
-            ? 'bg-valk-green/10 text-valk-green border-valk-green/20'
-            : 'bg-valk-card text-valk-muted border-valk-border'
-        }`}>
-          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${running ? 'bg-valk-green animate-pulse' : 'bg-valk-muted'}`} />
-          {running ? mode.toUpperCase() + ' ACTIVE' : 'IDLE — NO PROTECTION'}
-        </div>
+        {running && mode === 'shield' ? (
+          <div
+            className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs font-bold border border-transparent"
+            style={{ background: 'linear-gradient(135deg, rgba(0,212,255,0.15) 0%, rgba(168,85,247,0.15) 100%)', color: '#00d4ff' }}
+          >
+            <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-valk-cyan animate-pulse" />
+            SHIELD ACTIVE
+          </div>
+        ) : (
+          <div className={`flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs font-medium border ${
+            running
+              ? 'bg-valk-green/10 text-valk-green border-valk-green/20'
+              : 'bg-valk-card text-valk-muted border-valk-border'
+          }`}>
+            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${running ? 'bg-valk-green animate-pulse' : 'bg-valk-muted'}`} />
+            {running ? mode.toUpperCase() + ' ACTIVE' : 'IDLE — NO PROTECTION'}
+          </div>
+        )}
       </div>
 
       {/* Navigation */}

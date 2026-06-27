@@ -48,7 +48,8 @@ import datetime
 import platform
 import urllib.request
 from collections import defaultdict
-from dataclasses import dataclass, field
+import dataclasses
+from dataclasses import dataclass, field, asdict
 from enum import Enum
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -83,6 +84,7 @@ EVENT_DB_PATH = SCRIPT_DIR / "valkyrie_events.db"
 DEFAULT_DNS_PORT = 5353
 DEFAULT_DNS_UPSTREAM = "8.8.8.8"
 WATCH_INTERVAL = 2.5
+SHIELD_SCAN_INTERVAL = 30   # seconds between connection sweeps in Shield mode
 ALERT_COOLDOWN_SEC = 90
 
 # ── Feature: Active Firewall Mitigation ──────────────────────────────────────
@@ -1033,6 +1035,49 @@ class BlocklistDB:
         BlocklistEntry("analytics.yahoo.com",             ThreatCategory.CORPORATE_SPY,  "Yahoo Analytics tracking",                 3),
         BlocklistEntry("update.mykings.pw",               ThreatCategory.MALWARE_C2,     "MyKings botnet C2",                        5),
         BlocklistEntry("dl.installcdn-pub.com",           ThreatCategory.MALWARE_C2,     "Malicious installer CDN",                  5),
+        # ── Additional telemetry (apps) ──────────────────────────────────────
+        BlocklistEntry("spclient.wg.spotify.com",         ThreatCategory.TELEMETRY,      "Spotify client telemetry pipeline",        4),
+        BlocklistEntry("audio2.spotify.com",              ThreatCategory.TELEMETRY,      "Spotify metrics and analytics",            3),
+        BlocklistEntry("telemetry.steam.a.akamaihd.net",  ThreatCategory.TELEMETRY,      "Steam hardware survey telemetry",          4),
+        BlocklistEntry("crash.epicgames.com",             ThreatCategory.TELEMETRY,      "Epic Games crash/telemetry reporting",     4),
+        BlocklistEntry("tracking.epicgames.com",          ThreatCategory.TELEMETRY,      "Epic Games event tracking",                4),
+        BlocklistEntry("o.sentry.io",                     ThreatCategory.TELEMETRY,      "Sentry cross-app error/event telemetry",   3),
+        BlocklistEntry("ingest.sentry.io",                ThreatCategory.TELEMETRY,      "Sentry data ingest CDN",                   3),
+        BlocklistEntry("watson.telemetry.microsoft.com",  ThreatCategory.TELEMETRY,      "Windows Watson crash reporter",            4),
+        BlocklistEntry("sqm.microsoft.com",               ThreatCategory.TELEMETRY,      "Windows Software Quality Metrics",         4),
+        BlocklistEntry("diagnostics.apple.com",           ThreatCategory.TELEMETRY,      "Apple device diagnostics reporting",       4),
+        BlocklistEntry("telemetry.razer.com",             ThreatCategory.TELEMETRY,      "Razer Synapse telemetry",                  3),
+        BlocklistEntry("discordapp.com",                  ThreatCategory.TELEMETRY,      "Discord legacy analytics/tracking SDK",    3),
+        # ── Additional ad trackers ────────────────────────────────────────────
+        BlocklistEntry("pixel.facebook.com",              ThreatCategory.AD_TRACKER,     "Meta pixel conversion tracker",            5),
+        BlocklistEntry("an.facebook.com",                 ThreatCategory.AD_TRACKER,     "Facebook Audience Network",                4),
+        BlocklistEntry("graph.facebook.com",              ThreatCategory.AD_TRACKER,     "Meta Graph API ad tracking",              4),
+        BlocklistEntry("adservice.google.com",            ThreatCategory.AD_TRACKER,     "Google Ad Service",                        4),
+        BlocklistEntry("pagead2.googlesyndication.com",   ThreatCategory.AD_TRACKER,     "Google AdSense ad requests",               4),
+        BlocklistEntry("trc.taboola.com",                 ThreatCategory.AD_TRACKER,     "Taboola native ad tracker",                3),
+        BlocklistEntry("cdn.outbrain.com",                ThreatCategory.AD_TRACKER,     "Outbrain content recommendation tracker",  3),
+        BlocklistEntry("s.yimg.com",                      ThreatCategory.AD_TRACKER,     "Yahoo tracker/ad SDK",                     3),
+        BlocklistEntry("static.ads-twitter.com",          ThreatCategory.AD_TRACKER,     "Twitter/X ad tracker",                     4),
+        BlocklistEntry("analytics.twitter.com",           ThreatCategory.AD_TRACKER,     "Twitter/X analytics tracker",              4),
+        BlocklistEntry("ads.linkedin.com",                ThreatCategory.AD_TRACKER,     "LinkedIn Insight Tag ad tracker",          4),
+        BlocklistEntry("px.ads.linkedin.com",             ThreatCategory.AD_TRACKER,     "LinkedIn pixel tracker",                   4),
+        BlocklistEntry("sc-static.net",                   ThreatCategory.AD_TRACKER,     "Snapchat static ad assets tracker",        3),
+        BlocklistEntry("tr.snapchat.com",                 ThreatCategory.AD_TRACKER,     "Snapchat tracking pixel",                  4),
+        # ── Additional corporate spy / session analytics ───────────────────────
+        BlocklistEntry("api.segment.io",                  ThreatCategory.CORPORATE_SPY,  "Segment.io event analytics (100s of apps)",5),
+        BlocklistEntry("cdn.segment.com",                 ThreatCategory.CORPORATE_SPY,  "Segment.io analytics CDN",                 4),
+        BlocklistEntry("logx.optimizely.com",             ThreatCategory.CORPORATE_SPY,  "Optimizely A/B testing tracker",           3),
+        BlocklistEntry("datadome.co",                     ThreatCategory.CORPORATE_SPY,  "DataDome behavior profiling",              3),
+        BlocklistEntry("bat.bing.com",                    ThreatCategory.CORPORATE_SPY,  "Microsoft Bing Ads conversion tracker",    4),
+        # ── Additional fingerprinting ─────────────────────────────────────────
+        BlocklistEntry("tags.tiqcdn.com",                 ThreatCategory.FINGERPRINTING, "Tealium tag management fingerprinting",    4),
+        BlocklistEntry("tiqcdn.com",                      ThreatCategory.FINGERPRINTING, "Tealium Universal Tag",                    4),
+        BlocklistEntry("collector.github.com",            ThreatCategory.FINGERPRINTING, "GitHub analytics collector",               3),
+        # ── Additional data brokers ───────────────────────────────────────────
+        BlocklistEntry("hb.yahoo.com",                    ThreatCategory.DATA_BROKER,    "Yahoo header bidding data profile builder",4),
+        BlocklistEntry("prebid.a9.com",                   ThreatCategory.DATA_BROKER,    "Amazon A9 header bidding profiler",        4),
+        BlocklistEntry("aax.amazon-adsystem.com",         ThreatCategory.DATA_BROKER,    "Amazon DSP data collection",               4),
+        BlocklistEntry("s.amazon-adsystem.com",           ThreatCategory.DATA_BROKER,    "Amazon ad system tracker",                 3),
     ]
 
     def __init__(self):
@@ -1682,6 +1727,103 @@ class WiFiChecker:
         return info.security, f"{Color.CYAN}{info.security}{Color.RESET}"
 
 
+@dataclasses.dataclass
+class WiFiGuardStatus:
+    ssid: str
+    security_level: str
+    is_open: bool
+    dns_hijacked: bool
+    dns_check_domain: str
+    dns_expected_ip: str
+    dns_actual_ip: str
+    warnings: list
+    checked_at: str
+
+
+class WiFiGuard:
+    """
+    Monitors WiFi security posture:
+      - Detects open/unsecured/WEP/WPA networks
+      - Detects DNS hijacking via a Cloudflare canary domain
+    Suitable for polling inside Shield mode.
+
+    Note: when Shield mode is active, OS DNS already points to Valkyrie's
+    sinkhole (127.0.0.1), which forwards to 8.8.8.8. The canary check then
+    tests whether upstream (8.8.8.8) returns the right answer — a rogue AP
+    intercepting DNS before it reaches Valkyrie would still be detected if
+    the sinkhole is unreachable, but once Shield is running the sinkhole
+    itself neutralises local DNS hijacking.
+    """
+
+    _CANARY_DOMAIN = "dns-canary.cloudflare-dns.com"
+    _CANARY_EXPECTED_IP = "162.159.36.1"
+
+    def __init__(self, event_log: EventLog):
+        self._checker = WiFiChecker()
+        self._event_log = event_log
+        self._last_status: Optional[WiFiGuardStatus] = None
+        self._lock = threading.Lock()
+
+    def _check_dns_hijack(self) -> tuple:
+        try:
+            actual = socket.gethostbyname(self._CANARY_DOMAIN)
+            hijacked = actual != self._CANARY_EXPECTED_IP
+            return hijacked, self._CANARY_EXPECTED_IP, actual
+        except (socket.gaierror, OSError):
+            return False, self._CANARY_EXPECTED_IP, "resolution_failed"
+
+    def check(self) -> WiFiGuardStatus:
+        wifi_info = self._checker.get_wifi_info()
+        security_level, _ = self._checker.security_rating(wifi_info)
+        is_open = security_level in ("Open", "Unknown", "WEP", "WPA")
+        hijacked, expected_ip, actual_ip = self._check_dns_hijack()
+
+        warnings = []
+        if security_level == "Open":
+            warnings.append(f"'{wifi_info.ssid}' has no encryption — all traffic visible")
+        elif security_level == "WEP":
+            warnings.append("WEP encryption is broken — treat as open network")
+        elif security_level == "WPA":
+            warnings.append("WPA (TKIP) is deprecated — upgrade router to WPA2/WPA3")
+        if wifi_info.signal_dbm is not None and wifi_info.signal_dbm < -75:
+            warnings.append("Very weak signal — possible evil-twin AP nearby")
+        if hijacked:
+            warnings.append(
+                f"DNS hijack detected: {self._CANARY_DOMAIN} → {actual_ip} "
+                f"(expected {expected_ip})"
+            )
+
+        for w in warnings:
+            severity = 5 if (hijacked or security_level == "Open") else 3
+            self._event_log.log(
+                action="wifi_warning",
+                domain=wifi_info.ssid,
+                category="WIFI-SECURITY",
+                severity=severity,
+                details=w,
+            )
+
+        status = WiFiGuardStatus(
+            ssid=wifi_info.ssid,
+            security_level=security_level,
+            is_open=is_open,
+            dns_hijacked=hijacked,
+            dns_check_domain=self._CANARY_DOMAIN,
+            dns_expected_ip=expected_ip,
+            dns_actual_ip=actual_ip,
+            warnings=warnings,
+            checked_at=datetime.datetime.now().isoformat(timespec="seconds"),
+        )
+        with self._lock:
+            self._last_status = status
+        return status
+
+    @property
+    def last_status(self) -> Optional[WiFiGuardStatus]:
+        with self._lock:
+            return self._last_status
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION 7: CONSOLE OUTPUT
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1864,9 +2006,35 @@ def init_blocklist() -> BlocklistDB:
 
 
 DEFAULT_BLOCKLIST_URLS = [
-    ("https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts", "stevenblack-hosts.txt"),
-    ("https://raw.githubusercontent.com/oisd/domain-list/main/hosts", "oisd-hosts.txt"),
+    ("https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
+     "stevenblack-hosts.txt"),
+    ("https://raw.githubusercontent.com/oisd/domain-list/main/hosts",
+     "oisd-hosts.txt"),
+    ("https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt",
+     "adguard-dns.txt"),
+    ("https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/pro.plus.txt",
+     "hagezi-pro-plus.txt"),
+    ("https://urlhaus.abuse.ch/downloads/hostfile/",
+     "urlhaus-malware.txt"),
 ]
+
+EASYPRIVACY_URL  = "https://easylist.to/easylist/easyprivacy.txt"
+EASYPRIVACY_DEST = "easyprivacy-domains.txt"
+
+
+def _extract_abp_domains(text: str) -> list:
+    """Extract plain domain names from Adblock Plus format (||domain^)."""
+    domains = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith(("!", "[", "@@", "##", "#@#")):
+            continue
+        m = re.match(r"^\|\|([a-z0-9\-\.]+\.[a-z]{2,})\^", line)
+        if m:
+            domain = m.group(1)
+            if "/" not in domain and "*" not in domain:
+                domains.append(domain)
+    return domains
 
 
 def run_update(blocklist_dir: Path = BLOCKLIST_DIR):
@@ -1893,9 +2061,24 @@ def run_update(blocklist_dir: Path = BLOCKLIST_DIR):
             print(f"  {Color.RED}✗ Failed{Color.RESET} {url}\n     {Color.DIM}{exc}{Color.RESET}\n")
             failed.append((url, str(exc)))
 
+    # EasyPrivacy — Adblock Plus format, needs domain extraction
+    print(f"  {Color.CYAN}Downloading{Color.RESET} {EASYPRIVACY_URL}")
+    try:
+        req = urllib.request.Request(EASYPRIVACY_URL, headers={"User-Agent": "valkyrie-blocklist-updater/1.0"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+        domains = _extract_abp_domains(raw)
+        dest = blocklist_dir / EASYPRIVACY_DEST
+        dest.write_text("\n".join(domains), encoding="utf-8")
+        print(f"  {Color.GREEN}✓ Extracted{Color.RESET} {len(domains):,} domains → {dest.name}\n")
+        updated += 1
+    except Exception as exc:
+        print(f"  {Color.RED}✗ Failed{Color.RESET} {EASYPRIVACY_URL}\n     {Color.DIM}{exc}{Color.RESET}\n")
+        failed.append((EASYPRIVACY_URL, str(exc)))
+
     if updated:
         print(f"  {Color.GREEN}Updated {updated} blocklist(s).{Color.RESET}")
-        print(f"  {Color.DIM}Reload with: python valkyrie.py scan{Color.RESET}\n")
+        print(f"  {Color.DIM}Restart Valkyrie to load the new lists.{Color.RESET}\n")
     if failed:
         print(f"  {Color.YELLOW}Failed: {len(failed)}{Color.RESET}")
         for url, err in failed:
@@ -2237,6 +2420,131 @@ def run_monitor(blocklist: BlocklistDB, event_log: EventLog,
               f"View with: python valkyrie.py alerts{Color.RESET}\n")
 
 
+def run_shield(blocklist: BlocklistDB, event_log: EventLog,
+               dns_port: int = DEFAULT_DNS_PORT, api_bind: str = "127.0.0.1"):
+    """Combined maximum-protection mode: DNS sinkhole + firewall + WiFi guard."""
+    if not HAS_DNSLIB:
+        print(f"\n  {Color.RED}[!] dnslib not installed. Run: pip install -r requirements.txt\n")
+        sys.exit(1)
+
+    console = Console()
+    console.banner()
+    console.print_blocklist_info(blocklist)
+    print(f"  {Color.CYAN}Mode: SHIELD — DNS sinkhole + firewall injection + WiFi guard{Color.RESET}\n")
+
+    # ── Layer 1: Switch OS DNS → local sinkhole ──────────────────────────────
+    dns_switcher = DNSSwitcher()
+    dns_switcher.activate()
+
+    # ── Layer 2: Start DNS sinkhole in background (auto-restart on failure) ──
+    alert_state = AlertState()
+    dns_monitor = DNSMonitor(blocklist, event_log, alert_state, port=dns_port)
+    dns_monitor.start_background()
+    console.print_monitor_setup("127.0.0.1", dns_port, blocklist.size)
+
+    # ── Layer 3: Firewall mitigator (blocks tracker IPs at network level) ────
+    firewall = FirewallMitigator(event_log)
+
+    # ── Layer 4: Connection scanner ──────────────────────────────────────────
+    scanner = LiveScanner(blocklist)
+    wifi_guard = WiFiGuard(event_log)
+
+    # ── Layer 5: Alert API so the UI can poll /alerts ────────────────────────
+    api = AlertAPIServer(event_log, host=api_bind)
+    api.start()
+
+    running = True
+    wifi_tick = 0
+
+    def _stop(*_):
+        nonlocal running
+        running = False
+
+    signal.signal(signal.SIGINT, _stop)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, _stop)
+
+    console.section("SHIELD ACTIVE — ALL LAYERS RUNNING")
+    print(f"  {Color.GREEN}DNS Sinkhole{Color.RESET}  → tracking domains resolve to 0.0.0.0")
+    print(f"  {Color.GREEN}Firewall{Color.RESET}      → tracker IPs blocked at network level")
+    print(f"  {Color.GREEN}WiFi Guard{Color.RESET}    → monitors network security every 5 min")
+    print(f"  {Color.DIM}Scan interval: {SHIELD_SCAN_INTERVAL}s   Press Ctrl+C to stop{Color.RESET}\n")
+
+    # Initial WiFi check
+    try:
+        wifi_status = wifi_guard.check()
+        if wifi_status.warnings:
+            for w in wifi_status.warnings:
+                print(f"  {Color.YELLOW}[WIFI] {w}{Color.RESET}")
+        else:
+            print(f"  {Color.GREEN}[WIFI] {wifi_status.ssid} — {wifi_status.security_level} — OK{Color.RESET}")
+    except Exception as exc:
+        print(f"  {Color.DIM}[WIFI] check failed: {exc}{Color.RESET}")
+
+    try:
+        while running:
+            # Restart sinkhole thread if it died (port conflict, sleep/wake, etc.)
+            thread_dead = (dns_monitor._thread is None or
+                           not dns_monitor._thread.is_alive())
+            if thread_dead:
+                print(f"  {Color.YELLOW}[SHIELD] DNS sinkhole died — restarting…{Color.RESET}")
+                try:
+                    dns_monitor.stop()
+                except Exception:
+                    pass
+                dns_monitor = DNSMonitor(blocklist, event_log, alert_state, port=dns_port)
+                dns_monitor.start_background()
+
+            # Scan live connections + inject firewall rules for tracker IPs
+            connections = scanner.scan()
+            for conn in connections:
+                if not conn.blocklist_hit:
+                    continue
+                if conn.remote_ip and conn.remote_ip not in ("", "0.0.0.0"):
+                    threading.Thread(
+                        target=firewall.mitigate_threat,
+                        args=(conn.process_name or "unknown", conn.remote_ip, conn.remote_port),
+                        daemon=True,
+                    ).start()
+                _alert_tracking(
+                    conn.resolved_domain, conn.blocklist_hit, event_log, alert_state,
+                    conn.process_name,
+                )
+
+            # WiFi guard every 5 minutes (10 × 30s ticks)
+            wifi_tick += 1
+            if wifi_tick % 10 == 0:
+                try:
+                    wifi_status = wifi_guard.check()
+                    if wifi_status.warnings:
+                        for w in wifi_status.warnings:
+                            print(f"  {Color.YELLOW}[WIFI] {w}{Color.RESET}")
+                except Exception:
+                    pass
+
+            alerts, queries = dns_monitor.stats
+            fw_count = len(firewall._created_rules)
+            print(f"  {Color.DIM}[{datetime.datetime.now().strftime('%H:%M:%S')}] "
+                  f"DNS queries: {queries}  blocked DNS: {alerts}  "
+                  f"FW rules: {fw_count}{Color.RESET}")
+
+            time.sleep(SHIELD_SCAN_INTERVAL)
+    finally:
+        firewall.cleanup_all_rules()
+        dns_monitor.stop()
+        dns_switcher.restore()
+        api.stop()
+        print(f"\n  {Color.DIM}Shield stopped. All firewall rules removed. DNS restored.{Color.RESET}\n")
+
+
+def run_wifi_check(event_log: EventLog):
+    """One-shot WiFi security check — prints JSON to stdout."""
+    guard = WiFiGuard(event_log)
+    status = guard.check()
+    import json
+    print(json.dumps(dataclasses.asdict(status), indent=2))
+
+
 def run_alerts(event_log: EventLog, hours: int = 24):
     console = Console()
     console.banner()
@@ -2291,7 +2599,16 @@ Examples:
     alert_p.add_argument("--hours", type=int, default=24,
                          help="How many hours back to show (default 24)")
 
-    update_p = sub.add_parser("update", help="Download remote blocklists into blocklists/")
+    sub.add_parser("update", help="Download remote blocklists into blocklists/")
+
+    shield_p = sub.add_parser("shield",
+                               help="Maximum protection: DNS sinkhole + firewall + WiFi guard")
+    shield_p.add_argument("--dns-port", type=int, default=DEFAULT_DNS_PORT,
+                          help=f"DNS listen port (default {DEFAULT_DNS_PORT})")
+    shield_p.add_argument("--api-bind", default="127.0.0.1",
+                          help="Bind REST API to address (default 127.0.0.1)")
+
+    sub.add_parser("wifi-check", help="One-shot WiFi security check (JSON output)")
 
     return parser
 
@@ -2323,6 +2640,12 @@ def main():
         run_alerts(event_log, hours=getattr(args, "hours", 24))
     elif command == "update":
         run_update()
+    elif command == "shield":
+        run_shield(blocklist, event_log,
+                   dns_port=getattr(args, "dns_port", DEFAULT_DNS_PORT),
+                   api_bind=api_bind)
+    elif command == "wifi-check":
+        run_wifi_check(event_log)
 
 
 if __name__ == "__main__":

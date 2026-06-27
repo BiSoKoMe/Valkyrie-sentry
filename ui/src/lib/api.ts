@@ -37,6 +37,15 @@ export const getDnsLog = (hours = 1, limit = 500) =>
 export const updateBlocklists = () =>
   api.post('/blocklist/update').then(r => r.data);
 
+export const startShield = (opts?: Record<string, unknown>) =>
+  api.post('/start', { mode: 'shield', ...opts }).then(r => r.data);
+
+export const getWifiStatus = () =>
+  api.get('/wifi-status').then(r => r.data);
+
+export const getBlocklistCount = () =>
+  api.get('/blocklist/count').then(r => r.data);
+
 export const exportLogs = async () => {
   const res = await api.get('/alerts', { params: { hours: 168, limit: 5000 }, responseType: 'json' });
   const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: 'application/json' });

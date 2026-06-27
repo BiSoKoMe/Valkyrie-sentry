@@ -107,6 +107,8 @@ def _build_cmd(mode: str, dns_port: int = 5353, api_bind: str = "127.0.0.1", wit
         cmd += ["--dns-port", str(dns_port), "--api-bind", api_bind]
     elif mode == "scan":
         cmd += ["scan"]
+    elif mode == "shield":
+        cmd += ["shield", "--dns-port", str(dns_port), "--api-bind", api_bind]
     else:
         raise ValueError(f"Unknown mode: {mode}")
     return cmd
@@ -433,6 +435,48 @@ async def get_dns_log(hours: int = 1, limit: int = 500):
     except Exception:
         events = []
     return {"count": len(events), "events": events}
+
+@app.get("/api/wifi-status")
+async def get_wifi_status():
+    """One-shot WiFi security check — runs valkyrie wifi-check subprocess."""
+    if hasattr(sys, '_MEIPASS'):
+        cmd = [sys.executable, "--engine", "wifi-check"]
+    else:
+        cmd = [PYTHON, str(VALKYRIE_PY), "wifi-check"]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=15,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
+        import json as _json
+        return _json.loads(result.stdout)
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+@app.get("/api/blocklist/count")
+async def get_blocklist_count():
+    """Count total non-comment domain entries across all blocklist files."""
+    if not BLOCKLIST_DIR.exists():
+        return {"total_domains": 0}
+    total = 0
+    for f in BLOCKLIST_DIR.iterdir():
+        if not f.is_file() or f.suffix not in (".txt", ".hosts", ""):
+            continue
+        try:
+            for line in f.read_text(encoding="utf-8", errors="ignore").splitlines():
+                line = line.strip()
+                if line and not line.startswith(("#", "!", "[", ";")):
+                    # hosts-format: "0.0.0.0 domain" or "127.0.0.1 domain"
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[0] in ("0.0.0.0", "127.0.0.1"):
+                        total += 1
+                    elif len(parts) == 1 and "." in parts[0]:
+                        total += 1
+        except Exception:
+            continue
+    return {"total_domains": total}
+
 
 @app.get("/api/settings")
 async def get_settings():

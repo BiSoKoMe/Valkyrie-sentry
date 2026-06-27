@@ -1,5 +1,5 @@
 import { useEffect, useState, FormEvent } from 'react';
-import { getBlockedDomains, addDomain, removeDomain, reloadBlocklists, exportLogs, updateBlocklists } from '../lib/api';
+import { getBlockedDomains, addDomain, removeDomain, reloadBlocklists, exportLogs, updateBlocklists, getBlocklistCount } from '../lib/api';
 import { Shield, Plus, Trash2, RefreshCw, Download, CloudDownload } from 'lucide-react';
 
 interface Domain {
@@ -16,11 +16,13 @@ export default function Blocklist() {
   const [loading, setLoading] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [updateMsg, setUpdateMsg] = useState('');
+  const [totalDomains, setTotalDomains] = useState<number | null>(null);
 
   const load = async () => {
     setLoading(true);
-    const d = await getBlockedDomains(200);
+    const [d, cnt] = await Promise.all([getBlockedDomains(200), getBlocklistCount().catch(() => null)]);
     setDomains(d.domains || []);
+    if (cnt?.total_domains != null) setTotalDomains(cnt.total_domains);
     setLoading(false);
   };
 
@@ -57,7 +59,14 @@ export default function Blocklist() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold">Blocklist Management</h2>
-          <p className="text-valk-muted text-sm mt-1">Manage tracker and surveillance domains</p>
+          <p className="text-valk-muted text-sm mt-1">
+            Manage tracker and surveillance domains
+            {totalDomains != null && (
+              <span className="ml-2 text-valk-cyan font-semibold">
+                — {totalDomains.toLocaleString()} domains protected
+              </span>
+            )}
+          </p>
         </div>
         <div className="flex gap-2">
           <button
@@ -93,7 +102,7 @@ export default function Blocklist() {
               Community Blocklists
             </h3>
             <p className="text-valk-muted text-sm mt-1">
-              Download Steven Black + OISD community lists (~100k+ tracker domains). Covers every major ad network, data broker, and telemetry endpoint.
+              Download 6 community lists (~1M+ domains): Steven Black, OISD, AdGuard DNS, HaGeZi Pro++, URLhaus malware, EasyPrivacy. Covers every major ad network, data broker, malware host, and telemetry endpoint.
             </p>
             {updateMsg && (
               <p className={`text-sm mt-2 ${updateMsg.startsWith('Failed') ? 'text-valk-red' : 'text-valk-green'}`}>
