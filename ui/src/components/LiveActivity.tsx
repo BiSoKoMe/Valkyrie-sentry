@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getDnsLog, getStats } from '../lib/api';
+import { getDnsLog } from '../lib/api';
 import { RefreshCw, Shield, AlertTriangle, CheckCircle, Globe, Search } from 'lucide-react';
 
 interface DnsEvent {
