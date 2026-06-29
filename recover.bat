@@ -14,26 +14,21 @@ echo ============================================
 echo  Undoing all Shield mode changes...
 echo.
 
-echo [1/5] Re-enabling IPv6 on all adapters...
-powershell -NonInteractive -Command "Enable-NetAdapterBinding -Name '*' -ComponentID ms_tcpip6 -ErrorAction SilentlyContinue"
-echo     Done.
-
-echo.
-echo [2/5] Restoring DNS to DHCP on all interfaces...
+echo [1/4] Restoring DNS to DHCP on all interfaces...
 powershell -NonInteractive -Command "Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object { Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ResetServerAddresses }"
 echo     Done.
 
 echo.
-echo [3/5] Removing all Valkyrie firewall rules...
+echo [2/4] Removing all Valkyrie firewall rules...
 powershell -NonInteractive -Command "Get-NetFirewallRule | Where-Object { $_.DisplayName -like 'Valkyrie*' } | Remove-NetFirewallRule -ErrorAction SilentlyContinue"
 echo     Done.
 
 echo.
-echo [4/5] Cleaning Valkyrie entries from hosts file...
+echo [3/4] Cleaning Valkyrie entries from hosts file...
 powershell -NonInteractive -Command "$h='C:\Windows\System32\drivers\etc\hosts'; $t=[IO.File]::ReadAllText($h,'UTF8'); if($t -match '# Valkyrie-start') { $t=[regex]::Replace($t,'# Valkyrie-start[\s\S]*?# Valkyrie-end\r?\n?',''); [IO.File]::WriteAllText($h,$t,'UTF8'); Write-Host '    Entries removed.' } else { Write-Host '    Already clean.' }"
 
 echo.
-echo [5/5] Flushing DNS cache...
+echo [4/4] Flushing DNS cache...
 ipconfig /flushdns >nul
 echo     Done.
 
@@ -42,9 +37,9 @@ echo ============================================
 echo  RECOVERY COMPLETE
 echo ============================================
 echo.
-echo  WiFi and DNS are restored to normal.
+echo  DNS restored to automatic (DHCP).
 echo  All Valkyrie firewall rules removed.
-echo  IPv6 re-enabled on all adapters.
+echo  Hosts file cleaned.
 echo.
 echo  If WiFi still seems slow, run:
 echo    netsh winsock reset

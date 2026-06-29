@@ -46,15 +46,17 @@ import threading
 import time
 import datetime
 import platform
+import ssl
 import urllib.request
 from collections import defaultdict
 import dataclasses
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
 import concurrent.futures
+import queue
 
 try:
     import psutil
@@ -71,7 +73,7 @@ if sys.platform == "win32":
                 pass
 
 try:
-    from dnslib import DNSRecord, QTYPE, RR, A
+    from dnslib import DNSRecord, QTYPE, RR, A, AAAA as AAAARecord
     from dnslib.server import DNSServer, BaseResolver
     HAS_DNSLIB = True
 except ImportError:
@@ -83,7 +85,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 BLOCKLIST_DIR = SCRIPT_DIR / "blocklists"
 EVENT_DB_PATH = SCRIPT_DIR / "valkyrie_events.db"
 DEFAULT_DNS_PORT = 5353
-DEFAULT_DNS_UPSTREAM = "8.8.8.8"
+DEFAULT_DNS_UPSTREAM = "194.242.2.2"      # Mullvad — no-logs, ad-blocking
+_DOT_UPSTREAM_HOSTNAME = "dns.mullvad.net" # TLS SNI for encrypted upstream queries
 WATCH_INTERVAL = 2.5
 SHIELD_SCAN_INTERVAL = 5    # seconds between connection sweeps in Shield mode
 ALERT_COOLDOWN_SEC = 15
@@ -102,17 +105,32 @@ _DOH_PROVIDERS = [
     "9.9.9.9", "149.112.112.112",      # Quad9
     "208.67.222.222", "208.67.220.220",# OpenDNS
     "45.90.28.0", "45.90.30.0",        # NextDNS
-    "194.242.2.2", "194.242.2.3",      # Mullvad
     "94.140.14.14", "94.140.15.15",    # AdGuard
     "96.113.151.145",                  # Comcast DoH
+    # Mullvad (194.242.2.2/3) intentionally excluded — it is Valkyrie's own
+    # encrypted upstream. Blocking its port 853 would break our DoT queries.
 ]
 
-# Known tracker/ad-network IP subnets pre-blocked at Shield startup
-_KNOWN_TRACKER_SUBNETS = [
-    "157.240.0.0/16",   # Facebook/Meta ads
-    "69.171.250.0/24",  # Meta infrastructure
-    "31.13.64.0/18",    # Meta EMEA
-]
+# Known tracker/ad-network IP subnets pre-blocked at Shield startup.
+# Intentionally excludes broad Facebook/Meta ranges (157.240.x, 69.171.x, 31.13.x)
+# because those subnets also serve photos, videos, and legitimate content.
+_KNOWN_TRACKER_SUBNETS: list = []
+
+# CDN and media-serving domains that must never be blocked, even if they appear
+# in a blocklist. These serve images, videos, and static assets on major sites.
+_CDN_WHITELIST = frozenset({
+    # Facebook / Instagram media
+    "fbcdn.net", "cdninstagram.com",
+    # YouTube / Google media
+    "googlevideo.com", "ytimg.com", "ggpht.com",
+    "googleusercontent.com", "gstatic.com",
+    # Twitter/X images
+    "twimg.com",
+    # Major shared CDNs (Akamai, CloudFront, Fastly)
+    "akamaized.net", "akamai.net", "akamaihd.net",
+    "cloudfront.net",
+    "fastly.net", "fastlylb.net",
+})
 
 # ── Feature: Automated DNS Switcher ──────────────────────────────────────────
 DNS_SWITCH_INTERFACE_WIN   = "Wi-Fi"   # Windows adapter name — fallback if enum fails
@@ -126,6 +144,29 @@ HOSTS_MARKER_END   = "# Valkyrie-end"
 # ── Feature: REST API log server ─────────────────────────────────────────────
 API_SERVER_HOST = "127.0.0.1"
 API_SERVER_PORT = 8080
+
+# ── Feature: Tracking parameter proxy ────────────────────────────────────────
+PROXY_SERVER_PORT = 8889
+
+_TRACKING_PARAMS = frozenset({
+    # Google Analytics / Ads
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "utm_id", "utm_reader", "utm_referrer", "utm_name", "_ga",
+    # Meta / Facebook
+    "fbclid", "igshid",
+    # Google Ads
+    "gclid", "dclid",
+    # Microsoft Ads
+    "msclkid",
+    # Yahoo / other
+    "yclid", "twclid",
+    # HubSpot
+    "mc_eid", "_hsenc", "_hsmi",
+    # Referrer leakage
+    "ref_src", "ref_url",
+    # Spotify / YouTube share IDs
+    "si", "feature",
+})
 
 # ── Feature: Router/ARP mode — LAN device identification ─────────────────────
 ARP_SCAN_INTERVAL = 30   # seconds between ARP table refreshes between refreshes
@@ -330,7 +371,7 @@ class FirewallMitigator:
         created = 0
         for ip in _DOH_PROVIDERS:
             if ":" in ip:
-                continue  # skip IPv6 — handled by block_ipv6_outbound()
+                continue  # skip any IPv6 provider IPs — not relevant for DoH/DoT blocking
             for port, label in ((443, "DoH"), (853, "DoT")):
                 rule_name = f"Valkyrie_Block_{label}_{self._sanitize(ip)}_{port}"
                 with self._lock:
@@ -770,7 +811,8 @@ class HostsFileManager:
         lines = [HOSTS_MARKER_START + "\n"]
         for domain in domains:
             domain = domain.strip().lower()
-            if domain and "." in domain and not domain.startswith("#"):
+            if domain and "." in domain and not domain.startswith("#") \
+                    and not _is_cdn_whitelisted(domain):
                 lines.append(f"0.0.0.0 {domain}\n")
         lines.append(HOSTS_MARKER_END + "\n")
 
@@ -932,6 +974,16 @@ class _AlertAPIHandler(BaseHTTPRequestHandler):
                 "mitigations": events,
             })
 
+        elif path == "/wifi":
+            try:
+                hours = int(qs.get("hours", 24))
+                limit = int(qs.get("limit", 100))
+            except ValueError:
+                self._send_json({"error": "hours and limit must be integers"}, 400)
+                return
+            events = log.fetch_wifi_warnings(hours=hours, limit=limit)
+            self._send_json({"count": len(events), "warnings": events})
+
         elif path == "/dns-log":
             try:
                 hours = int(qs.get("hours", 1))
@@ -941,6 +993,35 @@ class _AlertAPIHandler(BaseHTTPRequestHandler):
                 return
             events = log.fetch_dns_log(hours=hours, limit=limit)
             self._send_json({"count": len(events), "events": events})
+
+        elif path == "/stream":
+            # Server-Sent Events — push each new log event to connected dashboards
+            log: EventLog = self.server.event_log  # type: ignore[attr-defined]
+            q = log.sse_subscribe()
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "keep-alive")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                # Send a heartbeat immediately so the browser knows the stream is live
+                self.wfile.write(b": heartbeat\n\n")
+                self.wfile.flush()
+                while True:
+                    try:
+                        event = q.get(timeout=15)
+                        data = json.dumps(event, default=str)
+                        self.wfile.write(f"data: {data}\n\n".encode())
+                        self.wfile.flush()
+                    except queue.Empty:
+                        # Send a keepalive comment every 15s so the connection stays open
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+            finally:
+                log.sse_unsubscribe(q)
 
         else:
             self._send_json({"error": f"Unknown endpoint: {path}"}, 404)
@@ -969,7 +1050,7 @@ class AlertAPIServer:
     def start(self):
         """Start the API server in a background daemon thread."""
         try:
-            self._server = HTTPServer((self._host, self._port), _AlertAPIHandler)
+            self._server = ThreadingHTTPServer((self._host, self._port), _AlertAPIHandler)
             # Inject event_log onto the server object so the handler can access it
             self._server.event_log = self._event_log  # type: ignore[attr-defined]
         except OSError as e:
@@ -992,6 +1073,175 @@ class AlertAPIServer:
     def stop(self):
         if self._server:
             self._server.shutdown()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURE: TRACKING PARAMETER PROXY
+# ─────────────────────────────────────────────────────────────────────────────
+# Local HTTP proxy on port 8889.
+# - Strips known tracking query parameters (utm_*, fbclid, gclid, …) from URLs
+# - Injects DNT: 1 and Sec-GPC: 1 privacy headers on every outbound request
+# - HTTPS (CONNECT): tunnelled transparently — TLS cannot be decrypted without
+#   a MITM certificate, so params inside HTTPS URLs pass through unchanged
+# Configured as the Windows system HTTP proxy via netsh winhttp on Shield start;
+# restored to direct access on Shield exit.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import http.client as _http_client
+
+
+class _ProxyHandler(BaseHTTPRequestHandler):
+    """Request handler for TrackingParamProxy."""
+
+    def log_message(self, format, *args):
+        pass  # suppress access log noise
+
+    # ── HTTPS pass-through ────────────────────────────────────────────────────
+
+    def do_CONNECT(self):
+        """Tunnel HTTPS connections transparently (no MITM)."""
+        try:
+            host, _, port_str = self.path.rpartition(":")
+            port = int(port_str) if port_str else 443
+            with socket.create_connection((host, port), timeout=10) as remote:
+                self.send_response(200, "Connection Established")
+                self.end_headers()
+                # Relay bytes in both directions until one side closes
+                conns = [self.connection, remote]
+                import select
+                while True:
+                    r, _, _ = select.select(conns, [], conns, 10)
+                    if not r:
+                        break
+                    for s in r:
+                        data = s.recv(65536)
+                        if not data:
+                            return
+                        other = remote if s is self.connection else self.connection
+                        other.sendall(data)
+        except (OSError, ValueError):
+            try:
+                self.send_error(502)
+            except Exception:
+                pass
+
+    # ── HTTP request cleaning ─────────────────────────────────────────────────
+
+    def _clean_url(self, url: str) -> str:
+        """Remove tracking query parameters from url, preserve the rest."""
+        from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+        parsed = urlparse(url)
+        cleaned_qs = [(k, v) for k, v in parse_qsl(parsed.query)
+                      if k.lower() not in _TRACKING_PARAMS]
+        new_query = urlencode(cleaned_qs)
+        return urlunparse(parsed._replace(query=new_query))
+
+    def _forward(self, method: str):
+        from urllib.parse import urlparse
+        try:
+            clean = self._clean_url(self.path)
+            parsed = urlparse(clean)
+            host = parsed.netloc or parsed.hostname or ""
+            port = parsed.port or 80
+            path = parsed.path or "/"
+            if parsed.query:
+                path += "?" + parsed.query
+
+            # Build outbound headers — inject privacy signals, drop hop-by-hop
+            skip = {"proxy-connection", "keep-alive", "te", "trailers",
+                    "transfer-encoding", "upgrade"}
+            headers = {k: v for k, v in self.headers.items()
+                       if k.lower() not in skip}
+            headers["DNT"] = "1"
+            headers["Sec-GPC"] = "1"
+            headers.pop("Host", None)
+            headers["Host"] = host
+
+            body = None
+            if method in ("POST", "PUT", "PATCH"):
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length) if length else None
+
+            conn = _http_client.HTTPConnection(host, port, timeout=15)
+            conn.request(method, path, body=body, headers=headers)
+            resp = conn.getresponse()
+
+            self.send_response(resp.status, resp.reason)
+            for header, value in resp.getheaders():
+                if header.lower() not in ("transfer-encoding", "connection"):
+                    self.send_header(header, value)
+            self.end_headers()
+            self.wfile.write(resp.read())
+            conn.close()
+        except (OSError, _http_client.HTTPException):
+            try:
+                self.send_error(502)
+            except Exception:
+                pass
+
+    def do_GET(self):    self._forward("GET")
+    def do_POST(self):   self._forward("POST")
+    def do_HEAD(self):   self._forward("HEAD")
+    def do_PUT(self):    self._forward("PUT")
+    def do_DELETE(self): self._forward("DELETE")
+
+
+class TrackingParamProxy:
+    """
+    Local HTTP proxy that strips tracking URL parameters and injects privacy
+    headers. Starts on port PROXY_SERVER_PORT and registers itself as the
+    Windows system HTTP proxy via netsh winhttp.
+    """
+
+    def __init__(self):
+        self._server: Optional[HTTPServer] = None
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self):
+        try:
+            self._server = HTTPServer(("127.0.0.1", PROXY_SERVER_PORT), _ProxyHandler)
+            self._thread = threading.Thread(
+                target=self._server.serve_forever, daemon=True,
+                name="valkyrie-proxy",
+            )
+            self._thread.start()
+            print(f"  {Color.GREEN}[PROXY] Tracking parameter proxy started "
+                  f"on 127.0.0.1:{PROXY_SERVER_PORT}{Color.RESET}")
+        except OSError as exc:
+            print(f"  {Color.YELLOW}[PROXY] Could not start proxy: {exc}{Color.RESET}")
+
+    def stop(self):
+        if self._server:
+            self._server.shutdown()
+            self._server = None
+
+    @staticmethod
+    def set_windows_system_proxy():
+        """Configure Windows system HTTP proxy to route through Valkyrie."""
+        try:
+            subprocess.run(
+                ["netsh", "winhttp", "set", "proxy",
+                 f"127.0.0.1:{PROXY_SERVER_PORT}", "<local>"],
+                capture_output=True, timeout=8,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            print(f"  {Color.GREEN}[PROXY] Windows system proxy → "
+                  f"127.0.0.1:{PROXY_SERVER_PORT}{Color.RESET}")
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    @staticmethod
+    def reset_windows_system_proxy():
+        """Restore Windows system proxy to direct (no proxy)."""
+        try:
+            subprocess.run(
+                ["netsh", "winhttp", "reset", "proxy"],
+                capture_output=True, timeout=8,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            print(f"  {Color.GREEN}[PROXY] Windows system proxy restored to direct{Color.RESET}")
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1388,6 +1638,49 @@ class BlocklistDB:
         BlocklistEntry("prebid.a9.com",                   ThreatCategory.DATA_BROKER,    "Amazon A9 header bidding profiler",        4),
         BlocklistEntry("aax.amazon-adsystem.com",         ThreatCategory.DATA_BROKER,    "Amazon DSP data collection",               4),
         BlocklistEntry("s.amazon-adsystem.com",           ThreatCategory.DATA_BROKER,    "Amazon ad system tracker",                 3),
+        # ── Fingerprinting services ───────────────────────────────────────────
+        BlocklistEntry("fpjs.io",                         ThreatCategory.FINGERPRINTING, "FingerprintJS Pro CDN",                    5),
+        BlocklistEntry("fingerprint.com",                 ThreatCategory.FINGERPRINTING, "FingerprintJS SaaS platform",              5),
+        BlocklistEntry("deviceatlas.com",                 ThreatCategory.FINGERPRINTING, "DeviceAtlas device ID fingerprinting",     5),
+        BlocklistEntry("threatmetrix.com",                ThreatCategory.FINGERPRINTING, "LexisNexis ThreatMetrix device ID",        5),
+        BlocklistEntry("tapad.com",                       ThreatCategory.FINGERPRINTING, "Tapad cross-device fingerprinting",        5),
+        BlocklistEntry("kochava.com",                     ThreatCategory.FINGERPRINTING, "Kochava mobile attribution fingerprint",   5),
+        BlocklistEntry("appsflyer.com",                   ThreatCategory.FINGERPRINTING, "AppsFlyer attribution SDK",                5),
+        BlocklistEntry("adjust.com",                      ThreatCategory.FINGERPRINTING, "Adjust mobile attribution SDK",            5),
+        BlocklistEntry("branch.io",                       ThreatCategory.FINGERPRINTING, "Branch deep-link tracking",                5),
+        # ── Session recording / heatmaps ──────────────────────────────────────
+        BlocklistEntry("sessioncam.com",                  ThreatCategory.FINGERPRINTING, "SessionCam session recording",             5),
+        BlocklistEntry("smartlook.com",                   ThreatCategory.FINGERPRINTING, "Smartlook session recording",              5),
+        BlocklistEntry("inspectlet.com",                  ThreatCategory.FINGERPRINTING, "Inspectlet session recording",             5),
+        BlocklistEntry("logrocket.com",                   ThreatCategory.FINGERPRINTING, "LogRocket session replay",                 5),
+        BlocklistEntry("crazyegg.com",                    ThreatCategory.FINGERPRINTING, "Crazy Egg heatmap + session replay",       5),
+        BlocklistEntry("mouseflow.com",                   ThreatCategory.FINGERPRINTING, "Mouseflow session recording",              5),
+        BlocklistEntry("luckyorange.com",                 ThreatCategory.FINGERPRINTING, "Lucky Orange session recording",           5),
+        # ── Data brokers / audience profiling ─────────────────────────────────
+        BlocklistEntry("liveramp.com",                    ThreatCategory.DATA_BROKER,    "LiveRamp identity graph",                  5),
+        BlocklistEntry("liveramp.net",                    ThreatCategory.DATA_BROKER,    "LiveRamp CDN",                             5),
+        BlocklistEntry("rlcdn.com",                       ThreatCategory.DATA_BROKER,    "LiveRamp tracking pixel CDN",              5),
+        BlocklistEntry("quantcast.com",                   ThreatCategory.DATA_BROKER,    "Quantcast audience profiling",             5),
+        BlocklistEntry("scorecardresearch.com",           ThreatCategory.DATA_BROKER,    "Comscore Scorecard Research",              5),
+        BlocklistEntry("comscore.com",                    ThreatCategory.DATA_BROKER,    "Comscore measurement",                     4),
+        BlocklistEntry("exelator.com",                    ThreatCategory.DATA_BROKER,    "Nielsen eXelate DMP",                      5),
+        BlocklistEntry("bluekai.com",                     ThreatCategory.DATA_BROKER,    "Oracle BlueKai DMP",                       5),
+        BlocklistEntry("krxd.net",                        ThreatCategory.DATA_BROKER,    "Salesforce Krux DMP",                      5),
+        BlocklistEntry("demdex.net",                      ThreatCategory.DATA_BROKER,    "Adobe Audience Manager DMP",               5),
+        # ── Ad exchanges / SSPs ───────────────────────────────────────────────
+        BlocklistEntry("adnxs.com",                       ThreatCategory.AD_TRACKER,     "AppNexus/Xandr ad exchange",               5),
+        BlocklistEntry("openx.net",                       ThreatCategory.AD_TRACKER,     "OpenX ad exchange",                        5),
+        BlocklistEntry("rubiconproject.com",              ThreatCategory.AD_TRACKER,     "Rubicon/Magnite SSP",                      5),
+        BlocklistEntry("pubmatic.com",                    ThreatCategory.AD_TRACKER,     "PubMatic SSP",                             5),
+        BlocklistEntry("casalemedia.com",                 ThreatCategory.AD_TRACKER,     "Index Exchange SSP",                       5),
+        BlocklistEntry("33across.com",                    ThreatCategory.AD_TRACKER,     "33Across ad exchange",                     4),
+        BlocklistEntry("tribalfusion.com",                ThreatCategory.AD_TRACKER,     "Exponential/Tribal Fusion ad network",     4),
+        # ── Affiliate / attribution tracking ──────────────────────────────────
+        BlocklistEntry("everestjs.net",                   ThreatCategory.AD_TRACKER,     "Commission Junction pixel",                4),
+        BlocklistEntry("tradedoubler.com",                ThreatCategory.AD_TRACKER,     "TradeDoubler affiliate tracking",          4),
+        BlocklistEntry("awin1.com",                       ThreatCategory.AD_TRACKER,     "Awin affiliate tracking",                  4),
+        BlocklistEntry("impact.com",                      ThreatCategory.AD_TRACKER,     "Impact.com attribution platform",          4),
+        BlocklistEntry("shareasale.com",                  ThreatCategory.AD_TRACKER,     "ShareASale affiliate tracking",            4),
     ]
 
     def __init__(self):
@@ -1545,6 +1838,8 @@ class EventLog:
     def __init__(self, db_path: Path = EVENT_DB_PATH):
         self._db_path = db_path
         self._lock = threading.Lock()
+        self._sse_lock = threading.Lock()
+        self._sse_subscribers: list[queue.Queue] = []
         self._init_db()
 
     def _init_db(self):
@@ -1564,6 +1859,31 @@ class EventLog:
             """)
             conn.commit()
 
+    def sse_subscribe(self) -> "queue.Queue":
+        """Return a new queue that receives every future log event as a dict."""
+        q: queue.Queue = queue.Queue(maxsize=200)
+        with self._sse_lock:
+            self._sse_subscribers.append(q)
+        return q
+
+    def sse_unsubscribe(self, q: "queue.Queue"):
+        with self._sse_lock:
+            try:
+                self._sse_subscribers.remove(q)
+            except ValueError:
+                pass
+
+    def _sse_publish(self, event: dict):
+        with self._sse_lock:
+            dead = []
+            for q in self._sse_subscribers:
+                try:
+                    q.put_nowait(event)
+                except queue.Full:
+                    dead.append(q)
+            for q in dead:
+                self._sse_subscribers.remove(q)
+
     def log(self, action: str, domain: str = "", process_name: str = "",
             remote_ip: str = "", category: str = "", severity: int = 0,
             details: str = ""):
@@ -1576,6 +1896,11 @@ class EventLog:
                     (ts, action, domain, process_name, remote_ip, category, severity, details),
                 )
                 conn.commit()
+        self._sse_publish({
+            "ts": ts, "action": action, "domain": domain,
+            "process_name": process_name, "remote_ip": remote_ip,
+            "category": category, "severity": severity, "details": details,
+        })
 
     def recent_count(self, action: Optional[str] = None) -> int:
         with sqlite3.connect(self._db_path) as conn:
@@ -1592,8 +1917,20 @@ class EventLog:
         with sqlite3.connect(self._db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                "SELECT ts, domain, process_name, category, severity, details "
-                "FROM events WHERE action = 'tracking_alert' AND ts >= ? "
+                "SELECT ts, action, domain, process_name, remote_ip, category, severity, details "
+                "FROM events WHERE action IN ('tracking_alert','detected') AND ts >= ? "
+                "ORDER BY ts DESC LIMIT ?",
+                (cutoff, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def fetch_wifi_warnings(self, hours: int = 24, limit: int = 100) -> list[dict]:
+        cutoff = (datetime.datetime.now() - datetime.timedelta(hours=hours)).isoformat()
+        with sqlite3.connect(self._db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT ts, domain, category, severity, details "
+                "FROM events WHERE action = 'wifi_warning' AND ts >= ? "
                 "ORDER BY ts DESC LIMIT ?",
                 (cutoff, limit),
             ).fetchall()
@@ -1631,8 +1968,88 @@ class EventLog:
 # SECTION 4: DNS SINKHOLE
 # ─────────────────────────────────────────────────────────────────────────────
 
+_DOT_FALLBACK_UPSTREAM = "8.8.8.8"  # plain UDP fallback — always accepts queries, firewall only blocks TCP:443/853
+
+
+def _is_cdn_whitelisted(qname: str) -> bool:
+    """Return True if qname is (or is a subdomain of) a CDN/media domain that must not be blocked."""
+    for cdn in _CDN_WHITELIST:
+        if qname == cdn or qname.endswith("." + cdn):
+            return True
+    return False
+
+
+class _DoTSession:
+    """
+    Persistent DNS-over-TLS connection (RFC 7858).
+
+    Establishes one TLS connection and reuses it across queries — eliminates
+    the per-query TLS handshake overhead (~300ms) that caused browsers to timeout.
+    Reconnects automatically if the connection drops.
+    Thread-safe via a per-instance lock.
+    """
+
+    def __init__(self, host: str, server_hostname: str, port: int = 853):
+        self._host = host
+        self._hostname = server_hostname
+        self._port = port
+        self._sock: Optional[ssl.SSLSocket] = None
+        self._lock = threading.Lock()
+        self._ctx = ssl.create_default_context()
+
+    def _connect(self) -> ssl.SSLSocket:
+        raw = socket.create_connection((self._host, self._port), timeout=5)
+        raw.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        return self._ctx.wrap_socket(raw, server_hostname=self._hostname)
+
+    def _send_recv(self, sock: ssl.SSLSocket, wire: bytes) -> bytes:
+        sock.sendall(len(wire).to_bytes(2, "big") + wire)
+        lb = b""
+        while len(lb) < 2:
+            chunk = sock.recv(2 - len(lb))
+            if not chunk:
+                raise OSError("DoT: connection closed")
+            lb += chunk
+        resp_len = int.from_bytes(lb, "big")
+        data = b""
+        while len(data) < resp_len:
+            chunk = sock.recv(resp_len - len(data))
+            if not chunk:
+                raise OSError("DoT: response truncated")
+            data += chunk
+        return data
+
+    def query(self, request: "DNSRecord") -> bytes:
+        """Send a DNS query over the persistent TLS connection. Reconnects once on failure."""
+        wire = request.pack()
+        with self._lock:
+            for attempt in range(2):
+                try:
+                    if self._sock is None:
+                        self._sock = self._connect()
+                    return self._send_recv(self._sock, wire)
+                except (OSError, ssl.SSLError):
+                    try:
+                        self._sock.close()
+                    except Exception:
+                        pass
+                    self._sock = None
+                    if attempt == 1:
+                        raise
+        raise OSError("DoT: unreachable")
+
+    def close(self):
+        with self._lock:
+            if self._sock:
+                try:
+                    self._sock.close()
+                except Exception:
+                    pass
+                self._sock = None
+
+
 class ValkyrieDNSResolver(BaseResolver):
-    """dnslib resolver: blocklist hit → 0.0.0.0, else forward upstream."""
+    """dnslib resolver: blocklist hit → 0.0.0.0/::, else forward upstream via DoT."""
 
     def __init__(self, blocklist: BlocklistDB, upstream: str, event_log: EventLog):
         self._blocklist = blocklist
@@ -1641,10 +2058,13 @@ class ValkyrieDNSResolver(BaseResolver):
         self.blocked_total = 0
         self.allowed_total = 0
         self._query_state = AlertState(cooldown_sec=30)  # dedupe clean queries per 30s
+        self._dot = _DoTSession(upstream, _DOT_UPSTREAM_HOSTNAME)
 
     def resolve(self, request, handler):
         qname = str(request.q.qname).rstrip(".")
         hit = self._blocklist.lookup(qname)
+        if hit and _is_cdn_whitelisted(qname):
+            hit = None  # CDN/media domain — always allow even if in blocklist
 
         if hit:
             self.blocked_total += 1
@@ -1658,6 +2078,8 @@ class ValkyrieDNSResolver(BaseResolver):
             reply = request.reply()
             if request.q.qtype in (QTYPE.A, QTYPE.ANY):
                 reply.add_answer(RR(request.q.qname, QTYPE.A, rdata=A("0.0.0.0"), ttl=300))
+            elif request.q.qtype == QTYPE.AAAA:
+                reply.add_answer(RR(request.q.qname, QTYPE.AAAA, rdata=AAAARecord("::"), ttl=300))
             return reply
 
         self.allowed_total += 1
@@ -1670,12 +2092,17 @@ class ValkyrieDNSResolver(BaseResolver):
                 details="Clean DNS query",
             )
         try:
-            upstream_reply = request.send(self._upstream, 53, timeout=3)
-            return DNSRecord.parse(upstream_reply)
-        except (socket.timeout, OSError):
-            reply = request.reply()
-            reply.header.rcode = 2  # SERVFAIL
-            return reply
+            raw = self._dot.query(request)
+            return DNSRecord.parse(raw)
+        except (OSError, ssl.SSLError):
+            # DoT failed — fall back to plain UDP on a reliable public resolver
+            try:
+                upstream_reply = request.send(_DOT_FALLBACK_UPSTREAM, 53, timeout=3)
+                return DNSRecord.parse(upstream_reply)
+            except (socket.timeout, OSError):
+                reply = request.reply()
+                reply.header.rcode = 2  # SERVFAIL
+                return reply
 
 
 class DNSSinkhole:
@@ -1721,18 +2148,23 @@ class MonitorDNSResolver(BaseResolver):
         self.alert_total = 0
         self.query_total = 0
         self._query_state = AlertState(cooldown_sec=30)  # dedupe clean queries per 30s
+        self._dot = _DoTSession(upstream, _DOT_UPSTREAM_HOSTNAME)
 
     def resolve(self, request, handler):
         qname = str(request.q.qname).rstrip(".")
         self.query_total += 1
 
         try:
-            upstream_reply = request.send(self._upstream, 53, timeout=3)
-            reply = DNSRecord.parse(upstream_reply)
-        except (socket.timeout, OSError):
-            reply = request.reply()
-            reply.header.rcode = 2
-            return reply
+            raw = self._dot.query(request)
+            reply = DNSRecord.parse(raw)
+        except (OSError, ssl.SSLError):
+            try:
+                upstream_reply = request.send(_DOT_FALLBACK_UPSTREAM, 53, timeout=3)
+                reply = DNSRecord.parse(upstream_reply)
+            except (socket.timeout, OSError):
+                reply = request.reply()
+                reply.header.rcode = 2
+                return reply
 
         hit = self._blocklist.lookup(qname)
         if hit and self._alert_state.should_alert(qname):
@@ -2835,15 +3267,14 @@ def run_shield(blocklist: BlocklistDB, event_log: EventLog,
 
     # ── Layer 2: Start DNS sinkhole in background (auto-restart on failure) ──
     alert_state = AlertState()
-    dns_monitor = DNSMonitor(blocklist, event_log, alert_state, port=dns_port)
-    dns_monitor.start_background()
-    console.print_monitor_setup("127.0.0.1", dns_port, blocklist.size)
+    dns_sinkhole = DNSSinkhole(blocklist, event_log, port=dns_port)
+    dns_sinkhole.start_background()
+    console.print_dns_setup("127.0.0.1", dns_port)
 
-    # ── Layer 3: Firewall — DoH block + IPv6 block + proactive IP preload ────
+    # ── Layer 3: Firewall — DoH block + proactive IP preload ────────────────
     firewall = FirewallMitigator(event_log)
     if sys.platform == "win32":
         firewall.block_doh_providers()
-        firewall.block_ipv6_outbound()
         # Resolve curated domains and pre-inject rules (background — non-blocking)
         curated_domains = [
             d for d, e in blocklist._index.items()
@@ -2864,6 +3295,12 @@ def run_shield(blocklist: BlocklistDB, event_log: EventLog,
     api = AlertAPIServer(event_log, host=api_bind)
     api.start()
 
+    # ── Layer 6: Tracking parameter proxy ────────────────────────────────────
+    proxy = TrackingParamProxy()
+    proxy.start()
+    if sys.platform == "win32":
+        proxy.set_windows_system_proxy()
+
     running = True
     wifi_tick = 0
 
@@ -2876,13 +3313,16 @@ def run_shield(blocklist: BlocklistDB, event_log: EventLog,
         signal.signal(signal.SIGTERM, _stop)
 
     console.section("SHIELD ACTIVE — ALL LAYERS RUNNING")
-    print(f"  {Color.GREEN}DNS Sinkhole{Color.RESET}    → all interfaces → 127.0.0.1, tracker domains → 0.0.0.0")
+    print(f"  {Color.GREEN}DNS Sinkhole{Color.RESET}    → all interfaces → 127.0.0.1, tracker A+AAAA → 0.0.0.0/::")
     print(f"  {Color.GREEN}Hosts File{Color.RESET}      → {len(high_value_domains)} high-value trackers hardcoded to 0.0.0.0")
+    print(f"  {Color.GREEN}Encrypted DNS{Color.RESET}   → upstream queries via DoT to Mullvad (ISP cannot see queries)")
     print(f"  {Color.GREEN}DoH/DoT Block{Color.RESET}   → encrypted DNS bypasses blocked at firewall")
-    print(f"  {Color.GREEN}IPv6 Block{Color.RESET}      → IPv6 outbound blocked")
+    print(f"  {Color.GREEN}Fingerprinting{Color.RESET}  → 40+ fingerprint/session-record services blocked at DNS")
+    print(f"  {Color.GREEN}URL Proxy{Color.RESET}       → tracking params stripped (utm_*, fbclid, gclid...) + DNT:1 injected")
     print(f"  {Color.GREEN}Firewall{Color.RESET}        → TCP+UDP rules injected per tracker connection")
     print(f"  {Color.GREEN}WiFi Guard{Color.RESET}      → 4-canary DNS hijack detection, network security check")
-    print(f"  {Color.DIM}Scan interval: {SHIELD_SCAN_INTERVAL}s   Press Ctrl+C to stop{Color.RESET}\n")
+    print(f"  {Color.DIM}Scan interval: {SHIELD_SCAN_INTERVAL}s   Press Ctrl+C to stop{Color.RESET}")
+    print(f"  {Color.DIM}ISP note: DNS is encrypted. For full traffic encryption, add a VPN (Proton VPN free / Mullvad).{Color.RESET}\n")
 
     # Initial WiFi check
     try:
@@ -2898,16 +3338,16 @@ def run_shield(blocklist: BlocklistDB, event_log: EventLog,
     try:
         while running:
             # Restart sinkhole thread if it died (port conflict, sleep/wake, etc.)
-            thread_dead = (dns_monitor._thread is None or
-                           not dns_monitor._thread.is_alive())
+            thread_dead = (dns_sinkhole._thread is None or
+                           not dns_sinkhole._thread.is_alive())
             if thread_dead:
                 print(f"  {Color.YELLOW}[SHIELD] DNS sinkhole died — restarting…{Color.RESET}")
                 try:
-                    dns_monitor.stop()
+                    dns_sinkhole.stop()
                 except Exception:
                     pass
-                dns_monitor = DNSMonitor(blocklist, event_log, alert_state, port=dns_port)
-                dns_monitor.start_background()
+                dns_sinkhole = DNSSinkhole(blocklist, event_log, port=dns_port)
+                dns_sinkhole.start_background()
 
             # Scan live connections + inject firewall rules for tracker IPs
             connections = scanner.scan()
@@ -2936,21 +3376,23 @@ def run_shield(blocklist: BlocklistDB, event_log: EventLog,
                 except Exception:
                     pass
 
-            alerts, queries = dns_monitor.stats
+            blocked, allowed = dns_sinkhole.stats
             fw_count = len(firewall._created_rules)
             print(f"  {Color.DIM}[{datetime.datetime.now().strftime('%H:%M:%S')}] "
-                  f"DNS queries: {queries}  blocked DNS: {alerts}  "
+                  f"DNS queries: {blocked + allowed}  blocked DNS: {blocked}  "
                   f"FW rules: {fw_count}{Color.RESET}")
 
             time.sleep(SHIELD_SCAN_INTERVAL)
     finally:
         firewall.cleanup_all_rules()
-        firewall.restore_ipv6()
-        dns_monitor.stop()
+        dns_sinkhole.stop()
         dns_switcher.restore()
         hosts_mgr.restore()
+        proxy.stop()
+        if sys.platform == "win32":
+            proxy.reset_windows_system_proxy()
         api.stop()
-        print(f"\n  {Color.DIM}Shield stopped. Firewall rules removed. IPv6 restored. DNS restored. Hosts file cleaned.{Color.RESET}\n")
+        print(f"\n  {Color.DIM}Shield stopped. Firewall rules removed. DNS restored. Hosts file cleaned. Proxy removed.{Color.RESET}\n")
 
 
 def run_wifi_check(event_log: EventLog):
@@ -3098,8 +3540,8 @@ Examples:
 
     shield_p = sub.add_parser("shield",
                                help="Maximum protection: DNS sinkhole + firewall + WiFi guard")
-    shield_p.add_argument("--dns-port", type=int, default=DEFAULT_DNS_PORT,
-                          help=f"DNS listen port (default {DEFAULT_DNS_PORT})")
+    shield_p.add_argument("--dns-port", type=int, default=53,
+                          help="DNS listen port (default 53 — Shield requires Administrator)")
     shield_p.add_argument("--api-bind", default="127.0.0.1",
                           help="Bind REST API to address (default 127.0.0.1)")
 

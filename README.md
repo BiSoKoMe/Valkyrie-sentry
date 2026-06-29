@@ -133,7 +133,8 @@ start.bat
 
 ## What It Protects Against
 
-- **DNS tracking** — returns `0.0.0.0` for 1M+ surveillance domains so requests never reach trackers
+- **DNS tracking** — returns `0.0.0.0`/`::` for 1M+ surveillance domains (IPv4 A and IPv6 AAAA) so requests never reach trackers
+- **ISP/government DNS surveillance** — all upstream DNS queries travel over DoT (DNS-over-TLS) to Mullvad's no-log resolver; your ISP sees only encrypted TLS traffic, not your query content
 - **App telemetry** — blocks Spotify, Steam, Discord, Epic Games, Sentry, and other app-level phone-home connections
 - **Ad networks** — Google Ads, Meta Pixel, Twitter/X Ads, Snap, TikTok, LinkedIn Insight Tag, Bing Ads
 - **Data brokers** — Segment, Amplitude, Mixpanel, Hotjar, FullStory, Datadog, New Relic
