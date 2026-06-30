@@ -14,3 +14,5 @@ winotify>=1.1.0
 # back to normal Clear-DnsClientServerAddress -InterfaceAlias "Wi-Fi"
  
  #  python valkyrie.py monitor --dns-port 5353
+
+ # start  python -m valkyrie --web --no-ui --web-port 8090

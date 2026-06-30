@@ -19,9 +19,17 @@ LOG_PATH       = DATA_DIR / "valkyrie.log"
 # ---------------------------------------------------------------------------
 DNS_LISTEN_HOST  = "127.0.0.1"
 DNS_LISTEN_PORT  = 5300        # 5353 is taken by mDNS (Brave, svchost) on Windows
-DNS_UPSTREAM     = "8.8.8.8"
+DNS_UPSTREAM     = "40.54.1.13"
 DNS_UPSTREAM_PORT = 53
 DNS_TIMEOUT      = 3.0         # seconds
+
+# Ordered list of upstream resolvers tried in sequence on forward failure
+UPSTREAM_SERVERS: list[str] = [
+    "40.54.1.13",   # ISP DNS — primary (always reachable on this network)
+    "8.8.8.8",      # Google — fallback
+    "1.1.1.1",      # Cloudflare — fallback
+    "9.9.9.9",      # Quad9 — fallback
+]
 
 SINKHOLE_IPV4 = "0.0.0.0"
 SINKHOLE_IPV6 = "::"
@@ -40,7 +48,7 @@ BLOCKLIST_MAX_AGE_DAYS = 7
 # ---------------------------------------------------------------------------
 ENTROPY_THRESHOLD      = 3.5    # Shannon entropy above this → suspicious
 RATE_WINDOW_SECONDS    = 10     # sliding window for query-rate check
-RATE_MAX_QUERIES       = 20     # queries per window per process → suspicious
+RATE_MAX_QUERIES       = 30     # queries per window per process → suspicious
 DOMAIN_AGE_THRESHOLD   = 30     # days; newer domains flagged (WHOIS optional)
 BEHAVIORAL_BLOCK_SCORE = 0.7    # suspicion score at/above which we block
 
@@ -122,27 +130,9 @@ WIREGUARD_CLIENT_ADDR = "10.13.13.2/24"
 # ---------------------------------------------------------------------------
 # Site scanner
 # ---------------------------------------------------------------------------
-TRUSTED_ROOTS: frozenset[str] = frozenset({
-    "google.com", "bing.com", "yahoo.com", "duckduckgo.com",
-    "youtube.com", "twitter.com", "instagram.com",
-    "facebook.com", "tiktok.com", "reddit.com",
-    "gmail.com", "outlook.com", "zoom.us", "slack.com",
-    "discord.com", "telegram.org", "whatsapp.com",
-    "github.com", "stackoverflow.com", "gitlab.com",
-    "npmjs.com", "pypi.org", "cloudflare.com",
-    "amazon.com", "ebay.com", "etsy.com",
-    "bbc.com", "cnn.com", "reuters.com", "nytimes.com",
-    "netflix.com", "spotify.com", "twitch.tv",
-    "soundcloud.com", "vimeo.com",
-    "microsoft.com", "windows.com", "office.com",
-    "live.com", "xbox.com", "apple.com", "icloud.com",
-    "paypal.com", "stripe.com",
-    "cloudfront.net", "fastly.net", "akamaized.net",
-    "jsdelivr.net", "unpkg.com", "cdnjs.cloudflare.com",
-})
 
-# Ad-tech / pure-tracking SLDs: a single signal here is enough to block.
-TRACKER_SLDS_HARD: frozenset[str] = frozenset({
+# Pure ad-tech / tracking SLDs — score +0.7, block alone.
+TRACKER_SLDS: frozenset[str] = frozenset({
     "doubleclick", "googlesyndication", "googleadservices",
     "googletagmanager", "googletagservices", "google-analytics",
     "fbcdn", "fbsbx", "amazon-adsystem", "amazonaax",
@@ -150,25 +140,23 @@ TRACKER_SLDS_HARD: frozenset[str] = frozenset({
     "omtrdc", "2o7", "everesttech", "moatads",
     "criteo", "taboola", "outbrain", "adsrvr",
     "adnxs", "rubiconproject", "pubmatic", "openx",
+    "telemetry",   # telemetry.* SLDs are pure tracker infra
 })
 
-# Analytics / monitoring SLDs: a single signal flags but does not block alone.
-TRACKER_SLDS_SOFT: frozenset[str] = frozenset({
-    "chartbeat", "parsely", "hotjar", "mouseflow",
-    "fullstory", "logrocket", "segment", "mixpanel",
-    "amplitude", "heap", "optimizely", "abtasty",
-    "newrelic", "datadoghq", "rollbar",
+# Analytics / monitoring SLDs — score +0.4, flag only.
+ANALYTICS_SLDS: frozenset[str] = frozenset({
+    "segment", "mixpanel", "amplitude", "heap",
+    "hotjar", "mouseflow", "fullstory", "logrocket",
+    "chartbeat", "parsely", "optimizely", "abtasty",
+    "newrelic", "datadoghq", "rollbar", "heap-api",
 })
 
-# Combined set kept for external callers that don't need the tier distinction.
-TRACKER_SLDS: frozenset[str] = TRACKER_SLDS_HARD | TRACKER_SLDS_SOFT
-
-TRACKER_SUBDOMAINS: frozenset[str] = frozenset({
+# Subdomain prefixes that indicate tracker infrastructure — score +0.7, block alone.
+# Only fires when the FIRST label of the domain exactly matches one of these
+# AND the domain has 3+ parts (subdomain.domain.tld).
+TRACKER_PREFIXES: frozenset[str] = frozenset({
     "tracker", "tracking", "telemetry", "analytics",
-    "pixel", "beacon", "collect", "stats", "metrics",
-    "log", "logs", "event", "events", "ad", "ads",
-    "adserver", "adtrack", "spy", "monitor", "report",
-    "reports", "data", "sync", "synced", "hit",
+    "pixel", "beacon", "collect", "adserver", "adtrack",
 })
 
 SYSTEM_PROCESSES: frozenset[str] = frozenset({
@@ -178,10 +166,12 @@ SYSTEM_PROCESSES: frozenset[str] = frozenset({
 
 MS_TRUSTED_ROOTS: frozenset[str] = frozenset({
     "microsoft.com", "windows.com", "windowsupdate.com",
+    "live.com",
 })
 
 SCANNER_BLOCK_THRESHOLD: float = 0.7
 SCANNER_FLAG_THRESHOLD:  float = 0.4
+RATE_MAX_QUERIES:        int   = 30
 SCAN_CACHE_TTL_HOURS:    int   = 24
 
 # ---------------------------------------------------------------------------

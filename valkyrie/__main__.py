@@ -76,30 +76,74 @@ from .wireguard import WireGuardConfig
 # ---------------------------------------------------------------------------
 
 def _add_windows_firewall_rule(port: int, console) -> None:
-    """Add an inbound UDP allow rule for Valkyrie DNS port (non-fatal)."""
+    """Add inbound + outbound UDP allow rules for Valkyrie DNS (non-fatal)."""
     if platform.system() != "Windows":
         return
-    rule_name = f"Valkyrie DNS UDP {port}"
-    try:
-        subprocess.run(
-            [
-                "netsh", "advfirewall", "firewall", "add", "rule",
-                f"name={rule_name}",
-                "dir=in",
-                "action=allow",
-                "protocol=UDP",
-                f"localport={port}",
-                "profile=any",
-            ],
-            check=True,
-            capture_output=True,
-        )
-        console.print(f"[green]✓[/green] Windows Firewall rule added for UDP port {port}")
-    except subprocess.CalledProcessError as exc:
-        # Rule may already exist — not fatal
-        console.print(f"[dim]Firewall rule skipped: {exc.stderr.decode(errors='replace').strip()}[/dim]")
-    except FileNotFoundError:
-        console.print("[dim]netsh not found — skipping firewall rule[/dim]")
+
+    rules = [
+        # Inbound: accept DNS queries arriving at our listen port
+        {"name": f"Valkyrie DNS Inbound UDP {port}", "dir": "in",
+         "protocol": "UDP", "localport": str(port)},
+        # Outbound UDP: forward queries to upstream resolvers
+        {"name": "Valkyrie DNS Outbound UDP", "dir": "out",
+         "protocol": "UDP", "remoteport": "53"},
+        # Outbound TCP: TCP fallback when UDP is blocked/dropped
+        {"name": "Valkyrie DNS Outbound TCP", "dir": "out",
+         "protocol": "TCP", "remoteport": "53"},
+    ]
+
+    for rule in rules:
+        args = [
+            "netsh", "advfirewall", "firewall", "add", "rule",
+            f"name={rule['name']}",
+            f"dir={rule['dir']}",
+            "action=allow",
+            f"protocol={rule['protocol']}",
+            "profile=any",
+        ]
+        if "localport" in rule:
+            args.append(f"localport={rule['localport']}")
+        if "remoteport" in rule:
+            args.append(f"remoteport={rule['remoteport']}")
+        try:
+            subprocess.run(args, check=True, capture_output=True)
+            console.print(f"[green]✓[/green] Firewall rule: {rule['name']}")
+        except subprocess.CalledProcessError as exc:
+            console.print(f"[dim]Firewall rule skipped ({rule['name']}): "
+                          f"{exc.stderr.decode(errors='replace').strip()}[/dim]")
+        except FileNotFoundError:
+            console.print("[dim]netsh not found — skipping firewall rules[/dim]")
+            break
+
+
+# ---------------------------------------------------------------------------
+# Upstream reachability probe
+# ---------------------------------------------------------------------------
+
+def _test_upstream() -> bool:
+    """Send a raw UDP DNS query for github.com to verify outbound port 53 works.
+
+    Uses a hand-crafted wire packet so this works even if dnspython is broken.
+    Returns True if any upstream responds within 2 seconds.
+    """
+    import socket, struct
+    # Minimal A-record query for github.com (transaction ID 0xAABB)
+    wire = (b'\xaa\xbb\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00'
+            b'\x06github\x03com\x00\x00\x01\x00\x01')
+    for upstream in ["40.54.1.13", "8.8.8.8", "1.1.1.1"]:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(2.0)
+            sock.sendto(wire, (upstream, 53))
+            sock.recvfrom(4096)
+            sock.close()
+            return True
+        except Exception:
+            try:
+                sock.close()
+            except Exception:
+                pass
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +192,8 @@ def main() -> None:
     parser.add_argument("--zero-log",        action="store_true",  help="RAM-only mode — no disk writes")
     parser.add_argument("--zero-log-import", type=int, default=0, metavar="HOURS",
                         help="Import last N hours from disk DB into RAM at startup")
+    parser.add_argument("--debug", action="store_true",
+                        help="Verbose DNS forwarding logs — prints every query, upstream tried, and result")
     args = parser.parse_args()
 
     console = Console()
@@ -397,6 +443,11 @@ def main() -> None:
     dns_server: DNSInterceptor | None = None
     if not args.no_dns:
         _add_windows_firewall_rule(args.port, console)
+        if _test_upstream():
+            console.print("[green]✓ Upstream DNS reachable[/green]")
+        else:
+            console.print("[red]WARNING: Cannot reach upstream DNS servers. "
+                          "Check firewall / network.[/red]")
         dns_server = DNSInterceptor(
             store           = store,
             blocklist       = blocklist,
@@ -409,6 +460,7 @@ def main() -> None:
             port            = args.port,
             upstream_host   = dns_upstream_host,
             upstream_port   = dns_upstream_port,
+            debug           = args.debug,
         )
         try:
             dns_server.start()

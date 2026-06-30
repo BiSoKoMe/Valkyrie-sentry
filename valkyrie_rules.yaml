@@ -1,0 +1,25 @@
+# Valkyrie user rules — edit and save; changes take effect within 5 seconds.
+#
+# always_allow: never block these domains (e.g. work tools, trusted services)
+# always_block: force-block these domains regardless of other decisions
+#
+# Wildcards: use *.example.com to match any subdomain.
+# Process filter: add 'process: appname' to restrict a rule to one process.
+
+always_allow:
+  - domain: "*.zoom.us"
+  - domain: "*.slack.com"
+  - domain: "*.microsoft.com"
+    process: "teams"
+
+always_block:
+  - domain: "*.doubleclick.net"
+  - domain: "doubleclick.net"
+  - domain: "*.googlesyndication.com"
+  - domain: "googlesyndication.com"
+  - domain: "*.facebook.com"
+    process: "chrome"
+  # Cursor telemetry — WmiPrvSE.exe querying api2.cursor.sh is anomalous
+  # (WMI should never be phoning out to a code editor's API endpoint)
+  - domain: "*.cursor.sh"
+  - domain: "cursor.sh"

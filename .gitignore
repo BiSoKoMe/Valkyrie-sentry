@@ -28,3 +28,6 @@ Thumbs.db
 # Blocklists (large downloaded files)
 blocklists/steven_black_hosts.txt
 blocklists/oisd_full.txt
+
+# Runtime data (downloaded blocklist, sqlite db, MAC/IP backups)
+data/
