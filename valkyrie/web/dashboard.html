@@ -1,0 +1,1227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Valkyrie — Privacy Gateway</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+  <style>
+    /* ══════════════════════════════════════════════════════════════
+       Custom Properties
+       ══════════════════════════════════════════════════════════════ */
+    :root {
+      --bg-base:      #000000;
+      --bg-surface:   #0c0c0c;
+      --bg-hover:     rgba(255,255,255,0.04);
+      --border:       rgba(255,255,255,0.08);
+      --border-hover: rgba(255,255,255,0.16);
+
+      --text-primary:   rgba(255,255,255,0.95);
+      --text-secondary: rgba(255,255,255,0.45);
+      --text-tertiary:  rgba(255,255,255,0.2);
+
+      --red:    #FF453A;
+      --orange: #FF9F0A;
+      --yellow: #FFD60A;
+      --green:  #30D158;
+      --blue:   #0A84FF;
+      --purple: #BF5AF2;
+
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+      --font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+
+      --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);
+      --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+      --header-h:  60px;
+      --sidebar-w: 300px;
+    }
+
+    /* ══════════════════════════════════════════════════════════════
+       Reset
+       ══════════════════════════════════════════════════════════════ */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html {
+      height: 100%;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    body {
+      height: 100%;
+      background: var(--bg-base);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      font-size: 14px;
+      line-height: 1.5;
+      overflow: hidden;
+    }
+
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255,255,255,0.1);
+      border-radius: 100px;
+    }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+    /* ══════════════════════════════════════════════════════════════
+       Layout shell
+       ══════════════════════════════════════════════════════════════ */
+    .app {
+      display: grid;
+      grid-template-rows: var(--header-h) auto 1fr;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    .main-area {
+      display: grid;
+      grid-template-columns: 1fr var(--sidebar-w);
+      overflow: hidden;
+      border-top: 1px solid var(--border);
+    }
+
+    .events-section {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      border-right: 1px solid var(--border);
+    }
+
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ══════════════════════════════════════════════════════════════
+       Header
+       ══════════════════════════════════════════════════════════════ */
+    .site-header {
+      display: flex;
+      align-items: center;
+      padding: 0 24px;
+      gap: 20px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(0,0,0,0.85);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+    }
+
+    .wordmark {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+
+    .wordmark-icon {
+      width: 26px;
+      height: 26px;
+      color: var(--blue);
+    }
+
+    .wordmark-title {
+      font-size: 17px;
+      font-weight: 200;
+      letter-spacing: 0.28em;
+      text-transform: uppercase;
+      color: var(--text-primary);
+    }
+
+    .wordmark-sub {
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+      margin-top: 1px;
+    }
+
+    .header-spacer { flex: 1; }
+
+    .live-clock {
+      font-size: 13px;
+      font-weight: 400;
+      font-variant-numeric: tabular-nums;
+      color: var(--text-secondary);
+      letter-spacing: 0.05em;
+    }
+
+    .ws-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.05em;
+      color: var(--text-secondary);
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--text-tertiary);
+      flex-shrink: 0;
+      transition: background 250ms ease;
+    }
+
+    .status-dot.connected {
+      background: var(--green);
+      animation: dotPulse 2.5s ease-in-out infinite;
+    }
+
+    .status-dot.disconnected {
+      background: var(--red);
+      animation: dotPulse 0.9s ease-in-out infinite;
+    }
+
+    /* ══════════════════════════════════════════════════════════════
+       Stat Cards
+       ══════════════════════════════════════════════════════════════ */
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .stat-card {
+      padding: 14px 18px;
+      border-right: 1px solid var(--border);
+      cursor: default;
+      transition: background 200ms ease;
+      animation: fadeSlideUp 400ms var(--ease-out) both;
+    }
+
+    .stat-card:last-child { border-right: none; }
+    .stat-card:hover { background: var(--bg-hover); }
+    .stat-card + .stat-card { border-left: 1px solid var(--border); }
+
+    .stat-card:nth-child(1) { animation-delay:   0ms; }
+    .stat-card:nth-child(2) { animation-delay:  50ms; }
+    .stat-card:nth-child(3) { animation-delay: 100ms; }
+    .stat-card:nth-child(4) { animation-delay: 150ms; }
+    .stat-card:nth-child(5) { animation-delay: 200ms; }
+    .stat-card:nth-child(6) { animation-delay: 250ms; }
+    .stat-card:nth-child(7) { animation-delay: 300ms; }
+    .stat-card:nth-child(8) { animation-delay: 350ms; }
+
+    .stat-label {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+      margin-bottom: 6px;
+    }
+
+    .stat-value {
+      font-size: 26px;
+      font-weight: 300;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+      color: var(--text-primary);
+    }
+
+    .stat-value.c-red    { color: var(--red); }
+    .stat-value.c-orange { color: var(--orange); }
+    .stat-value.c-yellow { color: var(--yellow); }
+    .stat-value.c-green  { color: var(--green); }
+    .stat-value.c-blue   { color: var(--blue); }
+
+    .stat-value.is-text {
+      font-size: 12px;
+      font-weight: 400;
+      margin-top: 3px;
+      line-height: 1.4;
+      word-break: break-all;
+    }
+
+    /* ══════════════════════════════════════════════════════════════
+       Section headers
+       ══════════════════════════════════════════════════════════════ */
+    .section-hdr {
+      display: flex;
+      align-items: center;
+      padding: 10px 18px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      gap: 8px;
+    }
+
+    .section-title {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    .section-count {
+      font-size: 11px;
+      color: var(--text-tertiary);
+      margin-left: auto;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ══════════════════════════════════════════════════════════════
+       Events table
+       ══════════════════════════════════════════════════════════════ */
+    .events-scroll {
+      overflow-y: auto;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .events-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    .events-table thead th {
+      padding: 8px 14px;
+      text-align: left;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--text-tertiary);
+      position: sticky;
+      top: 0;
+      background: var(--bg-base);
+      border-bottom: 1px solid var(--border);
+      z-index: 10;
+    }
+
+    .col-time     { width: 76px; }
+    .col-decision { width: 112px; }
+    .col-domain   { /* flex */ }
+    .col-process  { width: 130px; }
+    .col-reason   { width: 140px; }
+    .col-score    { width: 52px; text-align: right !important; }
+
+    .event-row td {
+      padding: 7px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.025);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      vertical-align: middle;
+    }
+
+    /* Time cell: tighter padding so HH:MM:SS never clips */
+    .event-row td:first-child { padding-left: 14px; padding-right: 4px; }
+
+    .event-row:hover td { background: var(--bg-hover); }
+    .event-row:last-child td { border-bottom: none; }
+
+    .cell-time    { font-size: 11px; font-family: var(--font-mono); color: var(--text-tertiary); }
+    .cell-domain  { font-size: 12px; font-family: var(--font-mono); color: var(--text-primary); }
+    .cell-process { font-size: 12px; color: var(--text-secondary); }
+    .cell-reason  { font-size: 11px; color: var(--text-tertiary); }
+    .cell-score   { font-size: 12px; font-family: var(--font-mono); text-align: right; font-weight: 500; }
+    .cell-score.lo { color: var(--text-tertiary); }
+    .cell-score.md { color: var(--yellow); }
+    .cell-score.hi { color: var(--red); font-weight: 600; }
+
+    /* Decision badges */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 11px;
+      border-radius: 100px;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .badge-blocked    { background: rgba(255,69,58,0.14); color: var(--red); }
+    .badge-behavioral { background: rgba(191,90,242,0.14); color: var(--purple); }
+    .badge-flagged    { background: rgba(255,214,10,0.12); color: var(--yellow); }
+    .badge-allowed    { color: var(--green); font-size: 11px; font-weight: 400; padding: 2px 6px; }
+
+    /* ══════════════════════════════════════════════════════════════
+       Sidebar
+       ══════════════════════════════════════════════════════════════ */
+    .system-body { padding: 4px 14px 12px; }
+    .telemetry-row {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;
+    }
+    .telemetry-badge {
+      font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 4px;
+      letter-spacing: .03em;
+      background: var(--bg-hover); color: var(--text-secondary);
+    }
+    .telemetry-badge.killed  { background: rgba(48,209,88,.15); color: var(--green); }
+    .telemetry-badge.active  { background: rgba(255,69,58,.15); color: var(--red); }
+    .telemetry-badge.partial { background: rgba(255,159,10,.15); color: var(--orange); }
+    .telemetry-list { list-style: none; margin: 0 0 10px; padding: 0; max-height: 140px; overflow-y: auto; }
+    .telemetry-list li {
+      font-size: 11px; padding: 3px 0; color: var(--text-secondary);
+      display: flex; justify-content: space-between; gap: 8px;
+    }
+    .telemetry-list li.t-on  { color: var(--red); }
+    .telemetry-list li.t-off { color: var(--green); }
+    .telemetry-btn {
+      width: 100%; padding: 7px 0; font-size: 12px; font-weight: 600;
+      border: 1px solid var(--border); border-radius: 6px;
+      background: var(--bg-hover); color: var(--text-primary);
+      cursor: pointer;
+    }
+    .telemetry-btn:hover { background: var(--bg-active, var(--border)); }
+    .telemetry-btn:disabled { opacity: .5; cursor: default; }
+
+    .lock-icon {
+      vertical-align: -1px;
+      color: var(--blue);
+      margin-right: 1px;
+    }
+
+    .mode-panel {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+    .mode-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--text-secondary);
+      flex-shrink: 0;
+    }
+    .mode-dot.is-service { background: var(--green); }
+    .mode-dot.is-terminal { background: var(--blue); }
+
+    /* Zero-log banner */
+    .zero-log-banner {
+      display: none;
+      background: rgba(255,69,58,0.18);
+      border-bottom: 1px solid rgba(255,69,58,0.35);
+      padding: 6px 24px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      color: var(--red);
+      text-align: center;
+      flex-shrink: 0;
+    }
+    .zero-log-banner.active { display: block; }
+
+    /* MAC / VPN sidebar rows */
+    .info-row {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 12px; color: var(--text-secondary); margin-bottom: 6px;
+    }
+    .info-val {
+      font-size: 11px; font-family: var(--font-mono); color: var(--text-primary);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px;
+    }
+    .action-btn {
+      width: 100%; padding: 7px 0; font-size: 12px; font-weight: 600;
+      border: 1px solid var(--border); border-radius: 6px;
+      background: var(--bg-hover); color: var(--text-primary);
+      cursor: pointer; margin-bottom: 6px;
+    }
+    .action-btn:hover { background: var(--border-hover); }
+    .action-btn:disabled { opacity: .5; cursor: default; }
+    .integrity-ok  { color: var(--green); font-size: 11px; }
+    .integrity-bad { color: var(--red);   font-size: 11px; font-weight: 600; }
+
+    .sidebar-panel {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .sidebar-panel.doh-panel {
+      flex: 0 0 auto;
+      max-height: 220px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .sidebar-panel.chart-panel {
+      flex: 1;
+      min-height: 0;
+    }
+
+    .sidebar-scroll {
+      overflow-y: auto;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .doh-empty, .chart-empty {
+      padding: 18px;
+      font-size: 12px;
+      color: var(--text-tertiary);
+      text-align: center;
+    }
+
+    /* DoH alert rows */
+    .doh-item {
+      padding: 8px 16px;
+      transition: background 150ms ease;
+    }
+    .doh-item:hover { background: var(--bg-hover); }
+    .doh-item-proc { font-size: 13px; font-weight: 500; }
+    .doh-item-detail { font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono); margin-top: 1px; }
+
+    /* Top blocked bar chart */
+    .chart-row { padding: 8px 16px; }
+    .chart-row-hdr { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 5px; }
+    .chart-domain { font-size: 12px; font-family: var(--font-mono); color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 74%; }
+    .chart-count { font-size: 11px; font-weight: 600; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+    .chart-track { height: 4px; background: rgba(255,255,255,0.06); border-radius: 100px; overflow: hidden; width: 100%; }
+    .chart-fill { height: 100%; border-radius: 100px; background: linear-gradient(90deg, var(--red), var(--orange)); width: 0%; transition: width 700ms var(--ease-out); }
+
+    /* Suspicious system-process indicator */
+    .cell-process.sys-suspicious { color: var(--yellow); }
+    .cell-process.sys-suspicious::before {
+      content: '⚑ ';
+      font-size: 9px;
+      opacity: 0.8;
+    }
+
+    /* Sidebar section title colours */
+    .title-doh   { color: var(--red); }
+    .title-chart { color: var(--text-secondary); }
+
+    /* ══════════════════════════════════════════════════════════════
+       Animations
+       ══════════════════════════════════════════════════════════════ */
+    @keyframes slideInRow {
+      from { opacity: 0; transform: translateY(-14px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes fadeOut {
+      from { opacity: 1; }
+      to   { opacity: 0; }
+    }
+
+    @keyframes blockFlash {
+      0%   { background-color: rgba(255,69,58,0.16); }
+      60%  { background-color: rgba(255,69,58,0.05); }
+      100% { background-color: transparent; }
+    }
+
+    @keyframes dotPulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.25; }
+    }
+
+    @keyframes fadeSlideUp {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes slideInRight {
+      from { opacity: 0; transform: translateX(10px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+
+    .event-row { animation: slideInRow 280ms var(--ease-spring) both; }
+    .event-row.blocked-flash td { animation: blockFlash 1100ms ease-out both; }
+    .event-row.exiting { animation: fadeOut 180ms ease forwards; }
+    .doh-item.entering { animation: slideInRight 240ms var(--ease-out) both; }
+
+    /* ══════════════════════════════════════════════════════════════
+       Responsive
+       ══════════════════════════════════════════════════════════════ */
+    @media (max-width: 1100px) {
+      :root { --sidebar-w: 260px; }
+      .col-reason { display: none; }
+    }
+
+    @media (max-width: 1200px) {
+      .stats-row { grid-template-columns: repeat(4, 1fr); }
+    }
+
+    @media (max-width: 900px) {
+      .sidebar { display: none; }
+      .main-area { grid-template-columns: 1fr; }
+      .stats-row { grid-template-columns: repeat(4, 1fr); }
+      .col-process { display: none; }
+    }
+
+    @media (max-width: 640px) {
+      .stats-row { grid-template-columns: repeat(2, 1fr); }
+      .stat-card:nth-child(n+5) { display: none; }
+      .wordmark-sub { display: none; }
+    }
+  </style>
+</head>
+
+<body>
+<div class="app">
+
+  <!-- ── Zero-log banner (hidden unless active) ───────────────────── -->
+  <div class="zero-log-banner" id="zero-log-banner">
+    ZERO LOG MODE — RAM ONLY — No data written to disk
+  </div>
+
+  <!-- ── Header ─────────────────────────────────────────────────────── -->
+  <header class="site-header">
+    <div class="wordmark">
+      <svg class="wordmark-icon" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="1.5"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+      </svg>
+      <div>
+        <div class="wordmark-title">Valkyrie</div>
+        <div class="wordmark-sub">Privacy Gateway</div>
+      </div>
+    </div>
+
+    <div class="header-spacer"></div>
+
+    <time class="live-clock" id="live-clock">--:--:--</time>
+
+    <div class="ws-badge">
+      <span class="status-dot" id="status-dot"></span>
+      <span id="status-text">Connecting</span>
+    </div>
+  </header>
+
+  <!-- ── Stat Cards ──────────────────────────────────────────────────── -->
+  <div class="stats-row" role="region" aria-label="Statistics">
+    <div class="stat-card">
+      <div class="stat-label">Total (24h)</div>
+      <div class="stat-value" id="s-total">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">DNS Blocked</div>
+      <div class="stat-value c-red" id="s-blocked">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">FW Blocked</div>
+      <div class="stat-value c-orange" id="s-fw">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Flagged</div>
+      <div class="stat-value c-yellow" id="s-flagged">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Allowed</div>
+      <div class="stat-value c-green" id="s-allowed">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Top Domain</div>
+      <div class="stat-value c-blue is-text" id="s-domain">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Scanner Decisions</div>
+      <div class="stat-value c-blue" id="s-scanner">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Elements Cleaned</div>
+      <div class="stat-value c-green" id="s-cleaned">0</div>
+    </div>
+  </div>
+
+  <!-- ── Main ────────────────────────────────────────────────────────── -->
+  <div class="main-area">
+
+    <!-- Events feed -->
+    <section class="events-section">
+      <div class="section-hdr">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
+             stroke="var(--text-secondary)" stroke-width="2.5"
+             stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="12" y1="8" x2="12" y2="12"/>
+          <line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <span class="section-title" style="color:var(--text-secondary)">Live DNS Events</span>
+        <span class="section-count" id="event-count">0 events</span>
+      </div>
+
+      <div class="events-scroll">
+        <table class="events-table" role="log" aria-live="polite" aria-atomic="false">
+          <thead>
+            <tr>
+              <th class="col-time">Time</th>
+              <th class="col-decision">Decision</th>
+              <th class="col-domain">Domain</th>
+              <th class="col-process">Process</th>
+              <th class="col-reason">Reason</th>
+              <th class="col-score">Score</th>
+            </tr>
+          </thead>
+          <tbody id="events-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+
+      <!-- Run mode indicator -->
+      <div class="sidebar-panel mode-panel" id="mode-panel">
+        <span class="mode-dot" id="mode-dot"></span>
+        <span id="mode-label">Checking mode…</span>
+      </div>
+
+      <!-- DoH Bypass Alerts -->
+      <div class="sidebar-panel doh-panel">
+        <div class="section-hdr">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
+               stroke="var(--red)" stroke-width="2.5"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          <span class="section-title title-doh">DoH Bypass</span>
+        </div>
+        <div class="sidebar-scroll">
+          <div id="doh-list">
+            <p class="doh-empty" id="doh-empty">No bypass detected</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Top Blocked Domains -->
+      <div class="sidebar-panel chart-panel">
+        <div class="section-hdr">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
+               stroke="var(--text-secondary)" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="20" x2="18" y2="10"/>
+            <line x1="12" y1="20" x2="12" y2="4"/>
+            <line x1="6"  y1="20" x2="6"  y2="14"/>
+          </svg>
+          <span class="section-title title-chart">Top Blocked</span>
+        </div>
+        <div class="sidebar-scroll">
+          <div id="chart-list">
+            <p class="chart-empty">No blocked events yet</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- MAC Randomizer -->
+      <div class="sidebar-panel" style="flex:0 0 auto;border-bottom:1px solid var(--border)">
+        <div class="section-hdr">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
+               stroke="var(--text-secondary)" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="7" width="20" height="14" rx="2"/>
+            <path d="M16 3l-4 4-4-4"/>
+          </svg>
+          <span class="section-title">MAC Address</span>
+        </div>
+        <div class="system-body">
+          <div class="info-row" id="mac-row">
+            <span>Current</span>
+            <span class="info-val" id="mac-current">—</span>
+          </div>
+          <div class="info-row">
+            <span>Original</span>
+            <span class="info-val" id="mac-original">—</span>
+          </div>
+          <button class="action-btn" id="mac-rand-btn">Randomise Now</button>
+          <button class="action-btn" id="mac-restore-btn">Restore Original</button>
+        </div>
+      </div>
+
+      <!-- Multi-hop VPN -->
+      <div class="sidebar-panel" style="flex:0 0 auto;border-bottom:1px solid var(--border)">
+        <div class="section-hdr">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
+               stroke="var(--text-secondary)" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M2 12h20M12 2a15.3 15.3 0 010 20M12 2a15.3 15.3 0 000 20"/>
+          </svg>
+          <span class="section-title">Multi-hop VPN</span>
+        </div>
+        <div class="system-body">
+          <div class="info-row">
+            <span>Hop 1</span>
+            <span class="info-val" id="vpn-hop1">—</span>
+          </div>
+          <div class="info-row">
+            <span>Hop 2</span>
+            <span class="info-val" id="vpn-hop2">—</span>
+          </div>
+          <div class="info-row">
+            <span>Kill switch</span>
+            <span class="info-val" id="vpn-ks">—</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- System / Telemetry + Zero-log -->
+      <div class="sidebar-panel system-panel">
+        <div class="section-hdr">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
+               stroke="var(--text-secondary)" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06A1.65 1.65 0 004.6 15a1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06A1.65 1.65 0 009 4.6a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+          </svg>
+          <span class="section-title">System</span>
+        </div>
+        <div class="sidebar-scroll system-body">
+          <div class="info-row">
+            <span>Mode</span>
+            <span class="info-val" id="zl-mode">disk</span>
+          </div>
+          <div class="info-row">
+            <span>Session events</span>
+            <span class="info-val" id="zl-events">—</span>
+          </div>
+          <div class="info-row">
+            <span>Disk writes</span>
+            <span class="info-val" id="zl-disk">enabled</span>
+          </div>
+          <div class="info-row">
+            <span>Integrity</span>
+            <span id="zl-integrity" class="integrity-ok">verified</span>
+          </div>
+          <div class="telemetry-row" style="margin-top:8px">
+            <span>Telemetry</span>
+            <span class="telemetry-badge" id="telemetry-badge">—</span>
+          </div>
+          <ul class="telemetry-list" id="telemetry-list"></ul>
+          <button class="telemetry-btn" id="telemetry-btn">Run Killer</button>
+        </div>
+      </div>
+
+    </aside>
+  </div>
+</div>
+
+<script>
+// ── Constants ─────────────────────────────────────────────────────────────
+const MAX_EVENTS      = 100;
+const MAX_DOH         = 10;
+const COUNTUP_MS      = 380;
+const WS_RECONNECT_MS = 3000;
+
+// Processes that should never make non-Microsoft DNS queries
+const SYS_PROCS = new Set([
+  'wmiprvse.exe', 'svchost.exe', 'services.exe', 'lsass.exe',
+  'csrss.exe', 'spoolsv.exe', 'taskhostw.exe', 'taskhost.exe',
+  'dllhost.exe', 'msiexec.exe', 'rundll32.exe', 'smss.exe',
+  'wininit.exe', 'winlogon.exe', 'dwm.exe',
+]);
+
+// Domains that are expected from Windows system processes
+const MS_DOMAIN = /(\.|^)(microsoft\.com|windows\.com|windowsupdate\.com|msftconnecttest\.com|msftncsi\.com|live\.com|office\.com|azure\.com|msn\.com|bing\.com|xbox\.com|visualstudio\.com|skype\.com|teams\.com|sharepoint\.com|outlook\.com|hotmail\.com|akadns\.net|akamai\.net|trafficmanager\.net)$/i;
+
+function isSysSuspicious(proc, domain) {
+  if (!proc || !domain) return false;
+  return SYS_PROCS.has(proc.toLowerCase()) && !MS_DOMAIN.test(domain);
+}
+
+// ── State ─────────────────────────────────────────────────────────────────
+let ws           = null;
+let reconnectTmr = null;
+let pingTmr      = null;
+let nums         = {};   // el-id → last displayed value (for count-up)
+let eventCount   = 0;
+let dohCount     = 0;
+
+// ── DOM ───────────────────────────────────────────────────────────────────
+const $body      = document.getElementById('events-body');
+const $evCount   = document.getElementById('event-count');
+const $dohList   = document.getElementById('doh-list');
+const $chartList = document.getElementById('chart-list');
+const $dot       = document.getElementById('status-dot');
+const $status    = document.getElementById('status-text');
+const $clock     = document.getElementById('live-clock');
+
+// ── WebSocket ─────────────────────────────────────────────────────────────
+
+function connect() {
+  const proto   = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsPort  = location.port || (location.protocol === 'https:' ? '443' : '80');
+  ws = new WebSocket(`${proto}//${location.hostname}:${wsPort}/ws`);
+
+  ws.onopen = () => {
+    $dot.className = 'status-dot connected';
+    $status.textContent = 'Live';
+    clearTimeout(reconnectTmr);
+    pingTmr = setInterval(() => ws && ws.readyState === 1 && ws.send('ping'), 30000);
+  };
+
+  ws.onmessage = ({ data }) => {
+    let msg;
+    try { msg = JSON.parse(data); } catch { return; }
+    dispatch(msg);
+  };
+
+  ws.onclose = ws.onerror = () => {
+    $dot.className = 'status-dot disconnected';
+    $status.textContent = 'Reconnecting…';
+    clearInterval(pingTmr);
+    reconnectTmr = setTimeout(connect, WS_RECONNECT_MS);
+  };
+}
+
+function dispatch(msg) {
+  switch (msg.type) {
+    case 'init':
+      renderStats(msg.stats);
+      renderChart(msg.stats.top_blocked || []);
+      // seed events in chronological order (oldest first) so newest ends at top
+      (msg.events || []).slice().reverse().forEach(prependEvent);
+      break;
+    case 'event':
+      prependEvent(msg.event);
+      break;
+    case 'stats':
+      renderStats(msg.stats);
+      renderChart(msg.stats.top_blocked || []);
+      break;
+  }
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────
+
+const STAT_MAP = [
+  { id: 's-total',   key: 'total_24h',        text: false },
+  { id: 's-blocked', key: 'dns_blocked',       text: false },
+  { id: 's-fw',      key: 'fw_blocked',        text: false },
+  { id: 's-flagged', key: 'flagged',           text: false },
+  { id: 's-allowed', key: 'allowed',           text: false },
+  { id: 's-domain',  key: 'top_domain',        text: true  },
+  { id: 's-scanner', key: 'scanner_decisions', text: false },
+  { id: 's-cleaned', key: 'elements_cleaned',  text: false },
+];
+
+function renderStats(stats) {
+  STAT_MAP.forEach(({ id, key, text }) => {
+    const el  = document.getElementById(id);
+    const val = stats[key];
+    if (!el || val === undefined) return;
+    if (text) { el.textContent = val || '—'; return; }
+    countUp(el, Number(val) || 0);
+  });
+  if (stats.running_as_service !== undefined) renderMode(stats.running_as_service);
+  if (stats.zero_log_active !== undefined)    renderZeroLogBanner(stats.zero_log_active);
+}
+
+function renderZeroLogBanner(active) {
+  const banner = document.getElementById('zero-log-banner');
+  if (banner) banner.classList.toggle('active', !!active);
+}
+
+function renderMode(isService) {
+  const dot   = document.getElementById('mode-dot');
+  const label = document.getElementById('mode-label');
+  if (!dot || !label) return;
+  dot.classList.toggle('is-service', isService);
+  dot.classList.toggle('is-terminal', !isService);
+  label.textContent = isService ? 'Running as service ✓' : 'Running in terminal';
+}
+
+function countUp(el, target) {
+  const start = nums[el.id] ?? 0;
+  if (start === target) return;
+  nums[el.id] = target;
+  const t0 = performance.now();
+
+  (function step(now) {
+    const p = Math.min((now - t0) / COUNTUP_MS, 1);
+    const e = 1 - Math.pow(1 - p, 3);   // ease-out cubic
+    el.textContent = Math.round(start + (target - start) * e).toLocaleString();
+    if (p < 1) requestAnimationFrame(step);
+    else el.textContent = target.toLocaleString();
+  })(performance.now());
+}
+
+// ── Events ────────────────────────────────────────────────────────────────
+
+function prependEvent(evt) {
+  const row = makeRow(evt);
+  if (evt.decision === 'blocked' || evt.decision === 'behavioral') {
+    row.classList.add('blocked-flash');
+  }
+  $body.prepend(row);
+  eventCount++;
+  $evCount.textContent = `${eventCount.toLocaleString()} events`;
+
+  if (evt.category === 'doh_bypass') addDohAlert(evt);
+  trimEvents();
+}
+
+function makeRow(evt) {
+  const score    = parseFloat(evt.suspicion) || 0;
+  const scoreCls = score >= 0.7 ? 'hi' : score >= 0.4 ? 'md' : 'lo';
+  const procCls  = isSysSuspicious(evt.process_name, evt.domain) ? 'cell-process sys-suspicious' : 'cell-process';
+  const isHttps  = !!evt.url;
+  const lock     = isHttps
+    ? '<svg class="lock-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg> '
+    : '';
+  const domainTitle = isHttps ? ` title="${x(evt.url)}"` : '';
+  const row = document.createElement('tr');
+  row.className = 'event-row' + (isHttps ? ' event-https' : '');
+  row.innerHTML =
+    `<td><span class="cell-time">${x(evt.timestamp)}</span></td>` +
+    `<td>${badge(evt.decision)}</td>` +
+    `<td><span class="cell-domain"${domainTitle}>${lock}${x(evt.domain)}</span></td>` +
+    `<td><span class="${procCls}">${x(evt.process_name || '')}</span></td>` +
+    `<td><span class="cell-reason">${x(evt.reason || '')}</span></td>` +
+    `<td><span class="cell-score ${scoreCls}">${score.toFixed(2)}</span></td>`;
+  return row;
+}
+
+function badge(decision) {
+  const MAP = {
+    blocked:    ['badge-blocked',    'Blocked'],
+    behavioral: ['badge-behavioral', 'Behavioral'],
+    flagged:    ['badge-flagged',    'Flagged'],
+    allowed:    ['badge-allowed',    '✓'],
+  };
+  const [cls, label] = MAP[decision] || ['badge-allowed', decision];
+  return `<span class="badge ${cls}">${label}</span>`;
+}
+
+function trimEvents() {
+  const rows = $body.querySelectorAll('.event-row:not(.exiting)');
+  if (rows.length <= MAX_EVENTS) return;
+  const oldest = rows[rows.length - 1];
+  oldest.classList.add('exiting');
+  oldest.addEventListener('animationend', () => oldest.remove(), { once: true });
+  setTimeout(() => { if (oldest.parentNode) oldest.remove(); }, 220);
+}
+
+// ── DoH Alerts ────────────────────────────────────────────────────────────
+
+function addDohAlert(evt) {
+  const empty = document.getElementById('doh-empty');
+  if (empty) empty.remove();
+
+  const item = document.createElement('div');
+  item.className = 'doh-item entering';
+  item.innerHTML =
+    `<div class="doh-item-proc">${x(evt.process_name || 'unknown')}</div>` +
+    `<div class="doh-item-detail">${x(evt.domain)} &middot; ${x(evt.timestamp)}</div>`;
+  $dohList.prepend(item);
+  dohCount++;
+
+  const items = $dohList.querySelectorAll('.doh-item');
+  if (items.length > MAX_DOH) items[items.length - 1].remove();
+}
+
+// ── Chart ─────────────────────────────────────────────────────────────────
+
+function renderChart(domains) {
+  if (!domains || domains.length === 0) return;
+  const max = Math.max(1, domains[0].count);
+
+  $chartList.innerHTML = domains.slice(0, 5).map(({ domain, count }) => {
+    // Scale so the longest bar is always 100% of the track.
+    // Even a single event makes a full-width bar — bars are always readable.
+    const pct = Math.round((count / max) * 100);
+    return `<div class="chart-row">
+      <div class="chart-row-hdr">
+        <span class="chart-domain" title="${x(domain)}">${x(domain)}</span>
+        <span class="chart-count">${Number(count).toLocaleString()}</span>
+      </div>
+      <div class="chart-track">
+        <div class="chart-fill" data-pct="${pct}" style="width:0%"></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Double rAF: first frame commits the DOM + initial width:0%;
+  // second frame starts the CSS transition to the target width.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    $chartList.querySelectorAll('.chart-fill').forEach(el => {
+      el.style.width = el.dataset.pct + '%';
+    });
+  }));
+}
+
+// ── Clock ─────────────────────────────────────────────────────────────────
+
+function startClock() {
+  function tick() {
+    $clock.textContent = new Date().toLocaleTimeString('en-GB', {
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+    });
+  }
+  tick();
+  setInterval(tick, 1000);
+}
+
+// ── Utility ───────────────────────────────────────────────────────────────
+
+function x(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────
+
+async function loadInitial() {
+  try {
+    const [sRes, eRes] = await Promise.all([
+      fetch('/api/stats'),
+      fetch('/api/events'),
+    ]);
+    if (sRes.ok) {
+      const stats = await sRes.json();
+      renderStats(stats);
+      renderChart(stats.top_blocked || []);
+    }
+    if (eRes.ok) {
+      const events = await eRes.json();
+      // API returns newest-first; reverse so prependEvent builds the list correctly
+      events.slice().reverse().forEach(prependEvent);
+    }
+  } catch (_) {
+    // Server not ready yet — WS init payload will fill the data once connected
+  }
+}
+
+// ── Telemetry / System panel ────────────────────────────────────────────
+
+async function loadTelemetryStatus() {
+  const badge = document.getElementById('telemetry-badge');
+  const list  = document.getElementById('telemetry-list');
+  if (!badge || !list) return;
+  try {
+    const res = await fetch('/api/telemetry/status');
+    const data = await res.json();
+    badge.textContent = data.status;
+    badge.className = 'telemetry-badge ' + data.status.toLowerCase();
+    list.innerHTML = (data.settings || []).map(s =>
+      `<li class="${s.active ? 't-on' : 't-off'}">
+        <span>${x(s.name.replace(/_/g, ' '))}</span><span>${s.active ? 'on' : 'off'}</span>
+      </li>`
+    ).join('');
+  } catch (_) {
+    badge.textContent = 'UNKNOWN';
+  }
+}
+
+function wireTelemetryButton() {
+  const btn = document.getElementById('telemetry-btn');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    btn.textContent = 'Running…';
+    try {
+      await fetch('/api/telemetry/kill', { method: 'POST' });
+    } catch (_) { /* ignore */ }
+    await loadTelemetryStatus();
+    btn.disabled = false;
+    btn.textContent = 'Run Killer';
+  });
+}
+
+// ── MAC Randomizer ────────────────────────────────────────────────────────
+
+async function loadMacStatus() {
+  try {
+    const res  = await fetch('/api/mac/status');
+    const data = await res.json();
+    if (!data.enabled) return;
+    const ifaces = Object.entries(data.interfaces || {});
+    if (!ifaces.length) return;
+    // Show first non-lo interface
+    const [iface, info] = ifaces[0];
+    const cur = document.getElementById('mac-current');
+    const org = document.getElementById('mac-original');
+    const row = document.getElementById('mac-row');
+    if (cur) cur.textContent = (info.current || '—') + (info.changed ? ' (rand)' : '');
+    if (org) org.textContent = info.original || '—';
+    if (row) row.title = iface;
+  } catch (_) {}
+}
+
+function wireMacButtons() {
+  const randBtn    = document.getElementById('mac-rand-btn');
+  const restoreBtn = document.getElementById('mac-restore-btn');
+  if (randBtn) {
+    randBtn.addEventListener('click', async () => {
+      randBtn.disabled = true;
+      try {
+        await fetch('/api/mac/randomize', { method: 'POST' });
+        await loadMacStatus();
+      } catch (_) {}
+      randBtn.disabled = false;
+    });
+  }
+  if (restoreBtn) {
+    restoreBtn.addEventListener('click', async () => {
+      restoreBtn.disabled = true;
+      try {
+        await fetch('/api/mac/restore', { method: 'POST' });
+        await loadMacStatus();
+      } catch (_) {}
+      restoreBtn.disabled = false;
+    });
+  }
+}
+
+// ── VPN Status ────────────────────────────────────────────────────────────
+
+async function loadVpnStatus() {
+  try {
+    const res  = await fetch('/api/vpn/status');
+    const data = await res.json();
+    const h1 = document.getElementById('vpn-hop1');
+    const h2 = document.getElementById('vpn-hop2');
+    const ks = document.getElementById('vpn-ks');
+    if (h1) h1.textContent = data.hop1_conf_exists ? 'configured' : 'not set';
+    if (h2) h2.textContent = data.hop2_conf_exists ? 'configured' : 'not set';
+    if (ks) ks.textContent = 'ACTIVE';
+  } catch (_) {}
+}
+
+// ── Zero-log Status ───────────────────────────────────────────────────────
+
+async function loadZeroLogStatus() {
+  try {
+    const res  = await fetch('/api/zero-log/status');
+    const data = await res.json();
+    const mode   = document.getElementById('zl-mode');
+    const events = document.getElementById('zl-events');
+    const disk   = document.getElementById('zl-disk');
+    const integ  = document.getElementById('zl-integrity');
+    if (mode)   mode.textContent   = data.active ? 'Zero log (RAM only)' : 'disk';
+    if (events) events.textContent = data.session_events != null
+                                      ? data.session_events.toLocaleString() + ' (RAM)'
+                                      : '—';
+    if (disk)   disk.textContent   = data.disk_writes || '—';
+    if (integ) {
+      integ.textContent  = data.integrity || 'verified';
+      integ.className    = data.integrity === 'TAMPERED' ? 'integrity-bad' : 'integrity-ok';
+    }
+    renderZeroLogBanner(data.active);
+  } catch (_) {}
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  startClock();
+  loadInitial();
+  connect();
+  loadTelemetryStatus();
+  wireTelemetryButton();
+  loadMacStatus();
+  wireMacButtons();
+  loadVpnStatus();
+  loadZeroLogStatus();
+  // Refresh MAC/zero-log status every 30s
+  setInterval(() => { loadMacStatus(); loadZeroLogStatus(); }, 30000);
+});
+</script>
+</body>
+</html>
