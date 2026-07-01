@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import gc
 import hashlib
-import os
 import platform
 import sqlite3
 import threading

@@ -1,8 +1,21 @@
 """Unbound local recursive DNS resolver manager.
 
-Starts Unbound as a subprocess listening on 127.0.0.1:5301.
-When running, dns_interceptor.py forwards allowed queries here
-instead of to an external resolver like 8.8.8.8.
+Two modes, tried in order:
+
+1. Adopt an already-running Unbound instance. If something is already
+   listening on 127.0.0.1:53 (most commonly Unbound installed as a native
+   OS service — e.g. the Windows Unbound service), we use it directly as
+   the upstream resolver rather than spawning a second instance, which
+   would simply fail to bind the already-owned port.
+2. Spawn our own subprocess on UNBOUND_PORT (5301) with a generated config,
+   as before — used when no system-level Unbound is present.
+
+Either way, dns_interceptor.py forwards allowed queries to whichever
+address upstream_addr() returns instead of to an external resolver like
+8.8.8.8 — so the overall chain is:
+
+    OS DNS client -> Valkyrie (sinkhole/filter, port 5300/5353)
+                   -> Unbound (real recursive resolution, port 53 or 5301)
 
 This means DNS resolution is fully local — root nameservers are
 contacted directly, and no plaintext query leaves the machine to
@@ -33,7 +46,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from .config import DATA_DIR, DNS_TIMEOUT, UNBOUND_CONF_PATH, UNBOUND_PORT
+from .config import DATA_DIR, UNBOUND_CONF_PATH, UNBOUND_PORT
 
 _SYSTEM = platform.system()
 
@@ -157,6 +170,9 @@ class UnboundManager:
         mgr.stop()
     """
 
+    # Native OS-service Unbound always answers on the standard DNS port.
+    _SYSTEM_UNBOUND_PORT = 53
+
     def __init__(
         self,
         port: int        = UNBOUND_PORT,
@@ -167,6 +183,7 @@ class UnboundManager:
         self._conf_path = conf_path
         self._console   = console
         self._proc: Optional[subprocess.Popen] = None
+        self._adopted_existing = False
 
     def _print(self, msg: str) -> None:
         if self._console:
@@ -181,7 +198,22 @@ class UnboundManager:
     # ------------------------------------------------------------------
 
     def start(self) -> bool:
-        """Start Unbound.  Returns True if it is listening after startup."""
+        """Start Unbound.  Returns True if it is listening after startup.
+
+        Checks for an already-running system-level Unbound on port 53 first
+        (e.g. installed as a native Windows service) and adopts it directly
+        rather than spawning a second instance — which would simply fail to
+        bind a port the OS service already owns.
+        """
+        if self._detect_existing_unbound():
+            self._port = self._SYSTEM_UNBOUND_PORT
+            self._adopted_existing = True
+            self._print(
+                f"[green]✓[/green] Using existing Unbound service on port "
+                f"{self._SYSTEM_UNBOUND_PORT}"
+            )
+            return True
+
         unbound_bin = _which("unbound")
         if not unbound_bin:
             self._print(
@@ -214,6 +246,11 @@ class UnboundManager:
         return False
 
     def stop(self) -> None:
+        # Never touch an adopted system-level service — Valkyrie didn't
+        # start it and has no business stopping it on exit.
+        if self._adopted_existing:
+            self._adopted_existing = False
+            return
         if self._proc and self._proc.poll() is None:
             self._proc.terminate()
             try:
@@ -223,6 +260,8 @@ class UnboundManager:
         self._proc = None
 
     def is_running(self) -> bool:
+        if self._adopted_existing:
+            return self._probe()
         return (
             self._proc is not None
             and self._proc.poll() is None
@@ -232,6 +271,48 @@ class UnboundManager:
     def upstream_addr(self) -> tuple[str, int]:
         """Return (host, port) to use as DNS upstream."""
         return ("127.0.0.1", self._port)
+
+    # ------------------------------------------------------------------
+    # Existing-service detection
+    # ------------------------------------------------------------------
+
+    def _detect_existing_unbound(self) -> bool:
+        """True if something is already answering DNS on 127.0.0.1:53.
+
+        Probing the port directly is the reliable, OS-agnostic signal — it's
+        true regardless of whether Unbound got there via a Windows service,
+        systemd, or a manually-started process. On Windows we also check the
+        Service Control Manager by name purely for clearer logging; its
+        absence doesn't change the result, since the port probe is what
+        actually matters (a service named something else, or a manually
+        started binary, is just as valid an "already running" resolver).
+        """
+        if not self._probe_port(self._SYSTEM_UNBOUND_PORT):
+            return False
+        if _SYSTEM == "Windows":
+            state = self._windows_service_state("Unbound")
+            if state:
+                self._print(f"[dim]  Windows service 'Unbound' state: {state}[/dim]")
+        return True
+
+    @staticmethod
+    def _windows_service_state(name: str) -> Optional[str]:
+        """Return the SCM state word (e.g. "RUNNING") for a named Windows
+        service, or None if it can't be determined. Windows-only."""
+        if _SYSTEM != "Windows":
+            return None
+        try:
+            import re
+            result = subprocess.run(
+                ["sc", "query", name],
+                capture_output=True, text=True, timeout=5,
+            )
+            match = re.search(r"STATE\s*:\s*\d+\s+(\w+)", result.stdout)
+            if match:
+                return match.group(1)
+        except Exception:
+            pass
+        return None
 
     # ------------------------------------------------------------------
     # Internal
@@ -274,7 +355,15 @@ class UnboundManager:
             return None
 
     def _probe(self) -> bool:
-        """Send a minimal UDP DNS query; return True if we get any response."""
+        """Send a minimal UDP DNS query to our own configured port; return
+        True if we get any response."""
+        return self._probe_port(self._port)
+
+    @staticmethod
+    def _probe_port(port: int) -> bool:
+        """Send a minimal UDP DNS query to 127.0.0.1:<port>; return True if
+        we get any response. Used both for our own spawned instance and for
+        detecting a pre-existing resolver on the standard DNS port."""
         import socket
         import struct
 
@@ -285,7 +374,7 @@ class UnboundManager:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.settimeout(1.0)
         try:
-            sock.sendto(query, ("127.0.0.1", self._port))
+            sock.sendto(query, ("127.0.0.1", port))
             data, _ = sock.recvfrom(512)
             return len(data) >= 12
         except (socket.timeout, OSError):

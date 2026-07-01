@@ -15,7 +15,7 @@ import queue
 import sqlite3
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Optional
@@ -57,8 +57,6 @@ class DnsEvent:
 # ---------------------------------------------------------------------------
 # Internal message types for scan-cache operations on the writer queue
 # ---------------------------------------------------------------------------
-
-from dataclasses import field as _field  # avoid shadowing Python builtins
 
 @dataclass
 class _ScanCacheTouch:

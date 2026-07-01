@@ -59,7 +59,7 @@ from rich.console import Console
 
 from .behavioral import BehavioralEngine
 from .blocklist import BlocklistManager
-from .config import DNS_LISTEN_HOST, DNS_LISTEN_PORT, UNBOUND_PORT, WEB_HOST, WEB_PORT
+from .config import DNS_LISTEN_HOST, DNS_LISTEN_PORT, WEB_HOST, WEB_PORT
 from .dns_interceptor import DNSInterceptor
 from .doh_detector import DoHDetector
 from .firewall import FirewallManager
@@ -131,18 +131,22 @@ def _test_upstream() -> bool:
     wire = (b'\xaa\xbb\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00'
             b'\x06github\x03com\x00\x00\x01\x00\x01')
     for upstream in ["40.54.1.13", "8.8.8.8", "1.1.1.1"]:
+        sock = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.settimeout(2.0)
             sock.sendto(wire, (upstream, 53))
             sock.recvfrom(4096)
-            sock.close()
             return True
-        except Exception:
-            try:
-                sock.close()
-            except Exception:
-                pass
+        except OSError:
+            # Unreachable/timeout for this upstream — try the next one.
+            continue
+        finally:
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
     return False
 
 
@@ -398,8 +402,13 @@ def main() -> None:
         _t = time.monotonic()
         from .mac_randomizer import MacRandomizer
         mac_randomizer = MacRandomizer(store=store)
+        new_mac = mac_randomizer.randomize()
+        if new_mac:
+            console.print(f"[green]✓[/green] MAC randomised: [cyan]{new_mac}[/cyan]")
+        elif mac_randomizer.last_error:
+            console.print(f"[red]✗ MAC randomisation failed:[/red] {mac_randomizer.last_error}")
         mac_randomizer.auto_randomize_on_connect()
-        _tick("MAC randomizer started (auto-randomise on reconnect)", _t)
+        _tick("MAC randomizer: active (auto-randomise on reconnect)", _t)
     else:
         console.print("[dim]MAC randomizer: disabled (use --mac-rand to enable)[/dim]")
 

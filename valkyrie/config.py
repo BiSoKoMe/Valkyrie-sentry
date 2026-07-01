@@ -25,10 +25,10 @@ DNS_TIMEOUT      = 3.0         # seconds
 
 # Ordered list of upstream resolvers tried in sequence on forward failure
 UPSTREAM_SERVERS: list[str] = [
-    "40.54.1.13",   # ISP DNS — primary (always reachable on this network)
-    "8.8.8.8",      # Google — fallback
+    "8.8.8.8",      # Google — primary
     "1.1.1.1",      # Cloudflare — fallback
     "9.9.9.9",      # Quad9 — fallback
+    "40.54.1.13",   # ISP DNS — moved last (often unreachable off-network)
 ]
 
 SINKHOLE_IPV4 = "0.0.0.0"
@@ -171,8 +171,8 @@ MS_TRUSTED_ROOTS: frozenset[str] = frozenset({
 
 SCANNER_BLOCK_THRESHOLD: float = 0.7
 SCANNER_FLAG_THRESHOLD:  float = 0.4
-RATE_MAX_QUERIES:        int   = 30
 SCAN_CACHE_TTL_HOURS:    int   = 24
+# NOTE: RATE_MAX_QUERIES is defined once under "Behavioral heuristics" above.
 
 # ---------------------------------------------------------------------------
 # Web dashboard
@@ -256,7 +256,7 @@ REALISTIC_OUIS: list[str] = [
     "00:1B:21",   # Intel
     "8C:8D:28",   # Intel
 ]
-MAC_BACKUP_PATH: "Path" = DATA_DIR / "mac_backup.json"
+MAC_BACKUP_PATH: Path = DATA_DIR / "mac_backup.json"
 MAC_AUTO_RANDOMIZE: bool = False
 MAC_NEVER_RANDOMIZE: frozenset[str] = frozenset({
     "lo", "localhost", "docker0", "vmnet0",

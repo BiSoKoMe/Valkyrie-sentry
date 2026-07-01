@@ -39,7 +39,7 @@ def main() -> None:
             FirewallManager, _IPSet, _in_never_block, _parse_cidr,
             _parse_feed, load_ip_blocklist,
         )
-        from valkyrie.config import FIREWALL_DOH_IPS, FIREWALL_NEVER_BLOCK
+        from valkyrie.config import DNS_UPSTREAM, FIREWALL_DOH_IPS, FIREWALL_NEVER_BLOCK
         _check("firewall module imports", True)
     except ImportError as exc:
         print(f"  [!] FAIL: {exc}")
@@ -65,7 +65,7 @@ def main() -> None:
     _check("10.1.2.3 (RFC1918) protected", _in_never_block("10.1.2.3"))
     _check("172.16.0.0/12 is protected",   _in_never_block("172.16.0.0/12"))
     _check("192.168.1.1 is protected",     _in_never_block("192.168.1.1"))
-    _check("8.8.8.8 upstream protected",   _in_never_block("8.8.8.8"))
+    _check(f"{DNS_UPSTREAM} upstream protected", _in_never_block(DNS_UPSTREAM))
     _check("public IP NOT protected",     not _in_never_block("185.220.101.1"))
 
     # ------------------------------------------------------------------
