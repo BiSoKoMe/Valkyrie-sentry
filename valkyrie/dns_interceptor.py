@@ -49,6 +49,17 @@ from .process_watcher import ProcessInfo, ProcessWatcher, _UNKNOWN
 from .rules import RulesLoader
 from .store import DnsEvent, Store
 
+import struct
+
+
+def _fix_transaction_id(response_wire: bytes, original_id: int) -> bytes:
+    """Rewrite the DNS transaction ID (first 2 bytes of the header) to match
+    the ORIGINAL client's request ID, regardless of what ID was used to
+    query upstream internally."""
+    if len(response_wire) < 2:
+        return response_wire
+    return struct.pack("!H", original_id) + response_wire[2:]
+
 try:
     import dns.message
     import dns.query
@@ -210,10 +221,30 @@ class DNSInterceptor:
             print(f"[dns] {qname}  decision={decision}  proc={proc.name}  reason={reason or '-'}")
 
         response = self._build_response(request, qname, qtype, decision)
+
+        # Defensive: guarantee the reply's transaction ID matches the
+        # original client request, regardless of what ID was used internally
+        # to reach upstream. A mismatched ID makes the client silently
+        # discard the reply — indistinguishable from a timeout.
+        if response:
+            response = _fix_transaction_id(response, request.id)
+
+        if self._debug:
+            resp_id = struct.unpack("!H", response[:2])[0] if len(response) >= 2 else None
+            print(f"  [reply] original_id={request.id} response_id={resp_id}")
+
+        if not response:
+            if self._debug:
+                print(f"  [reply] empty response for {qname} — not sending")
+            return
+
         try:
+            if self._debug:
+                print(f"  [reply] forwarding {len(response)} bytes back to {addr}")
             self._sock.sendto(response, addr)
-        except OSError:
-            pass
+        except OSError as e:
+            if self._debug:
+                print(f"  [reply] sendto failed: {e}")
 
         self._store.log(DnsEvent.now(
             domain       = qname,
@@ -312,21 +343,30 @@ class DNSInterceptor:
         wire  = request.to_wire()
         qname = str(request.question[0].name).rstrip(".") if request.question else "?"
 
-        for upstream in UPSTREAM_SERVERS:
+        # Try the configured upstream first (e.g. local Unbound on 127.0.0.1:53
+        # for fully local recursive resolution), then fall back to the public
+        # resolver list if it's unreachable. Without this, the configured
+        # upstream_host/upstream_port were silently ignored and every query
+        # went straight to public DNS regardless of what Unbound integration
+        # had set up.
+        servers: list[tuple[str, int]] = [(self._upstream_host, self._upstream_port)]
+        servers += [(s, 53) for s in UPSTREAM_SERVERS if s != self._upstream_host]
+
+        for upstream, port in servers:
             # ── UDP ──────────────────────────────────────────────────────────
             if self._debug:
-                print(f"  → forwarding {qname} to {upstream} (UDP)")
+                print(f"  → forwarding {qname} to {upstream}:{port} (UDP)")
             sock = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
             try:
-                sock.settimeout(3.0)
-                sock.sendto(wire, (upstream, 53))
+                sock.settimeout(1.0)
+                sock.sendto(wire, (upstream, port))
                 data, _ = sock.recvfrom(4096)
                 if self._debug:
-                    print(f"  ✓ {qname} resolved via UDP/{upstream}")
+                    print(f"  ✓ {qname} resolved via UDP/{upstream}:{port}")
                 return data
             except Exception as e:
                 if self._debug:
-                    print(f"  ✗ UDP/{upstream} failed: {e}")
+                    print(f"  ✗ UDP/{upstream}:{port} failed: {e}")
             finally:
                 try:
                     sock.close()
@@ -335,11 +375,11 @@ class DNSInterceptor:
 
             # ── TCP (DNS-over-TCP: 2-byte length prefix) ──────────────────
             if self._debug:
-                print(f"  → forwarding {qname} to {upstream} (TCP)")
+                print(f"  → forwarding {qname} to {upstream}:{port} (TCP)")
             sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
             try:
-                sock.settimeout(3.0)
-                sock.connect((upstream, 53))
+                sock.settimeout(1.0)
+                sock.connect((upstream, port))
                 sock.sendall(struct.pack("!H", len(wire)) + wire)
                 length_data = sock.recv(2)
                 if len(length_data) == 2:
@@ -352,11 +392,11 @@ class DNSInterceptor:
                         data += chunk
                     if data:
                         if self._debug:
-                            print(f"  ✓ {qname} resolved via TCP/{upstream}")
+                            print(f"  ✓ {qname} resolved via TCP/{upstream}:{port}")
                         return data
             except Exception as e:
                 if self._debug:
-                    print(f"  ✗ TCP/{upstream} failed: {e}")
+                    print(f"  ✗ TCP/{upstream}:{port} failed: {e}")
             finally:
                 try:
                     sock.close()

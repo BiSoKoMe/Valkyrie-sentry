@@ -24,6 +24,7 @@ import platform
 import subprocess
 import threading
 import time
+import webbrowser
 
 
 # ---------------------------------------------------------------------------
@@ -75,8 +76,16 @@ from .wireguard import WireGuardConfig
 # Windows firewall helper
 # ---------------------------------------------------------------------------
 
-def _add_windows_firewall_rule(port: int, console) -> None:
-    """Add inbound + outbound UDP allow rules for Valkyrie DNS (non-fatal)."""
+def _add_windows_firewall_rule(port: int, console=None) -> None:
+    """Add inbound + outbound UDP allow rules for Valkyrie DNS (non-fatal).
+
+    `console` may be None (normal, quiet startup); when None, per-rule output
+    is suppressed and only the firewall changes are applied.
+    """
+    def _say(msg: str) -> None:
+        if console is not None:
+            console.print(msg)
+
     if platform.system() != "Windows":
         return
 
@@ -107,12 +116,12 @@ def _add_windows_firewall_rule(port: int, console) -> None:
             args.append(f"remoteport={rule['remoteport']}")
         try:
             subprocess.run(args, check=True, capture_output=True)
-            console.print(f"[green]✓[/green] Firewall rule: {rule['name']}")
+            _say(f"[green]✓[/green] Firewall rule: {rule['name']}")
         except subprocess.CalledProcessError as exc:
-            console.print(f"[dim]Firewall rule skipped ({rule['name']}): "
-                          f"{exc.stderr.decode(errors='replace').strip()}[/dim]")
+            _say(f"[dim]Firewall rule skipped ({rule['name']}): "
+                 f"{exc.stderr.decode(errors='replace').strip()}[/dim]")
         except FileNotFoundError:
-            console.print("[dim]netsh not found — skipping firewall rules[/dim]")
+            _say("[dim]netsh not found — skipping firewall rules[/dim]")
             break
 
 
@@ -148,6 +157,40 @@ def _test_upstream() -> bool:
                 except OSError:
                     pass
     return False
+
+
+# ---------------------------------------------------------------------------
+# Startup status box
+# ---------------------------------------------------------------------------
+
+def _print_status_box(console, rows) -> None:
+    """Render the boxed "VALKYRIE IS RUNNING" summary from live service rows.
+
+    Args:
+        console: Rich console to print to.
+        rows:    list of (label, ok, detail) tuples — ok=False renders a red ✗.
+    """
+    from rich import box as _box
+    from rich.panel import Panel
+    from rich.table import Table
+
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(justify="left", no_wrap=True)
+    grid.add_column(justify="center", no_wrap=True)
+    grid.add_column(justify="left")
+    for label, ok, detail in rows:
+        mark = "[green]✓[/green]" if ok else "[red]✗[/red]"
+        grid.add_row(f"[bold]{label}[/bold]", mark, f"[dim]{detail}[/dim]")
+
+    console.print()
+    console.print(Panel(
+        grid,
+        title="[bold green]VALKYRIE IS RUNNING[/bold green]",
+        box=_box.DOUBLE,
+        border_style="green",
+        expand=False,
+        padding=(1, 3),
+    ))
 
 
 # ---------------------------------------------------------------------------
@@ -291,9 +334,20 @@ def main() -> None:
         return
 
     def _tick(label: str, t0: float) -> None:
-        """Print a timed startup line.  Called immediately after each component starts."""
+        """Print a timed per-component startup line — only in --debug mode.
+
+        In normal mode startup output is just the final status box, so these
+        progress lines (and the sub-component chatter routed through
+        `_verbose` below) are suppressed to keep the console clean.
+        """
+        if not args.debug:
+            return
         elapsed = time.monotonic() - t0
         console.print(f"[green]✓[/green] {label} [dim]({elapsed:.2f}s)[/dim]")
+
+    # Sub-components accept a Rich console for progress output; give them one
+    # only in debug mode so normal startup stays quiet (Improvement 6).
+    _verbose = console if args.debug else None
 
     # ------------------------------------------------------------------
     # 0. Zero-log mode (must run before Store so we pass RAM URI)
@@ -326,7 +380,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     _t = time.monotonic()
     blocklist = BlocklistManager()
-    count = blocklist.load(console=console)
+    count = blocklist.load(console=_verbose)
     _tick(f"Blocklist loaded ({count:,} domains)", _t)
     if args.update:
         console.print(f"[green]Update complete.[/green] {count:,} domains.")
@@ -337,28 +391,30 @@ def main() -> None:
     # 3. Firewall (IP-level blocking — optional, non-fatal)
     # ------------------------------------------------------------------
     _t = time.monotonic()
-    firewall = FirewallManager(console=console)
+    firewall = FirewallManager(console=_verbose)
     if not args.no_firewall:
-        firewall.start(console=console)
+        firewall.start(console=_verbose)
         _tick("Firewall ready", _t)
-    else:
+    elif args.debug:
         console.print("[yellow]Firewall disabled (--no-firewall)[/yellow]")
 
     # ------------------------------------------------------------------
     # 4. Unbound local resolver (optional — degrades to external DNS)
     # ------------------------------------------------------------------
     unbound: UnboundManager | None = None
+    unbound_ok = False
     dns_upstream_host = "8.8.8.8"
     dns_upstream_port = 53
     if not args.no_unbound:
         _t = time.monotonic()
-        unbound = UnboundManager(console=console)
+        unbound = UnboundManager(console=_verbose)
         if unbound.start():
+            unbound_ok = True
             dns_upstream_host, dns_upstream_port = unbound.upstream_addr()
             _tick("Unbound resolver ready", _t)
         else:
             _tick("Unbound skipped (not installed)", _t)
-    else:
+    elif args.debug:
         console.print("[yellow]Unbound disabled (--no-unbound)[/yellow]")
 
     # ------------------------------------------------------------------
@@ -409,7 +465,7 @@ def main() -> None:
             console.print(f"[red]✗ MAC randomisation failed:[/red] {mac_randomizer.last_error}")
         mac_randomizer.auto_randomize_on_connect()
         _tick("MAC randomizer: active (auto-randomise on reconnect)", _t)
-    else:
+    elif args.debug:
         console.print("[dim]MAC randomizer: disabled (use --mac-rand to enable)[/dim]")
 
     # ------------------------------------------------------------------
@@ -420,7 +476,7 @@ def main() -> None:
     _mh_status = MultiHopVPN().status()
     if _mh_status["hop1_conf_exists"] and _mh_status["hop2_conf_exists"]:
         _tick("Multi-hop VPN configs ready", _t)
-    else:
+    elif args.debug:
         console.print("[dim]Multi-hop VPN: no configs (run --setup-multihop --hop1 IP --hop2 IP)[/dim]")
 
     # ------------------------------------------------------------------
@@ -451,9 +507,10 @@ def main() -> None:
     _t = time.monotonic()
     dns_server: DNSInterceptor | None = None
     if not args.no_dns:
-        _add_windows_firewall_rule(args.port, console)
+        _add_windows_firewall_rule(args.port, _verbose)
         if _test_upstream():
-            console.print("[green]✓ Upstream DNS reachable[/green]")
+            if args.debug:
+                console.print("[green]✓ Upstream DNS reachable[/green]")
         else:
             console.print("[red]WARNING: Cannot reach upstream DNS servers. "
                           "Check firewall / network.[/red]")
@@ -483,7 +540,7 @@ def main() -> None:
         except PermissionError:
             console.print(f"[red]✗ Cannot bind port {args.port} — try sudo or use --port 5353[/red]")
             dns_server = None
-    else:
+    elif args.debug:
         console.print("[yellow]DNS interceptor disabled (--no-dns)[/yellow]")
 
     # ------------------------------------------------------------------
@@ -542,6 +599,8 @@ def main() -> None:
         web_state.start_time     = time.time()
         web_state.mac_randomizer = mac_randomizer
         web_state.zero_log       = zero_log
+        web_state.dns_port       = args.port
+        web_state.web_port       = args.web_port
         web_thread = threading.Thread(
             target=run_server,
             kwargs={"host": args.web_host, "port": args.web_port},
@@ -549,10 +608,11 @@ def main() -> None:
             name="web-dashboard",
         )
         web_thread.start()
-        console.print(
-            f"[green]✓[/green] Web dashboard  "
-            f"[cyan]http://localhost:{args.web_port}[/cyan]"
-        )
+        if args.debug:
+            console.print(
+                f"[green]✓[/green] Web dashboard  "
+                f"[cyan]http://localhost:{args.web_port}[/cyan]"
+            )
 
     # ------------------------------------------------------------------
     # 11. TLS inspection (optional — disabled by default)
@@ -574,10 +634,60 @@ def main() -> None:
             tls_inspector = None
 
     # ------------------------------------------------------------------
-    # 12. Run
+    # 12. Startup status box (real values) + auto-open dashboard
     # ------------------------------------------------------------------
-    console.print("\n[bold green]Valkyrie is running.[/bold green]  Press Ctrl-C to stop.\n")
+    status_rows: list[tuple[str, bool, str]] = []
 
+    if not args.no_dns:
+        if dns_server is not None:
+            status_rows.append(("DNS Sinkhole", True, f"port {args.port}"))
+        else:
+            status_rows.append(("DNS Sinkhole", False, f"could not bind port {args.port}"))
+    if not args.no_firewall:
+        status_rows.append(("Firewall", True, f"{firewall.count():,} IP ranges"))
+    status_rows.append(("Behavioral AI", True, "active"))
+    if unbound_ok:
+        status_rows.append(("Recursive DNS", True, f"Unbound {dns_upstream_host}:{dns_upstream_port}"))
+    else:
+        status_rows.append(("Upstream DNS", True, f"{dns_upstream_host}:{dns_upstream_port}"))
+    if zero_log is not None and zero_log.is_active():
+        status_rows.append(("Zero Log", True, "RAM only (no disk)"))
+    else:
+        status_rows.append(("Logging", True, "disk (persistent)"))
+    if mac_randomizer is not None:
+        status_rows.append(("MAC Random", True, "auto on reconnect"))
+    if tls_inspector is not None:
+        status_rows.append(("TLS Inspect", True, f"port {tls_inspector.port}"))
+    web_url = f"http://localhost:{args.web_port}"
+    if args.web:
+        status_rows.append(("Dashboard", True, f"localhost:{args.web_port}"))
+
+    _print_status_box(console, status_rows)
+
+    all_ok = all(ok for _, ok, _ in status_rows)
+    console.print()
+    if all_ok:
+        console.print("  [bold]Protection:[/bold] [bold green]ACTIVE[/bold green]")
+    else:
+        console.print("  [bold]Protection:[/bold] [bold yellow]DEGRADED[/bold yellow] — see ✗ above")
+    if args.web:
+        console.print(f"  Open dashboard: [cyan]{web_url}[/cyan]")
+    console.print("  [dim]Press Ctrl-C to stop.[/dim]\n")
+
+    # Auto-open the dashboard in the browser, but only for an interactive
+    # session with the web UI enabled — never when headless (--no-ui) or when
+    # running under the Service Control Manager (no desktop session).
+    if args.web and not args.no_ui:
+        from .service_manager import is_running_as_service
+        if not is_running_as_service():
+            try:
+                webbrowser.open(web_url)
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------
+    # 13. Run
+    # ------------------------------------------------------------------
     try:
         if dashboard:
             dashboard.run()     # blocks until Ctrl-C

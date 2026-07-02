@@ -24,7 +24,8 @@ def test_status_helpers() -> bool:
     print("Testing service_manager helpers ...")
     status = get_service_status()
     print(f"  get_service_status() -> {status!r}")
-    if status not in ("running", "stopped", "not installed"):
+    if status not in ("running", "stopped", "paused", "starting",
+                       "stopping", "continuing", "pausing", "not installed"):
         print("  FAIL — unexpected status value")
         return False
 

@@ -19,19 +19,26 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import secrets
+import subprocess
 import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
+
+from ..config import DATA_DIR
 
 _WEB_DIR = Path(__file__).parent
+_PROJECT_ROOT = _WEB_DIR.parent.parent   # .../valkyrie/web -> .../valkyrie -> repo root
 
 # Module-level FastAPI imports so annotations resolve correctly.
 # (from __future__ import annotations makes ws: WebSocket a lazy string;
 #  FastAPI resolves it against module globals — a local import won't be found.)
 try:
-    from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+    from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
     from fastapi.responses import FileResponse, JSONResponse
     _FASTAPI_OK = True
 except ImportError:
@@ -49,6 +56,8 @@ class _AppState:
     mac_randomizer = None      # valkyrie.mac_randomizer.MacRandomizer (optional)
     zero_log       = None      # valkyrie.zero_log.ZeroLogMode (optional)
     start_time: float = 0.0
+    dns_port: int  = 0         # actual DNS listen port (for dashboard display)
+    web_port: int  = 0         # actual web dashboard port
 
 
 state = _AppState()
@@ -140,6 +149,8 @@ def _build_stats() -> dict:
         "top_process":        s["top_process"],
         "top_blocked":        top,
         "uptime_seconds":     int(time.time() - state.start_time),
+        "dns_port":           state.dns_port,
+        "web_port":           state.web_port,
         "running_as_service": is_running_as_service(),
         "scanner_decisions":  state.store.scanner_decision_count(),
         "elements_cleaned":   state.store.cleaned_count(),
@@ -147,6 +158,86 @@ def _build_stats() -> dict:
         "multihop_hop1_ready": mh_status["hop1_conf_exists"],
         "multihop_hop2_ready": mh_status["hop2_conf_exists"],
     }
+
+
+# ---------------------------------------------------------------------------
+# System control (localhost + token gated)
+#
+# The launcher / dashboard "Restart" and "Stop" buttons spawn PowerShell, so
+# these endpoints are locked down against the two realistic attack vectors:
+#   1. Other devices on the LAN — the server binds 0.0.0.0, so we require the
+#      peer IP to be loopback.
+#   2. Cross-site request forgery — a malicious page you visit runs in *your*
+#      browser and can POST to 127.0.0.1, so a loopback check alone is not
+#      enough. We additionally require a per-process secret token that only a
+#      same-origin (or explicitly launcher-injected) caller can obtain, plus a
+#      same-origin Origin check as defence in depth.
+# ---------------------------------------------------------------------------
+
+_CONTROL_TOKEN = secrets.token_urlsafe(24)
+_CONTROL_TOKEN_FILE = DATA_DIR / "control_token.txt"
+try:
+    _CONTROL_TOKEN_FILE.write_text(_CONTROL_TOKEN, encoding="utf-8")
+except OSError:
+    pass
+
+
+def _peer_is_local(request) -> bool:
+    host = request.client.host if request.client else ""
+    return host in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+
+
+def _origin_is_local(request) -> bool:
+    """True when the Origin header is absent/null (non-browser or file://
+    callers) or resolves to a loopback host. Blocks state-changing POSTs whose
+    Origin is a real remote website."""
+    origin = request.headers.get("origin")
+    if not origin or origin == "null":
+        return True   # curl / launcher.html (file://) — the token is the gate
+    try:
+        host = urlparse(origin).hostname
+    except ValueError:
+        return False
+    return host in ("127.0.0.1", "localhost", "::1")
+
+
+def _token_ok(request) -> bool:
+    token = request.headers.get("x-valkyrie-token") or request.query_params.get("token", "")
+    return bool(token) and secrets.compare_digest(token, _CONTROL_TOKEN)
+
+
+def _control_guard(request):
+    """Return a JSONResponse to short-circuit with, or None if the caller is
+    authorised to run a system-control action."""
+    if os.name != "nt":
+        return JSONResponse({"error": "system control is only available on Windows"}, status_code=501)
+    if not _peer_is_local(request):
+        return JSONResponse({"error": "forbidden: control endpoints are loopback-only"}, status_code=403)
+    if not _origin_is_local(request):
+        return JSONResponse({"error": "forbidden: cross-origin control blocked"}, status_code=403)
+    if not _token_ok(request):
+        return JSONResponse({"error": "forbidden: missing or invalid control token"}, status_code=403)
+    return None
+
+
+def _run_detached_ps(ps_command: str) -> None:
+    """Launch a detached PowerShell command that outlives this process.
+
+    The restart path runs stop_all.ps1 (which kills THIS very process) and then
+    start_all.ps1, so the runner must survive its parent dying — hence
+    DETACHED_PROCESS + a new process group and no inherited handles.
+    """
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = 0x00000008 | 0x00000200   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    subprocess.Popen(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_command],
+        creationflags=creationflags,
+        close_fds=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +359,35 @@ def create_app():
                     "session_events": 0, "disk_writes": "enabled",
                     "integrity": "verified", "tampered_files": []}
         return state.zero_log.status()
+
+    # ── System control (launcher / dashboard buttons) ───────────────────
+    @app.get("/api/system/token")
+    async def system_token(request: Request):
+        # Same-origin loopback only. Lets the dashboard fetch the control
+        # token it needs for restart/stop. A cross-origin page cannot read
+        # this response (no CORS headers) and fails the origin check anyway.
+        if not _peer_is_local(request) or not _origin_is_local(request):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        return {"token": _CONTROL_TOKEN, "web_port": int(state.web_port or 0)}
+
+    @app.post("/api/system/restart")
+    async def system_restart(request: Request):
+        guard = _control_guard(request)
+        if guard is not None:
+            return guard
+        stop  = _PROJECT_ROOT / "stop_all.ps1"
+        start = _PROJECT_ROOT / "start_all.ps1"
+        _run_detached_ps(f"& '{stop}'; Start-Sleep -Seconds 3; & '{start}'")
+        return {"status": "restarting"}
+
+    @app.post("/api/system/shutdown")
+    async def system_shutdown(request: Request):
+        guard = _control_guard(request)
+        if guard is not None:
+            return guard
+        stop = _PROJECT_ROOT / "stop_all.ps1"
+        _run_detached_ps(f"& '{stop}'")
+        return {"status": "stopping"}
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket):

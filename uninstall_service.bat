@@ -2,7 +2,7 @@
 setlocal
 
 :: ---------------------------------------------------------------------
-:: uninstall_service.bat — remove the Valkyrie Windows service
+:: uninstall_service.bat - remove the Valkyrie Windows service
 :: ---------------------------------------------------------------------
 
 net session >nul 2>&1
@@ -30,7 +30,11 @@ if exist "%NSSM_EXE%" (
     sc delete %SERVICE_NAME%
 )
 
-echo [*] Removing Windows Firewall rule...
+echo [*] Removing Windows Firewall rules...
+netsh advfirewall firewall delete rule name="Valkyrie DNS Inbound UDP 5300" >nul 2>&1
+netsh advfirewall firewall delete rule name="Valkyrie DNS Outbound UDP" >nul 2>&1
+netsh advfirewall firewall delete rule name="Valkyrie DNS Outbound TCP" >nul 2>&1
+:: Legacy rule name from older installs - harmless if not present
 netsh advfirewall firewall delete rule name="Valkyrie DNS UDP 5300" >nul 2>&1
 
 echo [OK] Valkyrie service uninstalled.

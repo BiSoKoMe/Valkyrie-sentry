@@ -431,6 +431,23 @@
     }
     .action-btn:hover { background: var(--border-hover); }
     .action-btn:disabled { opacity: .5; cursor: default; }
+
+    /* System Control (restart / stop) */
+    .ctl-btn {
+      width: 100%; padding: 8px 0; font-size: 12px; font-weight: 600;
+      border: 1px solid var(--border); border-radius: 6px;
+      background: var(--bg-hover); color: var(--text-primary);
+      cursor: pointer; margin-bottom: 6px;
+      transition: filter .12s ease, background .12s ease;
+    }
+    .ctl-btn:hover:not(:disabled) { filter: brightness(1.12); }
+    .ctl-btn:disabled { opacity: .5; cursor: default; }
+    .ctl-amber { border-color: rgba(255,159,10,0.55); color: var(--orange); }
+    .ctl-amber:hover:not(:disabled) { background: rgba(255,159,10,0.10); }
+    .ctl-red   { border-color: rgba(255,69,58,0.55); color: var(--red); }
+    .ctl-red:hover:not(:disabled)   { background: rgba(255,69,58,0.10); }
+    .ctl-note  { font-size: 11px; color: var(--text-secondary); margin-top: 2px; min-height: 14px; line-height: 1.4; }
+
     .integrity-ok  { color: var(--green); font-size: 11px; }
     .integrity-bad { color: var(--red);   font-size: 11px; font-weight: 600; }
 
@@ -797,6 +814,24 @@
         </div>
       </div>
 
+      <!-- System Control -->
+      <div class="sidebar-panel" style="flex:0 0 auto;border-top:1px solid var(--border)">
+        <div class="section-hdr">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
+               stroke="var(--text-secondary)" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18.36 6.64a9 9 0 11-12.73 0"/>
+            <line x1="12" y1="2" x2="12" y2="12"/>
+          </svg>
+          <span class="section-title">System Control</span>
+        </div>
+        <div class="system-body">
+          <button class="ctl-btn ctl-amber" id="restart-btn">Restart Valkyrie</button>
+          <button class="ctl-btn ctl-red"   id="shutdown-btn">Stop Protection</button>
+          <p class="ctl-note" id="ctl-note"></p>
+        </div>
+      </div>
+
     </aside>
   </div>
 </div>
@@ -828,6 +863,7 @@ function isSysSuspicious(proc, domain) {
 let ws           = null;
 let reconnectTmr = null;
 let pingTmr      = null;
+let wsRetryCount = 0;
 let nums         = {};   // el-id → last displayed value (for count-up)
 let eventCount   = 0;
 let dohCount     = 0;
@@ -852,6 +888,7 @@ function connect() {
     $dot.className = 'status-dot connected';
     $status.textContent = 'Live';
     clearTimeout(reconnectTmr);
+    wsRetryCount = 0;
     pingTmr = setInterval(() => ws && ws.readyState === 1 && ws.send('ping'), 30000);
   };
 
@@ -865,7 +902,11 @@ function connect() {
     $dot.className = 'status-dot disconnected';
     $status.textContent = 'Reconnecting…';
     clearInterval(pingTmr);
-    reconnectTmr = setTimeout(connect, WS_RECONNECT_MS);
+    // First 10 retries: 1 s apart (catches server that's almost ready).
+    // After that: fall back to 3 s to avoid hammering a stopped server.
+    const delay = wsRetryCount < 10 ? 1000 : WS_RECONNECT_MS;
+    wsRetryCount++;
+    reconnectTmr = setTimeout(connect, delay);
   };
 }
 
@@ -1209,6 +1250,54 @@ async function loadZeroLogStatus() {
   } catch (_) {}
 }
 
+// ── System control (restart / stop) ─────────────────────────────────────────
+let controlToken = '';
+async function wireSystemControl() {
+  const restart  = document.getElementById('restart-btn');
+  const shutdown = document.getElementById('shutdown-btn');
+  const note     = document.getElementById('ctl-note');
+  if (!restart || !shutdown) return;
+
+  // The token is served same-origin only; a cross-site page cannot read it,
+  // which is what stops a malicious site from POSTing to these endpoints.
+  try {
+    const r = await fetch('/api/system/token');
+    if (r.ok) { const d = await r.json(); controlToken = d.token || ''; }
+  } catch (_) {}
+
+  const post = (path) => fetch(path, {
+    method: 'POST',
+    headers: { 'X-Valkyrie-Token': controlToken },
+  });
+
+  restart.addEventListener('click', async () => {
+    if (!confirm('Restart Valkyrie? DNS protection will blink for a few seconds.')) return;
+    restart.disabled = shutdown.disabled = true;
+    note.textContent = 'Restarting — the dashboard will reconnect shortly…';
+    try {
+      const r = await post('/api/system/restart');
+      if (!r.ok) throw new Error();
+    } catch (_) {
+      note.textContent = 'Restart request failed (are you on the local machine?).';
+      restart.disabled = shutdown.disabled = false;
+    }
+  });
+
+  shutdown.addEventListener('click', async () => {
+    if (!confirm('Stop Valkyrie protection?\n\nYour DNS reverts to normal and tracking protection ends.')) return;
+    restart.disabled = shutdown.disabled = true;
+    note.textContent = 'Stopping protection…';
+    try {
+      const r = await post('/api/system/shutdown');
+      if (!r.ok) throw new Error();
+      note.textContent = 'Protection stopped. This dashboard will go offline.';
+    } catch (_) {
+      note.textContent = 'Shutdown request failed (are you on the local machine?).';
+      restart.disabled = shutdown.disabled = false;
+    }
+  });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   startClock();
   loadInitial();
@@ -1219,6 +1308,7 @@ document.addEventListener('DOMContentLoaded', () => {
   wireMacButtons();
   loadVpnStatus();
   loadZeroLogStatus();
+  wireSystemControl();
   // Refresh MAC/zero-log status every 30s
   setInterval(() => { loadMacStatus(); loadZeroLogStatus(); }, 30000);
 });

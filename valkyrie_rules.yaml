@@ -23,3 +23,5 @@ always_block:
   # (WMI should never be phoning out to a code editor's API endpoint)
   - domain: "*.cursor.sh"
   - domain: "cursor.sh"
+  # DoH bypass — Xfinity's DNS-over-HTTPS endpoint; forces DNS outside Valkyrie
+  - domain: "doh.xfinity.com"

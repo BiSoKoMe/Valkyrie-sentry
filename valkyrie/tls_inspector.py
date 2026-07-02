@@ -110,7 +110,12 @@ class TLSInspector:
                     listen_port=self.port,
                     confdir=str(TLS_MITMPROXY_CONF_DIR),
                 )
-                master = DumpMaster(opts, with_termlog=False, with_dumper=False)
+                # mitmproxy's DumpMaster falls back to asyncio.get_running_loop()
+                # when loop= is omitted, which raises RuntimeError here because
+                # no loop is actively running yet at construction time (we only
+                # start running it below via loop.run_until_complete). Pass our
+                # explicit loop instead.
+                master = DumpMaster(opts, loop=loop, with_termlog=False, with_dumper=False)
                 self._addon = ValkyrieAddon(
                     store=self.store, blocklist=self.blocklist,
                     behavioral=self.behavioral, rules=self.rules,

@@ -59,6 +59,15 @@ def _platform() -> str:
     return platform.system().lower()
 
 
+def _is_windows_admin() -> bool:
+    """True if the current process has Administrator rights on Windows."""
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # MacRandomizer
 # ---------------------------------------------------------------------------
@@ -72,6 +81,7 @@ class MacRandomizer:
         """
         self._store       = store
         self._lock        = threading.Lock()
+        self.last_error   = ""
         self._backup: dict[str, str] = self._load_backup()
         self._monitor_thread: Optional[threading.Thread] = None
         self._monitor_stop  = threading.Event()
@@ -85,8 +95,17 @@ class MacRandomizer:
         """Apply a new random MAC to *interface* (or all non-excluded ifaces).
 
         Returns the new MAC string (last interface changed), or empty string
-        on failure.
+        on failure. Sets self.last_error with a human-readable reason when
+        every interface fails (e.g. missing admin rights on Windows).
         """
+        self.last_error = ""
+        if _platform() == "windows" and not _is_windows_admin():
+            self.last_error = (
+                "Administrator rights required — MAC randomisation writes to "
+                "HKEY_LOCAL_MACHINE. Re-run as Administrator."
+            )
+            return ""
+
         ifaces = self._resolve_interfaces(interface)
         last   = ""
         for iface in ifaces:
@@ -95,6 +114,8 @@ class MacRandomizer:
             if ok:
                 last = new_mac
                 self._log(f"MAC randomised: {iface} → {new_mac}")
+        if not last and ifaces and not self.last_error:
+            self.last_error = "No interface could be changed (adapter not found or write failed)."
         return last
 
     def restore(self, interface: Optional[str] = None) -> str:
@@ -258,39 +279,80 @@ class MacRandomizer:
         return True
 
     def _find_windows_adapter_key(self, iface_name: str, base_path: str) -> Optional[str]:
-        """Locate the registry subkey for a Windows adapter by name."""
+        """Locate the registry subkey for a Windows adapter by its interface alias.
+
+        Matching against DriverDesc (e.g. "Realtek PCIe GbE Family Controller")
+        never matches a real interface alias (e.g. "Ethernet", "Wi-Fi") — the
+        two strings are unrelated. The correct lookup is two-step:
+          1. Control\\Network\\{netclass}\\{adapterGUID}\\Connection -> "Name"
+             gives the friendly alias exactly as shown by ipconfig/psutil.
+          2. Control\\Class\\{netclass}\\NNNN -> "NetCfgInstanceId" == that GUID
+             identifies the matching settings subkey (where NetworkAddress lives).
+        """
         try:
             import winreg
+            net_class = base_path.rsplit("\\", 1)[-1]
+            conn_base = rf"SYSTEM\CurrentControlSet\Control\Network\{net_class}"
+
+            # Step 1: find the adapter GUID whose Connection\Name matches iface_name
+            target_guid: Optional[str] = None
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, conn_base) as conn_root:
+                idx = 0
+                while True:
+                    try:
+                        guid = winreg.EnumKey(conn_root, idx)
+                        idx += 1
+                    except OSError:
+                        break
+                    try:
+                        conn_path = f"{conn_base}\\{guid}\\Connection"
+                        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, conn_path) as ck:
+                            name, _ = winreg.QueryValueEx(ck, "Name")
+                            if name.lower() == iface_name.lower():
+                                target_guid = guid
+                                break
+                    except OSError:
+                        continue
+            if not target_guid:
+                return None
+
+            # Step 2: find the Class subkey whose NetCfgInstanceId == target_guid
             with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, base_path) as base:
                 idx = 0
                 while True:
                     try:
                         sub = winreg.EnumKey(base, idx)
                         idx += 1
-                        try:
-                            full = f"{base_path}\\{sub}"
-                            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, full) as k:
-                                desc, _ = winreg.QueryValueEx(k, "DriverDesc")
-                                name, _ = winreg.QueryValueEx(k, "NetCfgInstanceId") if True else ("", None)
-                                if iface_name.lower() in str(desc).lower():
-                                    return full
-                        except OSError:
-                            pass
                     except OSError:
                         break
+                    try:
+                        full = f"{base_path}\\{sub}"
+                        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, full) as k:
+                            net_cfg_id, _ = winreg.QueryValueEx(k, "NetCfgInstanceId")
+                            if net_cfg_id == target_guid:
+                                return full
+                    except OSError:
+                        continue
         except Exception:
             pass
         return None
 
     def _read_current_mac(self, iface: str) -> str:
-        """Read the current MAC of *iface* via psutil or /sys."""
+        """Read the current MAC of *iface* via psutil or /sys.
+
+        psutil reports Windows MACs hyphen-separated ("AA-BB-CC-DD-EE-FF")
+        and Linux/macOS colon-separated — normalise to colon format so the
+        rest of the codebase (generation, backup, validation) sees one shape.
+        """
         try:
             import psutil
             addrs = psutil.net_if_addrs().get(iface, [])
+            link_family = psutil.AF_LINK if hasattr(psutil, "AF_LINK") else 17
             for addr in addrs:
-                if addr.family == psutil.AF_LINK if hasattr(psutil, 'AF_LINK') else 17:
-                    if _is_valid_mac(addr.address or ""):
-                        return addr.address
+                if addr.family == link_family:
+                    raw = (addr.address or "").replace("-", ":")
+                    if _is_valid_mac(raw):
+                        return raw.upper()
         except Exception:
             pass
 

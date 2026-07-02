@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Valkyrie Launcher</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-base:    #000000;
+      --bg-surface: #0c0c0c;
+      --border:     rgba(255,255,255,0.10);
+      --text:       rgba(255,255,255,0.95);
+      --text-dim:   rgba(255,255,255,0.45);
+      --green:      #30D158;
+      --red:        #FF453A;
+      --amber:      #FF9F0A;
+      --blue:       #0A84FF;
+      --font: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      background: radial-gradient(1200px 600px at 50% -10%, #14161c 0%, var(--bg-base) 60%);
+      color: var(--text);
+      font-family: var(--font);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      -webkit-font-smoothing: antialiased;
+    }
+    .card {
+      width: 420px;
+      max-width: 92vw;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 34px 30px 28px;
+      box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+      text-align: center;
+    }
+    .brand { display: flex; align-items: center; justify-content: center; gap: 11px; margin-bottom: 4px; }
+    .brand svg { color: var(--blue); }
+    .brand h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
+    .tagline { color: var(--text-dim); font-size: 13px; margin-bottom: 24px; }
+
+    .status {
+      display: inline-flex; align-items: center; gap: 9px;
+      padding: 8px 16px; border-radius: 100px;
+      border: 1px solid var(--border); background: rgba(255,255,255,0.03);
+      font-size: 13px; font-weight: 600; margin-bottom: 26px;
+    }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-dim); }
+    .status.up   .dot { background: var(--green); box-shadow: 0 0 0 4px rgba(48,209,88,0.18); }
+    .status.up   .label { color: var(--green); }
+    .status.down .dot { background: var(--text-dim); }
+    .status.down .label { color: var(--text-dim); }
+
+    .btn {
+      display: flex; align-items: center; justify-content: center; gap: 9px;
+      width: 100%; padding: 14px 0; margin-bottom: 12px;
+      font-family: var(--font); font-size: 15px; font-weight: 600;
+      border: 1px solid transparent; border-radius: 12px;
+      cursor: pointer; transition: transform .08s ease, filter .15s ease, background .15s ease;
+      color: #fff;
+    }
+    .btn:active { transform: scale(0.985); }
+    .btn:disabled { opacity: .45; cursor: default; }
+    .btn-start { background: var(--green); color: #032b12; }
+    .btn-start:hover:not(:disabled) { filter: brightness(1.08); }
+    .btn-stop  { background: var(--red); }
+    .btn-stop:hover:not(:disabled) { filter: brightness(1.08); }
+    .btn-open  { background: transparent; border-color: var(--border); color: var(--text); }
+    .btn-open:hover:not(:disabled) { background: rgba(255,255,255,0.05); }
+
+    .note {
+      margin-top: 14px; min-height: 34px;
+      font-size: 12px; line-height: 1.5; color: var(--text-dim);
+    }
+    .note code {
+      font-family: 'SF Mono', 'Cascadia Code', monospace;
+      background: rgba(255,255,255,0.06); padding: 1px 6px; border-radius: 5px;
+      color: var(--text);
+    }
+    .note.warn { color: var(--amber); }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="brand">
+      <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+      </svg>
+      <h1>Valkyrie</h1>
+    </div>
+    <p class="tagline">Local privacy gateway</p>
+
+    <div class="status down" id="status">
+      <span class="dot"></span>
+      <span class="label" id="status-label">Checking…</span>
+    </div>
+
+    <button class="btn btn-start" id="btn-start">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+      <span id="btn-start-label">Start Valkyrie</span>
+    </button>
+    <button class="btn btn-stop" id="btn-stop">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+      Stop Valkyrie
+    </button>
+    <button class="btn btn-open" id="btn-open">Open Dashboard</button>
+
+    <p class="note" id="note"></p>
+  </div>
+
+<script>
+// The dashboard port. Overridable via the URL hash: launcher.html#<token>@<port>
+const DEFAULT_PORT = 8090;
+
+// launcher.bat opens this page with the control token in the hash so the
+// Stop/Restart buttons can authenticate to the loopback-only control API:
+//   launcher.html#<token>            or   launcher.html#<token>@<port>
+function parseHash() {
+  const raw = (location.hash || '').replace(/^#/, '');
+  let token = raw, port = DEFAULT_PORT;
+  const at = raw.lastIndexOf('@');
+  if (at !== -1) { token = raw.slice(0, at); port = parseInt(raw.slice(at + 1), 10) || DEFAULT_PORT; }
+  return { token, port };
+}
+const { token: TOKEN, port: PORT } = parseHash();
+const BASE = `http://127.0.0.1:${PORT}`;
+
+const $status = document.getElementById('status');
+const $label  = document.getElementById('status-label');
+const $note   = document.getElementById('note');
+const $start  = document.getElementById('btn-start');
+const $startL = document.getElementById('btn-start-label');
+const $stop   = document.getElementById('btn-stop');
+const $open   = document.getElementById('btn-open');
+
+let running = false;
+
+function setNote(msg, warn) {
+  $note.textContent = msg || '';
+  $note.classList.toggle('warn', !!warn);
+}
+
+// Opaque no-cors probe — resolves if something answered, rejects if the port
+// is closed. That's all we need to distinguish Running from Stopped when this
+// page is opened as a local file (cross-origin reads are blocked by the browser).
+async function ping() {
+  try {
+    await fetch(`${BASE}/api/stats`, { mode: 'no-cors', cache: 'no-store' });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function render() {
+  $status.className = 'status ' + (running ? 'up' : 'down');
+  $label.textContent = running ? 'Running' : 'Stopped';
+  $startL.textContent = running ? 'Restart Valkyrie' : 'Start Valkyrie';
+  $start.classList.toggle('btn-start', true);
+  $stop.disabled = !running;
+}
+
+async function refresh() {
+  running = await ping();
+  render();
+}
+
+// Control POSTs are sent no-cors with the token as a query param; the server
+// validates the token + loopback peer, so we don't need to read the response.
+function control(path) {
+  return fetch(`${BASE}${path}?token=${encodeURIComponent(TOKEN)}`, {
+    method: 'POST', mode: 'no-cors', cache: 'no-store',
+  });
+}
+
+$open.addEventListener('click', () => window.open(BASE, '_blank'));
+
+$start.addEventListener('click', async () => {
+  if (running) {
+    // Already up → restart through the control API.
+    if (!TOKEN) { setNote('Open this page via launcher.bat to enable Restart.', true); return; }
+    setNote('Restarting… the dashboard will come back in a few seconds.');
+    await control('/api/system/restart');
+    setTimeout(refresh, 6000);
+  } else {
+    // A browser cannot launch an elevated process. Point the user at the
+    // real one-click starter, which requests Administrator via UAC.
+    setNote('To start Valkyrie, double-click launcher.bat (or start_all.bat). ' +
+            'Windows will prompt for Administrator — that is required to bind DNS.', true);
+  }
+});
+
+$stop.addEventListener('click', async () => {
+  if (!running) return;
+  if (!TOKEN) { setNote('Open this page via launcher.bat to enable Stop.', true); return; }
+  if (!confirm('Stop Valkyrie protection? Your DNS will revert to normal.')) return;
+  setNote('Stopping protection…');
+  await control('/api/system/shutdown');
+  setTimeout(refresh, 4000);
+});
+
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

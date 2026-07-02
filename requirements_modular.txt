@@ -4,15 +4,15 @@ psutil>=5.9.0
 rich>=13.0.0
 pyyaml>=6.0
 
-# Optional — domain age scoring (WHOIS)
+# Web dashboard (used by start_all.bat / start_valkyrie.bat daily flow)
+fastapi>=0.110.0
+uvicorn>=0.29.0
+
+# Optional - domain age scoring (WHOIS)
 # python-whois>=0.8.0
 
-# Optional — web dashboard
-# fastapi>=0.110.0
-# uvicorn>=0.29.0
-
-# Optional — TLS inspection (HTTPS interception)
+# Optional - TLS inspection (HTTPS interception; enable with --tls)
 # mitmproxy>=10.0.0
 
-# Optional — page content cleaner (HTML parsing in tls_addon.py)
+# Optional - page content cleaner (HTML parsing in tls_addon.py)
 # lxml>=5.0.0
