@@ -239,6 +239,13 @@ def main() -> None:
     parser.add_argument("--zero-log",        action="store_true",  help="RAM-only mode — no disk writes")
     parser.add_argument("--zero-log-import", type=int, default=0, metavar="HOURS",
                         help="Import last N hours from disk DB into RAM at startup")
+    parser.add_argument("--meeting-on",  action="store_true", help="Meeting Mode: block ALL outbound traffic (kill switch), then exit")
+    parser.add_argument("--meeting-off", action="store_true", help="Deactivate Meeting Mode and restore normal traffic, then exit")
+    parser.add_argument("--meeting-status", action="store_true", help="Print Meeting Mode status and exit")
+    parser.add_argument("--fingerprint", action="store_true", help="Normalise TCP/IP fingerprint (TTL 64, no timestamps), then exit")
+    parser.add_argument("--fingerprint-restore", action="store_true", help="Restore original TCP/IP fingerprint, then exit")
+    parser.add_argument("--fingerprint-status", action="store_true", help="Print TCP/IP fingerprint status and exit")
+    parser.add_argument("--skip-selftest", action="store_true", help="Skip the startup self-test (not recommended)")
     parser.add_argument("--debug", action="store_true",
                         help="Verbose DNS forwarding logs — prints every query, upstream tried, and result")
     args = parser.parse_args()
@@ -333,6 +340,53 @@ def main() -> None:
             console.print(f"  {k:25s} {v}")
         return
 
+    # ------------------------------------------------------------------
+    # Early-exit: Meeting Mode (network kill switch)
+    # ------------------------------------------------------------------
+    if args.meeting_on or args.meeting_off or args.meeting_status:
+        from .meeting_mode import MeetingMode
+        mm = MeetingMode()
+        if args.meeting_on:
+            console.print("[bold red]Activating Meeting Mode — blocking ALL outbound traffic…[/bold red]")
+            res = mm.activate()
+        elif args.meeting_off:
+            console.print("[bold]Deactivating Meeting Mode — restoring normal traffic…[/bold]")
+            res = mm.deactivate()
+        else:
+            res = mm.status()
+        if res.get("error"):
+            console.print(f"[red]✗ {res['error']}[/red]")
+        elif res.get("active"):
+            console.print(f"[bold red]MEETING MODE ACTIVE[/bold red] — outbound blocked "
+                          f"(since {res.get('activated_at', '?')}, {res.get('duration_minutes', 0)} min)")
+        else:
+            console.print("[green]Meeting Mode is OFF[/green] — traffic normal.")
+        return
+
+    # ------------------------------------------------------------------
+    # Early-exit: TCP/IP fingerprint normalisation
+    # ------------------------------------------------------------------
+    if args.fingerprint or args.fingerprint_restore or args.fingerprint_status:
+        from .fingerprint import NetworkFingerprint
+        fp = NetworkFingerprint()
+        if args.fingerprint:
+            ok = fp.normalize()
+            console.print("[green]✓ Fingerprint normalised[/green] (TTL 64, TCP timestamps off)"
+                          if ok else f"[red]✗ {fp.last_error}[/red]")
+        elif args.fingerprint_restore:
+            ok = fp.restore()
+            console.print("[green]✓ Fingerprint restored[/green]"
+                          if ok else f"[red]✗ {fp.last_error}[/red]")
+        else:
+            st = fp.status()
+            console.print(f"  Supported     : {st['supported']}")
+            console.print(f"  Default TTL   : {st['ttl']}  "
+                          f"({'normalised' if st['ttl_normalized'] else 'not normalised'})")
+            console.print(f"  TCP timestamps: {st['tcp_timestamps']}  "
+                          f"({'normalised' if st['timestamps_normalized'] else 'not normalised'})")
+            console.print(f"  Overall       : {'NORMALISED' if st['normalized'] else 'default'}")
+        return
+
     def _tick(label: str, t0: float) -> None:
         """Print a timed per-component startup line — only in --debug mode.
 
@@ -348,6 +402,31 @@ def main() -> None:
     # Sub-components accept a Rich console for progress output; give them one
     # only in debug mode so normal startup stays quiet (Improvement 6).
     _verbose = console if args.debug else None
+
+    # ------------------------------------------------------------------
+    # Startup self-test — refuse to announce "protected" from a broken state
+    # ------------------------------------------------------------------
+    if not args.skip_selftest:
+        from .self_test import preflight, critical_failures
+        checks = preflight(
+            port         = args.port,
+            host         = args.host,
+            want_dns     = not args.no_dns,
+            want_unbound = not args.no_unbound,
+            want_tls     = args.tls and not args.no_tls,
+        )
+        fatal = critical_failures(checks)
+        if fatal or args.debug:
+            for c in checks:
+                mark = "[green]✓[/green]" if c.ok else ("[red]✗[/red]" if c.critical else "[yellow]![/yellow]")
+                console.print(f"  {mark} {c.name}: [dim]{c.detail}[/dim]")
+        if fatal:
+            console.print()
+            console.print("[bold red]Startup aborted — critical checks failed:[/bold red]")
+            for c in fatal:
+                console.print(f"  [red]✗ {c.name}: {c.detail}[/red]")
+            console.print("[dim]Fix the above and retry, or pass --skip-selftest to override.[/dim]")
+            sys.exit(1)
 
     # ------------------------------------------------------------------
     # 0. Zero-log mode (must run before Store so we pass RAM URI)
@@ -589,6 +668,28 @@ def main() -> None:
         threading.Thread(target=_baseline_loop, daemon=True, name="baseline").start()
 
     # ------------------------------------------------------------------
+    # 9b. Protection heartbeat — continuously re-verify the sinkhole answers
+    # ------------------------------------------------------------------
+    heartbeat = None
+    if dns_server is not None:
+        from .self_test import HeartbeatMonitor
+
+        def _on_health_change(healthy: bool) -> None:
+            if healthy:
+                console.print("[green]✓ Protection heartbeat recovered — DNS sinkhole answering again.[/green]")
+            else:
+                console.print("[bold red]⚠ PROTECTION HEARTBEAT FAILED — DNS sinkhole is not answering![/bold red]")
+
+        heartbeat = HeartbeatMonitor(
+            dns_host  = args.host,
+            dns_port  = args.port,
+            interval  = 15.0,
+            store     = store,
+            on_change = _on_health_change,
+        )
+        heartbeat.start()
+
+    # ------------------------------------------------------------------
     # 10. Web dashboard (optional)
     # ------------------------------------------------------------------
     if args.web:
@@ -599,6 +700,7 @@ def main() -> None:
         web_state.start_time     = time.time()
         web_state.mac_randomizer = mac_randomizer
         web_state.zero_log       = zero_log
+        web_state.heartbeat      = heartbeat
         web_state.dns_port       = args.port
         web_state.web_port       = args.web_port
         web_thread = threading.Thread(
@@ -658,6 +760,8 @@ def main() -> None:
         status_rows.append(("MAC Random", True, "auto on reconnect"))
     if tls_inspector is not None:
         status_rows.append(("TLS Inspect", True, f"port {tls_inspector.port}"))
+    if heartbeat is not None:
+        status_rows.append(("Heartbeat", True, "self-check every 15s"))
     web_url = f"http://localhost:{args.web_port}"
     if args.web:
         status_rows.append(("Dashboard", True, f"localhost:{args.web_port}"))
@@ -698,6 +802,8 @@ def main() -> None:
         pass
     finally:
         console.print("\n[dim]Shutting down…[/dim]")
+        if heartbeat:
+            heartbeat.stop()
         if dns_server:
             dns_server.stop()
         if unbound:

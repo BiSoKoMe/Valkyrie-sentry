@@ -55,6 +55,7 @@ class _AppState:
     blocklist      = None      # valkyrie.blocklist.BlocklistManager
     mac_randomizer = None      # valkyrie.mac_randomizer.MacRandomizer (optional)
     zero_log       = None      # valkyrie.zero_log.ZeroLogMode (optional)
+    heartbeat      = None      # valkyrie.self_test.HeartbeatMonitor (optional)
     start_time: float = 0.0
     dns_port: int  = 0         # actual DNS listen port (for dashboard display)
     web_port: int  = 0         # actual web dashboard port
@@ -139,6 +140,19 @@ def _build_stats() -> dict:
 
     zero_active = state.zero_log is not None and state.zero_log.is_active()
 
+    healthy = True
+    if state.heartbeat is not None:
+        try:
+            healthy = state.heartbeat.is_healthy()
+        except Exception:
+            healthy = True
+
+    from ..meeting_mode import MeetingMode
+    try:
+        meeting = MeetingMode().status()
+    except Exception:
+        meeting = {"active": False, "duration_minutes": 0}
+
     return {
         "total_24h":          s["total_24h"],
         "dns_blocked":        s["blocked_24h"],
@@ -151,6 +165,9 @@ def _build_stats() -> dict:
         "uptime_seconds":     int(time.time() - state.start_time),
         "dns_port":           state.dns_port,
         "web_port":           state.web_port,
+        "protection_healthy": healthy,
+        "meeting_active":     meeting.get("active", False),
+        "meeting_minutes":    meeting.get("duration_minutes", 0),
         "running_as_service": is_running_as_service(),
         "scanner_decisions":  state.store.scanner_decision_count(),
         "elements_cleaned":   state.store.cleaned_count(),
@@ -388,6 +405,40 @@ def create_app():
         stop = _PROJECT_ROOT / "stop_all.ps1"
         _run_detached_ps(f"& '{stop}'")
         return {"status": "stopping"}
+
+    # ── Protection heartbeat (read-only) ────────────────────────────────
+    @app.get("/api/health")
+    async def get_health():
+        if state.heartbeat is None:
+            return {"healthy": True, "monitored": False}
+        try:
+            st = state.heartbeat.status()
+            st["monitored"] = True
+            return st
+        except Exception:
+            return {"healthy": True, "monitored": False}
+
+    # ── Meeting Mode (kill switch) ──────────────────────────────────────
+    @app.get("/api/meeting/status")
+    async def meeting_status():
+        from ..meeting_mode import MeetingMode
+        return MeetingMode().status()
+
+    @app.post("/api/meeting/start")
+    async def meeting_start(request: Request):
+        guard = _control_guard(request)
+        if guard is not None:
+            return guard
+        from ..meeting_mode import MeetingMode
+        return MeetingMode().activate()
+
+    @app.post("/api/meeting/stop")
+    async def meeting_stop(request: Request):
+        guard = _control_guard(request)
+        if guard is not None:
+            return guard
+        from ..meeting_mode import MeetingMode
+        return MeetingMode().deactivate()
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket):

@@ -80,7 +80,9 @@ The dashboard (at <http://localhost:8090>) is your live window into what Valkyri
 - **Which app** made each request, so you can see exactly who was phoning home.
 - **MAC address** panel — randomize or restore your Wi-Fi hardware address.
 - **System** panel — Windows telemetry status, file-integrity check, and whether zero-log (RAM-only) mode is on.
-- **System Control** panel — one-click **Restart Valkyrie** or **Stop Protection** buttons.
+- **System Control** panel — a live **protection health** indicator (green when the DNS sinkhole is confirmed answering, red if it silently stops), a **Meeting Mode** kill switch, and **Restart Valkyrie** / **Stop Protection** buttons.
+
+**Meeting Mode** is a one-tap kill switch for sensitive moments: it blocks *all* outbound network traffic instantly. The dashboard stays reachable (loopback is exempt) so you can turn it back off, and it shows how long it has been active.
 
 ---
 
@@ -102,7 +104,11 @@ python -m valkyrie [options]
 | `--mac-rand` | Randomize your MAC address on reconnect |
 | `--tls` | Enable HTTPS/TLS inspection (needs the optional `mitmproxy` package) |
 | `--kill-telemetry` | Scan and disable Windows telemetry |
+| `--meeting-on` / `--meeting-off` | Meeting Mode kill switch — block / restore all outbound traffic |
+| `--fingerprint` | Normalize the TCP/IP fingerprint (TTL 64, TCP timestamps off) |
 | `--debug` | Show detailed DNS forwarding logs |
+
+On startup Valkyrie runs a **self-test** — it checks its dependencies, that the data folder is writable, and that its DNS port is free. If anything critical is wrong it prints the reason and exits cleanly rather than pretending to protect you. After that, a background **heartbeat** keeps re-checking that the DNS sinkhole is actually answering, and flips the dashboard to a red "protection degraded" state the moment it isn't.
 
 **Example — the full stack with everything enabled:**
 

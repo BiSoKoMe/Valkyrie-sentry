@@ -448,6 +448,30 @@
     .ctl-red:hover:not(:disabled)   { background: rgba(255,69,58,0.10); }
     .ctl-note  { font-size: 11px; color: var(--text-secondary); margin-top: 2px; min-height: 14px; line-height: 1.4; }
 
+    /* Meeting Mode — prominent kill switch */
+    .meeting-btn {
+      width: 100%; padding: 11px 0; font-size: 13px; font-weight: 700;
+      letter-spacing: 0.02em; border: 1px solid rgba(255,69,58,0.6);
+      border-radius: 8px; background: rgba(255,69,58,0.12); color: var(--red);
+      cursor: pointer; margin-bottom: 8px;
+      transition: filter .12s ease, background .12s ease;
+    }
+    .meeting-btn:hover:not(:disabled) { background: rgba(255,69,58,0.20); }
+    .meeting-btn.active {
+      background: var(--red); color: #fff; border-color: var(--red);
+      animation: meetingPulse 1.4s ease-in-out infinite;
+    }
+    @keyframes meetingPulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(255,69,58,0.55); }
+      50%      { box-shadow: 0 0 0 6px rgba(255,69,58,0.0); }
+    }
+    .health-row {
+      display: flex; align-items: center; gap: 7px;
+      font-size: 11px; color: var(--text-secondary); margin-bottom: 8px;
+    }
+    .health-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+    .health-dot.bad { background: var(--red); }
+
     .integrity-ok  { color: var(--green); font-size: 11px; }
     .integrity-bad { color: var(--red);   font-size: 11px; font-weight: 600; }
 
@@ -826,6 +850,11 @@
           <span class="section-title">System Control</span>
         </div>
         <div class="system-body">
+          <div class="health-row">
+            <span class="health-dot" id="health-dot"></span>
+            <span id="health-label">Protection healthy</span>
+          </div>
+          <button class="meeting-btn" id="meeting-btn">Meeting Mode</button>
           <button class="ctl-btn ctl-amber" id="restart-btn">Restart Valkyrie</button>
           <button class="ctl-btn ctl-red"   id="shutdown-btn">Stop Protection</button>
           <p class="ctl-note" id="ctl-note"></p>
@@ -1298,6 +1327,67 @@ async function wireSystemControl() {
   });
 }
 
+// ── Meeting Mode + protection heartbeat ─────────────────────────────────────
+async function refreshMeetingHealth() {
+  // Protection heartbeat
+  try {
+    const hr = await fetch('/api/health');
+    if (hr.ok) {
+      const h   = await hr.json();
+      const dot = document.getElementById('health-dot');
+      const lbl = document.getElementById('health-label');
+      if (dot && lbl) {
+        const ok = h.healthy !== false;
+        dot.className = 'health-dot' + (ok ? '' : ' bad');
+        lbl.textContent = ok ? 'Protection healthy' : 'PROTECTION DEGRADED — DNS not answering';
+        lbl.style.color = ok ? '' : 'var(--red)';
+      }
+    }
+  } catch (_) {}
+  // Meeting Mode state
+  try {
+    const mr = await fetch('/api/meeting/status');
+    if (mr.ok) {
+      const m   = await mr.json();
+      const btn = document.getElementById('meeting-btn');
+      if (btn) {
+        if (m.active) {
+          btn.classList.add('active');
+          btn.textContent = `MEETING ACTIVE · ${m.duration_minutes || 0}m — tap to end`;
+        } else {
+          btn.classList.remove('active');
+          btn.textContent = 'Meeting Mode';
+        }
+      }
+    }
+  } catch (_) {}
+}
+
+function wireMeetingMode() {
+  const btn = document.getElementById('meeting-btn');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    const active = btn.classList.contains('active');
+    const msg = active
+      ? 'End Meeting Mode and restore internet access?'
+      : 'Activate Meeting Mode?\n\nThis BLOCKS ALL outbound network traffic immediately. ' +
+        'The dashboard stays reachable so you can turn it back off.';
+    if (!confirm(msg)) return;
+    btn.disabled = true;
+    try {
+      const path = active ? '/api/meeting/stop' : '/api/meeting/start';
+      const r = await fetch(path, { method: 'POST', headers: { 'X-Valkyrie-Token': controlToken } });
+      const d = await r.json().catch(() => ({}));
+      const note = document.getElementById('ctl-note');
+      if (d.error && note) note.textContent = 'Meeting Mode: ' + d.error;
+    } catch (_) {
+    } finally {
+      btn.disabled = false;
+      refreshMeetingHealth();
+    }
+  });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   startClock();
   loadInitial();
@@ -1309,8 +1399,11 @@ document.addEventListener('DOMContentLoaded', () => {
   loadVpnStatus();
   loadZeroLogStatus();
   wireSystemControl();
-  // Refresh MAC/zero-log status every 30s
+  wireMeetingMode();
+  refreshMeetingHealth();
+  // Refresh MAC/zero-log status every 30s; heartbeat + meeting every 3s
   setInterval(() => { loadMacStatus(); loadZeroLogStatus(); }, 30000);
+  setInterval(refreshMeetingHealth, 3000);
 });
 </script>
 </body>
