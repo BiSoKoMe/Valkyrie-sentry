@@ -61,8 +61,38 @@ BLOCKLIST_MAX_AGE_DAYS = 7
 ENTROPY_THRESHOLD      = 3.5    # Shannon entropy above this → suspicious
 RATE_WINDOW_SECONDS    = 10     # sliding window for query-rate check
 RATE_MAX_QUERIES       = 30     # queries per window per process → suspicious
-DOMAIN_AGE_THRESHOLD   = 30     # days; newer domains flagged (WHOIS optional)
 BEHAVIORAL_BLOCK_SCORE = 0.7    # suspicion score at/above which we block
+
+# TLD reputation — offline replacement for the old WHOIS domain-age signal.
+#
+# The previous "new domain" signal called python-whois over the network. That
+# dependency is not installed and, more importantly, network WHOIS does not work
+# in the offline / intelligence-only posture this product ships in — so it
+# silently contributed 0 on every domain while looking active (the same class of
+# bug as the DNS leak). It is replaced by this static, shipped set of TLDs that
+# public abuse telemetry (Spamhaus "Most Abused TLDs", Interisle "Cybercrime
+# Supply Chain") consistently rank as disproportionately used for spam, malware,
+# phishing, and throwaway tracker infrastructure. Membership is an O(1) set
+# lookup with no network dependency, so the signal is always live offline.
+#
+# Deliberately conservative: this set contains NONE of the mainstream registry
+# TLDs (com/net/org/edu/gov/io/co and major ccTLDs) that legitimate sites use,
+# so it cannot fire on the benign control set. It carries the same small 0.15
+# weight the age signal had and therefore can never, on its own, reach the flag
+# (0.40) or block (0.70) threshold — it only nudges a domain already suspicious
+# on entropy/rate. It is a supplementary signal, not a primary tracker detector.
+SUSPICIOUS_TLDS: frozenset[str] = frozenset({
+    # Freenom free-registration TLDs (historically the most abused)
+    "tk", "ml", "ga", "cf", "gq",
+    # New-gTLD bulk/cheap registrations dominant in abuse rankings
+    "top", "xyz", "club", "work", "live", "click", "link", "gdn",
+    "loan", "download", "stream", "rest", "buzz", "cyou", "sbs",
+    "cfd", "icu", "monster", "quest", "bar", "wtf", "kim", "mom",
+    "lol", "cam", "surf", "beauty", "hair", "makeup", "skin",
+    "men", "date", "racing", "win", "review", "party", "trade",
+    "science", "accountant", "cricket", "faith", "webcam",
+})
+SUSPICIOUS_TLD_WEIGHT = 0.15    # supplementary weight in the behavioral combine
 
 # ---------------------------------------------------------------------------
 # DoH bypass detection

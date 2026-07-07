@@ -15,13 +15,14 @@ import collections
 import math
 import threading
 import time
-from typing import Optional
 
 from .config import (
     BEHAVIORAL_BLOCK_SCORE,
     ENTROPY_THRESHOLD,
     RATE_MAX_QUERIES,
     RATE_WINDOW_SECONDS,
+    SUSPICIOUS_TLDS,
+    SUSPICIOUS_TLD_WEIGHT,
 )
 
 
@@ -86,44 +87,32 @@ class RateLimiter:
 
 
 # ---------------------------------------------------------------------------
-# Domain age (WHOIS — optional)
+# TLD reputation (offline — replaces the old WHOIS domain-age signal)
 # ---------------------------------------------------------------------------
+#
+# The former age signal depended on network WHOIS, which is unavailable in the
+# offline / intelligence-only posture this product ships in, so it silently
+# scored 0 on every domain while appearing active. It is replaced by a static,
+# shipped set of abuse-heavy TLDs (config.SUSPICIOUS_TLDS) — an O(1) lookup with
+# no network dependency, so this signal is genuinely live offline. See the
+# config note for the sourcing and the deliberate exclusion of mainstream TLDs.
 
-_whois_cache: dict[str, Optional[int]] = {}   # domain → age in days (None = unknown)
-
-def _domain_age_days(domain: str) -> Optional[int]:
-    """Return domain age in days via python-whois, or None if unavailable."""
-    sld = ".".join(domain.rsplit(".", 2)[-2:])  # strip subdomains
-    if sld in _whois_cache:
-        return _whois_cache[sld]
-    try:
-        import whois                            # optional dependency
-        import datetime
-        info = whois.whois(sld)
-        created = info.creation_date
-        if isinstance(created, list):
-            created = created[0]
-        if created:
-            age = (datetime.datetime.utcnow() - created).days
-            _whois_cache[sld] = age
-            return age
-    except Exception:
-        pass
-    _whois_cache[sld] = None
-    return None
+def _tld(domain: str) -> str:
+    parts = domain.lower().rstrip(".").split(".")
+    return parts[-1] if parts else ""
 
 
-def age_score(domain: str, threshold_days: int = 30) -> tuple[float, str]:
-    """Return (partial_score, reason) based on domain age.
+def tld_reputation_score(domain: str) -> tuple[float, str]:
+    """Return (partial_score, reason) based on the domain's TLD reputation.
 
-    Returns (0, '') when WHOIS is unavailable or lookup fails.
+    Fully offline and deterministic: a domain on an abuse-heavy TLD contributes
+    a small partial score; everything else contributes exactly 0. Unlike the
+    old WHOIS age signal, a 0 here is a real "TLD is reputable" verdict, not a
+    silent failure to look anything up.
     """
-    age = _domain_age_days(domain)
-    if age is None:
-        return 0.0, ""
-    if age < threshold_days:
-        partial = max(0.3, 0.6 - age / threshold_days * 0.3)
-        return partial, f"new domain ({age}d old)"
+    tld = _tld(domain)
+    if tld in SUSPICIOUS_TLDS:
+        return 1.0, f"abuse-heavy TLD (.{tld})"
     return 0.0, ""
 
 
@@ -145,14 +134,36 @@ class BehavioralEngine:
         """
         e_score, e_reason = entropy_score(domain)
         r_score, r_reason = self._rate.record_and_score(process_name)
-        a_score, a_reason = age_score(domain)
+        t_score, t_reason = tld_reputation_score(domain)
 
         # Weighted combination (entropy carries most weight)
-        combined = min(1.0, e_score * 0.5 + r_score * 0.35 + a_score * 0.15)
+        combined = min(1.0, e_score * 0.5 + r_score * 0.35
+                       + t_score * SUSPICIOUS_TLD_WEIGHT)
 
-        reasons = [r for r in (e_reason, r_reason, a_reason) if r]
+        reasons = [r for r in (e_reason, r_reason, t_reason) if r]
         reason  = "; ".join(reasons) if reasons else ""
         return combined, reason
+
+    # ------------------------------------------------------------------
+    # Signal health (no silent failures — see PHASE 0)
+    # ------------------------------------------------------------------
+
+    def signal_health(self) -> list[dict]:
+        """Report each behavioral sub-signal's live status and firing condition.
+
+        Every signal here is offline-viable; none can silently contribute 0
+        while pretending to work. Returned so the intelligence layer can print a
+        single ACTIVE/DISABLED audit at startup.
+        """
+        return [
+            {"signal": "entropy", "active": True,
+             "note": f"fires when leftmost-label Shannon entropy > {ENTROPY_THRESHOLD}"},
+            {"signal": "query_rate", "active": True,
+             "note": f"fires on > {RATE_MAX_QUERIES} queries/{RATE_WINDOW_SECONDS}s per process"},
+            {"signal": "tld_reputation", "active": True,
+             "note": f"offline static set of {len(SUSPICIOUS_TLDS)} abuse-heavy TLDs "
+                     f"(replaces dead WHOIS age signal)"},
+        ]
 
     def should_block(self, domain: str, process_name: str) -> tuple[bool, float, str]:
         """Return (block, score, reason).

@@ -21,7 +21,8 @@ import valkyrie.config as config
 config.USE_EXTERNAL_LISTS = False
 
 from valkyrie import config as cfg
-from valkyrie.behavioral import BehavioralEngine, entropy_score, age_score, _shannon_entropy
+from valkyrie.behavioral import (BehavioralEngine, entropy_score,
+                                 tld_reputation_score, _shannon_entropy)
 from valkyrie.blocklist import BlocklistManager
 from valkyrie.dns_interceptor import DNSInterceptor
 from valkyrie.intelligence import Intelligence
@@ -105,7 +106,7 @@ def main() -> int:
         # behavioral.py components (entropy/rate/age -> weighted combine)
         be_ent, _ = entropy_score(d)         # NOT gated by part count
         be_rate, _ = beh._rate.record_and_score(ln)
-        be_age, _ = age_score(d)
+        be_age, _ = tld_reputation_score(d)   # PHASE 0: replaced dead WHOIS age signal
         beh_total = min(1.0, be_ent * 0.5 + be_rate * 0.35 + be_age * 0.15)
 
         classifier_total = max(anomaly_total, graph, beh_total)

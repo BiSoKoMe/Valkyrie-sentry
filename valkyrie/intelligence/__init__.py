@@ -44,6 +44,7 @@ class Intelligence:
 
     def __init__(self, store, behavioral=None) -> None:
         self._store    = store
+        self._behavioral = behavioral
         self.baseline  = BaselineLearner(store)
         self.anomaly   = AnomalyDetector(self.baseline)
         self.graph     = ThreatGraph(store)
@@ -66,6 +67,49 @@ class Intelligence:
         self.baseline.start()
         self.graph.start()
         self.memory.start()
+        self.print_signal_health()
+
+    # ------------------------------------------------------------------
+    # Signal health audit (no silent failures — see PHASE 0)
+    # ------------------------------------------------------------------
+
+    def signal_health(self) -> list[dict]:
+        """Aggregate ACTIVE/DISABLED status for every scoring signal in the
+        stack, evaluated against the CURRENT baseline state.
+
+        Grouped by engine. A DISABLED entry means the signal structurally
+        cannot fire right now (learning gate, missing dependency, etc.) — it is
+        surfaced rather than silently scoring 0.
+        """
+        rows: list[dict] = []
+        for s in self.anomaly.signal_health():
+            rows.append({"engine": "anomaly", **s})
+        if self._behavioral is not None and hasattr(self._behavioral, "signal_health"):
+            for s in self._behavioral.signal_health():
+                rows.append({"engine": "behavioral", **s})
+        else:
+            rows.append({"engine": "behavioral", "signal": "(engine)",
+                         "active": False,
+                         "note": "DISABLED: no behavioral engine wired into intelligence"})
+        # Threat-graph is a propagation signal: live, but scores > 0 only once a
+        # related domain has already been blocked (nothing to propagate from at
+        # a cold start).
+        rows.append({"engine": "threat_graph", "signal": "infrastructure_relation",
+                     "active": True,
+                     "note": "fires only after a related domain has been blocked "
+                             "(propagation signal, 0 at cold start)"})
+        return rows
+
+    def print_signal_health(self) -> None:
+        """Print a single ACTIVE/DISABLED audit line per signal at startup."""
+        learning = self.baseline.is_learning()
+        mode = (f"learning day {self.baseline.learning_day()}/"
+                f"{int(self.baseline._learning_days)}" if learning else "active")
+        print(f"[intelligence] signal health "
+              f"(intelligence-only baseline, mode={mode}):")
+        for r in self.signal_health():
+            state = "ACTIVE  " if r["active"] else "DISABLED"
+            print(f"  {state} {r['engine']:<12} {r['signal']:<22} {r['note']}")
 
     def stop(self) -> None:
         self.baseline.stop()
