@@ -7,27 +7,44 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-.env
 venv/
 .venv/
 
-# Database & logs
+# Runtime data (auto-created; never commit)
+data/*
+!data/.gitkeep
+
+# Databases & logs
 *.db
 *.log
 logs/
+service_stdout.log
+service_stderr.log
 
-# Node / UI
-ui/node_modules/
-ui/dist/
-ui/.vite/
+# Tools (downloaded binaries, e.g. nssm.exe)
+tools/
+
+# WireGuard / resolver configs (may contain keys)
+*.conf
+wg*.conf
+*.key
+*.pem
+
+# Environment
+.env
+.env.*
+
+# Large downloaded blocklists
+blocklists/steven_black_hosts.txt
+blocklists/oisd_full.txt
+
+# IDE / local settings
+.vscode/
+.idea/
+*.suo
+*.user
+.claude/settings.local.json
 
 # OS
 .DS_Store
 Thumbs.db
-
-# Blocklists (large downloaded files)
-blocklists/steven_black_hosts.txt
-blocklists/oisd_full.txt
-
-# Runtime data (downloaded blocklist, sqlite db, MAC/IP backups)
-data/

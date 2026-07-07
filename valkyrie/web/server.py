@@ -55,6 +55,8 @@ class _AppState:
     blocklist      = None      # valkyrie.blocklist.BlocklistManager
     mac_randomizer = None      # valkyrie.mac_randomizer.MacRandomizer (optional)
     zero_log       = None      # valkyrie.zero_log.ZeroLogMode (optional)
+    intelligence   = None      # valkyrie.intelligence.Intelligence (optional)
+    self_heal      = None      # valkyrie.intelligence.SelfHealing (optional)
     start_time: float = 0.0
     dns_port: int  = 0         # actual DNS listen port (for dashboard display)
     web_port: int  = 0         # actual web dashboard port
@@ -320,6 +322,24 @@ def create_app():
         if not results:
             return JSONResponse({"error": "admin rights required or no backup found"}, status_code=403)
         return {"results": results}
+
+    @app.get("/api/intelligence")
+    async def intelligence_status():
+        if state.intelligence is None:
+            return {"enabled": False}
+        info = state.intelligence.status()
+        info["enabled"] = True
+        info["blocklist_domains"] = state.blocklist.count() if state.blocklist else 0
+        try:
+            from ..seed_blocklist import SEED_DOMAINS
+            info["seed_domains"] = len(SEED_DOMAINS)
+        except ImportError:
+            info["seed_domains"] = 0
+        from ..config import USE_EXTERNAL_LISTS
+        info["external_lists"] = USE_EXTERNAL_LISTS
+        if state.self_heal is not None:
+            info["self_heal"] = state.self_heal.status()
+        return info
 
     @app.get("/api/stats/cleaned")
     async def get_cleaned_stats():

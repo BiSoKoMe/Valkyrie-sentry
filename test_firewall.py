@@ -127,17 +127,26 @@ not-valid-line
     _check("127.0.0.1 not in ipset",     not fw2.is_blocked_ip("127.0.0.1"))
 
     # ------------------------------------------------------------------
-    # 8. Load cached IP blocklist (or fetch if missing/stale)
+    # 8. IP blocklist load — offline default, downloads opt-in
     # ------------------------------------------------------------------
-    print("\n[8] IP blocklist load")
+    print("\n[8] IP blocklist load (downloads are opt-in)")
     try:
-        cidrs = load_ip_blocklist()
-        _check("blocklist loaded (non-empty)",  len(cidrs) > 0)
-        _check("no RFC1918 in blocklist",       not any(_in_never_block(c) for c in cidrs))
-        _check("no loopback in blocklist",      "127.0.0.1" not in cidrs)
-        print(f"       {len(cidrs):,} ranges loaded from disk/feeds")
+        cidrs = load_ip_blocklist(allow_download=False)
+        _check("offline load returns a set (no network needed)",
+               isinstance(cidrs, set))
+        _check("no RFC1918 in blocklist",  not any(_in_never_block(c) for c in cidrs))
+        _check("no loopback in blocklist", "127.0.0.1" not in cidrs)
+        print(f"       {len(cidrs):,} ranges from local cache "
+              f"({'cache present' if cidrs else 'no cache — DoH-only mode'})")
     except Exception as exc:
         print(f"  [!] SKIP — could not load blocklist: {exc}")
+
+    try:
+        fetched = load_ip_blocklist(allow_download=True)
+        _check("opt-in download fetches ranges", len(fetched) > 0)
+        print(f"       {len(fetched):,} ranges after opt-in download")
+    except Exception as exc:
+        print(f"  [!] SKIP — opt-in download unavailable offline: {exc}")
 
     # ------------------------------------------------------------------
     # 9. Kernel rule installation (admin/root required — non-fatal)
