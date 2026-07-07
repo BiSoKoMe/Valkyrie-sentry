@@ -102,6 +102,7 @@ class DNSInterceptor:
         port: int          = DNS_LISTEN_PORT,
         upstream_host: str = DNS_UPSTREAM,
         upstream_port: int = DNS_UPSTREAM_PORT,
+        allow_external_fallback: bool = True,
         debug: bool        = False,
     ) -> None:
         self._store         = store
@@ -116,6 +117,10 @@ class DNSInterceptor:
         self._port          = port
         self._upstream_host = upstream_host
         self._upstream_port = upstream_port
+        # When False, allowed queries go ONLY to the configured local upstream
+        # (e.g. Unbound on 127.0.0.1) and never fall back to public resolvers —
+        # fail-closed, no DNS leak.  See config.DNS_LOCAL_ONLY.
+        self._allow_external_fallback = allow_external_fallback
         self._debug         = debug
         self._sock: Optional[socket.socket] = None
         self._running   = False
@@ -414,8 +419,18 @@ class DNSInterceptor:
         # upstream_host/upstream_port were silently ignored and every query
         # went straight to public DNS regardless of what Unbound integration
         # had set up.
+        #
+        # No-leak mode (allow_external_fallback=False, auto-enabled when Unbound
+        # is the upstream): the public-resolver fallback is omitted entirely, so
+        # a plaintext query can NEVER reach a third-party resolver. If the local
+        # upstream is unreachable the loop exhausts and we return SERVFAIL below
+        # (fail-closed) rather than leaking the query to 8.8.8.8/1.1.1.1/etc.
         servers: list[tuple[str, int]] = [(self._upstream_host, self._upstream_port)]
-        servers += [(s, 53) for s in UPSTREAM_SERVERS if s != self._upstream_host]
+        if self._allow_external_fallback:
+            servers += [(s, 53) for s in UPSTREAM_SERVERS if s != self._upstream_host]
+        elif self._debug:
+            print(f"  [no-leak] {qname}: local upstream only "
+                  f"({self._upstream_host}:{self._upstream_port}), no external fallback")
 
         for upstream, port in servers:
             # ── UDP ──────────────────────────────────────────────────────────

@@ -259,6 +259,9 @@ def main() -> None:
     parser.add_argument("--download-lists", action="store_true",
                         help="Opt in to downloading external blocklist/IP feeds "
                              "(default: built-in seed list + learned intelligence, no downloads)")
+    parser.add_argument("--no-dns-leak", action="store_true",
+                        help="Fail-closed DNS: only ever use the local resolver upstream; "
+                             "never fall back to public resolvers (auto-enabled when Unbound is active)")
     args = parser.parse_args()
 
     console = Console()
@@ -485,6 +488,24 @@ def main() -> None:
     elif args.debug:
         console.print("[yellow]Unbound disabled (--no-unbound)[/yellow]")
 
+    # No-leak DNS policy: fail-closed (local upstream only, no public-resolver
+    # fallback) whenever Unbound is the upstream, or when forced via
+    # --no-dns-leak / config.DNS_LOCAL_ONLY. Without a local resolver and
+    # without the flag, external fallback stays on so DNS still resolves.
+    from .config import DNS_LOCAL_ONLY
+    force_local_only = args.no_dns_leak or DNS_LOCAL_ONLY
+    allow_external_fallback = not (unbound_ok or force_local_only)
+    if not allow_external_fallback:
+        if unbound_ok:
+            console.print("[green]✓[/green] No-leak DNS: local resolver only, "
+                          "no public-DNS fallback [dim](Unbound active)[/dim]")
+        else:
+            # Forced fail-closed with no local resolver present: queries will
+            # SERVFAIL rather than leak — the safe choice when the user asked.
+            console.print("[yellow]No-leak DNS forced (--no-dns-leak) but no local "
+                          "resolver is active — queries will SERVFAIL until Unbound "
+                          "is available (no external fallback).[/yellow]")
+
     # ------------------------------------------------------------------
     # 5. Rules
     # ------------------------------------------------------------------
@@ -613,6 +634,7 @@ def main() -> None:
             port            = args.port,
             upstream_host   = dns_upstream_host,
             upstream_port   = dns_upstream_port,
+            allow_external_fallback = allow_external_fallback,
             debug           = args.debug,
         )
         try:
@@ -807,6 +829,10 @@ def main() -> None:
         status_rows.append(("Recursive DNS", True, f"Unbound {dns_upstream_host}:{dns_upstream_port}"))
     else:
         status_rows.append(("Upstream DNS", True, f"{dns_upstream_host}:{dns_upstream_port}"))
+    if not allow_external_fallback:
+        status_rows.append(("DNS Leak Guard", True, "local resolver only (fail-closed)"))
+    else:
+        status_rows.append(("DNS Leak Guard", False, "public-DNS fallback ENABLED (install Unbound)"))
     if zero_log is not None and zero_log.is_active():
         status_rows.append(("Zero Log", True, "RAM only (no disk)"))
     else:

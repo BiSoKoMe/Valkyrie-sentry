@@ -34,6 +34,18 @@ UPSTREAM_SERVERS: list[str] = [
 SINKHOLE_IPV4 = "0.0.0.0"
 SINKHOLE_IPV6 = "::"
 
+# No-leak DNS policy.
+#   When the local recursive resolver (Unbound) is the upstream, allowed
+#   queries must NOT silently fall back to public resolvers (8.8.8.8,
+#   1.1.1.1, 9.9.9.9, ISP) — that would leak the very queries Unbound
+#   exists to keep local.  With fallback disabled the interceptor only ever
+#   contacts the configured local upstream and returns SERVFAIL on failure
+#   (fail-closed), so a plaintext query can never reach a third-party
+#   resolver.  This is auto-enabled whenever Unbound is active, and can be
+#   forced on (even without Unbound) with --no-dns-leak.
+DNS_LOCAL_ONLY = False   # default off → preserves external-resolver behaviour
+                         # when the user has no local resolver configured
+
 # ---------------------------------------------------------------------------
 # Blocklist updater
 # ---------------------------------------------------------------------------
