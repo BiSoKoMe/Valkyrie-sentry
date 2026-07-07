@@ -1,12 +1,17 @@
-"""Blocklist loader and auto-updater.
+"""Blocklist loader — seed-first, downloads opt-in.
 
 On startup:
-  1. Check if blocklist.txt is older than BLOCKLIST_MAX_AGE_DAYS.
-  2. If stale, fetch all BLOCKLIST_SOURCES in parallel, merge, deduplicate,
-     compare hash against existing file, and write only if changed.
-  3. Load the merged list into an in-memory set for O(1) lookups.
+  1. The built-in seed blocklist (seed_blocklist.py, ~500 of the most
+     egregious tracker domains) is ALWAYS loaded.  No network needed —
+     day-one protection works fully offline.
+  2. Downloaded lists are opt-in (``--download-lists`` or
+     USE_EXTERNAL_LISTS=True).  Only then is blocklist.txt refreshed
+     from BLOCKLIST_SOURCES when older than BLOCKLIST_MAX_AGE_DAYS.
+  3. A previously downloaded blocklist.txt on disk is still honoured if
+     present (it is local data — using it requires no network).
 
-The updater shows a Rich progress bar while downloading.
+Beyond the seed, ongoing protection comes from the intelligence layer,
+which learns threats from this machine's own traffic.
 """
 
 from __future__ import annotations
@@ -24,7 +29,9 @@ from .config import (
     BLOCKLIST_MAX_AGE_DAYS,
     BLOCKLIST_PATH,
     BLOCKLIST_SOURCES,
+    USE_EXTERNAL_LISTS,
 )
+from .seed_blocklist import SEED_DOMAINS
 
 # Matches lines like "0.0.0.0 tracker.example.com" or "127.0.0.1 ..."
 _HOSTS_PATTERN = re.compile(r"^\s*(?:0\.0\.0\.0|127\.0\.0\.1)\s+([a-zA-Z0-9.\-_]+)")
@@ -117,48 +124,63 @@ def update_blocklist(console=None) -> int:
 
 
 class BlocklistManager:
-    """In-memory blocklist with wildcard support and auto-update scheduling."""
+    """In-memory blocklist: built-in seed + optional downloaded lists."""
 
     def __init__(self) -> None:
         self._exact:    set[str] = set()
-        self._wildcards: list[str] = []    # stored without leading '*.'
+        self._wildcards: set[str] = set()   # stored without leading '*.'
         self._lock = threading.RLock()
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def load(self, console=None) -> int:
-        """Load or update blocklist.  Returns domain count."""
-        age = _file_age_days(BLOCKLIST_PATH)
-        if age is None or age > BLOCKLIST_MAX_AGE_DAYS:
-            count = update_blocklist(console)
-        else:
-            count = self._read_from_disk()
-            if console:
-                console.print(
-                    f"[dim]Blocklist loaded from cache ({BLOCKLIST_PATH.name},"
-                    f" {age:.1f}d old, {count:,} entries)[/dim]"
-                )
+    def load(self, console=None, allow_download: bool | None = None) -> int:
+        """Load the blocklist.  Returns domain count.
+
+        The seed blocklist always loads (offline, instant).  Downloads
+        happen only when ``allow_download`` is True (or unset and
+        USE_EXTERNAL_LISTS is enabled) AND the cached file is stale.
+        """
+        if allow_download is None:
+            allow_download = USE_EXTERNAL_LISTS
+
+        if allow_download:
+            age = _file_age_days(BLOCKLIST_PATH)
+            if age is None or age > BLOCKLIST_MAX_AGE_DAYS:
+                update_blocklist(console)
+
+        count = self._read_from_disk()
+        if console:
+            cached = count - len(SEED_DOMAINS)
+            console.print(
+                f"[dim]Blocklist ready: {len(SEED_DOMAINS):,} seed domains"
+                + (f" + {cached:,} from {BLOCKLIST_PATH.name}" if cached > 0 else "")
+                + ("" if allow_download else "  (downloads off — seed + learned intelligence)")
+                + "[/dim]"
+            )
         return count
 
     def _read_from_disk(self) -> int:
-        if not BLOCKLIST_PATH.exists():
-            return 0
-        exact: set[str] = set()
-        wildcards: list[str] = []
-        for line in BLOCKLIST_PATH.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if line.startswith("*."):
-                wildcards.append(line[2:])
-            else:
-                exact.add(line)
+        """(Re)build the in-memory sets: seed domains + cached file if any.
+
+        Every seed entry blocks the domain itself and all subdomains.
+        """
+        exact:     set[str] = set(SEED_DOMAINS)
+        wildcards: set[str] = set(SEED_DOMAINS)
+        if BLOCKLIST_PATH.exists():
+            for line in BLOCKLIST_PATH.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("*."):
+                    wildcards.add(line[2:])
+                else:
+                    exact.add(line)
         with self._lock:
             self._exact    = exact
             self._wildcards = wildcards
-        return len(exact) + len(wildcards)
+        return len(exact | wildcards)
 
     def reload(self) -> int:
         """Force re-read from disk (called after update)."""
@@ -184,4 +206,4 @@ class BlocklistManager:
 
     def count(self) -> int:
         with self._lock:
-            return len(self._exact) + len(self._wildcards)
+            return len(self._exact | self._wildcards)

@@ -279,6 +279,30 @@ INTEGRITY_CHECK_INTERVAL  = 3600   # seconds
 RAM_DB_URI                = "file::memory:?cache=shared"
 
 # ---------------------------------------------------------------------------
+# Intelligence layer (self-learning threat detection)
+# ---------------------------------------------------------------------------
+INTELLIGENCE_MODE       = True    # master switch for the learning pipeline
+LEARNING_PERIOD_DAYS    = 7       # baseline learning window after first start
+ANOMALY_BLOCK_THRESHOLD = 0.7     # classifier score at/above which we block
+ANOMALY_FLAG_THRESHOLD  = 0.4     # classifier score at/above which we flag
+
+# Downloaded blocklist/IP feeds are OPT-IN: default protection is the
+# built-in seed blocklist (seed_blocklist.py) + learned intelligence.
+# Enable per-run with --download-lists, or permanently by setting True.
+USE_EXTERNAL_LISTS      = False
+
+INTEL_FLUSH_INTERVAL    = 30      # seconds between SQLite flushes of learned state
+INTEL_HISTORY_SAMPLES   = 16      # timestamps/payloads kept per (process, domain)
+INTEL_HEARTBEAT_MIN_SAMPLES = 4   # gaps needed before heartbeat detection fires
+INTEL_HEARTBEAT_MIN_GAP = 5.0     # seconds — faster than this is a burst, not a beacon
+INTEL_HEARTBEAT_MAX_GAP = 3600.0  # seconds — slower than this is not a heartbeat
+INTEL_HEARTBEAT_MAX_CV  = 0.25    # coefficient of variation below this = regular
+INTEL_SMALL_PAYLOAD_BYTES = 512   # repeated payloads under this = beacon-like
+INTEL_GOOD_AFTER_ALLOWS = 5       # clean allows before a domain is remembered good
+
+SELF_HEAL_INTERVAL      = 30      # seconds between component health checks
+
+# ---------------------------------------------------------------------------
 # UI
 # ---------------------------------------------------------------------------
 UI_REFRESH_RATE     = 4           # Rich live refresh per second

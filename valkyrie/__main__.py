@@ -60,7 +60,14 @@ from rich.console import Console
 
 from .behavioral import BehavioralEngine
 from .blocklist import BlocklistManager
-from .config import DNS_LISTEN_HOST, DNS_LISTEN_PORT, WEB_HOST, WEB_PORT
+from .config import (
+    DATA_DIR,
+    DNS_LISTEN_HOST,
+    DNS_LISTEN_PORT,
+    INTELLIGENCE_MODE,
+    WEB_HOST,
+    WEB_PORT,
+)
 from .dns_interceptor import DNSInterceptor
 from .doh_detector import DoHDetector
 from .firewall import FirewallManager
@@ -241,6 +248,17 @@ def main() -> None:
                         help="Import last N hours from disk DB into RAM at startup")
     parser.add_argument("--debug", action="store_true",
                         help="Verbose DNS forwarding logs — prints every query, upstream tried, and result")
+    parser.add_argument("--intelligence-status", action="store_true",
+                        help="Print learning status and learned-intelligence stats, then exit")
+    parser.add_argument("--reset-learning", action="store_true",
+                        help="Wipe the learned baseline and restart the learning period, then exit")
+    parser.add_argument("--export-intelligence", action="store_true",
+                        help="Export learned intelligence to data/intelligence_export.json, then exit")
+    parser.add_argument("--no-intelligence", action="store_true",
+                        help="Disable the self-learning intelligence layer")
+    parser.add_argument("--download-lists", action="store_true",
+                        help="Opt in to downloading external blocklist/IP feeds "
+                             "(default: built-in seed list + learned intelligence, no downloads)")
     args = parser.parse_args()
 
     console = Console()
@@ -251,6 +269,52 @@ def main() -> None:
     if args.setup_wireguard:
         wg = WireGuardConfig(console=console)
         wg.generate(server_ip=args.server_ip, iface=args.wg_iface)
+        return
+
+    # ------------------------------------------------------------------
+    # Early-exit: intelligence status / reset / export
+    # ------------------------------------------------------------------
+    if args.intelligence_status or args.reset_learning or args.export_intelligence:
+        from .intelligence import Intelligence
+        store = Store()
+        store.start()
+        intel = Intelligence(store)
+        intel.start()
+        try:
+            if args.reset_learning:
+                confirm = console.input(
+                    "[bold yellow]This wipes the learned baseline and restarts "
+                    "the 7-day learning period. Proceed? [y/N]: [/bold yellow]"
+                ).strip().lower()
+                if confirm == "y":
+                    intel.reset_learning()
+                    console.print("[green]✓[/green] Learning reset — baseline wiped, learning restarts now.")
+                else:
+                    console.print("Cancelled.")
+            elif args.export_intelligence:
+                import json as _json
+                data = intel.export()
+                out = DATA_DIR / "intelligence_export.json"
+                out.write_text(_json.dumps(data, indent=2), encoding="utf-8")
+                console.print(f"[green]✓[/green] Intelligence exported → [cyan]{out}[/cyan]")
+                console.print(f"  Threats learned : {len(data['threats']):,}")
+                console.print(f"  Safe patterns   : {len(data['safe']):,}")
+            else:
+                st = intel.status()
+                mode = (f"LEARNING (day {st['learning_day']} of {st['learning_days_total']})"
+                        if st["learning"] else "ACTIVE")
+                console.print(f"[bold]Intelligence mode  :[/bold] {mode}")
+                console.print(f"  Threats learned  : {st['threats_learned']:,}")
+                console.print(f"  Safe patterns    : {st['safe_patterns']:,}")
+                console.print(f"  Processes profiled: {st['baseline_processes']:,}")
+                console.print(f"  Baseline pairs   : {st['baseline_pairs']:,}")
+                if st["last_anomaly"]:
+                    la = st["last_anomaly"]
+                    console.print(f"  Last anomaly     : {la['domain']} ({la['decision']}, {la['score']})")
+                    console.print(f"                     {la['explanation']}")
+        finally:
+            intel.stop()
+            store.stop()
         return
 
     # ------------------------------------------------------------------
@@ -380,7 +444,10 @@ def main() -> None:
     # ------------------------------------------------------------------
     _t = time.monotonic()
     blocklist = BlocklistManager()
-    count = blocklist.load(console=_verbose)
+    # --update / --download-lists force a download; otherwise the built-in
+    # seed blocklist (+ any previously downloaded cache) loads offline.
+    _dl = True if (args.update or args.download_lists) else None
+    count = blocklist.load(console=_verbose, allow_download=_dl)
     _tick(f"Blocklist loaded ({count:,} domains)", _t)
     if args.update:
         console.print(f"[green]Update complete.[/green] {count:,} domains.")
@@ -393,7 +460,8 @@ def main() -> None:
     _t = time.monotonic()
     firewall = FirewallManager(console=_verbose)
     if not args.no_firewall:
-        firewall.start(console=_verbose)
+        firewall.start(console=_verbose,
+                       allow_download=True if args.download_lists else None)
         _tick("Firewall ready", _t)
     elif args.debug:
         console.print("[yellow]Firewall disabled (--no-firewall)[/yellow]")
@@ -449,6 +517,24 @@ def main() -> None:
     _tick("Site scanner ready", _t)
     if args.strict:
         console.print("[yellow]  Strict mode: blocklist applied on top of scanner[/yellow]")
+
+    # ------------------------------------------------------------------
+    # 7b-2. Intelligence layer (self-learning threat detection)
+    # ------------------------------------------------------------------
+    intelligence = None
+    if INTELLIGENCE_MODE and not args.no_intelligence:
+        _t = time.monotonic()
+        from .intelligence import Intelligence
+        intelligence = Intelligence(store, behavioral=behavioral)
+        intelligence.start()
+        _st = intelligence.status()
+        if _st["learning"]:
+            _tick(f"Intelligence learning (day {_st['learning_day']} of "
+                  f"{_st['learning_days_total']})", _t)
+        else:
+            _tick(f"Intelligence active ({_st['threats_learned']:,} threats learned)", _t)
+    elif args.debug:
+        console.print("[yellow]Intelligence layer disabled[/yellow]")
 
     # ------------------------------------------------------------------
     # 7c. MAC randomizer (optional)
@@ -521,6 +607,7 @@ def main() -> None:
             rules           = rules,
             process_watcher = proc_watcher,
             scanner         = scanner,
+            intelligence    = intelligence,
             strict          = args.strict,
             host            = args.host,
             port            = args.port,
@@ -591,6 +678,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # 10. Web dashboard (optional)
     # ------------------------------------------------------------------
+    web_thread = None
     if args.web:
         from .web.server import state as web_state, run_server
         web_state.store          = store
@@ -601,6 +689,7 @@ def main() -> None:
         web_state.zero_log       = zero_log
         web_state.dns_port       = args.port
         web_state.web_port       = args.web_port
+        web_state.intelligence   = intelligence
         web_thread = threading.Thread(
             target=run_server,
             kwargs={"host": args.web_host, "port": args.web_port},
@@ -613,6 +702,65 @@ def main() -> None:
                 f"[green]✓[/green] Web dashboard  "
                 f"[cyan]http://localhost:{args.web_port}[/cyan]"
             )
+
+    # ------------------------------------------------------------------
+    # 10b. Self-healing watchdog — checks components every 30s, attempts
+    #      recovery on failure, isolates faults so nothing takes the
+    #      whole system down.
+    # ------------------------------------------------------------------
+    healer = None
+    if intelligence is not None:
+        from .intelligence import SelfHealing
+        healer = SelfHealing(store=store)
+
+        if dns_server is not None:
+            def _recover_dns() -> None:
+                try:
+                    dns_server.stop()
+                except Exception:
+                    pass
+                dns_server.start()
+            healer.register("dns_interceptor", dns_server.is_listening, _recover_dns)
+
+        healer.register("store_writer", store.is_writing)
+
+        if args.web:
+            def _check_web() -> bool:
+                import urllib.request
+                try:
+                    with urllib.request.urlopen(
+                        f"http://127.0.0.1:{args.web_port}/api/stats", timeout=3
+                    ) as resp:
+                        return resp.status == 200
+                except Exception:
+                    return False
+            healer.register("web_dashboard", _check_web)
+
+        if unbound_ok and unbound is not None:
+            def _check_unbound() -> bool:
+                import socket as _s
+                host, port = unbound.upstream_addr()
+                probe = (b"\x00\x01\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+                         b"\x07example\x03com\x00\x00\x01\x00\x01")
+                sock = _s.socket(_s.AF_INET, _s.SOCK_DGRAM)
+                try:
+                    sock.settimeout(2.0)
+                    sock.sendto(probe, (host, port))
+                    sock.recvfrom(512)
+                    return True
+                except OSError:
+                    return False
+                finally:
+                    sock.close()
+
+            def _recover_unbound() -> None:
+                unbound.start()
+
+            healer.register("unbound", _check_unbound, _recover_unbound)
+
+        healer.start()
+        if args.web:
+            web_state.self_heal = healer
 
     # ------------------------------------------------------------------
     # 11. TLS inspection (optional — disabled by default)
@@ -646,6 +794,15 @@ def main() -> None:
     if not args.no_firewall:
         status_rows.append(("Firewall", True, f"{firewall.count():,} IP ranges"))
     status_rows.append(("Behavioral AI", True, "active"))
+    if intelligence is not None:
+        _ist = intelligence.status()
+        if _ist["learning"]:
+            status_rows.append(("Intelligence", True,
+                                f"learning (day {_ist['learning_day']} of "
+                                f"{_ist['learning_days_total']})"))
+        else:
+            status_rows.append(("Intelligence", True,
+                                f"active — {_ist['threats_learned']:,} threats learned"))
     if unbound_ok:
         status_rows.append(("Recursive DNS", True, f"Unbound {dns_upstream_host}:{dns_upstream_port}"))
     else:
@@ -706,6 +863,10 @@ def main() -> None:
             tls_inspector.stop()
         if mac_randomizer:
             mac_randomizer.stop()
+        if healer:
+            healer.stop()
+        if intelligence:
+            intelligence.stop()
         firewall.stop()
         store.stop()
         if zero_log:

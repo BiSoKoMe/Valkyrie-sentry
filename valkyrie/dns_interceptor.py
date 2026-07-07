@@ -7,9 +7,16 @@ pipeline, and either:
 
 Decision pipeline (in order):
   1. User rules — always_allow / always_block take priority
-  2. Blocklist — known-bad domains
-  3. Behavioral heuristics — entropy + rate + age scoring
-  4. Baseline anomaly check — post-profiling phase
+  2. Intelligence memory — verdicts Valkyrie already learned (fast path)
+  3. Blocklist / scanner — known-bad domains + positive tracker signals
+  4. Threat classifier — behavioural intelligence (anomaly + threat graph)
+  5. Baseline anomaly check — post-profiling phase
+
+Every query is also recorded into the intelligence layer's baseline so
+the machine's "normal" keeps being learned; blocks feed the threat graph
+so related infrastructure is caught automatically.  The intelligence
+steps are additive — with intelligence=None the pipeline behaves exactly
+as before.
 
 OS-specific setup (NOT handled here — must be done externally):
   Linux:
@@ -89,6 +96,7 @@ class DNSInterceptor:
         rules: RulesLoader,
         process_watcher: ProcessWatcher,
         scanner: Optional[SiteScanner] = None,
+        intelligence=None,          # valkyrie.intelligence.Intelligence (optional)
         strict: bool = False,
         host: str          = DNS_LISTEN_HOST,
         port: int          = DNS_LISTEN_PORT,
@@ -102,6 +110,7 @@ class DNSInterceptor:
         self._rules         = rules
         self._watcher       = process_watcher
         self._scanner       = scanner
+        self._intelligence  = intelligence
         self._strict        = strict  # if True: also check blocklist after scanner "allow"
         self._host          = host
         self._port          = port
@@ -133,13 +142,30 @@ class DNSInterceptor:
         self._sock.bind((bind_host, self._port))
         self._sock.settimeout(1.0)
         self._running = True
-        self._thread.start()
+        try:
+            self._thread.start()
+        except RuntimeError:
+            # Thread objects are single-use — after a stop()/start() cycle
+            # (e.g. self-healing recovery) a fresh serve thread is needed.
+            self._thread = threading.Thread(
+                target=self._serve_loop, daemon=True, name="dns-interceptor"
+            )
+            self._thread.start()
 
     def stop(self) -> None:
         self._running = False
         if self._sock:
             self._sock.close()
         self._thread.join(timeout=3)
+
+    def is_listening(self) -> bool:
+        """Lightweight liveness probe for the self-healing watchdog.
+
+        True while the serve loop is running with a bound socket.  Does not
+        depend on upstream reachability — an offline upstream must not be
+        mistaken for a dead interceptor.
+        """
+        return self._running and self._sock is not None and self._thread.is_alive()
 
     def self_test(self, domain: str = "google.com", timeout: float = 3.0) -> dict:
         """Send a test query to ourselves and return result details.
@@ -215,7 +241,9 @@ class DNSInterceptor:
         qtype    = request.question[0].rdtype
         proc     = self._watcher.lookup(src_ip, src_port)
 
-        decision, reason, suspicion, category = self._decide(qname, qtype, proc)
+        decision, reason, suspicion, category = self._decide(
+            qname, qtype, proc, payload_size=len(data)
+        )
 
         if self._debug:
             print(f"[dns] {qname}  decision={decision}  proc={proc.name}  reason={reason or '-'}")
@@ -262,10 +290,11 @@ class DNSInterceptor:
     # ------------------------------------------------------------------
 
     def _decide(
-        self, domain: str, qtype: int, proc: ProcessInfo
+        self, domain: str, qtype: int, proc: ProcessInfo, payload_size: int = 0
     ) -> tuple[str, str, float, str]:
         """Return (decision, reason, suspicion_score, category)."""
         rules = self._rules.get()
+        intel = self._intelligence
 
         # 1. User always_allow
         if rules.is_always_allowed(domain, proc.name):
@@ -275,11 +304,27 @@ class DNSInterceptor:
         if rules.is_always_blocked(domain, proc.name):
             return "blocked", "user:always_block", 1.0, "user_rule"
 
+        # 2b. Intelligence: observe, then take the fast path if this domain
+        #     was already decided.  Known-good domains were promoted only
+        #     after repeatedly passing the full pipeline.
+        now = time.time()
+        if intel is not None:
+            intel.record(proc.name, domain, now, payload_size)
+            verdict = intel.check_memory(domain)
+            if verdict == "bad":
+                reason = intel.memory_reason(domain) or "learned threat"
+                return "blocked", f"intelligence:{reason}", 1.0, "intelligence"
+            if verdict == "good":
+                return "allowed", "intelligence:known_good", 0.0, "intelligence"
+
         # 3. Scanner (replaces blocklist + behavioral as default pipeline)
         if self._scanner is not None:
             result = self._scanner.analyze(domain, proc.name)
             if result.decision == "block":
-                return "blocked", "; ".join(result.reasons), result.confidence, result.category
+                reason = "; ".join(result.reasons)
+                if intel is not None:
+                    intel.remember_block(domain, reason)
+                return "blocked", reason, result.confidence, result.category
             if result.decision == "flag":
                 return "flagged", "; ".join(result.reasons), result.confidence, result.category
             # Scanner says "allow" — fall through to strict/anomaly checks below
@@ -287,14 +332,34 @@ class DNSInterceptor:
         else:
             # Fallback: legacy blocklist + behavioral (when scanner not wired in)
             if self._blocklist.is_blocked(domain):
+                if intel is not None:
+                    intel.remember_block(domain, "blocklist")
                 return "blocked", "blocklist", 0.0, "blocklist"
             block_beh, score, beh_reason = self._behavioral.should_block(domain, proc.name)
             if block_beh:
+                if intel is not None:
+                    intel.remember_block(domain, beh_reason)
                 return "behavioral", beh_reason, score, "behavioral"
 
-        # 3b. Strict mode — also apply blocklist as an extra layer
-        if self._strict and self._blocklist.is_blocked(domain):
-            return "blocked", "blocklist (strict)", 1.0, "blocklist"
+        # 3b. Blocklist on top of scanner "allow" — since the cutover to the
+        #     built-in seed list this is always enforced (the seed is small,
+        #     curated, and safe); --strict is therefore implied nowadays.
+        if self._blocklist.is_blocked(domain):
+            if intel is not None:
+                intel.remember_block(domain, "blocklist")
+            return "blocked", "blocklist", 1.0, "blocklist"
+
+        # 3c. Threat classifier — behavioural intelligence on top of the
+        #     list-based checks.  Blocks feed memory + threat graph so the
+        #     next hit takes the fast path and related infra is caught.
+        if intel is not None:
+            verdict = intel.classify(proc.name, domain, now, payload_size)
+            if verdict["decision"] == "block":
+                intel.remember_block(domain, verdict["reason"])
+                return "blocked", verdict["reason"], verdict["score"], "intelligence"
+            if verdict["decision"] == "flag":
+                return "flagged", verdict["reason"], verdict["score"], "intelligence"
+            score = max(score, verdict["score"])
 
         # 4. Baseline anomaly (flagged but not blocked)
         if self._store.is_anomaly(proc.name, domain):
