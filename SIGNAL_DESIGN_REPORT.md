@@ -162,3 +162,61 @@ behind every page and behind many anchors. The zero-FP result is preserved by
    test.
 
 **Stopping here for approval of the Bucket-B design before implementation.**
+
+---
+
+## Implementation results (post-approval)
+
+Landed in two commits, both additive inside the intelligence layer;
+`dns_interceptor.py` untouched.
+
+### Part 1 — Bucket-A seed widening
+Added 10 dedicated-tracker registrable domains to `seed_blocklist.py`
+(`media.net`, `sharethis.com`, `taboolasyndication.com`, `segmentapis.com`,
+`browser-intake-datadoghq.com`, `posthog.com`, `plausible.io`,
+`fingerprint.com`, `brandmetrics.com`, `adalytics.io`). `ceros.com` held back
+(serves user-facing embedded content — eTLD+1 block would risk real pages).
+
+### Part 2 — Bucket-B co-occurrence signal
+`valkyrie/intelligence/cooccurrence.py` — learns, per host, the set of distinct
+first-party anchors it is resolved behind; scores third-party ubiquity. Guards
+G1 (infra/functional allowlist, `config.INFRA_ALLOWLIST`), G2 (known-good
+exemption), G3 (**flag-only**, `COOC_SCORE_CAP = 0.60 < 0.70` block threshold —
+applied by the classifier only as an allow→flag upgrade), G4 (ubiquity gate,
+`COOC_MIN_ANCHORS = 3`). Startup signal-health audit lists it as FLAG-ONLY.
+
+### Before / after — mandated 15-tracker + 15-benign single-shot test
+
+| stage | recall | FP |
+|---|---|---|
+| baseline (pre-work) | 8/15 = **0.53** | **0/15** |
+| + Bucket-A seed widening | 13/15 = **0.87** | **0/15** |
+| + Bucket-B co-occurrence | 13/15 = **0.87** | **0/15** |
+
+Co-occurrence is temporal, so it correctly contributes **0** in the single-shot
+harness (one burst → every domain has a single anchor, below the ubiquity gate)
+— which is why the single-shot recall is unchanged by Part 2 and FP stays 0.
+Its effect is proven in the dedicated burst test.
+
+### Bucket-B recall + FP protection — `test_cooccurrence.py` (24/24)
+Drives the real `_decide` pipeline over multiple page-load bursts:
+- **Recall:** `tr.snapchat.com` and `events.reddit.com` are **flagged** once seen
+  behind ≥3 distinct first parties; the deciding reason is the co-occurrence
+  signal (anomaly contributes nothing).
+- **Invariant:** neither is ever **blocked** by co-occurrence — score stays
+  < 0.70 on every appearance.
+- **FP protection built into the test:** a CDN (`d1.cloudfront.net`), a fonts
+  host (`fonts.gstatic.com`), a payment SDK (`js.stripe.com`), and an
+  error-reporting/analytics-adjacent service (`o1.ingest.sentry.io`) are
+  co-loaded across the *same* sites yet are never flagged and accrue **0**
+  anchors (G1); a non-allowlisted benign service seen behind 2 sites stays
+  allowed (G4); first-party anchors are never flagged.
+
+### Honest limitations (unchanged from the design)
+- Co-occurrence is learned/temporal: it will not catch a tracker on first
+  contact or one that only ever appears on a single site.
+- `eTLD+1` is approximated as the last two labels (imprecise for multi-label
+  public suffixes like `co.uk`).
+- Functional third parties are protected by a **shipped allowlist**; a genuinely
+  novel benign third party not yet on it could be flagged (never blocked) — the
+  flag-only invariant is what bounds the cost of that case.

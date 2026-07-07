@@ -24,6 +24,7 @@ from typing import Optional
 from .anomaly import AnomalyDetector
 from .baseline import BaselineLearner
 from .classifier import ThreatClassifier
+from .cooccurrence import CoOccurrenceTracker
 from .memory import IntelligenceMemory
 from .self_heal import SelfHealing
 from .threat_graph import ThreatGraph
@@ -31,6 +32,7 @@ from .threat_graph import ThreatGraph
 __all__ = [
     "AnomalyDetector",
     "BaselineLearner",
+    "CoOccurrenceTracker",
     "Intelligence",
     "IntelligenceMemory",
     "SelfHealing",
@@ -49,12 +51,17 @@ class Intelligence:
         self.anomaly   = AnomalyDetector(self.baseline)
         self.graph     = ThreatGraph(store)
         self.memory    = IntelligenceMemory(store)
+        # G2: co-occurrence never scores a domain already promoted to known-good.
+        self.cooc      = CoOccurrenceTracker(
+            exempt_fn=lambda d: self.memory.check(d) == "good"
+        )
         self.classifier = ThreatClassifier(
             baseline     = self.baseline,
             anomaly      = self.anomaly,
             threat_graph = self.graph,
             memory       = self.memory,
             behavioral   = behavioral,
+            cooccurrence = self.cooc,
         )
         self._lock = threading.RLock()
         self._last_anomaly: dict = {}
@@ -98,6 +105,13 @@ class Intelligence:
                      "active": True,
                      "note": "fires only after a related domain has been blocked "
                              "(propagation signal, 0 at cold start)"})
+        # Co-occurrence is FLAG-ONLY and temporal: needs >= COOC_MIN_ANCHORS
+        # distinct first-party anchors learned over separate page loads.
+        from ..config import COOC_MIN_ANCHORS
+        rows.append({"engine": "cooccurrence", "signal": "third_party_ubiquity",
+                     "active": True,
+                     "note": f"FLAG-ONLY; needs >= {COOC_MIN_ANCHORS} distinct anchors "
+                             f"(temporal — 0 on first contact / single-shot)"})
         return rows
 
     def print_signal_health(self) -> None:
@@ -123,6 +137,10 @@ class Intelligence:
         """Step 1 of the pipeline: observe.  Never raises."""
         try:
             self.baseline.record(process, domain, timestamp, payload_size)
+        except Exception:
+            pass
+        try:
+            self.cooc.observe(process, domain, timestamp)
         except Exception:
             pass
 

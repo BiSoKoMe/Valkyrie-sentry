@@ -46,6 +46,7 @@ class ThreatClassifier:
         threat_graph: ThreatGraph,
         memory: IntelligenceMemory,
         behavioral=None,                        # valkyrie.behavioral.BehavioralEngine
+        cooccurrence=None,                      # valkyrie.intelligence.CoOccurrenceTracker
         block_threshold: float = ANOMALY_BLOCK_THRESHOLD,
         flag_threshold: float = ANOMALY_FLAG_THRESHOLD,
     ) -> None:
@@ -54,6 +55,7 @@ class ThreatClassifier:
         self._graph     = threat_graph
         self._memory    = memory
         self._behavioral = behavioral
+        self._cooc      = cooccurrence
         self._block = block_threshold
         self._flag  = flag_threshold
         self._clean_streak: dict[str, int] = {}
@@ -111,6 +113,18 @@ class ThreatClassifier:
                 and g_score < self._block):
             decision = "flag"
             reason = f"[learning] {reason}"
+
+        # Bucket-B co-occurrence — FLAG-ONLY augmentation. Applied strictly as an
+        # allow->flag upgrade and never touches the block path, so this signal
+        # can never cause a block on its own (HARD INVARIANT; also enforced by
+        # COOC_SCORE_CAP < block threshold in the tracker). See cooccurrence.py.
+        if self._cooc is not None:
+            c_score, c_reason = self._cooc.score(domain)
+            signals["cooccurrence"] = round(c_score, 3)
+            if decision == "allow" and c_score >= self._flag:
+                decision = "flag"
+                reason = c_reason
+                score = max(score, c_score)
 
         self._track_clean_streak(domain, process, decision, score)
 
