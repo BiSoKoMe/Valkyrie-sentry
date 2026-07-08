@@ -42,11 +42,12 @@ disclosed.
 | Fleet console (read-only multi-device view) | **Built** | `fleet/dashboard.html`, `fleet/server.py` |
 | Signed-update *verification* (Ed25519) | **Built + tested (verify-only)** | `valkyrie/updater.py` |
 | CLI: `--fleet-server`, `--fleet-agent` | **Wired** | `valkyrie/__main__.py` |
-| Central policy push (blocklists/rules to fleet) | Not started | — |
-| Per-client isolation / multi-tenancy | Single-tenant today | — |
+| Central policy push (signed block/allow to fleet) | **Built + tested** | `valkyrie/fleet/policy.py` |
+| Per-client isolation / multi-tenancy | **Built + tested** | `fleet/controller.py`, `fleet/store.py` |
+| Plaintext-bind safety guard | **Built** | `fleet/server.py` |
 | Signed-update *apply* (download + install) | Intentionally not built | see below |
 | Packaged installers (MSI / pkg) | Not started | see below |
-| TLS/HTTPS + reverse proxy for the server | Not started (run behind TLS!) | — |
+| TLS/HTTPS reverse proxy in front of the server | Deployment step (guard enforces it) | see below |
 
 ### What's genuinely done now
 You can run `python -m valkyrie --fleet-server --fleet-enroll-token SECRET` on
@@ -67,14 +68,21 @@ block totals. No domains cross the wire.
   credentials — they cannot cross the wire in cleartext.
 
 ### Next buildable milestones (in order)
-1. **TLS + reverse-proxy deployment guide** and refuse-plain-HTTP-in-prod guard.
-2. **Central policy push** — sign a policy bundle (reuse `updater.py`'s Ed25519
-   verify), agents pull + apply blocklist/rule updates.
-3. **Per-tenant isolation** — an `org_id` on devices; scoped views/tokens.
-4. **Packaged installers** — MSI (WiX/Advanced Installer) + a hardened Windows
+1. **Wire applied policy into the live pipeline** — the agent verifies + applies
+   a policy today via a `policy_applier` callback; connect that callback to the
+   real blocklist/rules so pushed `block_domains` take effect on the device.
+2. **TLS deployment guide** — Caddy/nginx in front; the plaintext-bind guard
+   already refuses insecure prod binds, so this is docs + a sample config.
+3. **Packaged installers** — MSI (WiX/Advanced Installer) + a hardened Windows
    service definition; signed with an EV code-signing cert.
-5. **Update *apply* path** — staged, rollback-capable, re-verifies at apply.
-6. **Alerting** — webhook/email when a device goes offline or a threat spikes.
+4. **Update *apply* path** — staged, rollback-capable, re-verifies at apply.
+5. **Alerting** — webhook/email when a device goes offline or a threat spikes.
+6. **Per-tenant scoped operator logins** — today org scoping is by query/enroll
+   token; add real operator accounts scoped to their org(s).
+
+**Done since first draft:** central signed policy push (#2 old), multi-tenant
+isolation (#3 old), and the plaintext-bind guard (part of #1 old) are built and
+tested — see the status table above.
 
 ---
 
