@@ -87,7 +87,26 @@ class TLSInspector:
 
     def start(self) -> bool:
         """Start mitmproxy on a background thread. Returns False (and does
-        not raise) if mitmproxy is not installed."""
+        not raise) if mitmproxy is not installed, or if the proxy fails to
+        actually bind its listening socket (e.g. port already in use).
+
+        NOTE ON A REAL PAST BUG: this used to call ready.set() immediately
+        after constructing DumpMaster and adding the addon, i.e. BEFORE
+        loop.run_until_complete(master.run()) had even started — meaning
+        before mitmproxy's proxyserver addon had called setup_servers() to
+        actually bind the listening socket. That made start() return True
+        (and is_running() report True) even when the bind hadn't happened
+        yet, or would shortly fail (e.g. port already in use causes the
+        server to exit asynchronously *after* ready.set() had already
+        fired). Verified empirically: probing the socket immediately after
+        start() returned True showed it still closed, and occupying the
+        port first made start() return True while the background thread
+        died ~1s later. See docs/TLS_ZEROLOG_AUDIT_REPORT.md. Fixed by
+        waiting for mitmproxy's own proxyserver.is_running flag (set inside
+        Proxyserver.running(), which mitmproxy calls only after
+        setup_servers() succeeds) before signalling ready — bounded so a
+        stuck bind can't hang start() forever.
+        """
         try:
             from mitmproxy import options
             from mitmproxy.tools.dump import DumpMaster
@@ -99,6 +118,7 @@ class TLSInspector:
         TLS_MITMPROXY_CONF_DIR.mkdir(parents=True, exist_ok=True)
         ready = threading.Event()
         error: list[Exception] = []
+        bound: list[bool] = []
 
         def _run() -> None:
             loop = asyncio.new_event_loop()
@@ -122,18 +142,55 @@ class TLSInspector:
                 )
                 master.addons.add(self._addon)
                 self._master = master
-                ready.set()
+
+                async def _signal_when_bound_or_dead() -> None:
+                    # Poll for the actual bind outcome instead of trusting
+                    # construction success. proxyserver.is_running only
+                    # flips True once setup_servers() has actually bound the
+                    # listening socket (see Proxyserver.running() in
+                    # mitmproxy.addons.proxyserver). Startup errors (e.g.
+                    # port already in use) surface via mitmproxy's
+                    # ErrorCheck addon calling sys.exit(1) from *inside*
+                    # this same event loop — that raises SystemExit on the
+                    # task running master.run(), which is handled below by
+                    # the outer except; should_exit is also checked here in
+                    # case a future mitmproxy version signals failure that
+                    # way instead.
+                    for _ in range(50):   # ~5s at 0.1s each
+                        if master.should_exit.is_set():
+                            bound.append(False)
+                            ready.set()
+                            return
+                        ps = master.addons.get("proxyserver")
+                        if ps is not None and getattr(ps, "is_running", False):
+                            bound.append(True)
+                            ready.set()
+                            return
+                        await asyncio.sleep(0.1)
+                    # Timed out waiting for a definitive bind/fail signal.
+                    bound.append(False)
+                    ready.set()
+
+                loop.create_task(_signal_when_bound_or_dead())
                 loop.run_until_complete(master.run())
-            except Exception as exc:
-                error.append(exc)
+            except BaseException as exc:
+                # BaseException (not just Exception): mitmproxy's ErrorCheck
+                # addon reports startup failures (e.g. "port already in
+                # use") by calling sys.exit(1) from within the running
+                # coroutine, which raises SystemExit — a BaseException
+                # subclass that a plain `except Exception` does NOT catch.
+                # Missing this previously meant the poller above had to hit
+                # its full timeout to notice the bind had failed, since
+                # neither `error` nor `bound` got populated promptly.
+                error.append(exc if isinstance(exc, Exception) else RuntimeError(str(exc)))
                 ready.set()
             finally:
                 loop.close()
 
         self._thread = threading.Thread(target=_run, daemon=True, name="tls-inspector")
         self._thread.start()
-        ready.wait(timeout=10)
-        if error or self._master is None:
+        ready.wait(timeout=8)
+        if error or self._master is None or not bound or not bound[0]:
             return False
         return True
 

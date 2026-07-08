@@ -152,6 +152,81 @@ not-valid-line
         print(f"  [!] SKIP — opt-in download unavailable offline: {exc}")
 
     # ------------------------------------------------------------------
+    # 8b. netsh return-code gating (mocked — no live firewall touched)
+    #     Guards the silent-success bug: a failed netsh call must NOT be
+    #     counted as an installed rule, and a full success must report the
+    #     EXACT expected count (not just >0, which a partial install passes).
+    # ------------------------------------------------------------------
+    print("\n[8b] netsh return-code gating (mocked subprocess)")
+    import subprocess as _sp
+    import valkyrie.firewall as _fwmod
+    from valkyrie.firewall import _WindowsFirewall
+
+    _orig_run = _fwmod._run
+    expected = len(FIREWALL_DOH_IPS)
+
+    def _fake_run_ok(args, *a, **k):
+        return _sp.CompletedProcess(args, 0, "Ok.", "")
+
+    def _fake_run_fail(args, *a, **k):
+        return _sp.CompletedProcess(args, 1, "", "requires elevation")
+
+    try:
+        _fwmod._run = _fake_run_ok
+        win = _WindowsFirewall()
+        ok = win.add_doh_rules(FIREWALL_DOH_IPS)
+        _check(f"all netsh calls succeed -> exactly {expected} counted", ok == expected)
+        _check("no last_error on full success", win.last_error is None)
+
+        _fwmod._run = _fake_run_fail
+        win2 = _WindowsFirewall()
+        ok2 = win2.add_doh_rules(FIREWALL_DOH_IPS)
+        _check("every netsh call fails -> 0 counted (not silently 'success')", ok2 == 0)
+        _check("failure recorded in last_error", bool(win2.last_error))
+    finally:
+        _fwmod._run = _orig_run
+
+    # ------------------------------------------------------------------
+    # 8c. DNS answer-IP screening — the threat-intel CIDR enforcement path.
+    #     A domain the pipeline "allows" can still resolve to a blocked IP;
+    #     _answer_blocked_ip() is what catches that on every platform.
+    # ------------------------------------------------------------------
+    print("\n[8c] DNS answer-IP screening against firewall CIDRs")
+    try:
+        import dns.message, dns.rrset, dns.rdatatype
+        from valkyrie.dns_interceptor import DNSInterceptor
+
+        screen_fw = FirewallManager()
+        screen_fw._ipset.load({"185.220.101.0/24"})
+
+        # Build a real DNS response wire whose A answer is inside the range.
+        q = dns.message.make_query("evil.example", dns.rdatatype.A)
+        bad_resp = dns.message.make_response(q)
+        bad_resp.answer.append(
+            dns.rrset.from_text("evil.example.", 60, "IN", "A", "185.220.101.50")
+        )
+        good_resp = dns.message.make_response(q)
+        good_resp.answer.append(
+            dns.rrset.from_text("good.example.", 60, "IN", "A", "93.184.216.34")
+        )
+
+        # Exercise the pure method without standing up the full interceptor.
+        inst = DNSInterceptor.__new__(DNSInterceptor)
+        inst._firewall = screen_fw
+        _check("blocked answer IP is detected",
+               inst._answer_blocked_ip(bad_resp.to_wire()) == "185.220.101.50")
+        _check("clean answer IP passes (returns None)",
+               inst._answer_blocked_ip(good_resp.to_wire()) is None)
+        _check("garbage wire fails open (returns None, never raises)",
+               inst._answer_blocked_ip(b"\x00\x01garbage") is None)
+
+        inst._firewall = None
+        _check("no firewall configured -> screening is a no-op",
+               inst._answer_blocked_ip(bad_resp.to_wire()) is None)
+    except ImportError as exc:
+        print(f"  [-] SKIP — dnspython not available: {exc}")
+
+    # ------------------------------------------------------------------
     # 9. Kernel rule installation (admin/root required — non-fatal)
     # ------------------------------------------------------------------
     print("\n[9] Kernel rule installation (requires admin/root)")

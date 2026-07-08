@@ -97,6 +97,7 @@ class DNSInterceptor:
         process_watcher: ProcessWatcher,
         scanner: Optional[SiteScanner] = None,
         intelligence=None,          # valkyrie.intelligence.Intelligence (optional)
+        firewall=None,              # valkyrie.firewall.FirewallManager (optional)
         strict: bool = False,
         host: str          = DNS_LISTEN_HOST,
         port: int          = DNS_LISTEN_PORT,
@@ -112,6 +113,12 @@ class DNSInterceptor:
         self._watcher       = process_watcher
         self._scanner       = scanner
         self._intelligence  = intelligence
+        # Firewall's in-process CIDR set (12k+ threat-intel ranges). Consulted
+        # AFTER an allowed query is resolved: if the upstream answer points at
+        # an IP inside a blocked range we sinkhole the reply instead of handing
+        # the client a live address. This is what makes those ranges actually
+        # enforce on Windows, where kernel CIDR rules are a deliberate no-op.
+        self._firewall      = firewall
         self._strict        = strict  # if True: also check blocklist after scanner "allow"
         self._host          = host
         self._port          = port
@@ -255,6 +262,33 @@ class DNSInterceptor:
 
         response = self._build_response(request, qname, qtype, decision)
 
+        # Answer-IP screening — the step that makes the firewall's threat-intel
+        # CIDR ranges enforce on every platform. _decide() works on the DOMAIN;
+        # a domain can be unknown/clean yet still resolve to an IP inside a
+        # known-bad range (fast-flux, parked C2, a CDN edge a feed flagged).
+        # Only meaningful for a real forwarded answer, so skip decisions that
+        # already sinkholed. If any A/AAAA answer is in a blocked range we
+        # rewrite the reply to the sinkhole and relabel the event as blocked.
+        if (
+            self._firewall is not None
+            and decision not in ("blocked", "behavioral")
+            and response
+        ):
+            bad_ip = self._answer_blocked_ip(response)
+            if bad_ip is not None:
+                decision = "blocked"
+                reason   = f"answer IP {bad_ip} in threat-intel range"
+                category = "firewall_ip"
+                suspicion = 1.0
+                if self._intelligence is not None:
+                    try:
+                        self._intelligence.remember_block(qname, reason)
+                    except Exception:
+                        pass
+                if self._debug:
+                    print(f"  [firewall] {qname} -> {bad_ip} blocked (threat-intel CIDR)")
+                response = self._sinkhole_response(request, qname, qtype)
+
         # Defensive: guarantee the reply's transaction ID matches the
         # original client request, regardless of what ID was used internally
         # to reach upstream. A mismatched ID makes the client silently
@@ -289,6 +323,31 @@ class DNSInterceptor:
             suspicion    = suspicion,
             raw_category = category,
         ))
+
+    def _answer_blocked_ip(self, response_wire: bytes) -> Optional[str]:
+        """Return the first A/AAAA answer IP that falls in a blocked firewall
+        range, or None. Parsing failures fail open (return None): a malformed
+        or non-parseable reply is passed through unchanged rather than dropped,
+        so this screening can only ever add blocks, never break resolution.
+        """
+        fw = self._firewall
+        if fw is None:
+            return None
+        try:
+            msg = dns.message.from_wire(response_wire)
+        except Exception:
+            return None
+        for rrset in msg.answer:
+            if rrset.rdtype not in (dns.rdatatype.A, dns.rdatatype.AAAA):
+                continue
+            for rdata in rrset:
+                ip = str(rdata)
+                try:
+                    if fw.is_blocked_ip(ip):
+                        return ip
+                except Exception:
+                    return None
+        return None
 
     # ------------------------------------------------------------------
     # Decision pipeline

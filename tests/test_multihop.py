@@ -101,8 +101,15 @@ with tempfile.TemporaryDirectory() as tmpdir:
     print("\n-- Cross-config consistency --------------------------")
     check("hop1 conf Endpoint is hop1_ip:51820",
           "1.2.3.4:51820" in hop1_text, hop1_text[:300])
-    check("hop2 conf Endpoint is 10.13.14.1:51820",
-          "10.13.14.1:51820" in hop2_text, hop2_text[:300])
+    # hop2's Endpoint MUST be hop2's real public IP (the address the client
+    # dials directly), NOT a WireGuard-internal overlay address like
+    # 10.13.14.1 — that address doesn't exist on the public internet and
+    # can't be used to perform the initial handshake. This used to be
+    # hardcoded to 10.13.14.1:51820 and hop2_ip was silently discarded; see
+    # docs/VPN_SELFHEAL_AUDIT_REPORT.md.
+    check("hop2 conf Endpoint is hop2_ip:51820 (not the internal overlay IP)",
+          "5.6.7.8:51820" in hop2_text and "10.13.14.1:51820" not in hop2_text,
+          hop2_text[:300])
     check("hop1 conf AllowedIPs routes into hop2 subnet",
           "10.13.14.0/24" in hop1_text)
     check("hop2 conf AllowedIPs is 0.0.0.0/0 (full tunnel)",
@@ -113,6 +120,26 @@ with tempfile.TemporaryDirectory() as tmpdir:
           "REPLACE_WITH_HOP1_PUBKEY" in hop1_text)
     check("hop2 conf has placeholder for hop2 pubkey",
           "REPLACE_WITH_HOP2_PUBKEY" in hop2_text)
+
+    # ── Test 4b: Invalid hop IPs are rejected, not silently written ────────
+    print("\n-- Input validation -----------------------------------")
+    try:
+        mh.generate_config(hop1_ip="1.2.3.4; rm -rf /", hop2_ip="5.6.7.8")
+        check("shell-metacharacter hop1_ip is rejected", False,
+              "generate_config() did not raise")
+    except ValueError:
+        check("shell-metacharacter hop1_ip is rejected", True)
+    except Exception as e:
+        check("shell-metacharacter hop1_ip is rejected", False,
+              f"wrong exception type: {e!r}")
+
+    try:
+        mh.generate_config(hop1_ip="", hop2_ip="5.6.7.8")
+        check("empty hop1_ip is rejected", False, "generate_config() did not raise")
+    except ValueError:
+        check("empty hop1_ip is rejected", True)
+    except Exception as e:
+        check("empty hop1_ip is rejected", False, f"wrong exception type: {e!r}")
 
     # ── Test 5: Instructions print cleanly ────────────────────────────────
     print("\n-- Instructions --------------------------------------")
@@ -130,6 +157,11 @@ with tempfile.TemporaryDirectory() as tmpdir:
     st = mh.status()
     check("status() shows hop1 conf exists", st.get("hop1_conf_exists") is True)
     check("status() shows hop2 conf exists", st.get("hop2_conf_exists") is True)
+    # kill_switch_configured must reflect the actual file contents, not just
+    # be a hardcoded truthy label (the dashboard previously hardcoded
+    # "ACTIVE" regardless of this value).
+    check("status() reports kill_switch_configured True when rule is present in both files",
+          st.get("kill_switch_configured") is True)
 
 # Restore config
 _cfg.DATA_DIR            = _orig_data

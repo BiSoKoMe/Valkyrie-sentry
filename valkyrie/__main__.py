@@ -262,6 +262,18 @@ def main() -> None:
     parser.add_argument("--no-dns-leak", action="store_true",
                         help="Fail-closed DNS: only ever use the local resolver upstream; "
                              "never fall back to public resolvers (auto-enabled when Unbound is active)")
+    parser.add_argument("--fleet-server", action="store_true",
+                        help="Run the fleet control-plane server (blocking) and exit — "
+                             "lets one operator monitor many Valkyrie devices")
+    parser.add_argument("--fleet-agent", type=str, default="", metavar="URL",
+                        help="Report this device's status to a fleet control plane at URL "
+                             "(metadata only — never domains). Requires --fleet-enroll-token on first run")
+    parser.add_argument("--fleet-enroll-token", type=str, default="",
+                        help="Enrollment secret for --fleet-server (to accept devices) "
+                             "or --fleet-agent (to join). Falls back to $VALKYRIE_FLEET_ENROLL_TOKEN")
+    parser.add_argument("--fleet-insecure-http", action="store_true",
+                        help="Allow --fleet-server to bind a non-loopback host over plain "
+                             "HTTP (only if TLS is terminated by a reverse proxy in front)")
     args = parser.parse_args()
 
     console = Console()
@@ -272,6 +284,31 @@ def main() -> None:
     if args.setup_wireguard:
         wg = WireGuardConfig(console=console)
         wg.generate(server_ip=args.server_ip, iface=args.wg_iface)
+        return
+
+    # ------------------------------------------------------------------
+    # Early-exit: fleet control-plane server (blocking)
+    # ------------------------------------------------------------------
+    if args.fleet_server:
+        from .fleet.server import run_fleet_server
+        from .config import FLEET_SERVER_PORT
+        console.print(
+            f"[bold cyan]Valkyrie Fleet Control Plane[/bold cyan] — "
+            f"http://localhost:{FLEET_SERVER_PORT}"
+        )
+        console.print("[dim]  Devices report status metadata only (never domains). "
+                      "Ctrl-C to stop.[/dim]")
+        import os as _os
+        try:
+            run_fleet_server(
+                host=args.web_host, port=FLEET_SERVER_PORT,
+                enroll_token=args.fleet_enroll_token,
+                policy_public_key_hex=_os.environ.get("VALKYRIE_FLEET_POLICY_PUBKEY", ""),
+                admin_token=_os.environ.get("VALKYRIE_FLEET_ADMIN_TOKEN", ""),
+                allow_insecure_http=args.fleet_insecure_http,
+            )
+        except SystemExit as exc:
+            console.print(f"[red]{exc}[/red]")
         return
 
     # ------------------------------------------------------------------
@@ -426,6 +463,14 @@ def main() -> None:
         zero_log.enable()
         console.print("[bold yellow]WARNING: Zero log mode: no data written to disk[/bold yellow]")
         console.print("[dim]Session data exists in RAM only. Power off to wipe all traces.[/dim]")
+        if args.debug:
+            # --debug prints every resolved domain to stdout, which is a
+            # persistent trace (terminal scrollback, redirected logs) that
+            # defeats the point of zero-log. Suppress the per-query domain
+            # printing while zero-log is active; other startup diagnostics are
+            # unaffected. See docs/TLS_ZEROLOG_AUDIT_REPORT.md.
+            console.print("[dim]  Zero-log: per-domain --debug output suppressed "
+                          "(would leave a domain trace on the terminal).[/dim]")
 
     # ------------------------------------------------------------------
     # 1. Store
@@ -629,13 +674,17 @@ def main() -> None:
             process_watcher = proc_watcher,
             scanner         = scanner,
             intelligence    = intelligence,
+            firewall        = (firewall if not args.no_firewall else None),
             strict          = args.strict,
             host            = args.host,
             port            = args.port,
             upstream_host   = dns_upstream_host,
             upstream_port   = dns_upstream_port,
             allow_external_fallback = allow_external_fallback,
-            debug           = args.debug,
+            # Zero-log forces per-domain stdout off: the interceptor's debug
+            # prints include every queried domain, which would persist in
+            # terminal scrollback and defeat RAM-only operation.
+            debug           = args.debug and not (zero_log is not None and zero_log.is_active()),
         )
         try:
             dns_server.start()
@@ -785,6 +834,40 @@ def main() -> None:
             web_state.self_heal = healer
 
     # ------------------------------------------------------------------
+    # 10c. Fleet agent (optional) — report this device to a control plane.
+    #      Sends status METADATA only (counts + component health), never
+    #      domains; see valkyrie/fleet/protocol.py.
+    # ------------------------------------------------------------------
+    fleet_agent = None
+    if args.fleet_agent:
+        from .fleet.agent import FleetAgent
+
+        def _fleet_status() -> dict:
+            s = dict(store.stats())
+            s["components"] = {
+                "dns":          dns_server.is_listening() if dns_server is not None else False,
+                "firewall":     not args.no_firewall,
+                "intelligence": intelligence is not None,
+            }
+            return s
+
+        fleet_agent = FleetAgent(
+            server_url      = args.fleet_agent,
+            status_provider = _fleet_status,
+            console         = console,
+        )
+        import os as _os
+        enroll_tok = args.fleet_enroll_token or _os.environ.get(
+            "VALKYRIE_FLEET_ENROLL_TOKEN", "")
+        if fleet_agent.is_enrolled() or fleet_agent.enroll(enroll_tok):
+            fleet_agent.start()
+            console.print(f"[green]✓[/green] Fleet agent reporting to {args.fleet_agent}")
+        else:
+            console.print("[yellow]Fleet agent not started (enrollment failed — "
+                          "check --fleet-enroll-token and server URL)[/yellow]")
+            fleet_agent = None
+
+    # ------------------------------------------------------------------
     # 11. TLS inspection (optional — disabled by default)
     # ------------------------------------------------------------------
     tls_inspector = None
@@ -891,12 +974,21 @@ def main() -> None:
             mac_randomizer.stop()
         if healer:
             healer.stop()
+        if fleet_agent is not None:
+            fleet_agent.stop()
         if intelligence:
             intelligence.stop()
         firewall.stop()
-        store.stop()
+        # zero_log.disable() must run BEFORE store.stop(): its secure wipe
+        # deletes rows through a fresh connection to the shared-cache RAM
+        # database, which only works while another connection (the Store's
+        # writer thread) is still open. `file::memory:?cache=shared` DBs are
+        # destroyed the instant their last connection closes, so wiping
+        # after store.stop() would silently target an already-gone database
+        # (see docs/TLS_ZEROLOG_AUDIT_REPORT.md).
         if zero_log:
             zero_log.disable()
+        store.stop()
         console.print("[green]Done.[/green]")
 
 

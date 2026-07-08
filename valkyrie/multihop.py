@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 import struct
 from pathlib import Path
 from typing import Optional
@@ -22,6 +23,15 @@ from .config import (
     WIREGUARD_HOP1_CONF,
     WIREGUARD_HOP2_CONF,
 )
+
+# Conservative allow-list for a WireGuard Endpoint host: IPv4/IPv6 literal or
+# DNS hostname (hostname labels may contain '_' in the wild, e.g. some
+# corporate DNS zones, so it's included). Deliberately rejects anything
+# containing shell/INI metacharacters (spaces, ';', '$', quotes, etc.) so a
+# bad --hop1/--hop2 value fails loudly instead of silently producing a
+# malformed config. __main__.py's HOP1_IP/HOP2_IP placeholder sentinels
+# (used when --hop1/--hop2 are omitted) intentionally still match this.
+_ENDPOINT_HOST_RE = re.compile(r"^[A-Za-z0-9._\-]+$")
 
 # Recommended server pairs (informational)
 RECOMMENDED_PAIRS = [
@@ -55,16 +65,30 @@ def _generate_private_key() -> bytes:
 
 
 def _private_to_public(private: bytes) -> bytes:
-    """Compute the Curve25519 public key via the cryptography library or fallback."""
+    """Compute the Curve25519 public key from a private key.
+
+    There is deliberately NO fallback. This used to `return os.urandom(32)`
+    when the `cryptography` package was missing — 32 random bytes that *look*
+    like a valid WireGuard public key but have no mathematical relationship to
+    the private key. A config built from such a "key" is accepted by every
+    check in this module and by WireGuard's own parser, yet no peer can ever
+    complete a handshake with it: a textbook silent failure (looks like it
+    worked, does nothing) with no diagnostic. `cryptography` is a hard
+    dependency of this project (see requirements.txt / the VPN audit report),
+    so if the import fails we raise loudly rather than hand back a key that is
+    guaranteed not to work.
+    """
     try:
         from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
-        priv_obj = X25519PrivateKey.from_private_bytes(private)
-        return priv_obj.public_key().public_bytes_raw()
-    except ImportError:
-        pass
-    # Fallback: return random bytes that look like a valid public key.
-    # (Correct key derivation requires Curve25519; install `cryptography` for real keys.)
-    return os.urandom(32)
+    except ImportError as exc:
+        raise RuntimeError(
+            "Cannot derive WireGuard public keys: the 'cryptography' package "
+            "is not installed. Install it (pip install cryptography) — there "
+            "is no safe fallback, since a fake public key produces a config "
+            "that silently never handshakes."
+        ) from exc
+    priv_obj = X25519PrivateKey.from_private_bytes(private)
+    return priv_obj.public_key().public_bytes_raw()
 
 
 def _encode_key(raw: bytes) -> str:
@@ -90,7 +114,22 @@ class MultiHopVPN:
 
         Returns a dict with keys: hop1_conf, hop2_conf, hop1_priv, hop2_priv,
         hop1_pub, hop2_pub, hop1_path, hop2_path, server_scripts.
+
+        Raises ValueError if hop1_ip/hop2_ip are empty or contain characters
+        that cannot appear in a WireGuard Endpoint value — this generator
+        previously accepted anything (including whitespace or shell
+        metacharacters) and would silently write a config with a malformed
+        Endpoint line that WireGuard would refuse to parse at connect time.
         """
+        for label, ip in (("hop1_ip", hop1_ip), ("hop2_ip", hop2_ip)):
+            if not ip or not ip.strip():
+                raise ValueError(f"{label} must not be empty")
+            if not _ENDPOINT_HOST_RE.match(ip.strip()):
+                raise ValueError(
+                    f"{label}={ip!r} is not a valid IP/hostname for a "
+                    "WireGuard Endpoint"
+                )
+
         priv1, pub1 = _make_keypair()
         priv2, pub2 = _make_keypair()
 
@@ -128,13 +167,35 @@ class MultiHopVPN:
         }
 
     def status(self) -> dict:
-        """Return status of the generated hop configs."""
+        """Return status of the generated hop configs.
+
+        `kill_switch_configured` reflects only that the PostUp/PreDown
+        iptables rule is present in the config files on disk. It is NOT a
+        claim that a tunnel is up or that the rule has actually been applied
+        to a live interface — this class never starts wg-quick or inspects
+        `iptables -S`, so real enforcement cannot be verified from here.
+        Callers (e.g. the dashboard) must not render this as "ACTIVE"
+        unconditionally.
+        """
+        hop1_exists = WIREGUARD_HOP1_CONF.exists()
+        hop2_exists = WIREGUARD_HOP2_CONF.exists()
+        kill_switch_configured = False
+        if hop1_exists and hop2_exists:
+            try:
+                hop1_text = WIREGUARD_HOP1_CONF.read_text(encoding="utf-8")
+                hop2_text = WIREGUARD_HOP2_CONF.read_text(encoding="utf-8")
+                kill_switch_configured = (
+                    _KILL_SWITCH_UP in hop1_text and _KILL_SWITCH_UP in hop2_text
+                )
+            except OSError:
+                kill_switch_configured = False
         return {
-            "hop1_conf_exists": WIREGUARD_HOP1_CONF.exists(),
-            "hop2_conf_exists": WIREGUARD_HOP2_CONF.exists(),
-            "hop1_path":        str(WIREGUARD_HOP1_CONF),
-            "hop2_path":        str(WIREGUARD_HOP2_CONF),
-            "kill_switch":      _KILL_SWITCH_UP,
+            "hop1_conf_exists":       hop1_exists,
+            "hop2_conf_exists":       hop2_exists,
+            "hop1_path":              str(WIREGUARD_HOP1_CONF),
+            "hop2_path":              str(WIREGUARD_HOP2_CONF),
+            "kill_switch":            _KILL_SWITCH_UP,
+            "kill_switch_configured": kill_switch_configured,
         }
 
     def instructions(self) -> str:
@@ -187,6 +248,12 @@ class MultiHopVPN:
         )
 
     def _hop2_conf(self, private_key: str, hop2_ip: str) -> str:
+        # NOTE: Endpoint must be hop2's real public IP/hostname (hop2_ip), not
+        # the WireGuard-internal tunnel address (e.g. 10.13.14.1). The overlay
+        # address doesn't exist on the public internet and can't be dialed to
+        # perform the initial handshake — using it here previously produced a
+        # config whose second hop could never connect (see
+        # docs/VPN_SELFHEAL_AUDIT_REPORT.md).
         return (
             f"[Interface]\n"
             f"PrivateKey = {private_key}\n"
@@ -196,7 +263,7 @@ class MultiHopVPN:
             f"\n"
             f"[Peer]\n"
             f"PublicKey = REPLACE_WITH_HOP2_PUBKEY\n"
-            f"Endpoint = 10.13.14.1:51820\n"
+            f"Endpoint = {hop2_ip}:51820\n"
             f"AllowedIPs = 0.0.0.0/0\n"
             f"PersistentKeepalive = 25\n"
         )
