@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(node -e \"const l = require\\('lucide-react'\\); console.log\\(Object.keys\\(l\\).filter\\(k => k.toLowerCase\\(\\).includes\\('cloud'\\) || k.toLowerCase\\(\\).includes\\('globe'\\)\\).join\\(', '\\)\\)\")",
-      "Read(//c/Users/badam/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/1c29c1b6-e5df-4437-a1ca-15849fa3b13c/23b43bce-e912-499f-9bab-ce95b2725a1f/skills/docx/**)",
-      "Bash(node -e \"require\\('docx'\\); console.log\\('docx ok'\\)\")"
-    ]
-  }
-}

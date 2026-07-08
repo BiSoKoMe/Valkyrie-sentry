@@ -50,6 +50,7 @@ from .config import (
     FIREWALL_IP_SOURCES,
     FIREWALL_MAX_AGE_DAYS,
     FIREWALL_NEVER_BLOCK,
+    USE_EXTERNAL_LISTS,
 )
 
 _SYSTEM = platform.system()
@@ -153,11 +154,27 @@ def fetch_ip_blocklist(console=None) -> set[str]:
     return merged
 
 
-def load_ip_blocklist(console=None) -> set[str]:
-    """Load or refresh the IP blocklist from disk."""
+def load_ip_blocklist(console=None, allow_download: bool | None = None) -> set[str]:
+    """Load the IP blocklist.
+
+    Downloads are opt-in (``--download-lists`` / USE_EXTERNAL_LISTS): only
+    then are stale feeds refreshed.  Otherwise a previously downloaded
+    cache on disk is used when present, and the firewall falls back to
+    DoH-only blocking when there is no cache — fully offline.
+    """
+    if allow_download is None:
+        allow_download = USE_EXTERNAL_LISTS
+
     age = _file_age_days(FIREWALL_IP_PATH)
-    if age is None or age > FIREWALL_MAX_AGE_DAYS:
+    if allow_download and (age is None or age > FIREWALL_MAX_AGE_DAYS):
         return fetch_ip_blocklist(console)
+    if not FIREWALL_IP_PATH.exists():
+        if console:
+            console.print(
+                "[dim]IP blocklist: no cached feeds (downloads off) — "
+                "DoH blocking + learned intelligence only[/dim]"
+            )
+        return set()
     cidrs = set()
     for line in FIREWALL_IP_PATH.read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -388,13 +405,16 @@ class FirewallManager:
     # Public API
     # ------------------------------------------------------------------
 
-    def start(self, console=None) -> int:
+    def start(self, console=None, allow_download: bool | None = None) -> int:
         """Load IP lists and install firewall rules.
 
         On Linux:   installs DoH rules + all CIDR ranges via iptables-restore.
         On Windows: installs only the 10 DoH rules via netsh; CIDR ranges are
                     enforced in-process by _IPSet (no kernel rules — avoids
                     the multi-hour hang of running 12k netsh commands).
+
+        ``allow_download`` gates feed downloads (default: USE_EXTERNAL_LISTS).
+        DoH blocking always works — the resolver IPs are hardcoded.
 
         Returns total count of IP ranges loaded into _IPSet.
         """
@@ -415,7 +435,7 @@ class FirewallManager:
 
         # 2. Load IP blocklist into _IPSet regardless of kernel availability
         try:
-            cidrs = load_ip_blocklist(self._console)
+            cidrs = load_ip_blocklist(self._console, allow_download=allow_download)
         except Exception as exc:
             self._print(f"[yellow]Firewall:[/yellow] IP list load failed: {exc}")
             cidrs = set()

@@ -34,6 +34,18 @@ UPSTREAM_SERVERS: list[str] = [
 SINKHOLE_IPV4 = "0.0.0.0"
 SINKHOLE_IPV6 = "::"
 
+# No-leak DNS policy.
+#   When the local recursive resolver (Unbound) is the upstream, allowed
+#   queries must NOT silently fall back to public resolvers (8.8.8.8,
+#   1.1.1.1, 9.9.9.9, ISP) — that would leak the very queries Unbound
+#   exists to keep local.  With fallback disabled the interceptor only ever
+#   contacts the configured local upstream and returns SERVFAIL on failure
+#   (fail-closed), so a plaintext query can never reach a third-party
+#   resolver.  This is auto-enabled whenever Unbound is active, and can be
+#   forced on (even without Unbound) with --no-dns-leak.
+DNS_LOCAL_ONLY = False   # default off → preserves external-resolver behaviour
+                         # when the user has no local resolver configured
+
 # ---------------------------------------------------------------------------
 # Blocklist updater
 # ---------------------------------------------------------------------------
@@ -277,6 +289,30 @@ ZERO_LOG_MODE             = False
 ZERO_LOG_IMPORT_HOURS     = 0
 INTEGRITY_CHECK_INTERVAL  = 3600   # seconds
 RAM_DB_URI                = "file::memory:?cache=shared"
+
+# ---------------------------------------------------------------------------
+# Intelligence layer (self-learning threat detection)
+# ---------------------------------------------------------------------------
+INTELLIGENCE_MODE       = True    # master switch for the learning pipeline
+LEARNING_PERIOD_DAYS    = 7       # baseline learning window after first start
+ANOMALY_BLOCK_THRESHOLD = 0.7     # classifier score at/above which we block
+ANOMALY_FLAG_THRESHOLD  = 0.4     # classifier score at/above which we flag
+
+# Downloaded blocklist/IP feeds are OPT-IN: default protection is the
+# built-in seed blocklist (seed_blocklist.py) + learned intelligence.
+# Enable per-run with --download-lists, or permanently by setting True.
+USE_EXTERNAL_LISTS      = False
+
+INTEL_FLUSH_INTERVAL    = 30      # seconds between SQLite flushes of learned state
+INTEL_HISTORY_SAMPLES   = 16      # timestamps/payloads kept per (process, domain)
+INTEL_HEARTBEAT_MIN_SAMPLES = 4   # gaps needed before heartbeat detection fires
+INTEL_HEARTBEAT_MIN_GAP = 5.0     # seconds — faster than this is a burst, not a beacon
+INTEL_HEARTBEAT_MAX_GAP = 3600.0  # seconds — slower than this is not a heartbeat
+INTEL_HEARTBEAT_MAX_CV  = 0.25    # coefficient of variation below this = regular
+INTEL_SMALL_PAYLOAD_BYTES = 512   # repeated payloads under this = beacon-like
+INTEL_GOOD_AFTER_ALLOWS = 5       # clean allows before a domain is remembered good
+
+SELF_HEAL_INTERVAL      = 30      # seconds between component health checks
 
 # ---------------------------------------------------------------------------
 # UI

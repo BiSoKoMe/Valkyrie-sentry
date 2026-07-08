@@ -296,6 +296,33 @@ class Store:
         return domain not in baseline["domains"]
 
     # ------------------------------------------------------------------
+    # Intelligence layer support
+    # ------------------------------------------------------------------
+
+    def connection(self) -> sqlite3.Connection:
+        """Open a new connection to this Store's database (disk or RAM).
+
+        Used by the intelligence layer so learned state lives in the same
+        SQLite database as events — including zero-log RAM mode, where
+        learned intelligence correctly stays in RAM only.  Callers own the
+        returned connection and must close it themselves.
+        """
+        return self._connect()
+
+    def is_writing(self) -> bool:
+        """True while the background event writer thread is alive."""
+        return self._writer_thread.is_alive()
+
+    def db_size_bytes(self) -> int:
+        """Size of the on-disk database in bytes (0 in RAM mode)."""
+        if self._ram_uri:
+            return 0
+        try:
+            return self._db_path.stat().st_size
+        except OSError:
+            return 0
+
+    # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 

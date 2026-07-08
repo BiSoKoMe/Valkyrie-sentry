@@ -711,6 +711,47 @@
         <span id="mode-label">Checking mode…</span>
       </div>
 
+      <!-- Intelligence (self-learning threat detection) -->
+      <div class="sidebar-panel" style="flex:0 0 auto;border-bottom:1px solid var(--border)">
+        <div class="section-hdr">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
+               stroke="var(--purple)" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2a7 7 0 017 7c0 2.4-1.2 4.5-3 5.7V17a2 2 0 01-2 2h-4a2 2 0 01-2-2v-2.3C6.2 13.5 5 11.4 5 9a7 7 0 017-7z"/>
+            <line x1="9" y1="22" x2="15" y2="22"/>
+          </svg>
+          <span class="section-title" style="color:var(--purple)">Intelligence</span>
+          <span class="section-count" id="intel-mode-badge">—</span>
+        </div>
+        <div class="system-body">
+          <div class="info-row">
+            <span>Status</span>
+            <span class="info-val" id="intel-status">—</span>
+          </div>
+          <div class="info-row">
+            <span>Threats learned</span>
+            <span class="info-val" id="intel-threats">—</span>
+          </div>
+          <div class="info-row">
+            <span>Safe patterns</span>
+            <span class="info-val" id="intel-safe">—</span>
+          </div>
+          <div class="info-row">
+            <span>Baseline coverage</span>
+            <span class="info-val" id="intel-coverage">—</span>
+          </div>
+          <div class="info-row" id="intel-seed-row" style="display:none">
+            <span>Seed protection</span>
+            <span class="info-val" id="intel-seed">—</span>
+          </div>
+          <div class="info-row" style="margin-top:6px">
+            <span>Last anomaly</span>
+            <span class="info-val" id="intel-anomaly-domain">none yet</span>
+          </div>
+          <p class="ctl-note" id="intel-anomaly-why"></p>
+        </div>
+      </div>
+
       <!-- DoH Bypass Alerts -->
       <div class="sidebar-panel doh-panel">
         <div class="section-hdr">
@@ -1279,6 +1320,47 @@ async function loadZeroLogStatus() {
   } catch (_) {}
 }
 
+// ── Intelligence panel ────────────────────────────────────────────────────
+
+async function loadIntelligenceStatus() {
+  try {
+    const res  = await fetch('/api/intelligence');
+    const data = await res.json();
+    const badge    = document.getElementById('intel-mode-badge');
+    const status   = document.getElementById('intel-status');
+    const threats  = document.getElementById('intel-threats');
+    const safe     = document.getElementById('intel-safe');
+    const coverage = document.getElementById('intel-coverage');
+    const seedRow  = document.getElementById('intel-seed-row');
+    const seed     = document.getElementById('intel-seed');
+    const anDom    = document.getElementById('intel-anomaly-domain');
+    const anWhy    = document.getElementById('intel-anomaly-why');
+    if (!status) return;
+
+    if (!data.enabled) {
+      if (badge)  badge.textContent  = 'OFF';
+      if (status) status.textContent = 'disabled';
+      return;
+    }
+    if (badge) badge.textContent = data.learning ? 'LEARNING' : 'ACTIVE';
+    status.textContent = data.learning
+      ? `Learning (day ${data.learning_day} of ${data.learning_days_total})`
+      : 'Active';
+    if (threats)  threats.textContent  = Number(data.threats_learned || 0).toLocaleString();
+    if (safe)     safe.textContent     = Number(data.safe_patterns   || 0).toLocaleString();
+    if (coverage) coverage.textContent = `${Number(data.baseline_processes || 0).toLocaleString()} processes`;
+    if (seedRow && data.seed_domains > 0) {
+      seedRow.style.display = '';
+      if (seed) seed.textContent = `${Number(data.seed_domains).toLocaleString()} domains`;
+    }
+    const la = data.last_anomaly || {};
+    if (la.domain) {
+      if (anDom) anDom.textContent = la.domain;
+      if (anWhy) anWhy.textContent = `${la.decision} @ ${la.at} — ${la.explanation || ''}`;
+    }
+  } catch (_) {}
+}
+
 // ── System control (restart / stop) ─────────────────────────────────────────
 let controlToken = '';
 async function wireSystemControl() {
@@ -1398,11 +1480,12 @@ document.addEventListener('DOMContentLoaded', () => {
   wireMacButtons();
   loadVpnStatus();
   loadZeroLogStatus();
+  loadIntelligenceStatus();
   wireSystemControl();
   wireMeetingMode();
   refreshMeetingHealth();
-  // Refresh MAC/zero-log status every 30s; heartbeat + meeting every 3s
-  setInterval(() => { loadMacStatus(); loadZeroLogStatus(); }, 30000);
+  // Refresh MAC/zero-log/intelligence status every 30s; heartbeat + meeting every 3s
+  setInterval(() => { loadMacStatus(); loadZeroLogStatus(); loadIntelligenceStatus(); }, 30000);
   setInterval(refreshMeetingHealth, 3000);
 });
 </script>
