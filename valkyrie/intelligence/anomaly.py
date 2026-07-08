@@ -176,6 +176,39 @@ class AnomalyDetector:
             self._explanations[(process, domain)] = reasons
         return score
 
+    # ------------------------------------------------------------------
+    # Signal health (no silent failures — see PHASE 0)
+    # ------------------------------------------------------------------
+
+    def signal_health(self) -> list[dict]:
+        """Report each anomaly sub-signal's live status in the CURRENT state.
+
+        This is dynamic on purpose: never-seen and timing-deviation are gated
+        off while the baseline is still in its learning window, and app-closed
+        depends on psutil being importable. A signal that cannot fire is
+        reported DISABLED with the reason, so it can never quietly contribute 0
+        while appearing active.
+        """
+        learning = self._baseline.is_learning()
+        gate = ("DISABLED: gated off during the learning window "
+                "(baseline still learning this machine's normal)")
+        return [
+            {"signal": "background_process", "active": True,
+             "note": "fires for known service/background binaries"},
+            {"signal": "heartbeat", "active": True,
+             "note": f"fires on >= {INTEL_HEARTBEAT_MIN_SAMPLES} regular-interval "
+                     f"gaps (needs repeat queries of the same pair)"},
+            {"signal": "app_closed", "active": _PSUTIL,
+             "note": "live process-liveness via psutil"
+                     if _PSUTIL else "DISABLED: psutil not installed"},
+            {"signal": "never_seen", "active": not learning,
+             "note": gate if learning else "fires on first-seen (process, domain) pair"},
+            {"signal": "timing_deviation", "active": not learning,
+             "note": gate if learning else "fires when query rhythm is much faster than learned"},
+            {"signal": "asymmetric_payload", "active": True,
+             "note": f"fires on >= {INTEL_HEARTBEAT_MIN_SAMPLES} small same-size payloads"},
+        ]
+
     def _timing_deviates(self, process: str, domain: str) -> bool:
         """True when the current query rhythm is much faster than learned."""
         profile = self._baseline.history(process, domain)

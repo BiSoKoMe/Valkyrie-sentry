@@ -1,0 +1,45 @@
+# ============================================================================
+# Valkyrie — DNS-over-TLS upstream for the native Unbound Windows service
+# ============================================================================
+# This is a READY-TO-APPLY artifact, NOT a live config. It is not loaded by
+# anything on its own. To make it effective:
+#
+#   1. As Administrator, merge the directives below into:
+#        C:\Program Files\Unbound\service.conf
+#   2. Restart the service (Administrator):
+#        net stop Unbound
+#        net start Unbound
+#   3. Ensure the native Unbound service is actually the live forwarder
+#      (see DOT_VERIFICATION_REPORT.md — right now start_all.ps1 STOPS it and
+#      Valkyrie cannot spawn its own copy because unbound.exe is not on PATH,
+#      so nothing uses this config until that is resolved).
+#
+# Machine-adapted note (matters — avoids a silent failure):
+#   The task template used  tls-cert-bundle: "<system CA bundle path>".
+#   This machine has NO PEM CA bundle present — checked and ABSENT:
+#     C:\Program Files\Unbound\icannbundle.pem
+#     C:\Program Files\Unbound\ca-bundle.crt
+#     C:\Program Files\Common Files\SSL\cert.pem
+#   Pointing tls-cert-bundle at a non-existent file makes Unbound fail EVERY
+#   upstream TLS handshake and SERVFAIL — a silent breakage. So we use
+#     tls-win-cert: yes
+#   which validates against the Windows Certificate Store (present on this box)
+#   and is the method this Unbound build's own service.conf documents.
+#   If you specifically want a PEM bundle instead, download
+#     https://curl.se/ca/cacert.pem  ->  C:\Program Files\Unbound\cacert.pem
+#   and replace the tls-win-cert line with:
+#     tls-cert-bundle: "C:\Program Files\Unbound\cacert.pem"
+
+server:
+    # Validate upstream TLS certificates against the Windows cert store.
+    tls-win-cert: yes
+
+# Send ALL upstream queries out ENCRYPTED on 853 — no plaintext :53 upstream.
+# (With this forward-zone present, Unbound stops doing plain recursion to the
+#  roots on :53 and instead forwards everything over TLS to these resolvers.)
+forward-zone:
+    name: "."
+    forward-tls-upstream: yes
+    forward-addr: 8.8.8.8@853#dns.google
+    forward-addr: 1.1.1.1@853#cloudflare-dns.com
+    forward-addr: 9.9.9.9@853#dns.quad9.net

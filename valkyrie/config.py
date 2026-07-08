@@ -61,8 +61,38 @@ BLOCKLIST_MAX_AGE_DAYS = 7
 ENTROPY_THRESHOLD      = 3.5    # Shannon entropy above this → suspicious
 RATE_WINDOW_SECONDS    = 10     # sliding window for query-rate check
 RATE_MAX_QUERIES       = 30     # queries per window per process → suspicious
-DOMAIN_AGE_THRESHOLD   = 30     # days; newer domains flagged (WHOIS optional)
 BEHAVIORAL_BLOCK_SCORE = 0.7    # suspicion score at/above which we block
+
+# TLD reputation — offline replacement for the old WHOIS domain-age signal.
+#
+# The previous "new domain" signal called python-whois over the network. That
+# dependency is not installed and, more importantly, network WHOIS does not work
+# in the offline / intelligence-only posture this product ships in — so it
+# silently contributed 0 on every domain while looking active (the same class of
+# bug as the DNS leak). It is replaced by this static, shipped set of TLDs that
+# public abuse telemetry (Spamhaus "Most Abused TLDs", Interisle "Cybercrime
+# Supply Chain") consistently rank as disproportionately used for spam, malware,
+# phishing, and throwaway tracker infrastructure. Membership is an O(1) set
+# lookup with no network dependency, so the signal is always live offline.
+#
+# Deliberately conservative: this set contains NONE of the mainstream registry
+# TLDs (com/net/org/edu/gov/io/co and major ccTLDs) that legitimate sites use,
+# so it cannot fire on the benign control set. It carries the same small 0.15
+# weight the age signal had and therefore can never, on its own, reach the flag
+# (0.40) or block (0.70) threshold — it only nudges a domain already suspicious
+# on entropy/rate. It is a supplementary signal, not a primary tracker detector.
+SUSPICIOUS_TLDS: frozenset[str] = frozenset({
+    # Freenom free-registration TLDs (historically the most abused)
+    "tk", "ml", "ga", "cf", "gq",
+    # New-gTLD bulk/cheap registrations dominant in abuse rankings
+    "top", "xyz", "club", "work", "live", "click", "link", "gdn",
+    "loan", "download", "stream", "rest", "buzz", "cyou", "sbs",
+    "cfd", "icu", "monster", "quest", "bar", "wtf", "kim", "mom",
+    "lol", "cam", "surf", "beauty", "hair", "makeup", "skin",
+    "men", "date", "racing", "win", "review", "party", "trade",
+    "science", "accountant", "cricket", "faith", "webcam",
+})
+SUSPICIOUS_TLD_WEIGHT = 0.15    # supplementary weight in the behavioral combine
 
 # ---------------------------------------------------------------------------
 # DoH bypass detection
@@ -313,6 +343,50 @@ INTEL_SMALL_PAYLOAD_BYTES = 512   # repeated payloads under this = beacon-like
 INTEL_GOOD_AFTER_ALLOWS = 5       # clean allows before a domain is remembered good
 
 SELF_HEAL_INTERVAL      = 30      # seconds between component health checks
+
+# ---------------------------------------------------------------------------
+# Bucket-B: third-party co-occurrence signal (SIGNAL_DESIGN_REPORT.md)
+# ---------------------------------------------------------------------------
+# Catches tracker subdomains hanging off mixed-use parents (tr.snapchat.com,
+# events.reddit.com) that cannot be listed by parent SLD. Learns, per candidate
+# host, the set of DISTINCT first-party "anchor" sites it is resolved behind in
+# the same process/burst. A host that rides behind many unrelated first parties,
+# is never navigated to directly, and is not infrastructure is behaving like a
+# third-party tracker.
+#
+# HARD INVARIANT: this signal is FLAG-ONLY. COOC_SCORE_CAP is held strictly
+# below ANOMALY_BLOCK_THRESHOLD so co-occurrence can never, on its own, cause a
+# block — enforced both by this cap and by the classifier applying it only as an
+# allow->flag upgrade. Do not raise the cap to/above the block threshold.
+COOC_QUIET_GAP     = 8.0     # s of quiet that ends a burst (next query = new anchor)
+COOC_BURST_MAX     = 30.0    # s; force a new anchor if one burst runs longer
+COOC_MIN_ANCHORS   = 3       # G4: distinct anchors required before any score
+COOC_SCORE_BASE    = 0.45    # flag-band score at exactly COOC_MIN_ANCHORS anchors
+COOC_SCORE_STEP    = 0.03    # added per extra distinct anchor
+COOC_SCORE_CAP     = 0.60    # < ANOMALY_BLOCK_THRESHOLD (0.7) — flag-only, hard cap
+
+# G1 — shipped infrastructure / functional-third-party allowlist (eTLD+1, last
+# two labels). These are legitimately co-loaded across many sites (CDNs, static
+# asset and font hosts, payment/captcha/error-reporting services) and would
+# otherwise look identical to a tracker under co-occurrence. They are exempt:
+# the co-occurrence signal never scores a domain whose base is in this set.
+INFRA_ALLOWLIST: frozenset[str] = frozenset({
+    # CDNs / static asset hosts
+    "cloudflare.com", "cloudfront.net", "akamai.net", "akamaihd.net",
+    "akamaiedge.net", "akamaized.net", "edgekey.net", "edgesuite.net",
+    "fastly.net", "fastlylb.net", "jsdelivr.net", "unpkg.com",
+    "gstatic.com", "googleapis.com", "googleusercontent.com", "gvt1.com",
+    "ggpht.com", "azureedge.net", "azurefd.net", "bootstrapcdn.com",
+    "cdnjs.com", "cdn77.com", "keycdn.com", "stackpathcdn.com",
+    "stackpathdns.com", "jquery.com", "typekit.net", "cloudinary.com",
+    "imgix.net",
+    # Fonts
+    "fontawesome.com",
+    # Functional third parties (payments / captcha / error reporting) that are
+    # co-loaded but not tracking-for-profiling in the EasyPrivacy sense.
+    "stripe.com", "stripe.network", "paypalobjects.com",
+    "recaptcha.net", "hcaptcha.com", "gravatar.com", "sentry.io",
+})
 
 # ---------------------------------------------------------------------------
 # UI
