@@ -201,6 +201,23 @@ TRACKER_PREFIXES: frozenset[str] = frozenset({
     "pixel", "beacon", "collect", "adserver", "adtrack",
 })
 
+# Distinctive tracker/analytics brand names for startswith-matching against
+# an SLD (e.g. "segmentapis" -> "segment", "taboolasyndication" -> "taboola")
+# — catches companies that register variant apex domains for infra/CDN use.
+# Curated deliberately to distinctive brand strings only; generic English
+# words already in TRACKER_SLDS/ANALYTICS_SLDS (e.g. "heap", "telemetry")
+# are excluded here since a startswith match on those risks colliding with
+# an unrelated legitimate domain.
+TRACKER_SLD_PREFIXES: frozenset[str] = frozenset({
+    "segment", "taboola", "outbrain", "criteo", "doubleclick",
+    "rubiconproject", "pubmatic", "scorecardresearch", "quantserve",
+    "everesttech", "moatads", "comscore", "mixpanel", "amplitude",
+    "hotjar", "mouseflow", "fullstory", "logrocket", "chartbeat",
+    "parsely", "optimizely", "abtasty", "newrelic", "rollbar",
+    "datadoghq", "googlesyndication", "googleadservices",
+    "googletagmanager", "googletagservices", "amazonaax",
+})
+
 SYSTEM_PROCESSES: frozenset[str] = frozenset({
     "wmiprvse.exe", "svchost.exe", "services.exe",
     "taskhost.exe", "taskhostw.exe", "backgroundtaskhost.exe",

@@ -266,11 +266,29 @@ class MacRandomizer:
         # token — the previous f'"{iface}"' sent embedded quotes and matched
         # nothing. Check return codes AND read the live MAC back: a registry
         # write with no successful cycle otherwise looks identical to success.
-        dis = subprocess.run(
-            ["netsh", "interface", "set", "interface",
-             f"name={iface}", "admin=disabled"],
-            capture_output=True, text=True,
-        )
+        #
+        # netsh can hang indefinitely on some virtual/VPN adapters instead of
+        # erroring — a timeout turns that into a reported failure for this one
+        # interface instead of freezing the whole randomize() call forever.
+        try:
+            dis = subprocess.run(
+                ["netsh", "interface", "set", "interface",
+                 f"name={iface}", "admin=disabled"],
+                capture_output=True, text=True, timeout=15,
+            )
+        except subprocess.TimeoutExpired:
+            # netsh may have taken effect despite timing out on us — best-effort
+            # re-enable so we never strand the adapter disabled with no retry.
+            try:
+                subprocess.run(
+                    ["netsh", "interface", "set", "interface",
+                     f"name={iface}", "admin=enabled"],
+                    capture_output=True, text=True, timeout=15,
+                )
+            except Exception:
+                pass
+            self.last_error = f"Adapter '{iface}' disable timed out after 15s"
+            return False
         if dis.returncode != 0:
             self.last_error = (
                 f"Adapter '{iface}' disable failed: "
@@ -278,11 +296,15 @@ class MacRandomizer:
             )
             return False
         time.sleep(2)
-        ena = subprocess.run(
-            ["netsh", "interface", "set", "interface",
-             f"name={iface}", "admin=enabled"],
-            capture_output=True, text=True,
-        )
+        try:
+            ena = subprocess.run(
+                ["netsh", "interface", "set", "interface",
+                 f"name={iface}", "admin=enabled"],
+                capture_output=True, text=True, timeout=15,
+            )
+        except subprocess.TimeoutExpired:
+            self.last_error = f"Adapter '{iface}' enable timed out after 15s"
+            return False
         if ena.returncode != 0:
             self.last_error = (
                 f"Adapter '{iface}' enable failed: "

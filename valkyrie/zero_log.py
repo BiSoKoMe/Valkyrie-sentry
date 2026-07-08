@@ -202,17 +202,32 @@ class ZeroLogMode:
     # ------------------------------------------------------------------
 
     def _secure_wipe(self) -> None:
-        """Overwrite RAM DB with zeros and force Python GC."""
+        """Overwrite RAM DB with zeros and force Python GC.
+
+        IMPORTANT: this must run while at least one other connection to the
+        shared-cache RAM DB (e.g. the Store's writer-thread connection) is
+        still open. `file::memory:?cache=shared` databases are destroyed the
+        instant their last connection closes, so calling this *after* the
+        Store has already been stopped means the DELETE statements below
+        silently no-op against a database that no longer exists (SQLite
+        raises "no such table", which the inner try/except swallows) — the
+        wipe never actually touches real session data. Callers (see
+        ZeroLogMode.disable()) must call this before the owning Store's
+        connections are torn down. See docs/TLS_ZEROLOG_AUDIT_REPORT.md.
+        """
         try:
             # Overwrite the shared memory DB with zeros
             conn = sqlite3.connect(RAM_DB_URI, uri=True, check_same_thread=False)
             try:
+                # secure_delete must be set BEFORE the deletes so the freed
+                # pages are actually zero-filled by these statements, rather
+                # than only affecting deletes that happen after this point.
+                conn.execute("PRAGMA secure_delete=ON")
                 for table in ("events", "scan_cache", "baselines"):
                     try:
                         conn.execute(f"DELETE FROM {table}")
                     except Exception:
                         pass
-                conn.execute("PRAGMA secure_delete=ON")
                 conn.commit()
                 conn.close()
             except Exception:

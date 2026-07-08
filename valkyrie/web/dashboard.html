@@ -788,6 +788,7 @@
           </div>
           <button class="action-btn" id="mac-rand-btn">Randomise Now</button>
           <button class="action-btn" id="mac-restore-btn">Restore Original</button>
+          <p class="ctl-note" id="mac-note"></p>
         </div>
       </div>
 
@@ -1231,24 +1232,37 @@ async function loadMacStatus() {
 function wireMacButtons() {
   const randBtn    = document.getElementById('mac-rand-btn');
   const restoreBtn = document.getElementById('mac-restore-btn');
+  const note       = document.getElementById('mac-note');
   if (randBtn) {
     randBtn.addEventListener('click', async () => {
-      randBtn.disabled = true;
+      randBtn.disabled = restoreBtn.disabled = true;
+      if (note) note.textContent = 'Randomising...';
       try {
-        await fetch('/api/mac/randomize', { method: 'POST' });
+        const r = await fetch('/api/mac/randomize', { method: 'POST' });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Randomisation failed');
+        if (note) note.textContent = `MAC randomised: ${d.new_mac}`;
         await loadMacStatus();
-      } catch (_) {}
-      randBtn.disabled = false;
+      } catch (err) {
+        if (note) note.textContent = err.message || 'Randomisation failed.';
+      }
+      randBtn.disabled = restoreBtn.disabled = false;
     });
   }
   if (restoreBtn) {
     restoreBtn.addEventListener('click', async () => {
-      restoreBtn.disabled = true;
+      randBtn.disabled = restoreBtn.disabled = true;
+      if (note) note.textContent = 'Restoring...';
       try {
-        await fetch('/api/mac/restore', { method: 'POST' });
+        const r = await fetch('/api/mac/restore', { method: 'POST' });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Restore failed');
+        if (note) note.textContent = `MAC restored: ${d.restored_mac}`;
         await loadMacStatus();
-      } catch (_) {}
-      restoreBtn.disabled = false;
+      } catch (err) {
+        if (note) note.textContent = err.message || 'Restore failed.';
+      }
+      randBtn.disabled = restoreBtn.disabled = false;
     });
   }
 }
@@ -1264,7 +1278,11 @@ async function loadVpnStatus() {
     const ks = document.getElementById('vpn-ks');
     if (h1) h1.textContent = data.hop1_conf_exists ? 'configured' : 'not set';
     if (h2) h2.textContent = data.hop2_conf_exists ? 'configured' : 'not set';
-    if (ks) ks.textContent = 'ACTIVE';
+    // kill_switch_configured only reflects that the PostUp/PreDown iptables
+    // rule is present in the generated config files on disk — it is NOT a
+    // live check that a tunnel is up or that the rule is loaded into the
+    // kernel, which this dashboard cannot verify remotely.
+    if (ks) ks.textContent = data.kill_switch_configured ? 'configured (not verified live)' : 'not configured';
   } catch (_) {}
 }
 

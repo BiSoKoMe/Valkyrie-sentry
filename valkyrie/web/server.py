@@ -242,6 +242,19 @@ def _run_detached_ps(ps_command: str) -> None:
     )
 
 
+def _get_mac_randomizer():
+    """Return the shared MacRandomizer, creating one on first use.
+
+    --mac-rand at startup only controls the auto-randomize-on-reconnect
+    monitor thread; the dashboard's manual Randomise/Restore buttons must
+    work regardless of whether that flag was passed.
+    """
+    if state.mac_randomizer is None:
+        from ..mac_randomizer import MacRandomizer
+        state.mac_randomizer = MacRandomizer(store=state.store)
+    return state.mac_randomizer
+
+
 # ---------------------------------------------------------------------------
 # FastAPI app factory
 # ---------------------------------------------------------------------------
@@ -349,22 +362,29 @@ def create_app():
 
     @app.get("/api/mac/status")
     async def mac_status():
-        if state.mac_randomizer is None:
-            return {"enabled": False, "interfaces": {}}
-        return {"enabled": True, "interfaces": state.mac_randomizer.status()}
+        mac = _get_mac_randomizer()
+        return {"enabled": True, "interfaces": mac.status()}
 
     @app.post("/api/mac/randomize")
     async def mac_randomize():
-        if state.mac_randomizer is None:
-            return JSONResponse({"error": "MAC randomizer not running (start with --mac-rand)"}, status_code=503)
-        new_mac = state.mac_randomizer.randomize()
+        mac = _get_mac_randomizer()
+        new_mac = mac.randomize()
+        if not new_mac:
+            return JSONResponse(
+                {"error": mac.last_error or "MAC randomisation failed"},
+                status_code=500,
+            )
         return {"new_mac": new_mac, "status": "randomised"}
 
     @app.post("/api/mac/restore")
     async def mac_restore():
-        if state.mac_randomizer is None:
-            return JSONResponse({"error": "MAC randomizer not running"}, status_code=503)
-        restored = state.mac_randomizer.restore()
+        mac = _get_mac_randomizer()
+        restored = mac.restore()
+        if not restored:
+            return JSONResponse(
+                {"error": "No backup found to restore (has a MAC ever been randomised?)"},
+                status_code=404,
+            )
         return {"restored_mac": restored, "status": "restored"}
 
     @app.get("/api/vpn/status")

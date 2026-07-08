@@ -101,9 +101,13 @@ class SelfHealing:
         error = ""
         try:
             healthy = bool(comp.check_fn())
-        except Exception as exc:                 # a broken check is a failure,
-            error = f"check raised: {exc}"       # not a crash
-        comp.last_check = time.time()
+        except BaseException as exc:              # a broken check is a failure,
+            error = f"check raised: {exc}"        # not a crash — catch BaseException
+        comp.last_check = time.time()             # (not just Exception) so a stray
+                                                    # SystemExit/KeyboardInterrupt raised
+                                                    # inside a check/recover callback can
+                                                    # never silently kill the watchdog
+                                                    # thread (see _loop below).
 
         if healthy:
             comp.ok = True
@@ -121,7 +125,7 @@ class SelfHealing:
             comp.recover_fn()
             comp.recoveries += 1
             self._log(f"{comp.name} recovery attempted")
-        except Exception as exc:
+        except BaseException as exc:
             comp.last_error = f"recovery raised: {exc}"
             self._log(f"{comp.name} recovery failed: {exc}")
 
@@ -132,8 +136,12 @@ class SelfHealing:
                 break
             try:
                 self.check_now()
-            except Exception:
-                pass    # the watchdog itself must never die
+            except BaseException:
+                pass    # the watchdog itself must never die — a check_fn/recover_fn
+                         # is untrusted third-party-ish code (dns_server.start(), etc.)
+                         # and _check_one already isolates ordinary exceptions, but this
+                         # outer guard is the last line of defence for anything that
+                         # slips past it (e.g. a bug in check_now()/_check_one() itself).
 
     def _log(self, message: str) -> None:
         if self._store is None:

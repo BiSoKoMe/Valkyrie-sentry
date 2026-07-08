@@ -426,6 +426,14 @@ def main() -> None:
         zero_log.enable()
         console.print("[bold yellow]WARNING: Zero log mode: no data written to disk[/bold yellow]")
         console.print("[dim]Session data exists in RAM only. Power off to wipe all traces.[/dim]")
+        if args.debug:
+            # --debug prints every resolved domain to stdout, which is a
+            # persistent trace (terminal scrollback, redirected logs) that
+            # defeats the point of zero-log. Suppress the per-query domain
+            # printing while zero-log is active; other startup diagnostics are
+            # unaffected. See docs/TLS_ZEROLOG_AUDIT_REPORT.md.
+            console.print("[dim]  Zero-log: per-domain --debug output suppressed "
+                          "(would leave a domain trace on the terminal).[/dim]")
 
     # ------------------------------------------------------------------
     # 1. Store
@@ -629,13 +637,17 @@ def main() -> None:
             process_watcher = proc_watcher,
             scanner         = scanner,
             intelligence    = intelligence,
+            firewall        = (firewall if not args.no_firewall else None),
             strict          = args.strict,
             host            = args.host,
             port            = args.port,
             upstream_host   = dns_upstream_host,
             upstream_port   = dns_upstream_port,
             allow_external_fallback = allow_external_fallback,
-            debug           = args.debug,
+            # Zero-log forces per-domain stdout off: the interceptor's debug
+            # prints include every queried domain, which would persist in
+            # terminal scrollback and defeat RAM-only operation.
+            debug           = args.debug and not (zero_log is not None and zero_log.is_active()),
         )
         try:
             dns_server.start()
@@ -894,9 +906,16 @@ def main() -> None:
         if intelligence:
             intelligence.stop()
         firewall.stop()
-        store.stop()
+        # zero_log.disable() must run BEFORE store.stop(): its secure wipe
+        # deletes rows through a fresh connection to the shared-cache RAM
+        # database, which only works while another connection (the Store's
+        # writer thread) is still open. `file::memory:?cache=shared` DBs are
+        # destroyed the instant their last connection closes, so wiping
+        # after store.stop() would silently target an already-gone database
+        # (see docs/TLS_ZEROLOG_AUDIT_REPORT.md).
         if zero_log:
             zero_log.disable()
+        store.stop()
         console.print("[green]Done.[/green]")
 
 

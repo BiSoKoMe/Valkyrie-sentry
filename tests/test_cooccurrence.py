@@ -92,7 +92,20 @@ def main() -> int:
                             scanner=scanner, intelligence=intel)
 
     anchors = ["news-alpha.test", "shop-bravo.test", "forum-charlie.test", "blog-delta.test"]
-    trackers = ["tr.snapchat.com", "events.reddit.com"]
+    # These MUST NOT be in the shipped blocklist seed — the whole point of this
+    # test is the softer co-occurrence FLAG path, which only runs for domains
+    # that aren't already hard-blocked. `tr.snapchat.com` used to live here but
+    # was later added to the seed (Bucket-A widening), which hard-blocked it
+    # before it ever reached the co-occurrence logic and silently broke this
+    # test. The setup guard below now fails loudly if that drift recurs.
+    trackers = ["tr.pinterest.com", "events.reddit.com"]
+    for _t in trackers:
+        if blocklist.is_blocked(_t):
+            print(f"  FAIL  fixture '{_t}' is in the blocklist seed — pick a "
+                  f"tracker subdomain that is NOT hard-blocked, or this test "
+                  f"silently stops exercising the co-occurrence path")
+            store.stop()
+            return 1
     infra = ["d1.cloudfront.net", "fonts.gstatic.com", "js.stripe.com", "o1.ingest.sentry.io"]
     partial = "widget.benign-svc.test"       # only in first 2 bursts -> ubiquity 2
     payloads = [50, 320, 70, 480]            # wide spread -> no beacon/heartbeat signals

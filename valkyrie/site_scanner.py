@@ -30,6 +30,7 @@ from .config import (
     SCANNER_FLAG_THRESHOLD,
     SYSTEM_PROCESSES,
     TRACKER_PREFIXES,
+    TRACKER_SLD_PREFIXES,
     TRACKER_SLDS,
 )
 
@@ -141,6 +142,26 @@ class SiteScanner:
             score += 0.4
             reasons.append(f"analytics SLD: {sld}")
 
+        # S1c — compound SLD: a hyphen-joined component exactly matches a
+        # known tracker/analytics SLD (e.g. "browser-intake-datadoghq"
+        # contains "datadoghq"). Exact-word match on each component only —
+        # never a substring match — so this can't collide with an unrelated
+        # domain that merely contains similar-looking text.
+        elif "-" in sld and any(c in TRACKER_SLDS for c in sld.split("-")):
+            score += 0.7
+            reasons.append(f"tracker SLD component: {sld}")
+        elif "-" in sld and any(c in ANALYTICS_SLDS for c in sld.split("-")):
+            score += 0.4
+            reasons.append(f"analytics SLD component: {sld}")
+
+        # S1d — SLD starts with a known distinctive tracker/analytics brand
+        # name (e.g. "segmentapis" -> "segment", "taboolasyndication" ->
+        # "taboola") — companies that register a variant apex domain for
+        # infra/CDN use. Curated prefix list excludes generic English words.
+        elif any(sld.startswith(p) for p in TRACKER_SLD_PREFIXES):
+            score += 0.7
+            reasons.append(f"tracker SLD prefix match: {sld}")
+
         # S2 — tracker subdomain prefix (+0.7, block alone)
         # Only fires when the FIRST label exactly matches a known tracker prefix
         # AND the domain has at least 3 parts (subdomain.domain.tld).
@@ -172,6 +193,19 @@ class SiteScanner:
                 and root not in MS_TRUSTED_ROOTS):
             score += 0.2
             reasons.append(f"system process {process} on tracker subdomain")
+
+        # S6 — short/cryptic first label (<=2 alpha chars) on a subdomain
+        # (3+ parts), e.g. "tr.snapchat.com", "cs.media.net", "l.sharethis.com".
+        # Real trackers often use terse, meaningless-looking labels to stay
+        # inconspicuous. WEAK combining signal only (0.25 alone stays under
+        # the 0.4 flag threshold) — a single one-off query to a short-labeled
+        # subdomain is still allowed by default; this only tips the balance
+        # together with rate-burst or entropy evidence. Restricted to alpha-
+        # only labels so numeric/alphanumeric infra shards (e.g. "s3", "c1")
+        # used by legitimate CDNs don't match.
+        if parts >= 3 and len(first) <= 2 and first.isalpha():
+            score += 0.25
+            reasons.append(f"short cryptic subdomain label: {first}")
 
         score = min(1.0, score)
 

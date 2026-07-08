@@ -329,31 +329,50 @@ class _WindowsFirewall:
 
     PREFIX = "Valkyrie_"
 
+    def __init__(self) -> None:
+        # Set when a netsh call fails (non-zero return code, missing binary,
+        # or timeout) so callers can distinguish "0 rules because nothing to
+        # do" from "0 rules because every netsh call failed silently" — the
+        # same class of gap identified in mac_randomizer.py's adapter cycle.
+        self.last_error: str | None = None
+
     def setup(self) -> bool:
         """Probe that netsh is available and we have permission."""
         try:
             r = _run(["netsh", "advfirewall", "show", "currentprofile"])
-            return r.returncode == 0
-        except (FileNotFoundError, subprocess.TimeoutExpired):
+            if r.returncode != 0:
+                self.last_error = f"netsh probe failed (rc={r.returncode}): {r.stdout.strip() or r.stderr.strip()}"
+                return False
+            return True
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            self.last_error = f"netsh unavailable: {exc}"
             return False
 
     def add_doh_rules(self, ips: list[str]) -> int:
         """Add one outbound block rule per DoH IP (TCP/443 only).
 
-        Returns count successfully added.  Skips silently on timeout.
+        Returns count of rules CONFIRMED installed by netsh's own return
+        code — a non-zero return code (e.g. elevation denied, malformed
+        rule, firewall service down) is NOT counted as success.  On any
+        failure, ``self.last_error`` is set with the last diagnostic seen
+        so the caller does not mistake a silent failure for success.
         """
         ok = 0
         for ip in ips:
             name = f"{self.PREFIX}DoH_{ip.replace('.', '_')}"
             try:
-                _run([
+                r = _run([
                     "netsh", "advfirewall", "firewall", "add", "rule",
                     f"name={name}", "dir=out", "action=block",
                     "protocol=TCP", f"remoteip={ip}", "remoteport=443",
                 ])
-                ok += 1
-            except (subprocess.TimeoutExpired, OSError):
-                pass
+                if r.returncode == 0:
+                    ok += 1
+                else:
+                    detail = (r.stdout or r.stderr or "").strip()
+                    self.last_error = f"netsh add rule failed for {ip} (rc={r.returncode}): {detail}"
+            except (subprocess.TimeoutExpired, OSError) as exc:
+                self.last_error = f"netsh add rule raised for {ip}: {exc}"
         return ok
 
     def add_cidr_rules_batch(self, cidrs: set[str]) -> int:
@@ -362,12 +381,15 @@ class _WindowsFirewall:
 
     def teardown(self) -> None:
         try:
-            _run([
+            r = _run([
                 "netsh", "advfirewall", "firewall", "delete", "rule",
                 f"name={self.PREFIX}*",
             ])
-        except (subprocess.TimeoutExpired, OSError):
-            pass
+            if r.returncode != 0:
+                detail = (r.stdout or r.stderr or "").strip()
+                self.last_error = f"netsh delete rule failed (rc={r.returncode}): {detail}"
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            self.last_error = f"netsh delete rule raised: {exc}"
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +476,18 @@ class FirewallManager:
             #    Linux:   one batched iptables-restore call (~instant)
             #    Windows: no-op (_IPSet handles it, avoids hours-long hang)
             cidr_ok = self._platform.add_cidr_rules_batch(cidrs)
+
+            # Surface a partial/total DoH install failure instead of letting
+            # it look identical to full success — mirrors the netsh
+            # return-code check added to mac_randomizer's adapter cycle.
+            expected_doh = len(FIREWALL_DOH_IPS)
+            if doh_ok < expected_doh:
+                last_error = getattr(self._platform, "last_error", None)
+                self._print(
+                    f"[yellow]Firewall:[/yellow] only {doh_ok}/{expected_doh} "
+                    f"DoH kernel rules installed"
+                    + (f" — {last_error}" if last_error else "")
+                )
 
         self._rule_count = len(all_cidrs)
         self._active     = True
