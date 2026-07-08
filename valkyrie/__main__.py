@@ -271,6 +271,9 @@ def main() -> None:
     parser.add_argument("--fleet-enroll-token", type=str, default="",
                         help="Enrollment secret for --fleet-server (to accept devices) "
                              "or --fleet-agent (to join). Falls back to $VALKYRIE_FLEET_ENROLL_TOKEN")
+    parser.add_argument("--fleet-insecure-http", action="store_true",
+                        help="Allow --fleet-server to bind a non-loopback host over plain "
+                             "HTTP (only if TLS is terminated by a reverse proxy in front)")
     args = parser.parse_args()
 
     console = Console()
@@ -295,9 +298,15 @@ def main() -> None:
         )
         console.print("[dim]  Devices report status metadata only (never domains). "
                       "Ctrl-C to stop.[/dim]")
+        import os as _os
         try:
-            run_fleet_server(host=args.web_host, port=FLEET_SERVER_PORT,
-                             enroll_token=args.fleet_enroll_token)
+            run_fleet_server(
+                host=args.web_host, port=FLEET_SERVER_PORT,
+                enroll_token=args.fleet_enroll_token,
+                policy_public_key_hex=_os.environ.get("VALKYRIE_FLEET_POLICY_PUBKEY", ""),
+                admin_token=_os.environ.get("VALKYRIE_FLEET_ADMIN_TOKEN", ""),
+                allow_insecure_http=args.fleet_insecure_http,
+            )
         except SystemExit as exc:
             console.print(f"[red]{exc}[/red]")
         return

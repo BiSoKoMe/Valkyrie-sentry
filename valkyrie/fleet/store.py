@@ -24,11 +24,17 @@ CREATE TABLE IF NOT EXISTS devices (
     device_id     TEXT PRIMARY KEY,
     token_hash    TEXT NOT NULL,
     label         TEXT NOT NULL,
+    org           TEXT NOT NULL DEFAULT '',
     platform      TEXT NOT NULL DEFAULT '',
     agent_version TEXT NOT NULL DEFAULT '',
     enrolled_at   REAL NOT NULL,
     last_seen     REAL NOT NULL DEFAULT 0,
     last_status   TEXT NOT NULL DEFAULT '{}'
+);
+CREATE TABLE IF NOT EXISTS policies (
+    org           TEXT PRIMARY KEY,
+    bundle        TEXT NOT NULL,
+    updated_at    REAL NOT NULL
 );
 """
 
@@ -41,21 +47,37 @@ class FleetStore:
         self._conn = sqlite3.connect(str(self._path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after the first release to pre-existing DBs.
+        `CREATE TABLE IF NOT EXISTS` won't add a column to an older table, so
+        an `org`-less registry from an earlier version is upgraded here."""
+        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(devices)")}
+        if "org" not in cols:
+            self._conn.execute("ALTER TABLE devices ADD COLUMN org TEXT NOT NULL DEFAULT ''")
 
     # ------------------------------------------------------------------
 
     def add_device(self, device_id: str, token_hash: str, label: str,
-                   platform: str, agent_version: str) -> None:
+                   platform: str, agent_version: str, org: str = "") -> None:
         with self._lock:
             self._conn.execute(
                 "INSERT OR REPLACE INTO devices "
-                "(device_id, token_hash, label, platform, agent_version, "
+                "(device_id, token_hash, label, org, platform, agent_version, "
                 " enrolled_at, last_seen, last_status) "
-                "VALUES (?,?,?,?,?,?,0,'{}')",
-                (device_id, token_hash, label, platform, agent_version, time.time()),
+                "VALUES (?,?,?,?,?,?,?,0,'{}')",
+                (device_id, token_hash, label, org, platform, agent_version, time.time()),
             )
             self._conn.commit()
+
+    def org_for(self, device_id: str) -> Optional[str]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT org FROM devices WHERE device_id=?", (device_id,)
+            ).fetchone()
+        return row["org"] if row else None
 
     def token_hash_for(self, device_id: str) -> Optional[str]:
         with self._lock:
@@ -83,12 +105,33 @@ class FleetStore:
             ).fetchone()
         return self._row_to_public(row) if row else None
 
-    def list_devices(self) -> list[dict]:
+    def list_devices(self, org: Optional[str] = None) -> list[dict]:
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM devices ORDER BY label"
-            ).fetchall()
+            if org is None:
+                rows = self._conn.execute(
+                    "SELECT * FROM devices ORDER BY label").fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM devices WHERE org=? ORDER BY label", (org,)).fetchall()
         return [self._row_to_public(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Policy persistence (per org)
+    # ------------------------------------------------------------------
+
+    def set_policy(self, org: str, bundle_json: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO policies (org, bundle, updated_at) VALUES (?,?,?)",
+                (org, bundle_json, time.time()),
+            )
+            self._conn.commit()
+
+    def get_policy(self, org: str) -> Optional[str]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT bundle FROM policies WHERE org=?", (org,)).fetchone()
+        return row["bundle"] if row else None
 
     def remove_device(self, device_id: str) -> bool:
         with self._lock:
@@ -114,6 +157,7 @@ class FleetStore:
         return {
             "device_id":     row["device_id"],
             "label":         row["label"],
+            "org":           row["org"],
             "platform":      row["platform"],
             "agent_version": row["agent_version"],
             "enrolled_at":   row["enrolled_at"],

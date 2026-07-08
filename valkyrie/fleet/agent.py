@@ -26,6 +26,8 @@ from ..config import (
     FLEET_AGENT_IDENTITY_PATH,
     FLEET_HEARTBEAT_INTERVAL,
 )
+from ..updater import UpdateError
+from .policy import SignedPolicy, verify_signed_policy
 from .protocol import EnrollmentRequest, Heartbeat
 
 
@@ -38,6 +40,8 @@ class FleetAgent:
         label: str = "",
         interval: float = FLEET_HEARTBEAT_INTERVAL,
         console=None,
+        policy_public_key_hex: str = "",
+        policy_applier: Optional[Callable[[object], None]] = None,
     ) -> None:
         self._server   = server_url.rstrip("/")
         self._provider = status_provider
@@ -45,8 +49,15 @@ class FleetAgent:
         self._label    = label or _default_label()
         self._interval = interval
         self._console  = console
+        # Pinned Ed25519 key the pushed policy must verify against, plus a
+        # callback that actually applies a verified policy locally (e.g. merges
+        # block_domains into the blocklist). Both optional: with no key/applier
+        # the agent simply never applies policy.
+        self._policy_pubkey  = policy_public_key_hex or ""
+        self._policy_applier = policy_applier
         self._device_id: Optional[str]    = None
         self._device_token: Optional[str] = None
+        self._applied_policy_version: int = -1
         self._running  = False
         self._thread: Optional[threading.Thread] = None
         self._load_identity()
@@ -101,6 +112,37 @@ class FleetAgent:
             self._print(f"[yellow]Fleet heartbeat failed:[/yellow] {exc}")
             return False
 
+    def fetch_and_apply_policy(self) -> bool:
+        """Pull the org policy, verify its signature against the pinned key,
+        and apply it — but ONLY if it is authentic AND strictly newer than the
+        version already applied (anti-rollback). Returns True if a new policy
+        was applied. Any verification failure is refused, not applied."""
+        if not self.is_enrolled() or not self._policy_pubkey or self._policy_applier is None:
+            return False
+        payload = {"device_id": self._device_id, "device_token": self._device_token}
+        try:
+            raw = self._post("/api/agent/policy", payload, auth=None)
+        except _HttpError:
+            return False   # 404 (no policy) / transient — nothing to apply
+        try:
+            bundle = SignedPolicy.from_dict(raw)
+            policy = verify_signed_policy(bundle, self._policy_pubkey)  # raises if bad
+        except UpdateError as exc:
+            self._print(f"[red]Fleet: refusing unverified policy:[/red] {exc}")
+            return False
+        if policy.version <= self._applied_policy_version:
+            return False   # equal/older -> ignore (replay/rollback protection)
+        try:
+            self._policy_applier(policy)
+        except Exception as exc:
+            self._print(f"[yellow]Fleet: policy applier raised: {exc}[/yellow]")
+            return False
+        self._applied_policy_version = policy.version
+        self._save_identity()
+        self._print(f"[green]✓[/green] Fleet policy v{policy.version} applied "
+                    f"({len(policy.block_domains)} block, {len(policy.allow_domains)} allow)")
+        return True
+
     def start(self) -> None:
         """Start the background heartbeat loop (no-op if not enrolled)."""
         if not self.is_enrolled() or self._running:
@@ -120,6 +162,7 @@ class FleetAgent:
     def _loop(self) -> None:
         while self._running:
             self.send_heartbeat()
+            self.fetch_and_apply_policy()
             # Sleep in short slices so stop() is responsive.
             slept = 0.0
             while self._running and slept < self._interval:
@@ -162,6 +205,9 @@ class FleetAgent:
             data = json.loads(self._identity_path.read_text(encoding="utf-8"))
             self._device_id    = data.get("device_id")
             self._device_token = data.get("device_token")
+            # Persisted so anti-rollback survives a restart — a captured older
+            # signed policy can't be replayed after the agent bounces.
+            self._applied_policy_version = int(data.get("applied_policy_version", -1))
         except (ValueError, OSError):
             self._device_id = self._device_token = None
 
@@ -170,7 +216,8 @@ class FleetAgent:
             self._identity_path.parent.mkdir(parents=True, exist_ok=True)
             self._identity_path.write_text(
                 json.dumps({"device_id": self._device_id,
-                            "device_token": self._device_token}),
+                            "device_token": self._device_token,
+                            "applied_policy_version": self._applied_policy_version}),
                 encoding="utf-8",
             )
             # Best-effort tighten perms (POSIX only; no-op on Windows).

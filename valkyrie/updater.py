@@ -106,37 +106,43 @@ def is_newer(candidate: str, current: str) -> bool:
 # Verification
 # ---------------------------------------------------------------------------
 
-def verify_manifest(manifest: UpdateManifest, signature: bytes,
-                    public_key_hex: Optional[str] = None) -> None:
+def verify_ed25519(data: bytes, signature: bytes, public_key_hex: str) -> None:
     """Raise UpdateError unless `signature` is a valid Ed25519 signature over
-    the manifest's canonical bytes for the configured release public key.
+    `data` for `public_key_hex`. Shared by manifest and policy verification.
 
-    Fail-closed: a missing/blank public key or missing `cryptography` package
-    raises rather than silently accepting the update.
+    Fail-closed: a blank public key or a missing `cryptography` package raises
+    rather than silently accepting.
     """
-    key_hex = (public_key_hex if public_key_hex is not None
-               else RELEASE_PUBLIC_KEY_HEX).strip()
+    key_hex = (public_key_hex or "").strip()
     if not key_hex:
-        raise UpdateError(
-            "no release public key configured — refusing to trust any update "
-            "(set RELEASE_PUBLIC_KEY_HEX to the real signing key)")
+        raise UpdateError("no public key configured — refusing to trust the payload")
     try:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
         from cryptography.exceptions import InvalidSignature
     except ImportError as exc:
-        raise UpdateError(
-            "cannot verify update signature: 'cryptography' is not installed"
-        ) from exc
-
+        raise UpdateError("cannot verify signature: 'cryptography' is not installed") from exc
     try:
         pub = Ed25519PublicKey.from_public_bytes(bytes.fromhex(key_hex))
     except ValueError as exc:
-        raise UpdateError(f"release public key is not valid hex/length: {exc}")
-
+        raise UpdateError(f"public key is not valid hex/length: {exc}")
     try:
-        pub.verify(signature, manifest.canonical_bytes())
+        pub.verify(signature, data)
     except InvalidSignature:
-        raise UpdateError("signature does not match manifest (untrusted or tampered)")
+        raise UpdateError("signature does not match payload (untrusted or tampered)")
+
+
+def verify_manifest(manifest: UpdateManifest, signature: bytes,
+                    public_key_hex: Optional[str] = None) -> None:
+    """Raise UpdateError unless `signature` is a valid Ed25519 signature over
+    the manifest's canonical bytes for the configured release public key.
+    """
+    key_hex = (public_key_hex if public_key_hex is not None
+               else RELEASE_PUBLIC_KEY_HEX)
+    if not (key_hex or "").strip():
+        raise UpdateError(
+            "no release public key configured — refusing to trust any update "
+            "(set RELEASE_PUBLIC_KEY_HEX to the real signing key)")
+    verify_ed25519(manifest.canonical_bytes(), signature, key_hex)
 
 
 def verify_artifact(data: bytes, expected_sha256: str) -> None:
