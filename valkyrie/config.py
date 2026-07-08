@@ -15,6 +15,24 @@ RULES_PATH     = BASE_DIR / "valkyrie_rules.yaml"
 LOG_PATH       = DATA_DIR / "valkyrie.log"
 
 # ---------------------------------------------------------------------------
+# Fleet control plane (multi-device management)
+# ---------------------------------------------------------------------------
+# Turns Valkyrie from a single-machine tool into an agent that reports to a
+# central control plane. Deliberately privacy-preserving: agents send status
+# METADATA (health, counts, category tallies) — never raw domains or traffic —
+# so the server never becomes a honeypot of client browsing history. See
+# valkyrie/fleet/protocol.py for exactly what crosses the wire.
+FLEET_DB_PATH             = DATA_DIR / "fleet.db"          # server-side device registry
+FLEET_AGENT_IDENTITY_PATH = DATA_DIR / "fleet_agent.json"  # agent-side device id + token
+FLEET_SERVER_PORT         = 8091
+FLEET_HEARTBEAT_INTERVAL  = 30      # seconds between agent heartbeats
+FLEET_OFFLINE_AFTER       = 90      # seconds without a heartbeat -> "offline"
+# Env var the server reads for the pre-shared enrollment secret. Agents must
+# present this once to enroll; it is NOT the per-device auth token (that is
+# issued at enrollment and stored only as a hash server-side).
+FLEET_ENROLL_TOKEN_ENV    = "VALKYRIE_FLEET_ENROLL_TOKEN"
+
+# ---------------------------------------------------------------------------
 # DNS
 # ---------------------------------------------------------------------------
 DNS_LISTEN_HOST  = "127.0.0.1"

@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Valkyrie Fleet Console</title>
+  <style>
+    :root {
+      --bg:#0b0e14; --panel:#141922; --line:#232b38; --fg:#e6edf3;
+      --dim:#8b98a9; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --accent:#58a6ff;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--fg);
+           font:14px/1.5 ui-sans-serif,system-ui,Segoe UI,Roboto,sans-serif; }
+    header { padding:20px 28px; border-bottom:1px solid var(--line);
+             display:flex; align-items:baseline; gap:14px; }
+    header h1 { margin:0; font-size:18px; letter-spacing:.4px; }
+    header .sub { color:var(--dim); font-size:12px; }
+    .wrap { padding:24px 28px; max-width:1100px; margin:0 auto; }
+    .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+             gap:14px; margin-bottom:24px; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+            padding:16px 18px; }
+    .card .n { font-size:26px; font-weight:600; }
+    .card .l { color:var(--dim); font-size:12px; text-transform:uppercase;
+               letter-spacing:.6px; margin-top:4px; }
+    table { width:100%; border-collapse:collapse; background:var(--panel);
+            border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+    th,td { text-align:left; padding:11px 14px; border-bottom:1px solid var(--line); }
+    th { color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.6px; }
+    tr:last-child td { border-bottom:none; }
+    .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:7px; }
+    .on  { background:var(--ok); }  .off { background:var(--bad); }
+    .muted { color:var(--dim); }
+    .health span { margin-right:8px; font-size:12px; }
+    .h-ok  { color:var(--ok); }  .h-bad { color:var(--bad); }
+    .empty { color:var(--dim); padding:28px; text-align:center; }
+    footer { color:var(--dim); font-size:11px; padding:16px 28px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Valkyrie Fleet Console</h1>
+    <span class="sub" id="updated">connecting…</span>
+  </header>
+  <div class="wrap">
+    <div class="cards" id="cards"></div>
+    <table>
+      <thead>
+        <tr><th>Device</th><th>Platform</th><th>Status</th>
+            <th>Blocked 24h</th><th>Components</th><th>Version</th><th>Last seen</th></tr>
+      </thead>
+      <tbody id="rows"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+  <footer>Read-only console. Devices report status metadata only — never browsing history.</footer>
+
+  <script>
+    const fmtAgo = (ts) => {
+      if (!ts) return 'never';
+      const s = Math.max(0, Math.floor(Date.now()/1000 - ts));
+      if (s < 60) return s + 's ago';
+      if (s < 3600) return Math.floor(s/60) + 'm ago';
+      if (s < 86400) return Math.floor(s/3600) + 'h ago';
+      return Math.floor(s/86400) + 'd ago';
+    };
+    const card = (n, l) => `<div class="card"><div class="n">${n}</div><div class="l">${l}</div></div>`;
+
+    function health(components) {
+      const keys = Object.keys(components || {});
+      if (!keys.length) return '<span class="muted">—</span>';
+      return '<span class="health">' + keys.map(k =>
+        `<span class="${components[k] ? 'h-ok' : 'h-bad'}">${components[k] ? '●' : '○'} ${k}</span>`
+      ).join('') + '</span>';
+    }
+
+    async function load() {
+      try {
+        const r = await fetch('/api/fleet');
+        const d = await r.json();
+        const s = d.summary || {};
+        document.getElementById('cards').innerHTML =
+          card(s.devices_online + ' / ' + s.devices_total, 'Devices online') +
+          card((s.blocked_24h||0).toLocaleString(), 'Blocked 24h') +
+          card((s.flagged_24h||0).toLocaleString(), 'Flagged 24h') +
+          card((s.allowed_24h||0).toLocaleString(), 'Allowed 24h');
+
+        const rows = (d.devices || []).map(dev => {
+          const counts = (dev.status && dev.status.counts) || {};
+          return `<tr>
+            <td><span class="dot ${dev.online ? 'on':'off'}"></span>${dev.label}</td>
+            <td class="muted">${dev.platform || '—'}</td>
+            <td>${dev.online ? 'online' : '<span class="muted">offline</span>'}</td>
+            <td>${(counts.blocked||0).toLocaleString()}</td>
+            <td>${health(dev.status && dev.status.components)}</td>
+            <td class="muted">${dev.agent_version || '—'}</td>
+            <td class="muted">${fmtAgo(dev.last_seen)}</td>
+          </tr>`;
+        }).join('');
+        document.getElementById('rows').innerHTML =
+          rows || '<tr><td colspan="7" class="empty">No devices enrolled yet.</td></tr>';
+        document.getElementById('updated').textContent =
+          'updated ' + new Date().toLocaleTimeString();
+      } catch (e) {
+        document.getElementById('updated').textContent = 'control plane unreachable';
+      }
+    }
+    load();
+    setInterval(load, 5000);
+  </script>
+</body>
+</html>
