@@ -1,0 +1,77 @@
+name: Build valkyrie_test.exe (Windows)
+
+# Builds the full application — DNS/firewall/intelligence, the web dashboard,
+# and the complete EDR layer (incidents, timelines, hunting, plugins, live
+# telemetry, signed remote response, AI-assisted investigation) — into a single
+# Windows executable on a real Windows runner, and uploads it for download.
+#
+# PyInstaller cannot cross-compile, which is why this runs on windows-latest
+# rather than being built in a Linux dev container.
+
+on:
+  workflow_dispatch:          # run on demand from the Actions tab
+  push:
+    branches:
+      - claude/valkyrie-endpoint-agent-5m6bf7
+    paths:                    # only rebuild when packaging-relevant files change
+      - "valkyrie/**"
+      - "run_valkyrie.py"
+      - "valkyrie.spec"
+      - "requirements_modular.txt"
+      - ".github/workflows/build-windows-exe.yml"
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies (everything, so the exe contains it all)
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements_modular.txt pyinstaller
+          # Bundle the optional extras so valkyrie_test.exe contains ALL features:
+          #   cryptography -> signed remote response over the fleet
+          #   anthropic    -> AI-assisted investigation (still opt-in at runtime)
+          python -m pip install cryptography anthropic
+
+      - name: Build valkyrie_test.exe
+        shell: pwsh
+        env:
+          VALKYRIE_EXE_NAME: valkyrie_test
+        run: |
+          python -m PyInstaller --clean --noconfirm valkyrie.spec
+          if (-not (Test-Path "dist/valkyrie_test.exe")) {
+            Write-Error "dist/valkyrie_test.exe was not produced"; exit 1
+          }
+          Get-Item dist/valkyrie_test.exe | Format-List Name, Length
+
+      - name: Smoke-test the frozen exe
+        shell: pwsh
+        run: |
+          # These exit cleanly and exercise the frozen import graph + EDR engine.
+          dist/valkyrie_test.exe --hunt list
+          dist/valkyrie_test.exe --incidents
+          Write-Host "Frozen exe smoke test passed."
+
+      - name: Upload valkyrie_test.exe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: valkyrie_test-windows
+          path: dist/valkyrie_test.exe
+          if-no-files-found: error
+
+      - name: Attach exe to release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/valkyrie_test.exe

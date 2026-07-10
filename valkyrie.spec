@@ -14,7 +14,12 @@ NOTE: PyInstaller does not cross-compile. Run this ON WINDOWS to get a Windows
 .exe; running it on Linux/macOS produces a native binary for that OS instead.
 """
 
+import os
 from PyInstaller.utils.hooks import collect_submodules, collect_all
+
+# Output name is overridable so the same recipe can build valkyrie.exe or, e.g.,
+# valkyrie_test.exe:  set VALKYRIE_EXE_NAME before running PyInstaller.
+APP_NAME = os.environ.get("VALKYRIE_EXE_NAME", "valkyrie")
 
 # ---------------------------------------------------------------------------
 # Read-only assets the running app loads by path (web templates are served via
@@ -84,7 +89,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="valkyrie",
+    name=APP_NAME,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
