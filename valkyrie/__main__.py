@@ -286,6 +286,13 @@ def main() -> None:
                              "HTTP (only if TLS is terminated by a reverse proxy in front)")
     args = parser.parse_args()
 
+    # Frozen exe double-clicked with no arguments: start the dashboard and let
+    # the browser auto-open to the right port, so a user never has to pass
+    # flags or guess a port. Running from source, or with any flag, is
+    # unchanged. (len(sys.argv)==1 means "no args beyond the program name".)
+    if getattr(sys, "frozen", False) and len(sys.argv) == 1:
+        args.web = True
+
     console = Console()
 
     # ------------------------------------------------------------------
