@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Valkyrie — EDR / Security Operations</title>
+<style>
+  :root{
+    --bg:#000; --surface:#0c0c0c; --surface2:#131313; --hover:rgba(255,255,255,.05);
+    --border:rgba(255,255,255,.09); --border2:rgba(255,255,255,.16);
+    --t1:rgba(255,255,255,.95); --t2:rgba(255,255,255,.5); --t3:rgba(255,255,255,.28);
+    --red:#FF453A; --orange:#FF9F0A; --yellow:#FFD60A; --green:#30D158; --blue:#0A84FF; --purple:#BF5AF2;
+    --font:'Inter',-apple-system,BlinkMacSystemFont,'SF Pro Display',system-ui,sans-serif;
+    --mono:'SF Mono','Fira Code','Cascadia Code',ui-monospace,monospace;
+  }
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--t1);font-family:var(--font);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  ::-webkit-scrollbar{width:6px;height:6px}
+  ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:100px}
+  a{color:var(--blue);text-decoration:none}
+  .wrap{max-width:1360px;margin:0 auto;padding:0 24px 64px}
+
+  header{position:sticky;top:0;z-index:10;background:rgba(0,0,0,.82);backdrop-filter:blur(14px);
+    border-bottom:1px solid var(--border);padding:16px 24px;display:flex;align-items:center;gap:16px}
+  header .brand{display:flex;flex-direction:column}
+  header .title{font-size:17px;font-weight:600;letter-spacing:-.01em}
+  header .sub{font-size:12px;color:var(--t2)}
+  header .spacer{flex:1}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--t3);transition:.3s}
+  .dot.live{background:var(--green);box-shadow:0 0 10px rgba(48,209,88,.6)}
+  .navlink{font-size:13px;color:var(--t2);padding:6px 12px;border:1px solid var(--border);border-radius:8px}
+  .navlink:hover{color:var(--t1);border-color:var(--border2)}
+
+  /* stat tiles */
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:24px 0}
+  .tile{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px 18px}
+  .tile .k{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--t2)}
+  .tile .v{font-size:30px;font-weight:600;letter-spacing:-.02em;margin-top:6px;font-variant-numeric:tabular-nums}
+  .tile .v small{font-size:13px;color:var(--t2);font-weight:400}
+
+  /* tabs */
+  .tabs{display:flex;gap:4px;margin:8px 0 20px;border-bottom:1px solid var(--border)}
+  .tab{padding:10px 16px;font-size:13px;color:var(--t2);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+  .tab.active{color:var(--t1);border-bottom-color:var(--blue)}
+  .panel{display:none}.panel.active{display:block}
+
+  /* incidents */
+  .cols{display:grid;grid-template-columns:minmax(340px,420px) 1fr;gap:20px;align-items:start}
+  @media(max-width:900px){.cols{grid-template-columns:1fr}}
+  .list{display:flex;flex-direction:column;gap:8px;max-height:70vh;overflow:auto}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;cursor:pointer;transition:.15s}
+  .card:hover{border-color:var(--border2);background:var(--surface2)}
+  .card.sel{border-color:var(--blue)}
+  .card .row1{display:flex;align-items:center;gap:8px}
+  .card .ttl{font-weight:500;font-size:13.5px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .card .meta{font-size:12px;color:var(--t2);margin-top:6px;display:flex;gap:12px;flex-wrap:wrap}
+  .chip{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;padding:3px 8px;border-radius:6px;white-space:nowrap}
+  .chip.critical,.chip.high{background:rgba(255,69,58,.16);color:var(--red)}
+  .chip.medium{background:rgba(255,159,10,.16);color:var(--orange)}
+  .chip.low{background:rgba(48,209,88,.14);color:var(--green)}
+  .chip.info{background:rgba(255,255,255,.08);color:var(--t2)}
+  .status-pill{font-size:11px;color:var(--t2);padding:2px 8px;border:1px solid var(--border);border-radius:100px}
+
+  /* detail */
+  .detail{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:22px;min-height:60vh}
+  .detail.empty{display:flex;align-items:center;justify-content:center;color:var(--t3);font-size:14px}
+  .detail h2{font-size:18px;font-weight:600;letter-spacing:-.01em}
+  .detail .kv{display:flex;gap:14px;flex-wrap:wrap;margin:12px 0;color:var(--t2);font-size:12.5px}
+  .sec{margin-top:22px}
+  .sec h3{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--t2);margin-bottom:10px}
+  .actions{display:flex;gap:8px;flex-wrap:wrap}
+  button{font-family:var(--font);font-size:12.5px;font-weight:500;color:var(--t1);background:var(--surface2);
+    border:1px solid var(--border2);border-radius:9px;padding:8px 13px;cursor:pointer;transition:.15s}
+  button:hover{background:var(--hover);border-color:var(--t3)}
+  button.danger{border-color:rgba(255,69,58,.4);color:var(--red)}
+  button.primary{border-color:var(--blue);color:var(--blue)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  .timeline{border-left:2px solid var(--border);padding-left:16px;display:flex;flex-direction:column;gap:12px}
+  .tl{position:relative}
+  .tl::before{content:'';position:absolute;left:-21px;top:5px;width:8px;height:8px;border-radius:50%;background:var(--t3)}
+  .tl.detection::before{background:var(--orange)}.tl.response::before{background:var(--blue)}
+  .tl.status::before{background:var(--purple)}.tl.note::before{background:var(--green)}
+  .tl .s{font-size:13px}.tl .t{font-size:11px;color:var(--t3);font-variant-numeric:tabular-nums}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;color:var(--t2);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:8px 10px;border-bottom:1px solid var(--border)}
+  td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+  .mono{font-family:var(--mono);font-size:12px}
+  .ai{background:var(--surface2);border:1px solid var(--border);border-left:3px solid var(--purple);border-radius:10px;padding:14px 16px;font-size:13.5px;line-height:1.6;white-space:pre-wrap}
+  .rec{background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-top:8px}
+  .rec .a{font-weight:600;color:var(--blue)}.rec .r{color:var(--t2);font-size:12.5px}
+  .empty-note{color:var(--t3);font-size:13px;padding:12px 0}
+
+  /* hunt */
+  .huntbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
+  input,select{font-family:var(--font);font-size:13px;color:var(--t1);background:var(--surface);border:1px solid var(--border2);border-radius:9px;padding:8px 11px}
+  input::placeholder{color:var(--t3)}
+  .facets{display:flex;gap:20px;flex-wrap:wrap;margin-bottom:16px;color:var(--t2);font-size:12.5px}
+  .facets b{color:var(--t1)}
+  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--surface2);border:1px solid var(--border2);
+    border-radius:10px;padding:12px 18px;font-size:13px;opacity:0;transition:.25s;pointer-events:none;max-width:80vw}
+  .toast.show{opacity:1}
+  .pill-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+  .pill{font-size:12px;color:var(--t2);border:1px solid var(--border);border-radius:100px;padding:6px 12px;cursor:pointer}
+  .pill:hover{border-color:var(--border2);color:var(--t1)}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="title">Valkyrie <span style="color:var(--t3)">EDR</span></div>
+    <div class="sub">Endpoint detection &amp; response — incidents · hunting · response</div>
+  </div>
+  <div class="spacer"></div>
+  <span id="dot" class="dot" title="live stream"></span>
+  <a class="navlink" href="/">← Dashboard</a>
+</header>
+
+<div class="wrap">
+  <div class="stats" id="stats"></div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="incidents">Incidents</div>
+    <div class="tab" data-tab="hunt">Threat Hunt</div>
+    <div class="tab" data-tab="plugins">Plugins</div>
+  </div>
+
+  <!-- INCIDENTS -->
+  <div class="panel active" id="p-incidents">
+    <div class="cols">
+      <div class="list" id="inc-list"></div>
+      <div class="detail empty" id="inc-detail">Select an incident to investigate.</div>
+    </div>
+  </div>
+
+  <!-- HUNT -->
+  <div class="panel" id="p-hunt">
+    <div class="pill-row" id="saved-hunts"></div>
+    <div class="huntbar">
+      <input id="h-domain" placeholder="domain contains…" size="16">
+      <input id="h-proc" placeholder="process name" size="14">
+      <select id="h-decision">
+        <option value="">any decision</option>
+        <option value="blocked">blocked</option>
+        <option value="flagged">flagged</option>
+        <option value="allowed">allowed</option>
+        <option value="behavioral">behavioral</option>
+      </select>
+      <input id="h-susp" placeholder="min suspicion" size="10">
+      <button class="primary" onclick="runHunt()">Run hunt</button>
+    </div>
+    <div class="facets" id="facets"></div>
+    <div id="hunt-results"></div>
+  </div>
+
+  <!-- PLUGINS -->
+  <div class="panel" id="p-plugins">
+    <div class="sec"><h3>Response actions available</h3><div class="pill-row" id="actions"></div></div>
+    <div id="plugin-list"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let TOKEN = "", SELECTED = null, INCIDENTS = [];
+
+async function j(url, opts){ const r = await fetch(url, opts); if(!r.ok){ let e; try{e=(await r.json()).error}catch{ e=r.statusText } throw new Error(e||r.status) } return r.json(); }
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function toast(m){ const t=document.getElementById('toast'); t.textContent=m; t.classList.add('show'); clearTimeout(t._x); t._x=setTimeout(()=>t.classList.remove('show'),3200); }
+
+async function getToken(){ try{ const d=await j('/api/system/token'); TOKEN=d.token; }catch{} }
+function authHeaders(){ return {'Content-Type':'application/json','X-Valkyrie-Token':TOKEN}; }
+
+// ---- tabs ----
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
+  t.classList.add('active'); document.getElementById('p-'+t.dataset.tab).classList.add('active');
+  if(t.dataset.tab==='plugins') loadPlugins();
+  if(t.dataset.tab==='hunt') loadHunts();
+});
+
+// ---- stats ----
+async function loadStats(){
+  try{
+    const s = await j('/api/edr/stats');
+    if(!s.enabled){ document.getElementById('stats').innerHTML='<div class="tile"><div class="k">EDR</div><div class="v" style="font-size:16px">disabled</div></div>'; return; }
+    const sev = s.open_by_severity||{};
+    const ch = (sev.critical||0)+(sev.high||0);
+    document.getElementById('stats').innerHTML = `
+      <div class="tile"><div class="k">Open incidents</div><div class="v">${s.incidents_open||0}</div></div>
+      <div class="tile"><div class="k">Critical / High</div><div class="v" style="color:${ch?'var(--red)':'var(--t1)'}">${ch}</div></div>
+      <div class="tile"><div class="k">Detections</div><div class="v">${s.detections_total||0}</div></div>
+      <div class="tile"><div class="k">Responses</div><div class="v">${s.responses_total||0}</div></div>
+      <div class="tile"><div class="k">Plugins</div><div class="v">${s.plugins||0}<small> loaded</small></div></div>`;
+  }catch(e){}
+}
+
+// ---- incidents ----
+async function loadIncidents(){
+  try{
+    INCIDENTS = await j('/api/edr/incidents');
+    renderList();
+  }catch(e){ document.getElementById('inc-list').innerHTML='<div class="empty-note">'+esc(e.message)+'</div>'; }
+}
+function renderList(){
+  const el = document.getElementById('inc-list');
+  if(!INCIDENTS.length){ el.innerHTML='<div class="empty-note">No incidents yet. As Valkyrie blocks threats, correlated incidents appear here.</div>'; return; }
+  el.innerHTML = INCIDENTS.map(i=>`
+    <div class="card ${SELECTED===i.id?'sel':''}" onclick="openIncident('${i.id}')">
+      <div class="row1"><span class="chip ${i.severity}">${i.severity}</span>
+        <span class="ttl">${esc(i.title)}</span></div>
+      <div class="meta">
+        <span class="status-pill">${i.status}</span>
+        <span>${esc(i.process_name||'—')}</span>
+        <span>${i.detection_count} det.</span>
+        <span class="mono" style="color:var(--t3)">${esc((i.entity||'').slice(0,28))}</span>
+      </div></div>`).join('');
+}
+async function openIncident(id){
+  SELECTED = id; renderList();
+  const d = await j('/api/edr/incidents/'+id);
+  const det = document.getElementById('inc-detail'); det.classList.remove('empty');
+  const tl = (d.timeline||[]).slice().reverse().map(t=>`
+    <div class="tl ${t.kind}"><div class="s">${esc(t.summary)}</div>
+      <div class="t">${esc((t.timestamp||'').replace('T',' ').slice(0,19))} · ${t.kind}</div></div>`).join('');
+  const dets = (d.detections||[]).map(x=>`<tr>
+      <td><span class="chip ${x.severity}">${x.severity}</span></td>
+      <td>${esc(x.title)}</td>
+      <td class="mono">${esc(x.entity||'')}</td>
+      <td style="color:var(--t2)">${esc(x.technique||'')}</td></tr>`).join('');
+  const resp = (d.responses||[]).map(r=>`<tr>
+      <td class="mono">${esc(r.action)}</td><td class="mono">${esc(r.target||'')}</td>
+      <td>${esc(r.status)}${r.dry_run?' <span style="color:var(--t3)">(dry-run)</span>':''}</td>
+      <td style="color:var(--t2)">${esc(r.result||'')}</td></tr>`).join('');
+  det.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px"><span class="chip ${d.severity}">${d.severity}</span><h2>${esc(d.title)}</h2></div>
+    <div class="kv"><span>Status: <b style="color:var(--t1)">${d.status}</b></span>
+      <span>Process: ${esc(d.process_name||'—')}</span>
+      <span>Detections: ${d.detection_count}</span>
+      <span>Updated: ${esc((d.updated_at||'').replace('T',' ').slice(0,19))}</span></div>
+
+    <div class="sec"><h3>Respond</h3><div class="actions">
+      <button class="primary" onclick="investigate('${d.id}',false)">Investigate</button>
+      <button class="primary" onclick="investigate('${d.id}',true)" title="Sends incident details to the Claude API (opt-in)">AI investigate</button>
+      <button onclick="respond('block_domain','${esc(d.entity)}','${d.id}')">Block domain</button>
+      <button class="danger" onclick="respond('kill_process','','${d.id}')">Kill process</button>
+      <button class="danger" onclick="respond('isolate_host','','${d.id}')">Isolate host</button>
+    </div></div>
+    <div class="sec"><h3>Triage</h3><div class="actions">
+      <button onclick="setStatus('${d.id}','investigating')">Investigating</button>
+      <button onclick="setStatus('${d.id}','contained')">Contained</button>
+      <button onclick="setStatus('${d.id}','resolved')">Resolved</button>
+      <button onclick="setStatus('${d.id}','dismissed')">Dismiss</button>
+    </div></div>
+
+    <div class="sec" id="ai-slot"></div>
+    <div class="sec"><h3>Timeline</h3><div class="timeline">${tl||'<div class="empty-note">—</div>'}</div></div>
+    <div class="sec"><h3>Detections</h3><table><thead><tr><th></th><th>Signal</th><th>Indicator</th><th>Technique</th></tr></thead><tbody>${dets}</tbody></table></div>
+    ${resp?`<div class="sec"><h3>Response audit</h3><table><thead><tr><th>Action</th><th>Target</th><th>Result</th><th>Detail</th></tr></thead><tbody>${resp}</tbody></table></div>`:''}`;
+}
+
+async function investigate(id, useAI){
+  const slot = document.getElementById('ai-slot');
+  slot.innerHTML = '<h3>Investigation</h3><div class="empty-note">Analysing…</div>';
+  try{
+    const r = await j('/api/edr/incidents/'+id+'/investigate',{method:'POST',headers:authHeaders(),body:JSON.stringify({use_ai:!!useAI})});
+    let html = '<h3>Investigation — '+esc(r.analyst)+' analyst</h3>';
+    if(r.ai_error) html += '<div class="empty-note">'+esc(r.ai_error)+'</div>';
+    html += '<div class="ai">'+esc(r.summary||'')+'</div>';
+    if(r.ai_narrative) html += '<div class="ai" style="margin-top:10px;border-left-color:var(--blue)">'+esc(r.ai_narrative)+'</div>';
+    if((r.recommended_actions||[]).length){
+      html += '<div style="margin-top:12px"><h3>Recommended actions</h3>';
+      html += r.recommended_actions.map(a=>`<div class="rec"><span class="a">${esc(a.action)}</span>${a.target?' <span class="mono">'+esc(a.target)+'</span>':''}<div class="r">${esc(a.rationale)}</div></div>`).join('');
+      html += '</div>';
+    }
+    slot.innerHTML = html;
+  }catch(e){ slot.innerHTML = '<h3>Investigation</h3><div class="empty-note">'+esc(e.message)+'</div>'; }
+}
+
+async function respond(action, target, id){
+  // First a dry-run so the operator sees exactly what would happen.
+  try{
+    const dry = await j('/api/edr/respond',{method:'POST',headers:authHeaders(),body:JSON.stringify({action,target,incident_id:id,dry_run:true})});
+    if(!confirm('DRY RUN — this would:\n\n'+(dry.result||'(no detail)')+'\n\nApply for real now?')){ toast('Cancelled (dry-run only)'); openIncident(id); return; }
+    const real = await j('/api/edr/respond',{method:'POST',headers:authHeaders(),body:JSON.stringify({action,target,incident_id:id,dry_run:false})});
+    toast(action+': '+real.status+' — '+(real.result||''));
+    openIncident(id);
+  }catch(e){ toast('Error: '+e.message); }
+}
+async function setStatus(id,status){
+  try{ await j('/api/edr/incidents/'+id+'/status',{method:'POST',headers:authHeaders(),body:JSON.stringify({status})});
+    toast('Status → '+status); await loadIncidents(); openIncident(id); }
+  catch(e){ toast('Error: '+e.message); }
+}
+
+// ---- hunt ----
+async function loadHunts(){
+  try{
+    const d = await j('/api/edr/hunt/saved');
+    document.getElementById('saved-hunts').innerHTML = d.hunts.map(h=>`<span class="pill" title="${esc(h.description)}" onclick="runSaved('${h.id}')">${esc(h.name)}</span>`).join('');
+    const f = d.facets||{};
+    const tp = (f.top_processes||[]).slice(0,4).map(p=>esc(p.process_name)+' <b>'+p.c+'</b>').join(' · ');
+    const tc = (f.top_categories||[]).slice(0,4).map(c=>esc(c.raw_category)+' <b>'+c.c+'</b>').join(' · ');
+    document.getElementById('facets').innerHTML = `<div>Top talkers: ${tp||'—'}</div><div>Top categories: ${tc||'—'}</div>`;
+  }catch(e){}
+}
+async function runSaved(id){
+  try{ const r = await j('/api/edr/hunt',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({saved:id})}); renderHunt(r); }
+  catch(e){ toast('Error: '+e.message); }
+}
+async function runHunt(){
+  const filters = {
+    domain_contains:document.getElementById('h-domain').value,
+    process:document.getElementById('h-proc').value,
+    decision:document.getElementById('h-decision').value||undefined,
+    min_suspicion:document.getElementById('h-susp').value||undefined,
+  };
+  try{ const r = await j('/api/edr/hunt',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filters})}); renderHunt(r); }
+  catch(e){ toast('Error: '+e.message); }
+}
+function renderHunt(r){
+  const rows = r.rows||[];
+  const el = document.getElementById('hunt-results');
+  if(!rows.length){ el.innerHTML='<div class="empty-note">No matching events.</div>'; return; }
+  const cols = Object.keys(rows[0]);
+  el.innerHTML = `<div style="color:var(--t2);font-size:12px;margin-bottom:8px">${r.count} result(s)</div>
+    <table><thead><tr>${cols.map(c=>'<th>'+esc(c)+'</th>').join('')}</tr></thead>
+    <tbody>${rows.slice(0,200).map(row=>'<tr>'+cols.map(c=>'<td class="'+(c==='domain'||c==='process_name'?'mono':'')+'">'+esc(row[c])+'</td>').join('')+'</tr>').join('')}</tbody></table>`;
+}
+
+// ---- plugins ----
+async function loadPlugins(){
+  try{
+    const d = await j('/api/edr/plugins');
+    document.getElementById('actions').innerHTML = (d.actions||[]).map(a=>'<span class="pill">'+esc(a)+'</span>').join('');
+    const byKind = {};
+    (d.plugins||[]).forEach(p=>{ (byKind[p.kind]=byKind[p.kind]||[]).push(p); });
+    let html='';
+    for(const kind of Object.keys(byKind)){
+      html += '<div class="sec"><h3>'+esc(kind)+' plugins</h3><table><thead><tr><th>Name</th><th>Description</th><th>Enabled</th></tr></thead><tbody>'+
+        byKind[kind].map(p=>`<tr><td class="mono">${esc(p.name)}</td><td style="color:var(--t2)">${esc(p.description)}</td><td>${p.enabled?'<span style="color:var(--green)">yes</span>':'no'}</td></tr>`).join('')+'</tbody></table></div>';
+    }
+    if(d.discovered&&d.discovered.length) html='<div class="empty-note">Discovered external: '+d.discovered.map(esc).join(', ')+'</div>'+html;
+    document.getElementById('plugin-list').innerHTML = html;
+  }catch(e){}
+}
+
+// ---- live stream ----
+function connectWS(){
+  try{
+    const proto = location.protocol==='https:'?'wss':'ws';
+    const ws = new WebSocket(proto+'://'+location.host+'/ws');
+    ws.onopen=()=>document.getElementById('dot').classList.add('live');
+    ws.onclose=()=>{ document.getElementById('dot').classList.remove('live'); setTimeout(connectWS,3000); };
+    ws.onmessage=ev=>{ let m; try{m=JSON.parse(ev.data)}catch{return}
+      if(m.type==='incident'){ loadStats(); loadIncidents(); if(SELECTED===m.incident.id) openIncident(SELECTED); }
+    };
+  }catch(e){ setTimeout(connectWS,3000); }
+}
+
+(async function(){ await getToken(); loadStats(); loadIncidents(); loadHunts(); connectWS();
+  setInterval(loadStats,15000); })();
+</script>
+</body>
+</html>

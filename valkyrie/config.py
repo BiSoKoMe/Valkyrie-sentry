@@ -380,6 +380,24 @@ INTEL_GOOD_AFTER_ALLOWS = 5       # clean allows before a domain is remembered g
 SELF_HEAL_INTERVAL      = 30      # seconds between component health checks
 
 # ---------------------------------------------------------------------------
+# EDR layer (detection -> incident -> response, on top of the existing sensors)
+# ---------------------------------------------------------------------------
+# The EDR layer subscribes to the live DNS-decision stream, runs detection
+# plugins, and correlates the results into incidents with timelines. It adds no
+# new sensing — it interprets what Valkyrie already sees — and stays entirely
+# local (its state lives in the same SQLite DB, so zero-log RAM mode covers it).
+EDR_MODE                    = True     # master switch for the EDR/SOC layer
+EDR_CORRELATION_WINDOW      = 600      # seconds: a detection folds into an open
+                                       # incident sharing its category + entity/process
+# Directory scanned for third-party plugins (detection/responder/enrichment).
+# Empty by default — discovery is opt-in and only from a directory you control.
+EDR_PLUGIN_DIR              = DATA_DIR / "plugins"
+# AI-assisted investigation. OFF by default: turning it on SENDS incident
+# details (including domains) to the Claude API, so it is opt-in and clearly
+# disclosed, matching the roadmap's rule for anything that leaves the machine.
+EDR_AI_INVESTIGATION        = False
+
+# ---------------------------------------------------------------------------
 # Bucket-B: third-party co-occurrence signal (SIGNAL_DESIGN_REPORT.md)
 # ---------------------------------------------------------------------------
 # Catches tracker subdomains hanging off mixed-use parents (tr.snapchat.com,

@@ -13,6 +13,7 @@ import uuid
 from typing import Optional, Union
 
 from ..updater import UpdateError
+from .command import SignedCommand, verify_signed_command
 from .policy import SignedPolicy, verify_signed_policy
 from .protocol import (
     AGENT_PROTOCOL_VERSION,
@@ -193,3 +194,47 @@ class FleetController:
             return json.loads(raw)
         except ValueError:
             return None
+
+    # ------------------------------------------------------------------
+    # Remote-response commands (signed, verify-then-store, at-most-once)
+    # ------------------------------------------------------------------
+
+    def queue_command(self, org: str, bundle: dict) -> dict:
+        """Operator-side: verify a signed command against the pinned key, then
+        queue it for an org (optionally a single device inside the bundle).
+        Fail-closed: no key, or a bad signature, and nothing is stored."""
+        if not self._policy_pubkey:
+            raise UpdateError("server has no policy/command public key configured — "
+                              "refusing to accept any command")
+        sc = SignedCommand.from_dict(bundle)
+        cmd = verify_signed_command(sc, self._policy_pubkey)   # raises if bad
+        self._store.queue_command(cmd.id, org or "", cmd.device_id,
+                                  json.dumps(sc.to_dict()))
+        return {"ok": True, "org": org or "", "command_id": cmd.id,
+                "action": cmd.action, "device_id": cmd.device_id}
+
+    def get_commands_for_device(self, device_id: str, device_token: str) -> list[dict]:
+        """Agent-side: authenticate, then return the pending signed commands
+        for this device (org-wide or device-targeted, minus already-acked). The
+        agent verifies each signature again locally before running it."""
+        self._authenticate(device_id, device_token)
+        org = self._store.org_for(device_id) or ""
+        out = []
+        for raw in self._store.commands_for_device(org, device_id):
+            try:
+                out.append(json.loads(raw))
+            except ValueError:
+                continue
+        return out
+
+    def ack_command(self, device_id: str, device_token: str, command_id: str,
+                    status: str, result: str) -> dict:
+        """Agent-side: authenticate, then record this device's result for a
+        command. The ack is what prevents the command being handed out again."""
+        self._authenticate(device_id, device_token)
+        self._store.ack_command(command_id, device_id, str(status), str(result))
+        return {"ok": True}
+
+    def command_status(self, command_id: str) -> list[dict]:
+        """Operator-side: which devices ran a command and what happened."""
+        return self._store.command_acks(command_id)
