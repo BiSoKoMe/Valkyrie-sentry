@@ -81,6 +81,35 @@ The dashboard (at <http://localhost:8090>) is your live window into what Valkyri
 - **MAC address** panel — randomize or restore your Wi-Fi hardware address.
 - **System** panel — Windows telemetry status, file-integrity check, and whether zero-log (RAM-only) mode is on.
 - **System Control** panel — one-click **Restart Valkyrie** or **Stop Protection** buttons.
+- **Security · EDR** link (top-right) — opens the endpoint detection & response console.
+
+---
+
+## 6b. Security / EDR console
+
+Beyond blocking, Valkyrie ships a full **endpoint detection & response** layer at
+<http://localhost:8090/edr>. It interprets what Valkyrie already sees and turns it
+into things a defender actually works with:
+
+- **Incidents with timelines** — related detections (a repeated beacon, a
+  threat-intel-IP callback, a DoH-bypass attempt) are correlated into a single
+  incident with a running timeline and an escalating severity, instead of a flat
+  wall of alerts.
+- **Threat hunting** — a safe, structured query surface over your event history,
+  plus one-click saved hunts ("beacon candidates", "noisiest talkers", "rare
+  domains", …).
+- **Response actions** — block a domain, kill a process, or network-isolate the
+  endpoint — **dry-run first** (you see the exact effect before anything happens)
+  and fully audited.
+- **AI-assisted investigation** — a local analyst writes up every incident with a
+  severity rationale, MITRE ATT&CK techniques, and recommended actions. An
+  optional Claude-assisted narrative is available but **off by default** (it
+  sends incident details to a third party — opt in only if you want that).
+- **Plugin architecture** — drop a `*.py` file into `data/plugins/` to add your
+  own detections, responders, or enrichers.
+
+Full details, including the privacy trade-offs and the signed remote-response
+channel for managed fleets, are in **`docs/EDR.md`**.
 
 ---
 
@@ -102,6 +131,10 @@ python -m valkyrie [options]
 | `--mac-rand` | Randomize your MAC address on reconnect |
 | `--tls` | Enable HTTPS/TLS inspection (needs the optional `mitmproxy` package) |
 | `--kill-telemetry` | Scan and disable Windows telemetry |
+| `--no-edr` | Disable the EDR layer (incidents, hunting, response) |
+| `--incidents` | Print current EDR incidents and exit |
+| `--hunt NAME` | Run a saved threat hunt and exit (`--hunt list` to see them) |
+| `--edr-plugin-dir DIR` | Load third-party EDR plugins from a directory |
 | `--debug` | Show detailed DNS forwarding logs |
 
 **Example — the full stack with everything enabled:**
@@ -109,6 +142,18 @@ python -m valkyrie [options]
 ```
 python -m valkyrie --port 53 --web --no-ui --web-port 8090 --mac-rand --tls --debug
 ```
+
+---
+
+## 7b. Standalone executable (`valkyrie.exe`)
+
+Prefer a single double-clickable file with no Python install on the target
+machine? The whole app — EDR layer and web console included — can be packaged
+into **`valkyrie.exe`** with PyInstaller. On a Windows machine, run
+**`build_exe.bat`** (or `build_exe.ps1`); the result is `dist\valkyrie.exe`,
+which keeps its `data\` folder, rules, and logs next to itself. Full
+instructions and the (honest) cross-compile caveat are in
+**`docs/BUILD_EXE.md`**.
 
 ---
 

@@ -27,6 +27,7 @@ from ..config import (
     FLEET_HEARTBEAT_INTERVAL,
 )
 from ..updater import UpdateError
+from .command import SignedCommand, verify_signed_command
 from .policy import SignedPolicy, verify_signed_policy
 from .protocol import EnrollmentRequest, Heartbeat
 
@@ -42,6 +43,7 @@ class FleetAgent:
         console=None,
         policy_public_key_hex: str = "",
         policy_applier: Optional[Callable[[object], None]] = None,
+        command_runner: Optional[Callable[[str, str], tuple]] = None,
     ) -> None:
         self._server   = server_url.rstrip("/")
         self._provider = status_provider
@@ -55,6 +57,10 @@ class FleetAgent:
         # the agent simply never applies policy.
         self._policy_pubkey  = policy_public_key_hex or ""
         self._policy_applier = policy_applier
+        # A verified remote command is executed by this callback — typically
+        # EdrEngine.respond(action, target). With no key/runner the agent never
+        # runs remote commands (the channel is simply inert).
+        self._command_runner = command_runner
         self._device_id: Optional[str]    = None
         self._device_token: Optional[str] = None
         self._applied_policy_version: int = -1
@@ -143,6 +149,46 @@ class FleetAgent:
                     f"({len(policy.block_domains)} block, {len(policy.allow_domains)} allow)")
         return True
 
+    def fetch_and_run_commands(self) -> int:
+        """Pull pending remote-response commands, verify each against the pinned
+        key, run it through the local responder, and ack the result. Returns the
+        number of commands executed. Any unverifiable command is refused, not
+        run. Inert unless both a pinned key AND a command runner are configured."""
+        if not self.is_enrolled() or not self._policy_pubkey or self._command_runner is None:
+            return 0
+        payload = {"device_id": self._device_id, "device_token": self._device_token}
+        try:
+            raw = self._post("/api/agent/commands", payload, auth=None)
+        except _HttpError:
+            return 0
+        ran = 0
+        for bundle in (raw.get("commands") or []):
+            try:
+                sc = SignedCommand.from_dict(bundle)
+                cmd = verify_signed_command(sc, self._policy_pubkey)   # raises if bad
+            except UpdateError as exc:
+                self._print(f"[red]Fleet: refusing unverified command:[/red] {exc}")
+                continue
+            try:
+                status, result = self._command_runner(cmd.action, cmd.target)
+            except Exception as exc:          # noqa: BLE001
+                status, result = "failed", f"runner error: {exc}"
+            # Ack regardless of outcome — the ack is what stops the command
+            # being handed back to us (anti-replay) and reports status upstream.
+            try:
+                self._post("/api/agent/commands/ack", {
+                    "device_id":  self._device_id,
+                    "device_token": self._device_token,
+                    "command_id": cmd.id,
+                    "status":     status,
+                    "result":     result,
+                }, auth=None)
+            except _HttpError:
+                pass
+            self._print(f"[green]✓[/green] Fleet command {cmd.action} → {status}")
+            ran += 1
+        return ran
+
     def start(self) -> None:
         """Start the background heartbeat loop (no-op if not enrolled)."""
         if not self.is_enrolled() or self._running:
@@ -163,6 +209,7 @@ class FleetAgent:
         while self._running:
             self.send_heartbeat()
             self.fetch_and_apply_policy()
+            self.fetch_and_run_commands()
             # Sleep in short slices so stop() is responsive.
             slept = 0.0
             while self._running and slept < self._interval:

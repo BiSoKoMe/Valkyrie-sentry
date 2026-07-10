@@ -11,6 +11,14 @@ uvicorn>=0.29.0
 # Optional - domain age scoring (WHOIS)
 # python-whois>=0.8.0
 
+# Optional - AI-assisted EDR investigation (opt-in; sends incident details to
+# the Claude API — off by default). Without it, the offline analyst is used.
+# anthropic>=0.40.0
+
+# Optional - signing/verifying fleet policy + remote-response commands
+# (Ed25519). Only needed on the control plane and for signed remote response.
+# cryptography>=41.0.0
+
 # Optional - TLS inspection (HTTPS interception; enable with --tls)
 # mitmproxy>=10.0.0
 

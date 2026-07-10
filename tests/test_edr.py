@@ -1,0 +1,298 @@
+"""Tests for the EDR layer (valkyrie/edr/).
+
+Standalone (no pytest), matching the rest of tests/. Locks in:
+  - the plugin registry runs detections and isolates a broken plugin;
+  - built-in detections map the real event stream to the right severities;
+  - the correlation engine folds repeat detections into ONE incident and
+    escalates its severity (not one incident per event);
+  - incident timelines record detections, responses, and status changes;
+  - threat-hunting compiles structured filters + saved hunts safely;
+  - response actions are dry-run by default, audited, and refuse protected PIDs;
+  - offline investigation always returns actionable output; AI stays opt-in/off;
+  - EDR state is local only (nothing EDR crosses the fleet privacy boundary).
+
+Usage: python tests/test_edr.py
+"""
+
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+PASS = 0
+FAIL = 0
+
+
+def check(label: str, cond: bool, detail: str = "") -> None:
+    global PASS, FAIL
+    if cond:
+        PASS += 1
+        print(f"  + [PASS]  {label}")
+    else:
+        FAIL += 1
+        print(f"  X [FAIL]  {label}" + (f"  ({detail})" if detail else ""))
+
+
+print("Valkyrie EDR test")
+print("=" * 55)
+
+from valkyrie.store import Store, DnsEvent
+from valkyrie.edr import (
+    Detection, EdrEngine, EdrStore, PluginRegistry, PluginContext,
+    DetectionPlugin, ThreatHunter,
+)
+from valkyrie.edr.builtin import register_builtin
+from valkyrie.edr.response import register_responders, ResponseManager
+from valkyrie.edr import schema
+
+
+def _event(**kw) -> dict:
+    base = {"domain": "", "decision": "allowed", "process_name": "",
+            "process_pid": 0, "category": "", "suspicion": 0.0, "reason": ""}
+    base.update(kw)
+    return base
+
+
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+    dbp = Path(tmp) / "edr.db"
+    store = Store(db_path=dbp)
+    store.start()
+
+    # ── Schema primitives ─────────────────────────────────────────────
+    print("\n-- Schema ------------------------------------------")
+    check("severity ordering", schema.severity_rank("critical") > schema.severity_rank("low"))
+    check("max_severity picks worse", schema.max_severity("low", "high") == "high")
+    det = Detection(source="t", severity="high", category="firewall_ip",
+                    title="x", entity="bad.example")
+    check("detection round-trips via dict", Detection.from_row(det.to_dict()).entity == "bad.example")
+
+    # ── Plugin registry + fault isolation ─────────────────────────────
+    print("\n-- Plugin architecture -----------------------------")
+    reg = PluginRegistry()
+    register_builtin(reg)
+    register_responders(reg)
+    ctx = PluginContext(store=store)
+    check("built-ins registered", len(reg.all()) >= 9)
+
+    class _Boom(DetectionPlugin):
+        name = "test.boom"
+        def analyze(self, event, c):
+            raise RuntimeError("boom")
+
+    class _Good(DetectionPlugin):
+        name = "test.good"
+        def analyze(self, event, c):
+            return [Detection(source=self.name, severity="low", category="tracker",
+                              title="ok", entity=event.get("domain", ""))]
+
+    reg.register(_Boom())
+    reg.register(_Good())
+    out = reg.run_detections(_event(domain="x.example", decision="blocked",
+                                    category="tracker"), ctx)
+    check("broken plugin does not stop the pipeline", any(d.source == "test.good" for d in out))
+    check("broken plugin fault is captured", any(e["plugin"] == "test.boom" for e in reg.errors()))
+    check("responder actions advertised",
+          set(["block_domain", "kill_process", "isolate_host"]) <= set(reg.available_actions()))
+
+    # ── Plugin discovery from a directory ─────────────────────────────
+    pdir = Path(tmp) / "plugins"
+    pdir.mkdir()
+    (pdir / "myplugin.py").write_text(
+        "from valkyrie.edr.plugins import DetectionPlugin\n"
+        "from valkyrie.edr.schema import Detection\n"
+        "class P(DetectionPlugin):\n"
+        "    name='ext.demo'\n"
+        "    def analyze(self, event, ctx):\n"
+        "        return []\n"
+        "def register(registry):\n"
+        "    registry.register(P())\n",
+        encoding="utf-8")
+    reg2 = PluginRegistry()
+    loaded = reg2.discover(pdir)
+    check("external plugin discovered", "myplugin" in loaded)
+    check("external plugin registered", any(p.name == "ext.demo" for p in reg2.all()))
+
+    # ── Built-in detection mapping ────────────────────────────────────
+    print("\n-- Built-in detections -----------------------------")
+    reg3 = PluginRegistry()
+    register_builtin(reg3)
+    def _detect(ev):
+        return reg3.run_detections(ev, ctx)
+    malware = _detect(_event(domain="c2.bad", decision="blocked",
+                             category="firewall_ip", process_name="evil.exe",
+                             reason="answer IP 1.2.3.4 in threat-intel range"))
+    check("firewall_ip → high severity", malware and malware[0].severity == "high")
+    check("firewall_ip gets a MITRE technique", malware and malware[0].technique.startswith("T1071"))
+    beacon = _detect(_event(domain="beacon.bad", decision="blocked",
+                            category="intelligence", reason="regular interval beacon detected"))
+    check("beacon reason → beacon detection", beacon and beacon[0].source == "dns.beacon")
+    tracker = _detect(_event(domain="ads.example", decision="blocked", category="tracker"))
+    check("tracker block → low severity", tracker and tracker[0].severity == "low")
+    allowed = _detect(_event(domain="good.example", decision="allowed", category=""))
+    check("clean allow yields no detection", allowed == [])
+
+    # ── Engine correlation + timelines ────────────────────────────────
+    print("\n-- Correlation engine ------------------------------")
+    engine = EdrEngine(store, correlation_window_seconds=600)
+    engine.start()
+
+    pushed = []
+    engine.subscribe(lambda p: pushed.append(p))
+
+    ev = _event(domain="c2.evil", decision="blocked", category="firewall_ip",
+                process_name="mal.exe", reason="answer IP in threat-intel range")
+    # Feed the SAME malicious signal three times.
+    for _ in range(3):
+        engine._on_store_event({"type": "event", "event": ev})
+
+    incs = engine.list_incidents()
+    fw_incs = [i for i in incs if i["category"] == "firewall_ip"]
+    check("repeat detections fold into ONE incident", len(fw_incs) == 1,
+          f"got {len(fw_incs)}")
+    check("incident counts all 3 detections", fw_incs and fw_incs[0]["detection_count"] == 3)
+    check("incident severity is high", fw_incs and fw_incs[0]["severity"] == "high")
+    check("live incident push emitted", any(p.get("type") == "incident" for p in pushed))
+
+    # A different category opens a separate incident.
+    engine._on_store_event({"type": "event", "event": _event(
+        domain="ads.co", decision="blocked", category="tracker", process_name="chrome")})
+    check("distinct category → separate incident",
+          len(engine.list_incidents()) == 2)
+
+    inc_id = fw_incs[0]["id"]
+    detail = engine.get_incident(inc_id)
+    check("incident detail carries its detections", len(detail["detections"]) == 3)
+    check("incident timeline recorded detections",
+          any(t["kind"] == "detection" for t in detail["timeline"]))
+
+    # ── Response actions: dry-run, audit, protected PIDs ──────────────
+    print("\n-- Response actions --------------------------------")
+    r1 = engine.respond("block_domain", "c2.evil", dry_run=True, incident_id=inc_id)
+    check("block_domain dry-run reports dry_run", r1["status"] == "dry_run")
+    r2 = engine.respond("kill_process", "4", dry_run=False, incident_id=inc_id)
+    check("kill refuses protected pid 4", r2["status"] == "skipped")
+    r3 = engine.respond("kill_process", "not-a-pid", dry_run=True)
+    check("kill rejects invalid pid", r3["status"] == "failed")
+    r4 = engine.respond("isolate_host", "", dry_run=True, incident_id=inc_id)
+    check("isolate_host dry-run describes the commands",
+          r4["status"] == "dry_run" and "iptables" in r4["result"].lower()
+          or "netsh" in r4["result"].lower())
+    r5 = engine.respond("nonexistent_action", "x")
+    check("unknown action fails cleanly", r5["status"] == "failed")
+    detail = engine.get_incident(inc_id)
+    check("responses are audited on the incident", len(detail["responses"]) >= 3)
+    check("response recorded in timeline",
+          any(t["kind"] == "response" for t in detail["timeline"]))
+
+    # Real block_domain against a temp rules file (no repo mutation).
+    import valkyrie.edr.response as _resp
+    _orig = _resp.RULES_PATH
+    try:
+        _resp.RULES_PATH = Path(tmp) / "rules.yaml"
+        got = engine.respond("block_domain", "tracker.test", dry_run=False)
+        check("real block_domain succeeds", got["status"] == "succeeded")
+        text = _resp.RULES_PATH.read_text(encoding="utf-8")
+        check("blocked domain written to rules", "tracker.test" in text)
+        engine.respond("unblock_domain", "tracker.test", dry_run=False)
+        text2 = _resp.RULES_PATH.read_text(encoding="utf-8")
+        check("unblock removes the domain", "tracker.test" not in text2)
+    finally:
+        _resp.RULES_PATH = _orig
+
+    # ── Incident lifecycle ────────────────────────────────────────────
+    print("\n-- Incident lifecycle ------------------------------")
+    upd = engine.update_incident(inc_id, status="investigating", notes="triaging",
+                                 assignee="alice")
+    check("status update sticks", upd["status"] == "investigating")
+    check("notes/assignee stick", upd["notes"] == "triaging" and upd["assignee"] == "alice")
+    check("status change is in the timeline",
+          any(t["kind"] == "status" for t in upd["timeline"]))
+    stats = engine.stats()
+    check("stats count open incidents", stats["incidents_open"] >= 1)
+    check("stats break down by severity", "high" in stats["open_by_severity"])
+
+    # ── Threat hunting ────────────────────────────────────────────────
+    print("\n-- Threat hunting ----------------------------------")
+    # Seed the raw event log the hunter reads. Spread the beacon across distinct
+    # minutes — a real C2 heartbeat phones home over time, which is exactly what
+    # the beacon_candidates hunt keys on (distinct-minute count).
+    from datetime import datetime as _dt, timedelta as _td
+    _t0 = _dt.utcnow()
+    for i in range(8):
+        ts = (_t0 - _td(minutes=i)).isoformat(timespec="milliseconds")
+        store.log(DnsEvent(timestamp=ts, domain="beacon.evil", decision="blocked",
+                           process_name="mal.exe", process_pid=1234, process_path="",
+                           reason="beacon", suspicion=0.9, raw_category="intelligence"))
+    for i in range(3):
+        store.log(DnsEvent.now(domain=f"rare{i}.example", decision="allowed",
+                               process_name="chrome", process_pid=0, process_path="",
+                               reason="", raw_category=""))
+    time.sleep(0.4)   # let the writer flush
+
+    hunter = ThreatHunter(store)
+    res = hunter.run({"decision": ["blocked"], "process": "mal.exe"}, limit=50)
+    check("structured hunt filters by process+decision", res["count"] >= 8)
+    check("hunt rejects unknown decision safely",
+          hunter.run({"decision": ["DROP TABLE"]}, 10)["count"] >= 0)
+    hs = hunter.run_saved("high_suspicion", 50)
+    check("saved hunt 'high_suspicion' returns rows", hs["count"] >= 8)
+    beacon_hunt = hunter.run_saved("beacon_candidates", 50)
+    check("saved hunt 'beacon_candidates' finds the beacon",
+          any(r["domain"] == "beacon.evil" for r in beacon_hunt["rows"]))
+    check("unknown saved hunt is handled", "error" in hunter.run_saved("nope", 5))
+    facets = hunter.facets(24)
+    check("facets return top processes", any(p["process_name"] == "mal.exe"
+                                             for p in facets["top_processes"]))
+
+    # ── Investigation (offline default, AI opt-in/off) ────────────────
+    print("\n-- Investigation -----------------------------------")
+    report = engine.investigate(inc_id, use_ai=False)
+    check("offline analyst always runs", report["analyst"] == "offline")
+    check("investigation recommends actions", len(report["recommended_actions"]) >= 1)
+    check("investigation lists MITRE techniques", len(report["techniques"]) >= 1)
+    check("investigation has a human summary", len(report["summary"]) > 20)
+    # AI stays off unless explicitly enabled AND a key exists.
+    import os as _os
+    had_key = bool(_os.environ.get("ANTHROPIC_API_KEY") or _os.environ.get("VALKYRIE_AI_KEY"))
+    report_ai = engine.investigate(inc_id, use_ai=True)
+    if had_key:
+        check("AI path attempted when key present", "analyst" in report_ai)
+    else:
+        check("AI opt-in without a key falls back to offline",
+              report_ai["analyst"] == "offline" and "ai_error" in report_ai)
+
+    # ── Plugins introspection ─────────────────────────────────────────
+    print("\n-- Plugin introspection ----------------------------")
+    pinfo = engine.plugins()
+    check("engine lists its plugins", len(pinfo["plugins"]) >= 9)
+    check("engine advertises response actions", "block_domain" in pinfo["actions"])
+
+    # ── Privacy: EDR data is local only ───────────────────────────────
+    print("\n-- Privacy invariant -------------------------------")
+    # The fleet heartbeat must NOT carry EDR incident details/domains. The
+    # fleet protocol only ships counts/categories/components (proven in
+    # test_fleet.py); EDR adds no new wire fields, so a heartbeat built from
+    # the same status dict never sees an incident domain.
+    from valkyrie.fleet.agent import FleetAgent
+    def _status():
+        return {"blocked_24h": 5, "allowed_24h": 1, "flagged_24h": 0,
+                "components": {"dns": True}, "categories": {"tracker": 5}}
+    agent = FleetAgent("http://localhost:1", _status)
+    hb = agent._build_heartbeat().to_dict()
+    blob = repr(hb)
+    check("fleet heartbeat carries no EDR incident/domain data",
+          "c2.evil" not in blob and "incidents" not in hb and "beacon.evil" not in blob)
+
+    engine.stop()
+    store.stop()
+
+print(f"\n{'=' * 55}")
+print(f"  {PASS} passed  /  {FAIL} failed")
+if FAIL:
+    print("  RESULT: SOME TESTS FAILED")
+    sys.exit(1)
+else:
+    print("  RESULT: ALL TESTS PASSED")
+    sys.exit(0)

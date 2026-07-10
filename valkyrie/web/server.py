@@ -57,6 +57,7 @@ class _AppState:
     zero_log       = None      # valkyrie.zero_log.ZeroLogMode (optional)
     intelligence   = None      # valkyrie.intelligence.Intelligence (optional)
     self_heal      = None      # valkyrie.intelligence.SelfHealing (optional)
+    edr            = None      # valkyrie.edr.EdrEngine (optional)
     start_time: float = 0.0
     dns_port: int  = 0         # actual DNS listen port (for dashboard display)
     web_port: int  = 0         # actual web dashboard port
@@ -109,6 +110,15 @@ manager = _ConnectionManager()
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+async def _safe_json(request) -> dict:
+    """Parse a JSON request body into a dict, tolerating empty/bad bodies."""
+    try:
+        data = await request.json()
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
 
 def _fmt_events(raw: list) -> list:
     out = []
@@ -222,6 +232,22 @@ def _control_guard(request):
     return None
 
 
+def _edr_guard(request):
+    """Gate a state-changing EDR endpoint (respond / status / investigate).
+
+    Same defence-in-depth as the system-control guard — loopback peer, local
+    Origin, and the per-process control token — but cross-platform, since EDR
+    actions (isolate host, kill process, block domain) are not Windows-only.
+    """
+    if not _peer_is_local(request):
+        return JSONResponse({"error": "forbidden: EDR actions are loopback-only"}, status_code=403)
+    if not _origin_is_local(request):
+        return JSONResponse({"error": "forbidden: cross-origin EDR action blocked"}, status_code=403)
+    if not _token_ok(request):
+        return JSONResponse({"error": "forbidden: missing or invalid control token"}, status_code=403)
+    return None
+
+
 def _run_detached_ps(ps_command: str) -> None:
     """Launch a detached PowerShell command that outlives this process.
 
@@ -270,10 +296,15 @@ def create_app():
         _loop = asyncio.get_running_loop()
         if state.store is not None:
             state.store.subscribe(manager.broadcast_sync)
+        # Stream EDR incidents to dashboards over the same WebSocket.
+        if state.edr is not None:
+            state.edr.subscribe(manager.broadcast_sync)
         yield
         # Shutdown: unregister subscriber
         if state.store is not None:
             state.store.unsubscribe(manager.broadcast_sync)
+        if state.edr is not None:
+            state.edr.unsubscribe(manager.broadcast_sync)
 
     app = FastAPI(title="Valkyrie Dashboard", lifespan=_lifespan,
                   docs_url=None, redoc_url=None)
@@ -428,6 +459,103 @@ def create_app():
         stop = _PROJECT_ROOT / "stop_all.ps1"
         _run_detached_ps(f"& '{stop}'")
         return {"status": "stopping"}
+
+    # ── EDR / SOC layer ─────────────────────────────────────────────────
+    @app.get("/edr", include_in_schema=False)
+    async def serve_edr_console():
+        return FileResponse(_WEB_DIR / "edr.html", media_type="text/html")
+
+    @app.get("/api/edr/stats")
+    async def edr_stats():
+        if state.edr is None:
+            return {"enabled": False}
+        s = state.edr.stats(); s["enabled"] = True
+        return s
+
+    @app.get("/api/edr/incidents")
+    async def edr_incidents(status: Optional[str] = None,
+                            severity: Optional[str] = None):
+        if state.edr is None:
+            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+        return state.edr.list_incidents(status=status, severity=severity, limit=200)
+
+    @app.get("/api/edr/incidents/{incident_id}")
+    async def edr_incident(incident_id: str):
+        if state.edr is None:
+            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+        inc = state.edr.get_incident(incident_id)
+        if inc is None:
+            return JSONResponse({"error": "unknown incident"}, status_code=404)
+        return inc
+
+    @app.post("/api/edr/incidents/{incident_id}/status")
+    async def edr_incident_status(incident_id: str, request: Request):
+        if state.edr is None:
+            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+        guard = _edr_guard(request)
+        if guard is not None:
+            return guard
+        body = await _safe_json(request)
+        inc = state.edr.update_incident(
+            incident_id, status=body.get("status"), notes=body.get("notes"),
+            assignee=body.get("assignee"), operator="dashboard")
+        if inc is None:
+            return JSONResponse({"error": "unknown incident"}, status_code=404)
+        return inc
+
+    @app.post("/api/edr/incidents/{incident_id}/investigate")
+    async def edr_investigate(incident_id: str, request: Request):
+        if state.edr is None:
+            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+        guard = _edr_guard(request)
+        if guard is not None:
+            return guard
+        body = await _safe_json(request)
+        report = state.edr.investigate(
+            incident_id, use_ai=bool(body.get("use_ai")), operator="dashboard")
+        if report is None:
+            return JSONResponse({"error": "unknown incident"}, status_code=404)
+        return report
+
+    @app.post("/api/edr/respond")
+    async def edr_respond(request: Request):
+        if state.edr is None:
+            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+        guard = _edr_guard(request)
+        if guard is not None:
+            return guard
+        body = await _safe_json(request)
+        action = str(body.get("action", ""))
+        if not action:
+            return JSONResponse({"error": "action is required"}, status_code=400)
+        # dry_run defaults to True — a real action must be explicitly requested.
+        dry_run = bool(body.get("dry_run", True))
+        return state.edr.respond(
+            action, str(body.get("target", "")), dry_run=dry_run,
+            operator="dashboard", incident_id=str(body.get("incident_id", "")))
+
+    @app.get("/api/edr/hunt/saved")
+    async def edr_saved_hunts():
+        if state.edr is None:
+            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+        return {"hunts": state.edr.saved_hunts(),
+                "facets": state.edr.hunt_facets(24)}
+
+    @app.post("/api/edr/hunt")
+    async def edr_hunt(request: Request):
+        if state.edr is None:
+            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+        body = await _safe_json(request)
+        limit = int(body.get("limit", 200) or 200)
+        if body.get("saved"):
+            return state.edr.run_saved_hunt(str(body["saved"]), limit)
+        return state.edr.hunt(body.get("filters") or {}, limit)
+
+    @app.get("/api/edr/plugins")
+    async def edr_plugins():
+        if state.edr is None:
+            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+        return state.edr.plugins()
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket):

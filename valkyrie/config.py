@@ -1,13 +1,26 @@
 """Central configuration — all constants, paths, and defaults live here."""
 
+import sys
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-BASE_DIR = Path(__file__).resolve().parent.parent
+# Frozen-build awareness (PyInstaller). When packaged as valkyrie.exe the
+# module lives inside an ephemeral temp extraction dir (sys._MEIPASS), so
+# writable state (data/, rules, logs) MUST live next to the executable to
+# persist across runs — while read-only bundled assets are read from the
+# bundle dir. When running from source, both are the repo root, exactly as
+# before, so nothing changes for the normal `python -m valkyrie` flow.
+if getattr(sys, "frozen", False):
+    BASE_DIR   = Path(sys.executable).resolve().parent            # next to the .exe
+    BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR))         # bundled assets
+else:
+    BASE_DIR   = Path(__file__).resolve().parent.parent
+    BUNDLE_DIR = BASE_DIR
+
 DATA_DIR = BASE_DIR / "data"
-DATA_DIR.mkdir(exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_PATH        = DATA_DIR / "valkyrie.db"
 BLOCKLIST_PATH = DATA_DIR / "blocklist.txt"
@@ -378,6 +391,24 @@ INTEL_SMALL_PAYLOAD_BYTES = 512   # repeated payloads under this = beacon-like
 INTEL_GOOD_AFTER_ALLOWS = 5       # clean allows before a domain is remembered good
 
 SELF_HEAL_INTERVAL      = 30      # seconds between component health checks
+
+# ---------------------------------------------------------------------------
+# EDR layer (detection -> incident -> response, on top of the existing sensors)
+# ---------------------------------------------------------------------------
+# The EDR layer subscribes to the live DNS-decision stream, runs detection
+# plugins, and correlates the results into incidents with timelines. It adds no
+# new sensing — it interprets what Valkyrie already sees — and stays entirely
+# local (its state lives in the same SQLite DB, so zero-log RAM mode covers it).
+EDR_MODE                    = True     # master switch for the EDR/SOC layer
+EDR_CORRELATION_WINDOW      = 600      # seconds: a detection folds into an open
+                                       # incident sharing its category + entity/process
+# Directory scanned for third-party plugins (detection/responder/enrichment).
+# Empty by default — discovery is opt-in and only from a directory you control.
+EDR_PLUGIN_DIR              = DATA_DIR / "plugins"
+# AI-assisted investigation. OFF by default: turning it on SENDS incident
+# details (including domains) to the Claude API, so it is opt-in and clearly
+# disclosed, matching the roadmap's rule for anything that leaves the machine.
+EDR_AI_INVESTIGATION        = False
 
 # ---------------------------------------------------------------------------
 # Bucket-B: third-party co-occurrence signal (SIGNAL_DESIGN_REPORT.md)

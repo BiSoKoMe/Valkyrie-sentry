@@ -106,6 +106,48 @@ def create_fleet_app(controller: FleetController, admin_token: str = ""):
             return JSONResponse({"error": str(exc)}, status_code=400)
         return result
 
+    @app.post("/api/agent/commands")
+    async def agent_commands(request: Request):
+        body = await _json(request)
+        device_id    = str(body.get("device_id", ""))
+        device_token = str(body.get("device_token", ""))
+        try:
+            cmds = controller.get_commands_for_device(device_id, device_token)
+        except AuthError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=401)
+        return {"commands": cmds}
+
+    @app.post("/api/agent/commands/ack")
+    async def agent_command_ack(request: Request):
+        body = await _json(request)
+        device_id    = str(body.get("device_id", ""))
+        device_token = str(body.get("device_token", ""))
+        try:
+            return controller.ack_command(
+                device_id, device_token, str(body.get("command_id", "")),
+                str(body.get("status", "")), str(body.get("result", "")))
+        except AuthError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=401)
+
+    @app.post("/api/command")
+    async def set_command(request: Request):
+        # Operator-only. Same admin-token gate as policy, plus signature check.
+        if not admin_token or not tokens_equal(_bearer(request), admin_token):
+            return JSONResponse({"error": "admin token required"}, status_code=403)
+        body = await _json(request)
+        org = str(body.get("org", ""))
+        try:
+            result = controller.queue_command(org, body.get("bundle") or {})
+        except UpdateError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return result
+
+    @app.get("/api/command/{command_id}")
+    async def command_status(command_id: str, request: Request):
+        if not admin_token or not tokens_equal(_bearer(request), admin_token):
+            return JSONResponse({"error": "admin token required"}, status_code=403)
+        return {"command_id": command_id, "acks": controller.command_status(command_id)}
+
     @app.get("/api/fleet")
     async def fleet(org: Optional[str] = None):
         return {

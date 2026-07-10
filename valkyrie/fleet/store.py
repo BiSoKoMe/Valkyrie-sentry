@@ -36,6 +36,21 @@ CREATE TABLE IF NOT EXISTS policies (
     bundle        TEXT NOT NULL,
     updated_at    REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS commands (
+    command_id    TEXT PRIMARY KEY,
+    org           TEXT NOT NULL DEFAULT '',
+    device_id     TEXT NOT NULL DEFAULT '',   -- '' = all devices in the org
+    bundle        TEXT NOT NULL,              -- signed-command JSON
+    created_at    REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS command_acks (
+    command_id    TEXT NOT NULL,
+    device_id     TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT '',
+    result        TEXT NOT NULL DEFAULT '',
+    acked_at      REAL NOT NULL,
+    PRIMARY KEY (command_id, device_id)
+);
 """
 
 
@@ -132,6 +147,55 @@ class FleetStore:
             row = self._conn.execute(
                 "SELECT bundle FROM policies WHERE org=?", (org,)).fetchone()
         return row["bundle"] if row else None
+
+    # ------------------------------------------------------------------
+    # Remote-response commands (per org, optionally per device)
+    # ------------------------------------------------------------------
+
+    def queue_command(self, command_id: str, org: str, device_id: str,
+                      bundle_json: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO commands "
+                "(command_id, org, device_id, bundle, created_at) VALUES (?,?,?,?,?)",
+                (command_id, org or "", device_id or "", bundle_json, time.time()),
+            )
+            self._conn.commit()
+
+    def commands_for_device(self, org: str, device_id: str) -> list[str]:
+        """Return pending signed-command bundles this device hasn't acked yet.
+
+        A command applies if it targets this device explicitly OR the whole org
+        (device_id ''), and this device has no ack row for it — that's the
+        at-most-once + anti-replay guarantee.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT bundle FROM commands WHERE org=? "
+                "AND (device_id='' OR device_id=?) "
+                "AND command_id NOT IN "
+                "  (SELECT command_id FROM command_acks WHERE device_id=?) "
+                "ORDER BY created_at",
+                (org or "", device_id, device_id),
+            ).fetchall()
+        return [r["bundle"] for r in rows]
+
+    def ack_command(self, command_id: str, device_id: str,
+                    status: str, result: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO command_acks "
+                "(command_id, device_id, status, result, acked_at) VALUES (?,?,?,?,?)",
+                (command_id, device_id, status[:32], result[:2000], time.time()),
+            )
+            self._conn.commit()
+
+    def command_acks(self, command_id: str) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT device_id, status, result, acked_at FROM command_acks "
+                "WHERE command_id=? ORDER BY acked_at", (command_id,)).fetchall()
+        return [dict(r) for r in rows]
 
     def remove_device(self, device_id: str) -> bool:
         with self._lock:

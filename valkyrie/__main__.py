@@ -256,6 +256,16 @@ def main() -> None:
                         help="Export learned intelligence to data/intelligence_export.json, then exit")
     parser.add_argument("--no-intelligence", action="store_true",
                         help="Disable the self-learning intelligence layer")
+    parser.add_argument("--no-edr", action="store_true",
+                        help="Disable the EDR layer (incidents, hunting, response)")
+    parser.add_argument("--edr-plugin-dir", type=str, default="",
+                        help="Directory to load third-party EDR plugins from "
+                             "(detection/responder/enrichment). Opt-in; trusted code only")
+    parser.add_argument("--incidents", action="store_true",
+                        help="Print current EDR incidents and exit")
+    parser.add_argument("--hunt", type=str, default="", metavar="HUNT",
+                        help="Run a saved threat hunt by id and exit "
+                             "(use --hunt list to see available hunts)")
     parser.add_argument("--download-lists", action="store_true",
                         help="Opt in to downloading external blocklist/IP feeds "
                              "(default: built-in seed list + learned intelligence, no downloads)")
@@ -354,6 +364,49 @@ def main() -> None:
                     console.print(f"                     {la['explanation']}")
         finally:
             intel.stop()
+            store.stop()
+        return
+
+    # ------------------------------------------------------------------
+    # Early-exit: EDR incidents / threat hunt (read-only, then exit)
+    # ------------------------------------------------------------------
+    if args.incidents or args.hunt:
+        from .edr import EdrEngine
+        store = Store()
+        store.start()
+        engine = EdrEngine(store)
+        engine.start()
+        try:
+            if args.hunt:
+                if args.hunt == "list":
+                    console.print("[bold]Available threat hunts:[/bold]")
+                    for h in engine.saved_hunts():
+                        console.print(f"  [cyan]{h['id']:20s}[/cyan] {h['description']}")
+                else:
+                    res = engine.run_saved_hunt(args.hunt, limit=50)
+                    if res.get("error"):
+                        console.print(f"[red]{res['error']}[/red] "
+                                      f"(try --hunt list)")
+                    else:
+                        console.print(f"[bold]Hunt '{args.hunt}':[/bold] "
+                                      f"{res['count']} result(s)")
+                        for row in res.get("rows", [])[:50]:
+                            console.print(f"  {row}")
+            else:  # --incidents
+                incs = engine.list_incidents(limit=100)
+                if not incs:
+                    console.print("[dim]No incidents recorded yet.[/dim]")
+                else:
+                    console.print(f"[bold]{len(incs)} incident(s):[/bold]")
+                    for i in incs:
+                        col = {"critical": "red", "high": "red", "medium": "yellow",
+                               "low": "green"}.get(i["severity"], "white")
+                        console.print(
+                            f"  [{col}]{i['severity']:8s}[/{col}] "
+                            f"[{i['status']:13s}] {i['title']}  "
+                            f"[dim]({i['detection_count']} detections)[/dim]")
+        finally:
+            engine.stop()
             store.stop()
         return
 
@@ -747,6 +800,33 @@ def main() -> None:
         threading.Thread(target=_baseline_loop, daemon=True, name="baseline").start()
 
     # ------------------------------------------------------------------
+    # 9c. EDR layer — detection → incident → response on top of the sensors.
+    #     Subscribes to the live event stream and correlates detections into
+    #     incidents. Stays entirely local (state lives in the same DB).
+    # ------------------------------------------------------------------
+    edr_engine = None
+    from .config import EDR_MODE, EDR_CORRELATION_WINDOW, EDR_PLUGIN_DIR
+    if EDR_MODE and not args.no_edr:
+        _t = time.monotonic()
+        from .edr import EdrEngine
+        plugin_dir = args.edr_plugin_dir or (str(EDR_PLUGIN_DIR) if EDR_PLUGIN_DIR.exists() else "")
+        edr_engine = EdrEngine(
+            store,
+            intelligence = intelligence,
+            firewall     = firewall,
+            rules        = rules,
+            blocklist    = blocklist,
+            plugin_dir   = plugin_dir,
+            correlation_window_seconds = EDR_CORRELATION_WINDOW,
+        )
+        edr_engine.start()
+        _pi = edr_engine.plugins()
+        _tick(f"EDR active ({len(_pi['plugins'])} plugins, "
+              f"{len(_pi['actions'])} response actions)", _t)
+    elif args.debug:
+        console.print("[yellow]EDR layer disabled (--no-edr)[/yellow]")
+
+    # ------------------------------------------------------------------
     # 10. Web dashboard (optional)
     # ------------------------------------------------------------------
     web_thread = None
@@ -761,6 +841,7 @@ def main() -> None:
         web_state.dns_port       = args.port
         web_state.web_port       = args.web_port
         web_state.intelligence   = intelligence
+        web_state.edr            = edr_engine
         web_thread = threading.Thread(
             target=run_server,
             kwargs={"host": args.web_host, "port": args.web_port},
@@ -840,6 +921,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     fleet_agent = None
     if args.fleet_agent:
+        import os as _os
         from .fleet.agent import FleetAgent
 
         def _fleet_status() -> dict:
@@ -851,12 +933,22 @@ def main() -> None:
             }
             return s
 
+        # Remote response: a verified fleet command runs through the local EDR
+        # responder (real apply, audited). Inert unless the fleet policy public
+        # key is pinned via $VALKYRIE_FLEET_POLICY_PUBKEY.
+        def _fleet_command_runner(action: str, target: str):
+            if edr_engine is None:
+                return ("skipped", "EDR not enabled on this device")
+            r = edr_engine.respond(action, target, dry_run=False, operator="fleet")
+            return (r.get("status", "failed"), r.get("result", ""))
+
         fleet_agent = FleetAgent(
             server_url      = args.fleet_agent,
             status_provider = _fleet_status,
             console         = console,
+            policy_public_key_hex = _os.environ.get("VALKYRIE_FLEET_POLICY_PUBKEY", ""),
+            command_runner  = _fleet_command_runner,
         )
-        import os as _os
         enroll_tok = args.fleet_enroll_token or _os.environ.get(
             "VALKYRIE_FLEET_ENROLL_TOKEN", "")
         if fleet_agent.is_enrolled() or fleet_agent.enroll(enroll_tok):
@@ -899,6 +991,10 @@ def main() -> None:
     if not args.no_firewall:
         status_rows.append(("Firewall", True, f"{firewall.count():,} IP ranges"))
     status_rows.append(("Behavioral AI", True, "active"))
+    if edr_engine is not None:
+        _es = edr_engine.stats()
+        status_rows.append(("EDR", True,
+                            f"{_es['plugins']} plugins, {_es['incidents_open']} open incidents"))
     if intelligence is not None:
         _ist = intelligence.status()
         if _ist["learning"]:
@@ -976,6 +1072,8 @@ def main() -> None:
             healer.stop()
         if fleet_agent is not None:
             fleet_agent.stop()
+        if edr_engine is not None:
+            edr_engine.stop()
         if intelligence:
             intelligence.stop()
         firewall.stop()
