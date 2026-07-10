@@ -145,6 +145,18 @@ python -m valkyrie --port 53 --web --no-ui --web-port 8090 --mac-rand --tls --de
 
 ---
 
+## 7b. Standalone executable (`valkyrie.exe`)
+
+Prefer a single double-clickable file with no Python install on the target
+machine? The whole app — EDR layer and web console included — can be packaged
+into **`valkyrie.exe`** with PyInstaller. On a Windows machine, run
+**`build_exe.bat`** (or `build_exe.ps1`); the result is `dist\valkyrie.exe`,
+which keeps its `data\` folder, rules, and logs next to itself. Full
+instructions and the (honest) cross-compile caveat are in
+**`docs/BUILD_EXE.md`**.
+
+---
+
 ## 8. Hardware deployment (GL.iNet)
 
 Valkyrie can also be installed onto a GL.iNet travel router (OpenWrt) so that **every device on the network** — phones, laptops, smart TVs — is protected automatically, with nothing to install on each device. The installer script and its instructions live in **`install_sentry.sh`**; run it on the router over SSH.

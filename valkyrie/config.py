@@ -1,13 +1,26 @@
 """Central configuration — all constants, paths, and defaults live here."""
 
+import sys
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-BASE_DIR = Path(__file__).resolve().parent.parent
+# Frozen-build awareness (PyInstaller). When packaged as valkyrie.exe the
+# module lives inside an ephemeral temp extraction dir (sys._MEIPASS), so
+# writable state (data/, rules, logs) MUST live next to the executable to
+# persist across runs — while read-only bundled assets are read from the
+# bundle dir. When running from source, both are the repo root, exactly as
+# before, so nothing changes for the normal `python -m valkyrie` flow.
+if getattr(sys, "frozen", False):
+    BASE_DIR   = Path(sys.executable).resolve().parent            # next to the .exe
+    BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR))         # bundled assets
+else:
+    BASE_DIR   = Path(__file__).resolve().parent.parent
+    BUNDLE_DIR = BASE_DIR
+
 DATA_DIR = BASE_DIR / "data"
-DATA_DIR.mkdir(exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_PATH        = DATA_DIR / "valkyrie.db"
 BLOCKLIST_PATH = DATA_DIR / "blocklist.txt"
