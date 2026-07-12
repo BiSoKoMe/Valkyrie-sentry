@@ -174,13 +174,33 @@ FIREWALL_DOH_IPS = [
 FIREWALL_MAX_AGE_DAYS = 1            # refresh daily
 FIREWALL_IP_PATH      = DATA_DIR / "blocked_ips.txt"
 
-# CIDRs that must never be blocked (local network, loopback, upstream DNS)
+# CIDRs that must never be blocked, no matter what a threat-intel feed claims.
+#
+# Threat feeds are not clean: they occasionally list reserved, documentation, or
+# bogon ranges (RFC 5737 test-nets show up surprisingly often). Firewalling those
+# is at best pointless and at worst actively harmful — blocking 169.254.0.0/16
+# breaks DHCP/APIPA fallback, 100.64.0.0/10 breaks carrier-grade NAT, 224.0.0.0/4
+# breaks multicast (mDNS/SSDP). This set is applied at feed-parse time AND on the
+# cache-read path (see firewall.load_ip_blocklist) so a protected range can never
+# reach the enforcement set, whatever the source.
 FIREWALL_NEVER_BLOCK = [
+    # Private / local (RFC 1918) + loopback + link-local
     "127.0.0.0/8",
     "10.0.0.0/8",
     "172.16.0.0/12",
     "192.168.0.0/16",
-    "169.254.0.0/16",   # link-local
+    "169.254.0.0/16",   # link-local (RFC 3927) — APIPA
+    # Special-use / documentation / bogon ranges that must never be treated as
+    # routable threat destinations (RFC 6890 and friends).
+    "0.0.0.0/8",        # "this network" (RFC 1122)
+    "100.64.0.0/10",    # carrier-grade NAT (RFC 6598)
+    "192.0.0.0/24",     # IETF protocol assignments (RFC 6890)
+    "192.0.2.0/24",     # TEST-NET-1 documentation (RFC 5737)
+    "198.18.0.0/15",    # benchmarking (RFC 2544)
+    "198.51.100.0/24",  # TEST-NET-2 documentation (RFC 5737)
+    "203.0.113.0/24",   # TEST-NET-3 documentation (RFC 5737)
+    "224.0.0.0/4",      # multicast (RFC 5771) — mDNS/SSDP live here
+    "240.0.0.0/4",      # reserved / future use, incl. 255.255.255.255 broadcast
     DNS_UPSTREAM,       # upstream resolver — blocking it breaks forwarding
 ]
 
@@ -267,7 +287,12 @@ SCAN_CACHE_TTL_HOURS:    int   = 24
 # ---------------------------------------------------------------------------
 # Web dashboard
 # ---------------------------------------------------------------------------
-WEB_HOST = "0.0.0.0"
+# Loopback by default. The dashboard exposes live DNS/browsing history, system
+# status, and control buttons; binding 0.0.0.0 would let any device on the LAN
+# read that feed. Opt into LAN / router-wide exposure explicitly with
+# --web-host 0.0.0.0 — which then additionally requires the per-process control
+# token for every off-loopback API and WebSocket call (see web/server.py).
+WEB_HOST = "127.0.0.1"
 WEB_PORT = 8090        # dashboard + /edr console; matches the daily-use scripts
 
 # ---------------------------------------------------------------------------
@@ -460,3 +485,29 @@ INFRA_ALLOWLIST: frozenset[str] = frozenset({
 UI_REFRESH_RATE     = 4           # Rich live refresh per second
 UI_MAX_TABLE_ROWS   = 30          # rows visible in each dashboard table
 UI_STATS_PANEL_ROWS = 8
+
+# ---------------------------------------------------------------------------
+# Layered overrides (config file / environment) — applied LAST so they win over
+# the documented defaults above. See valkyrie/settings.py for precedence and the
+# list of overridable settings. This block is deliberately at the end of the
+# module: Python finishes executing config.py (including these re-bindings)
+# before any `from .config import X` elsewhere resolves, so every consumer
+# transparently sees the resolved value with no change on their side.
+#
+# With no config file and no VALKYRIE_* environment variables this is a no-op
+# and every constant keeps exactly the default declared above.
+# ---------------------------------------------------------------------------
+from . import settings as _settings   # noqa: E402  (intentional late import)
+
+CONFIG_OVERRIDES: "list[_settings.Override]" = []
+try:
+    _base_settings = {s.key: globals()[s.key] for s in _settings.SPECS}
+    _resolved_settings, CONFIG_OVERRIDES = _settings.load(
+        _base_settings, config_dir=DATA_DIR
+    )
+    globals().update(_resolved_settings)
+except _settings.ConfigError as _cfg_exc:
+    # Fail loud on an explicitly-bad override rather than silently run a
+    # security tool on a misconfiguration. A missing file / unset var never
+    # reaches here — those simply leave the defaults in place.
+    raise SystemExit(f"[valkyrie] invalid configuration: {_cfg_exc}")

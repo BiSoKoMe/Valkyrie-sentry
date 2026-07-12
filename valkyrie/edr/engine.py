@@ -23,6 +23,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
+from ..eventbus import EventBus
 from .builtin import register_builtin
 from .investigate import Investigator
 from .hunt import ThreatHunter
@@ -56,8 +57,8 @@ class EdrEngine:
         self._hunter = ThreatHunter(store, self._edr)
         self._investigator = Investigator(self._edr)
 
-        self._subscribers: list[Callable[[dict], None]] = []
-        self._sub_lock = threading.Lock()
+        # Incident fan-out to the web dashboard runs over the shared EventBus.
+        self._bus = EventBus("edr")
         self._corr_lock = threading.Lock()   # serialise correlation writes
         self._running = False
 
@@ -136,24 +137,13 @@ class EdrEngine:
     # ------------------------------------------------------------------
 
     def subscribe(self, cb: Callable[[dict], None]) -> None:
-        with self._sub_lock:
-            self._subscribers.append(cb)
+        self._bus.subscribe(cb)
 
     def unsubscribe(self, cb: Callable[[dict], None]) -> None:
-        with self._sub_lock:
-            try:
-                self._subscribers.remove(cb)
-            except ValueError:
-                pass
+        self._bus.unsubscribe(cb)
 
     def _notify(self, payload: dict) -> None:
-        with self._sub_lock:
-            subs = list(self._subscribers)
-        for cb in subs:
-            try:
-                cb(payload)
-            except Exception:
-                pass
+        self._bus.publish(payload)
 
     # ------------------------------------------------------------------
     # Facade — incidents
@@ -251,6 +241,7 @@ class EdrEngine:
         return {
             "plugins": self._registry.list_info(),
             "discovered": self._discovered,
+            "loaded": self._registry.loaded_plugins(),
             "errors": self._registry.errors(),
             "actions": self._responder.available_actions(),
         }

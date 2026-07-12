@@ -30,6 +30,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from ..config import DATA_DIR
+from ..context import AppContext
 
 _WEB_DIR = Path(__file__).parent
 _PROJECT_ROOT = _WEB_DIR.parent.parent   # .../valkyrie/web -> .../valkyrie -> repo root
@@ -49,21 +50,11 @@ except ImportError:
 # App state (populated by __main__.py before starting the server)
 # ---------------------------------------------------------------------------
 
-class _AppState:
-    store          = None      # valkyrie.store.Store
-    firewall       = None      # valkyrie.firewall.FirewallManager
-    blocklist      = None      # valkyrie.blocklist.BlocklistManager
-    mac_randomizer = None      # valkyrie.mac_randomizer.MacRandomizer (optional)
-    zero_log       = None      # valkyrie.zero_log.ZeroLogMode (optional)
-    intelligence   = None      # valkyrie.intelligence.Intelligence (optional)
-    self_heal      = None      # valkyrie.intelligence.SelfHealing (optional)
-    edr            = None      # valkyrie.edr.EdrEngine (optional)
-    start_time: float = 0.0
-    dns_port: int  = 0         # actual DNS listen port (for dashboard display)
-    web_port: int  = 0         # actual web dashboard port
-
-
-state = _AppState()
+# The dashboard reads its services from an AppContext. `__main__` (the
+# composition root) builds one, wires the services in, and injects it via
+# create_app(ctx=...)/run_server(ctx=...). This module-level default keeps the
+# server importable and testable on its own (tests set fields on it directly).
+state = AppContext()
 
 # asyncio event loop captured inside lifespan — used to bridge sync → async
 _loop: Optional[asyncio.AbstractEventLoop] = None
@@ -285,9 +276,16 @@ def _get_mac_randomizer():
 # FastAPI app factory
 # ---------------------------------------------------------------------------
 
-def create_app():
+def create_app(ctx: Optional[AppContext] = None):
     if not _FASTAPI_OK:
         raise ImportError("fastapi is required for --web.  Run: pip install fastapi uvicorn")
+
+    # Dependency injection: when the composition root passes a context, adopt it
+    # as the module-global the routes read. Called with no ctx (e.g. in tests),
+    # the existing module-global `state` is used unchanged.
+    if ctx is not None:
+        global state
+        state = ctx
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI):
@@ -311,6 +309,26 @@ def create_app():
     # No CORSMiddleware — Starlette's CORS middleware blocks WebSocket upgrades
     # on some versions. The dashboard is served from the same origin, so CORS
     # is unnecessary and the middleware would break the /ws endpoint.
+
+    @app.middleware("http")
+    async def _offloopback_api_guard(request, call_next):
+        # The dashboard's data endpoints expose live DNS/browsing history and
+        # system status. When the server is bound off-loopback (the explicit
+        # --web-host 0.0.0.0 opt-in for router/LAN viewing), every /api/* call
+        # from a non-loopback peer must present the control token. Loopback
+        # callers — the local dashboard on the same machine — are unaffected, so
+        # the default single-user experience is unchanged. State-changing
+        # control/EDR POSTs keep their own stricter loopback+origin+token guards
+        # layered on top of this.
+        path = request.url.path
+        if (path.startswith("/api/")
+                and not _peer_is_local(request)
+                and not _token_ok(request)):
+            return JSONResponse(
+                {"error": "forbidden: off-loopback API access requires the control token"},
+                status_code=403,
+            )
+        return await call_next(request)
 
     # ── Routes ──────────────────────────────────────────────────────────
 
@@ -559,6 +577,14 @@ def create_app():
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket):
+        # The live event stream is the single most sensitive surface — real-time
+        # browsing history. The HTTP middleware does not cover WebSocket scope,
+        # so apply the same off-loopback rule here: a non-loopback subscriber
+        # must supply ?token=<control token>. Loopback (the local dashboard) is
+        # trusted and connects with no token, exactly as before.
+        if not _peer_is_local(ws) and not _token_ok(ws):
+            await ws.close(code=1008)   # 1008 = policy violation
+            return
         await ws.accept()
         q: asyncio.Queue = asyncio.Queue(maxsize=500)
         manager.add(ws, q)
@@ -607,12 +633,17 @@ def create_app():
 # Runner (called from __main__.py in a daemon thread)
 # ---------------------------------------------------------------------------
 
-def run_server(host: str = "0.0.0.0", port: int = 8080) -> None:
-    """Block the calling thread running the uvicorn server."""
+def run_server(host: str = "0.0.0.0", port: int = 8080,
+               ctx: Optional[AppContext] = None) -> None:
+    """Block the calling thread running the uvicorn server.
+
+    ``ctx`` is the injected AppContext; when omitted the module-global ``state``
+    is used (preserving the standalone/test entry point).
+    """
     try:
         import uvicorn
     except ImportError:
         raise ImportError("uvicorn is required for --web.  Run: pip install fastapi uvicorn")
 
-    app = create_app()
+    app = create_app(ctx)
     uvicorn.run(app, host=host, port=port, log_level="warning", access_log=False)

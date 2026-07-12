@@ -176,10 +176,24 @@ def load_ip_blocklist(console=None, allow_download: bool | None = None) -> set[s
             )
         return set()
     cidrs = set()
+    skipped_protected = 0
     for line in FIREWALL_IP_PATH.read_text(encoding="utf-8").splitlines():
         line = line.strip()
-        if line and not line.startswith("#"):
-            cidrs.add(line)
+        if not line or line.startswith("#"):
+            continue
+        # Defense in depth: never let a protected/bogon range reach the
+        # enforcement set, even from a stale or hand-edited cache written before
+        # FIREWALL_NEVER_BLOCK was expanded. Feed-parse time already filters
+        # these, but the on-disk cache is untrusted input like any other.
+        if _in_never_block(line):
+            skipped_protected += 1
+            continue
+        cidrs.add(line)
+    if console and skipped_protected:
+        console.print(
+            f"[dim]IP blocklist: dropped {skipped_protected} protected/bogon "
+            f"range(s) from cache[/dim]"
+        )
     if console:
         console.print(
             f"[dim]IP blocklist: {len(cidrs):,} ranges from cache "
@@ -192,42 +206,85 @@ def load_ip_blocklist(console=None, allow_download: bool | None = None) -> set[s
 # In-process IP lookup (used by is_blocked_ip)
 # ---------------------------------------------------------------------------
 
-class _IPSet:
-    """Fast membership test for a mixed set of host IPs and CIDRs."""
+class _PyIPSet:
+    """Fast membership test for a mixed set of host IPs and CIDRs.
+
+    Lookups are a hot path: dns_interceptor screens every allowed answer IP
+    against this set. The previous implementation scanned the network list
+    linearly — with ~12k threat-intel ranges that measured ~1.6 ms *per lookup*,
+    which collapses under any real DNS query rate.
+
+    Instead we bucket networks by prefix length. To test an address we mask it to
+    each distinct prefix length present and probe a hash set of network integers.
+    There are at most 32 distinct IPv4 prefix lengths, so a lookup is
+    O(distinct lengths) ≤ 32 hash probes, *independent of how many ranges are
+    loaded*. Memory is just the network integers — none of the node explosion a
+    binary trie would incur, which matters on a Raspberry Pi / router.
+
+    Public API (load / contains / count) and semantics are unchanged.
+    """
+
+    __slots__ = ("_hosts", "_by_len", "_masks", "_net_count", "_lock")
 
     def __init__(self) -> None:
-        self._hosts:    set[ipaddress.IPv4Address]  = set()
-        self._networks: list[ipaddress.IPv4Network] = []
+        self._hosts:    set[int]           = set()   # exact host IPs, as ints
+        self._by_len:   dict[int, set[int]] = {}     # prefixlen -> {network ints}
+        self._masks:    dict[int, int]      = {}     # prefixlen -> bitmask
+        self._net_count = 0                          # networks loaded (for count)
         self._lock = threading.RLock()
 
     def load(self, cidrs: set[str]) -> None:
-        hosts: set[ipaddress.IPv4Address]  = set()
-        nets:  list[ipaddress.IPv4Network] = []
+        hosts: set[int] = set()
+        by_len: dict[int, set[int]] = {}
+        net_count = 0
         for c in cidrs:
             try:
                 if "/" in c:
-                    nets.append(ipaddress.IPv4Network(c, strict=False))
+                    net = ipaddress.IPv4Network(c, strict=False)
+                    by_len.setdefault(net.prefixlen, set()).add(int(net.network_address))
+                    net_count += 1
                 else:
-                    hosts.add(ipaddress.IPv4Address(c))
+                    hosts.add(int(ipaddress.IPv4Address(c)))
             except ValueError:
                 pass
+        masks = {plen: ((0xFFFFFFFF << (32 - plen)) & 0xFFFFFFFF) for plen in by_len}
         with self._lock:
-            self._hosts    = hosts
-            self._networks = nets
+            self._hosts     = hosts
+            self._by_len    = by_len
+            self._masks     = masks
+            self._net_count = net_count
 
     def contains(self, ip: str) -> bool:
         try:
-            addr = ipaddress.IPv4Address(ip)
+            addr = int(ipaddress.IPv4Address(ip))
         except ValueError:
             return False
         with self._lock:
             if addr in self._hosts:
                 return True
-            return any(addr in net for net in self._networks)
+            masks = self._masks
+            for plen, netset in self._by_len.items():
+                if (addr & masks[plen]) in netset:
+                    return True
+            return False
 
     def count(self) -> int:
         with self._lock:
-            return len(self._hosts) + len(self._networks)
+            return len(self._hosts) + self._net_count
+
+
+# Select the CIDR-set backend. When the optional native accelerator
+# (``valkyrie_accel``, a Rust/PyO3 extension) is installed we use it; otherwise
+# we fall back to the pure-Python implementation above. The accelerator is a
+# drop-in with identical semantics (pinned by tests/test_rust_accel.py's
+# differential check) and is NEVER a hard dependency — a source or Raspberry-Pi
+# install with no compiled extension simply runs the Python path.
+try:
+    from valkyrie_accel import IpSet as _IPSet   # type: ignore
+    _IPSET_BACKEND = "rust"
+except Exception:
+    _IPSet = _PyIPSet
+    _IPSET_BACKEND = "python"
 
 
 # ---------------------------------------------------------------------------
@@ -464,6 +521,8 @@ class FirewallManager:
 
         all_cidrs = cidrs | set(FIREWALL_DOH_IPS)
         self._ipset.load(all_cidrs)
+        if _IPSET_BACKEND == "rust":
+            self._print("[dim]Firewall: native CIDR accelerator active[/dim]")
 
         doh_ok  = 0
         cidr_ok = 0
