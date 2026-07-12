@@ -849,6 +849,14 @@ def main() -> None:
         web_state.web_port       = args.web_port
         web_state.intelligence   = intelligence
         web_state.edr            = edr_engine
+        if args.web_host not in ("127.0.0.1", "::1", "localhost"):
+            console.print(
+                f"[yellow]⚠ Web dashboard bound to {args.web_host} (off-loopback).[/yellow]\n"
+                f"  Live DNS/browsing history is reachable from the network. "
+                f"Off-loopback API and WebSocket calls now require the control "
+                f"token in [cyan]data/control_token.txt[/cyan] "
+                f"(header X-Valkyrie-Token or ?token=…)."
+            )
         web_thread = threading.Thread(
             target=run_server,
             kwargs={"host": args.web_host, "port": args.web_port},

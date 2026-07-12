@@ -312,6 +312,26 @@ def create_app():
     # on some versions. The dashboard is served from the same origin, so CORS
     # is unnecessary and the middleware would break the /ws endpoint.
 
+    @app.middleware("http")
+    async def _offloopback_api_guard(request, call_next):
+        # The dashboard's data endpoints expose live DNS/browsing history and
+        # system status. When the server is bound off-loopback (the explicit
+        # --web-host 0.0.0.0 opt-in for router/LAN viewing), every /api/* call
+        # from a non-loopback peer must present the control token. Loopback
+        # callers — the local dashboard on the same machine — are unaffected, so
+        # the default single-user experience is unchanged. State-changing
+        # control/EDR POSTs keep their own stricter loopback+origin+token guards
+        # layered on top of this.
+        path = request.url.path
+        if (path.startswith("/api/")
+                and not _peer_is_local(request)
+                and not _token_ok(request)):
+            return JSONResponse(
+                {"error": "forbidden: off-loopback API access requires the control token"},
+                status_code=403,
+            )
+        return await call_next(request)
+
     # ── Routes ──────────────────────────────────────────────────────────
 
     @app.get("/", include_in_schema=False)
@@ -559,6 +579,14 @@ def create_app():
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket):
+        # The live event stream is the single most sensitive surface — real-time
+        # browsing history. The HTTP middleware does not cover WebSocket scope,
+        # so apply the same off-loopback rule here: a non-loopback subscriber
+        # must supply ?token=<control token>. Loopback (the local dashboard) is
+        # trusted and connects with no token, exactly as before.
+        if not _peer_is_local(ws) and not _token_ok(ws):
+            await ws.close(code=1008)   # 1008 = policy violation
+            return
         await ws.accept()
         q: asyncio.Queue = asyncio.Queue(maxsize=500)
         manager.add(ws, q)

@@ -287,7 +287,12 @@ SCAN_CACHE_TTL_HOURS:    int   = 24
 # ---------------------------------------------------------------------------
 # Web dashboard
 # ---------------------------------------------------------------------------
-WEB_HOST = "0.0.0.0"
+# Loopback by default. The dashboard exposes live DNS/browsing history, system
+# status, and control buttons; binding 0.0.0.0 would let any device on the LAN
+# read that feed. Opt into LAN / router-wide exposure explicitly with
+# --web-host 0.0.0.0 — which then additionally requires the per-process control
+# token for every off-loopback API and WebSocket call (see web/server.py).
+WEB_HOST = "127.0.0.1"
 WEB_PORT = 8090        # dashboard + /edr console; matches the daily-use scripts
 
 # ---------------------------------------------------------------------------
