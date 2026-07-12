@@ -847,18 +847,25 @@ def main() -> None:
     # 10. Web dashboard (optional)
     # ------------------------------------------------------------------
     web_thread = None
+    web_state = None
     if args.web:
-        from .web.server import state as web_state, run_server
-        web_state.store          = store
-        web_state.firewall       = firewall
-        web_state.blocklist      = blocklist
-        web_state.start_time     = time.time()
-        web_state.mac_randomizer = mac_randomizer
-        web_state.zero_log       = zero_log
-        web_state.dns_port       = args.port
-        web_state.web_port       = args.web_port
-        web_state.intelligence   = intelligence
-        web_state.edr            = edr_engine
+        from .web.server import run_server
+        from .context import AppContext
+        # __main__ is the composition root: build the context, wire services in,
+        # and inject it into the web server (create_app/run_server), rather than
+        # mutating a module-global singleton.
+        web_state = AppContext(
+            store          = store,
+            firewall       = firewall,
+            blocklist      = blocklist,
+            start_time     = time.time(),
+            mac_randomizer = mac_randomizer,
+            zero_log       = zero_log,
+            dns_port       = args.port,
+            web_port       = args.web_port,
+            intelligence   = intelligence,
+            edr            = edr_engine,
+        )
         if args.web_host not in ("127.0.0.1", "::1", "localhost"):
             console.print(
                 f"[yellow]⚠ Web dashboard bound to {args.web_host} (off-loopback).[/yellow]\n"
@@ -869,7 +876,7 @@ def main() -> None:
             )
         web_thread = threading.Thread(
             target=run_server,
-            kwargs={"host": args.web_host, "port": args.web_port},
+            kwargs={"host": args.web_host, "port": args.web_port, "ctx": web_state},
             daemon=True,
             name="web-dashboard",
         )

@@ -30,6 +30,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from ..config import DATA_DIR
+from ..context import AppContext
 
 _WEB_DIR = Path(__file__).parent
 _PROJECT_ROOT = _WEB_DIR.parent.parent   # .../valkyrie/web -> .../valkyrie -> repo root
@@ -49,21 +50,11 @@ except ImportError:
 # App state (populated by __main__.py before starting the server)
 # ---------------------------------------------------------------------------
 
-class _AppState:
-    store          = None      # valkyrie.store.Store
-    firewall       = None      # valkyrie.firewall.FirewallManager
-    blocklist      = None      # valkyrie.blocklist.BlocklistManager
-    mac_randomizer = None      # valkyrie.mac_randomizer.MacRandomizer (optional)
-    zero_log       = None      # valkyrie.zero_log.ZeroLogMode (optional)
-    intelligence   = None      # valkyrie.intelligence.Intelligence (optional)
-    self_heal      = None      # valkyrie.intelligence.SelfHealing (optional)
-    edr            = None      # valkyrie.edr.EdrEngine (optional)
-    start_time: float = 0.0
-    dns_port: int  = 0         # actual DNS listen port (for dashboard display)
-    web_port: int  = 0         # actual web dashboard port
-
-
-state = _AppState()
+# The dashboard reads its services from an AppContext. `__main__` (the
+# composition root) builds one, wires the services in, and injects it via
+# create_app(ctx=...)/run_server(ctx=...). This module-level default keeps the
+# server importable and testable on its own (tests set fields on it directly).
+state = AppContext()
 
 # asyncio event loop captured inside lifespan — used to bridge sync → async
 _loop: Optional[asyncio.AbstractEventLoop] = None
@@ -285,9 +276,16 @@ def _get_mac_randomizer():
 # FastAPI app factory
 # ---------------------------------------------------------------------------
 
-def create_app():
+def create_app(ctx: Optional[AppContext] = None):
     if not _FASTAPI_OK:
         raise ImportError("fastapi is required for --web.  Run: pip install fastapi uvicorn")
+
+    # Dependency injection: when the composition root passes a context, adopt it
+    # as the module-global the routes read. Called with no ctx (e.g. in tests),
+    # the existing module-global `state` is used unchanged.
+    if ctx is not None:
+        global state
+        state = ctx
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI):
@@ -635,12 +633,17 @@ def create_app():
 # Runner (called from __main__.py in a daemon thread)
 # ---------------------------------------------------------------------------
 
-def run_server(host: str = "0.0.0.0", port: int = 8080) -> None:
-    """Block the calling thread running the uvicorn server."""
+def run_server(host: str = "0.0.0.0", port: int = 8080,
+               ctx: Optional[AppContext] = None) -> None:
+    """Block the calling thread running the uvicorn server.
+
+    ``ctx`` is the injected AppContext; when omitted the module-global ``state``
+    is used (preserving the standalone/test entry point).
+    """
     try:
         import uvicorn
     except ImportError:
         raise ImportError("uvicorn is required for --web.  Run: pip install fastapi uvicorn")
 
-    app = create_app()
+    app = create_app(ctx)
     uvicorn.run(app, host=host, port=port, log_level="warning", access_log=False)
