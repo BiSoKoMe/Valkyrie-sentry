@@ -1,0 +1,46 @@
+# Valkyrie configuration file (example)
+# --------------------------------------
+# Copy this to  data/valkyrie.yaml  (or point $VALKYRIE_CONFIG at it) to override
+# built-in defaults without editing code. Every key is OPTIONAL — omit anything
+# you want left at its default. Precedence, lowest to highest:
+#
+#     code defaults  <  this file  <  VALKYRIE_* environment variables
+#
+# So an env var of the same name always wins over a value set here. Each setting
+# also has an environment-variable form: VALKYRIE_<KEY>, e.g.
+#     export VALKYRIE_DNS_LISTEN_PORT=53
+#
+# Invalid values (wrong type / out of range) stop startup with a clear error
+# rather than silently running misconfigured.
+
+# ── DNS sinkhole ────────────────────────────────────────────────────────────
+# DNS_LISTEN_HOST: "127.0.0.1"     # address the sinkhole binds to
+# DNS_LISTEN_PORT: 5300            # 1–65535 (use 53 for a system-wide resolver)
+# DNS_UPSTREAM: "127.0.0.1"        # primary upstream (e.g. local Unbound)
+# DNS_UPSTREAM_PORT: 53            # 1–65535
+# DNS_TIMEOUT: 3.0                 # upstream timeout, seconds (0.1–60)
+# DNS_LOCAL_ONLY: false            # true = fail closed, never use public resolvers
+
+# ── Web dashboard ───────────────────────────────────────────────────────────
+# WEB_HOST: "127.0.0.1"            # loopback-only by default; 0.0.0.0 exposes on LAN
+#                                  # (off-loopback access then requires the control token)
+# WEB_PORT: 8090                   # 1–65535
+
+# ── Fleet control plane ─────────────────────────────────────────────────────
+# FLEET_SERVER_PORT: 8091          # 1–65535
+# FLEET_HEARTBEAT_INTERVAL: 30     # seconds between agent heartbeats (1–3600)
+# FLEET_OFFLINE_AFTER: 90          # seconds without heartbeat -> "offline" (1–86400)
+
+# ── Behavioral heuristics ───────────────────────────────────────────────────
+# ENTROPY_THRESHOLD: 3.5           # domain entropy above which it is suspicious (0–8)
+# RATE_WINDOW_SECONDS: 10          # per-process query-rate window (1–3600)
+# RATE_MAX_QUERIES: 30             # queries/window/process before suspicious (1–1,000,000)
+# BEHAVIORAL_BLOCK_SCORE: 0.7      # suspicion score at/above which to block (0–1)
+
+# ── Blocklist / firewall refresh ────────────────────────────────────────────
+# BLOCKLIST_MAX_AGE_DAYS: 7        # refresh domain blocklist after N days (0–365)
+# FIREWALL_MAX_AGE_DAYS: 1         # refresh IP blocklist after N days (0–365)
+
+# ── Event store tuning ──────────────────────────────────────────────────────
+# STORE_QUEUE_SIZE: 10000          # async write-queue depth (100–10,000,000)
+# STORE_FLUSH_EVERY: 50            # rows batched before a DB commit (1–100,000)

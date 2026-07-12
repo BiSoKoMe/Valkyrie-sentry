@@ -295,6 +295,16 @@ def main() -> None:
 
     console = Console()
 
+    # Surface any active config-file/environment overrides up front, so an
+    # operator can see at a glance that a non-default setting is in effect
+    # (and where it came from). No output at all on a stock deployment.
+    from . import config as _config
+    for _ov in getattr(_config, "CONFIG_OVERRIDES", []):
+        console.print(
+            f"[cyan]config:[/cyan] {_ov.key} = {_ov.value!r} "
+            f"[dim](from {_ov.source})[/dim]"
+        )
+
     # ------------------------------------------------------------------
     # Early-exit: WireGuard config generator
     # ------------------------------------------------------------------

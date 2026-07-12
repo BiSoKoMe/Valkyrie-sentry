@@ -485,3 +485,29 @@ INFRA_ALLOWLIST: frozenset[str] = frozenset({
 UI_REFRESH_RATE     = 4           # Rich live refresh per second
 UI_MAX_TABLE_ROWS   = 30          # rows visible in each dashboard table
 UI_STATS_PANEL_ROWS = 8
+
+# ---------------------------------------------------------------------------
+# Layered overrides (config file / environment) — applied LAST so they win over
+# the documented defaults above. See valkyrie/settings.py for precedence and the
+# list of overridable settings. This block is deliberately at the end of the
+# module: Python finishes executing config.py (including these re-bindings)
+# before any `from .config import X` elsewhere resolves, so every consumer
+# transparently sees the resolved value with no change on their side.
+#
+# With no config file and no VALKYRIE_* environment variables this is a no-op
+# and every constant keeps exactly the default declared above.
+# ---------------------------------------------------------------------------
+from . import settings as _settings   # noqa: E402  (intentional late import)
+
+CONFIG_OVERRIDES: "list[_settings.Override]" = []
+try:
+    _base_settings = {s.key: globals()[s.key] for s in _settings.SPECS}
+    _resolved_settings, CONFIG_OVERRIDES = _settings.load(
+        _base_settings, config_dir=DATA_DIR
+    )
+    globals().update(_resolved_settings)
+except _settings.ConfigError as _cfg_exc:
+    # Fail loud on an explicitly-bad override rather than silently run a
+    # security tool on a misconfiguration. A missing file / unset var never
+    # reaches here — those simply leave the defaults in place.
+    raise SystemExit(f"[valkyrie] invalid configuration: {_cfg_exc}")
