@@ -164,7 +164,9 @@ class ProcessCollector:
                  interval: float = 2.0) -> None:
         self._emit = emit
         self._interval = max(0.25, float(interval))
-        self._last: dict = {}
+        # None = no baseline yet (a sentinel, not truthiness) so an empty first
+        # snapshot is still a valid baseline rather than causing a re-seed.
+        self._last: Optional[dict] = None
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
@@ -220,7 +222,7 @@ class ProcessCollector:
         On the very first call it only seeds the baseline (returns 0).
         """
         new = self.snapshot()
-        if not self._last:
+        if self._last is None:
             self._last = new
             return 0
         fresh = diff_snapshots(self._last, new)
