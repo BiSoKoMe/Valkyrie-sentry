@@ -12,7 +12,7 @@ Valkyrie is a bouncer for your internet connection. Every app on your computer c
 
 ## 2. What it protects against
 
-Valkyrie blocks the ways your machine leaks information about you. It stops background apps from silently "phoning home," using a list of **572,000+ known tracker and ad domains** and a firewall list of **12,000+ malicious IP ranges**. When something brand new shows up that isn't on any list yet, behavioral detection catches it by how it acts. It also switches off **16 of Windows' own built-in tracking systems** (telemetry), and — when the optional Unbound resolver is installed — it looks up website addresses privately instead of leaking every site you visit to Google or Cloudflare. Finally, it watches for apps trying to sneak around your DNS protection (DoH bypass attempts) and flags them.
+Valkyrie blocks the ways your machine leaks information about you. It stops background apps from silently "phoning home," using a list of **572,000+ known tracker and ad domains** and a firewall list of **12,000+ malicious IP ranges**. When something brand new shows up that isn't on any list yet, behavioral heuristics can still flag it by the *shape* of the DNS request — an unusually random-looking (high-entropy) hostname, an abnormal burst of lookups from one app, or an abuse-prone TLD. It also switches off **16 of Windows' own built-in tracking systems** (telemetry), and — when the optional Unbound resolver is installed — it looks up website addresses privately instead of leaking every site you visit to Google or Cloudflare. Finally, it watches for apps trying to sneak around your DNS protection (DoH bypass attempts) and flags them.
 
 To be honest about the limits: Valkyrie does **not** hide your physical location from cell towers, it does **not** hide activity from your internet provider (that needs a VPN, which is a planned feature), and it cannot inspect a handful of apps that use certificate pinning — most banking apps, for example — which deliberately refuse any inspection.
 
@@ -81,15 +81,29 @@ The dashboard (at <http://localhost:8090>) is your live window into what Valkyri
 - **MAC address** panel — randomize or restore your Wi-Fi hardware address.
 - **System** panel — Windows telemetry status, file-integrity check, and whether zero-log (RAM-only) mode is on.
 - **System Control** panel — one-click **Restart Valkyrie** or **Stop Protection** buttons.
-- **Security · EDR** link (top-right) — opens the endpoint detection & response console.
+- **Security · EDR** link (top-right) — opens the detection & response console.
+
+> **Private by default.** The dashboard now binds to **loopback (`127.0.0.1`)
+> only**, so its live browsing feed is *not* reachable from other devices on your
+> network. To view it from another device (e.g. a router deployment), start
+> Valkyrie with `--web-host 0.0.0.0`; when you do, off-loopback access requires
+> the control token in `data/control_token.txt`.
 
 ---
 
 ## 6b. Security / EDR console
 
-Beyond blocking, Valkyrie ships a full **endpoint detection & response** layer at
+Beyond blocking, Valkyrie ships a **detection & response** console at
 <http://localhost:8090/edr>. It interprets what Valkyrie already sees and turns it
-into things a defender actually works with:
+into things a defender actually works with.
+
+> **Scope, honestly.** This layer correlates Valkyrie's own **DNS and network
+> telemetry** into incidents and lets you respond to them. It is *not* a
+> kernel-level EDR: it does not (yet) collect process-tree, file, registry, or
+> in-memory telemetry the way a Windows/Linux endpoint sensor would. Think of it
+> as **network-layer detection & response with a SOC-style console** — genuinely
+> useful, and honest about where its visibility begins and ends. Deeper endpoint
+> telemetry (ETW/eBPF) is on the roadmap.
 
 - **Incidents with timelines** — related detections (a repeated beacon, a
   threat-intel-IP callback, a DoH-bypass attempt) are correlated into a single
@@ -101,12 +115,16 @@ into things a defender actually works with:
 - **Response actions** — block a domain, kill a process, or network-isolate the
   endpoint — **dry-run first** (you see the exact effect before anything happens)
   and fully audited.
-- **AI-assisted investigation** — a local analyst writes up every incident with a
-  severity rationale, MITRE ATT&CK techniques, and recommended actions. An
-  optional Claude-assisted narrative is available but **off by default** (it
+- **Automated investigation** — a built-in, fully-local analyst writes up every
+  incident with a severity rationale, MITRE ATT&CK techniques, and recommended
+  actions. This analyst is **deterministic (rule-based), not a machine-learning
+  model** — it runs entirely offline and nothing leaves your machine. An optional
+  Claude-assisted narrative (a real LLM) is available but **off by default** (it
   sends incident details to a third party — opt in only if you want that).
 - **Plugin architecture** — drop a `*.py` file into `data/plugins/` to add your
-  own detections, responders, or enrichers.
+  own detections, responders, or enrichers. (Note: plugins run as ordinary
+  Python with Valkyrie's privileges — only load plugins you trust. Sandboxed
+  plugins are on the roadmap.)
 
 Full details, including the privacy trade-offs and the signed remote-response
 channel for managed fleets, are in **`docs/EDR.md`**.
@@ -126,6 +144,7 @@ python -m valkyrie [options]
 | `--port 53` | DNS listen port (default: `5300`) |
 | `--web` | Enable the web dashboard |
 | `--web-port 8090` | Dashboard port (default: `8080`; the start scripts use `8090`) |
+| `--web-host 0.0.0.0` | Dashboard bind address (default: `127.0.0.1`, loopback-only; use `0.0.0.0` to expose on the LAN — then off-loopback calls require the control token) |
 | `--no-ui` | Disable the terminal display (run headless) |
 | `--zero-log` | RAM-only mode — nothing is written to disk |
 | `--mac-rand` | Randomize your MAC address on reconnect |
