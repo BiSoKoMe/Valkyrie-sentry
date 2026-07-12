@@ -645,5 +645,27 @@ def run_server(host: str = "0.0.0.0", port: int = 8080,
     except ImportError:
         raise ImportError("uvicorn is required for --web.  Run: pip install fastapi uvicorn")
 
+    # uvicorn needs a WebSocket implementation (websockets or wsproto) to serve
+    # the dashboard's live /ws feed. Plain `pip install uvicorn` does NOT include
+    # one, and uvicorn then answers the /ws upgrade with HTTP 404 — the dashboard
+    # loads its initial snapshot and never updates. Detect that and say so loudly
+    # rather than failing silently; uvicorn auto-selects websockets when present.
+    if not _websocket_impl_available():
+        print("[valkyrie] WARNING: no WebSocket library installed "
+              "(websockets/wsproto). The dashboard's live feed (/ws) will return "
+              "HTTP 404 and the page will NOT update in real time. "
+              "Fix: pip install websockets")
+
     app = create_app(ctx)
     uvicorn.run(app, host=host, port=port, log_level="warning", access_log=False)
+
+
+def _websocket_impl_available() -> bool:
+    """True if uvicorn has a WebSocket backend it can use for /ws."""
+    for mod in ("websockets", "wsproto"):
+        try:
+            __import__(mod)
+            return True
+        except ImportError:
+            continue
+    return False
