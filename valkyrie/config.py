@@ -174,13 +174,33 @@ FIREWALL_DOH_IPS = [
 FIREWALL_MAX_AGE_DAYS = 1            # refresh daily
 FIREWALL_IP_PATH      = DATA_DIR / "blocked_ips.txt"
 
-# CIDRs that must never be blocked (local network, loopback, upstream DNS)
+# CIDRs that must never be blocked, no matter what a threat-intel feed claims.
+#
+# Threat feeds are not clean: they occasionally list reserved, documentation, or
+# bogon ranges (RFC 5737 test-nets show up surprisingly often). Firewalling those
+# is at best pointless and at worst actively harmful — blocking 169.254.0.0/16
+# breaks DHCP/APIPA fallback, 100.64.0.0/10 breaks carrier-grade NAT, 224.0.0.0/4
+# breaks multicast (mDNS/SSDP). This set is applied at feed-parse time AND on the
+# cache-read path (see firewall.load_ip_blocklist) so a protected range can never
+# reach the enforcement set, whatever the source.
 FIREWALL_NEVER_BLOCK = [
+    # Private / local (RFC 1918) + loopback + link-local
     "127.0.0.0/8",
     "10.0.0.0/8",
     "172.16.0.0/12",
     "192.168.0.0/16",
-    "169.254.0.0/16",   # link-local
+    "169.254.0.0/16",   # link-local (RFC 3927) — APIPA
+    # Special-use / documentation / bogon ranges that must never be treated as
+    # routable threat destinations (RFC 6890 and friends).
+    "0.0.0.0/8",        # "this network" (RFC 1122)
+    "100.64.0.0/10",    # carrier-grade NAT (RFC 6598)
+    "192.0.0.0/24",     # IETF protocol assignments (RFC 6890)
+    "192.0.2.0/24",     # TEST-NET-1 documentation (RFC 5737)
+    "198.18.0.0/15",    # benchmarking (RFC 2544)
+    "198.51.100.0/24",  # TEST-NET-2 documentation (RFC 5737)
+    "203.0.113.0/24",   # TEST-NET-3 documentation (RFC 5737)
+    "224.0.0.0/4",      # multicast (RFC 5771) — mDNS/SSDP live here
+    "240.0.0.0/4",      # reserved / future use, incl. 255.255.255.255 broadcast
     DNS_UPSTREAM,       # upstream resolver — blocking it breaks forwarding
 ]
 

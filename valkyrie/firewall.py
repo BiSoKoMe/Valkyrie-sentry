@@ -176,10 +176,24 @@ def load_ip_blocklist(console=None, allow_download: bool | None = None) -> set[s
             )
         return set()
     cidrs = set()
+    skipped_protected = 0
     for line in FIREWALL_IP_PATH.read_text(encoding="utf-8").splitlines():
         line = line.strip()
-        if line and not line.startswith("#"):
-            cidrs.add(line)
+        if not line or line.startswith("#"):
+            continue
+        # Defense in depth: never let a protected/bogon range reach the
+        # enforcement set, even from a stale or hand-edited cache written before
+        # FIREWALL_NEVER_BLOCK was expanded. Feed-parse time already filters
+        # these, but the on-disk cache is untrusted input like any other.
+        if _in_never_block(line):
+            skipped_protected += 1
+            continue
+        cidrs.add(line)
+    if console and skipped_protected:
+        console.print(
+            f"[dim]IP blocklist: dropped {skipped_protected} protected/bogon "
+            f"range(s) from cache[/dim]"
+        )
     if console:
         console.print(
             f"[dim]IP blocklist: {len(cidrs):,} ranges from cache "
