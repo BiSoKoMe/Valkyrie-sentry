@@ -268,7 +268,7 @@ SCAN_CACHE_TTL_HOURS:    int   = 24
 # Web dashboard
 # ---------------------------------------------------------------------------
 WEB_HOST = "0.0.0.0"
-WEB_PORT = 8080
+WEB_PORT = 8090        # dashboard + /edr console; matches the daily-use scripts
 
 # ---------------------------------------------------------------------------
 # Windows service
