@@ -29,7 +29,14 @@ from .investigate import Investigator
 from .hunt import ThreatHunter
 from .plugins import PluginContext, PluginRegistry
 from .response import ResponseManager, register_responders
-from .schema import Detection, Incident, TimelineEntry, max_severity
+from .schema import Detection, Incident, TimelineEntry, max_severity, severity_rank
+
+# Map process-telemetry labels onto rough MITRE ATT&CK techniques for display.
+_TELEMETRY_TECHNIQUE = {
+    "lolbin":             "T1059 — Command & Scripting Interpreter",
+    "office_child_shell": "T1566 — Phishing (macro) → shell",
+    "suspicious_path":    "T1204 — User Execution",
+}
 from .store import EdrStore
 
 
@@ -95,6 +102,49 @@ class EdrEngine:
                 self._ingest_detection(det)
             except Exception:
                 pass
+
+    def ingest_telemetry(self, event) -> Optional[str]:
+        """Ingest a normalized TelemetryEvent (dict or object) from a non-DNS
+        collector — e.g. the process collector.
+
+        Flagged / medium-and-above observations become Detections and flow
+        through the same correlation → incident pipeline as DNS detections; plain
+        low/info observations are visibility only and are not escalated (avoids
+        turning every process start into an incident). Returns the incident id
+        when a detection was created, else None.
+        """
+        if not self._running:
+            return None
+        d = event.to_dict() if hasattr(event, "to_dict") else dict(event)
+        severity = str(d.get("severity", "info"))
+        action = str(d.get("action", ""))
+        if severity_rank(severity) < severity_rank("medium") and action != "flagged":
+            return None
+
+        labels = list(d.get("labels") or [])
+        technique = ""
+        for lab in labels:
+            if lab in _TELEMETRY_TECHNIQUE:
+                technique = _TELEMETRY_TECHNIQUE[lab]
+                break
+        entity = str(d.get("actor_path") or d.get("actor_name") or "")
+        title = str(d.get("reason") or
+                    f"{d.get('activity','')} {d.get('actor_name','')}".strip())
+        det = Detection(
+            source=str(d.get("source", "collector")),
+            severity=severity,
+            category=str(d.get("category", "") or "process"),
+            title=title,
+            entity=entity,
+            process_name=str(d.get("actor_name", "")),
+            process_pid=int(d.get("actor_pid", 0) or 0),
+            technique=technique,
+            details={"labels": labels, "target": d.get("target", {}),
+                     "activity": d.get("activity", "")},
+        )
+        # _ingest_detection takes the correlation lock itself — do not wrap.
+        self._ingest_detection(det)
+        return det.incident_id
 
     def _ingest_detection(self, det: Detection) -> None:
         with self._corr_lock:
