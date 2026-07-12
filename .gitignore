@@ -24,6 +24,10 @@ service_stderr.log
 # Tools (downloaded binaries, e.g. nssm.exe)
 tools/
 
+# Rust accelerator build artifacts (the crate's Cargo.lock IS tracked)
+rust/**/target/
+*.whl
+
 # WireGuard / resolver configs (may contain keys)
 *.conf
 wg*.conf

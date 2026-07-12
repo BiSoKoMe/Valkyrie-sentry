@@ -58,6 +58,29 @@ jobs:
       - name: Run unit test suite
         run: python tests/run_tests.py
 
+  accel:
+    name: Native accelerator (Rust) + suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install deps + build the accelerator
+        run: |
+          python -m pip install --upgrade pip maturin
+          python -m pip install -r requirements_modular.txt cryptography httpx
+          (cd rust/valkyrie_accel && maturin build --release)
+          python -m pip install rust/valkyrie_accel/target/wheels/*.whl
+      - name: Run suite with the Rust backend active
+        run: |
+          python -c "from valkyrie import firewall; assert firewall._IPSET_BACKEND=='rust'; print('Rust backend active')"
+          python tests/run_tests.py
+
   lint:
     name: Lint (advisory)
     runs-on: ubuntu-latest

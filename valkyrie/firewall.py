@@ -206,7 +206,7 @@ def load_ip_blocklist(console=None, allow_download: bool | None = None) -> set[s
 # In-process IP lookup (used by is_blocked_ip)
 # ---------------------------------------------------------------------------
 
-class _IPSet:
+class _PyIPSet:
     """Fast membership test for a mixed set of host IPs and CIDRs.
 
     Lookups are a hot path: dns_interceptor screens every allowed answer IP
@@ -271,6 +271,20 @@ class _IPSet:
     def count(self) -> int:
         with self._lock:
             return len(self._hosts) + self._net_count
+
+
+# Select the CIDR-set backend. When the optional native accelerator
+# (``valkyrie_accel``, a Rust/PyO3 extension) is installed we use it; otherwise
+# we fall back to the pure-Python implementation above. The accelerator is a
+# drop-in with identical semantics (pinned by tests/test_rust_accel.py's
+# differential check) and is NEVER a hard dependency — a source or Raspberry-Pi
+# install with no compiled extension simply runs the Python path.
+try:
+    from valkyrie_accel import IpSet as _IPSet   # type: ignore
+    _IPSET_BACKEND = "rust"
+except Exception:
+    _IPSet = _PyIPSet
+    _IPSET_BACKEND = "python"
 
 
 # ---------------------------------------------------------------------------
@@ -507,6 +521,8 @@ class FirewallManager:
 
         all_cidrs = cidrs | set(FIREWALL_DOH_IPS)
         self._ipset.load(all_cidrs)
+        if _IPSET_BACKEND == "rust":
+            self._print("[dim]Firewall: native CIDR accelerator active[/dim]")
 
         doh_ok  = 0
         cidr_ok = 0
