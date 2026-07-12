@@ -27,6 +27,7 @@ from .config import (
     STORE_FLUSH_EVERY,
     STORE_QUEUE_SIZE,
 )
+from .eventbus import EventBus
 
 
 # ---------------------------------------------------------------------------
@@ -90,8 +91,9 @@ class Store:
             target=self._writer_loop, daemon=True, name="store-writer"
         )
         self._lock = threading.Lock()   # for read queries from main thread
-        self._subscribers: list[Callable[[dict], None]] = []
-        self._sub_lock = threading.Lock()
+        # Live-event fan-out (EDR engine, web dashboard) runs over the shared
+        # EventBus primitive instead of a hand-rolled subscriber list.
+        self._bus = EventBus("store")
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -120,15 +122,10 @@ class Store:
 
     def subscribe(self, callback: Callable[[dict], None]) -> None:
         """Register callback(event_dict) called after each committed event."""
-        with self._sub_lock:
-            self._subscribers.append(callback)
+        self._bus.subscribe(callback)
 
     def unsubscribe(self, callback: Callable[[dict], None]) -> None:
-        with self._sub_lock:
-            try:
-                self._subscribers.remove(callback)
-            except ValueError:
-                pass
+        self._bus.unsubscribe(callback)
 
     # ------------------------------------------------------------------
     # Public read API (called from UI thread — uses its own connection)
@@ -408,14 +405,14 @@ class Store:
             evts = list(pending)
             pending.clear()
 
-            with self._sub_lock:
-                subs = list(self._subscribers)
-            if subs:
+            # Fan out committed events to live subscribers over the bus. Skip the
+            # per-event dict construction entirely when nobody is listening.
+            if self._bus.has_subscribers():
                 for e in evts:
                     ts = e.timestamp
                     if "T" in ts:
                         ts = ts[11:19]   # HH:MM:SS
-                    msg = {
+                    self._bus.publish({
                         "type": "event",
                         "event": {
                             "timestamp":    ts,
@@ -427,12 +424,7 @@ class Store:
                             "category":     e.raw_category,
                             "url":          e.url,
                         },
-                    }
-                    for cb in subs:
-                        try:
-                            cb(msg)
-                        except Exception:
-                            pass
+                    })
 
         _now = datetime.utcnow
 
