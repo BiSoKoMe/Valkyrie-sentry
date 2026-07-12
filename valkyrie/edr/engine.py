@@ -241,6 +241,7 @@ class EdrEngine:
         return {
             "plugins": self._registry.list_info(),
             "discovered": self._discovered,
+            "loaded": self._registry.loaded_plugins(),
             "errors": self._registry.errors(),
             "actions": self._responder.available_actions(),
         }

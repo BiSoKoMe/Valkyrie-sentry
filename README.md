@@ -122,9 +122,12 @@ into things a defender actually works with.
   Claude-assisted narrative (a real LLM) is available but **off by default** (it
   sends incident details to a third party — opt in only if you want that).
 - **Plugin architecture** — drop a `*.py` file into `data/plugins/` to add your
-  own detections, responders, or enrichers. (Note: plugins run as ordinary
-  Python with Valkyrie's privileges — only load plugins you trust. Sandboxed
-  plugins are on the roadmap.)
+  own detections, responders, or enrichers. Plugins run as ordinary Python with
+  Valkyrie's privileges, so loading is gated on trust: place an `allowed.sha256`
+  manifest (one approved SHA-256 per line) in the plugin directory and only those
+  exact files load — everything else is skipped (fail-closed). Without a manifest
+  plugins still load, but each is flagged **unverified** and logged. Full
+  sandboxing is on the roadmap.
 
 Full details, including the privacy trade-offs and the signed remote-response
 channel for managed fleets, are in **`docs/EDR.md`**.

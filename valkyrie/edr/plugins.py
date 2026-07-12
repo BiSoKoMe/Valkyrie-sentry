@@ -18,6 +18,7 @@ Everything is stdlib-only.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import threading
 import traceback
@@ -25,6 +26,36 @@ from pathlib import Path
 from typing import Callable, Iterable, Optional
 
 from .schema import Detection
+
+
+# ---------------------------------------------------------------------------
+# Plugin trust helpers (SHA-256 allowlist)
+# ---------------------------------------------------------------------------
+
+def sha256_file(path: Path) -> str:
+    """Return the hex SHA-256 of a file's bytes."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _read_allowlist_file(path: Path) -> set[str]:
+    """Parse an ``allowed.sha256`` manifest: one hex digest per line, ``#``
+    comments and inline ``  # note`` allowed. Case-insensitive."""
+    allowed: set[str] = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        token = line.split("#", 1)[0].strip().lower()
+        if token:
+            allowed.add(token)
+    return allowed
+
+
+def _normalize_allowlist(allowlist: Optional[Iterable[str]]) -> Optional[set[str]]:
+    if allowlist is None:
+        return None
+    return {str(x).strip().lower() for x in allowlist if str(x).strip()}
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +171,10 @@ class PluginRegistry:
         self._responder: list[ResponderPlugin] = []
         self._enrichment: list[EnrichmentPlugin] = []
         self._errors: list[dict] = []
+        # Provenance for every third-party module loaded via discover():
+        # {name, path, sha256, verified}. `verified` is True only when a
+        # SHA-256 allowlist was in force and this module matched it.
+        self._loaded: list[dict] = []
 
     # -- registration --------------------------------------------------
 
@@ -164,6 +199,11 @@ class PluginRegistry:
     def errors(self) -> list[dict]:
         with self._lock:
             return list(self._errors)
+
+    def loaded_plugins(self) -> list[dict]:
+        """Provenance of every third-party module loaded via discover()."""
+        with self._lock:
+            return list(self._loaded)
 
     def _record_error(self, plugin: str, exc: Exception) -> None:
         with self._lock:
@@ -223,24 +263,65 @@ class PluginRegistry:
 
     # -- discovery -----------------------------------------------------
 
-    def discover(self, directory) -> list[str]:
-        """Load ``*.py`` plugin modules from ``directory``.
+    def discover(self, directory,
+                 allowlist: Optional[Iterable[str]] = None) -> list[str]:
+        """Load ``*.py`` plugin modules from ``directory`` behind a trust gate.
 
         Each module may define ``register(registry)``; it is called with this
-        registry so it can add its plugins. Returns the list of module names
-        successfully loaded. Import/registration errors are captured (not
-        raised) so one bad file can't stop the others.
+        registry so it can add its plugins. Returns the module names successfully
+        loaded. Import/registration errors are captured (not raised) so one bad
+        file can't stop the others.
 
-        NOTE: discovered plugins run with the same privileges as Valkyrie.
-        Only point this at a directory you control.
+        **Trust gate.** Discovered plugins execute with Valkyrie's privileges, so
+        loading is gated on a SHA-256 allowlist:
+
+          * ``allowlist`` — an explicit iterable of approved hex digests, or
+          * an ``allowed.sha256`` manifest in ``directory`` (one digest per line)
+            used when ``allowlist`` is None.
+
+        When an allowlist is in force, only modules whose SHA-256 matches are
+        loaded; every other ``*.py`` is skipped and recorded (fail closed —
+        an empty allowlist loads nothing). When **no** allowlist is configured,
+        modules still load (preserving existing behavior) but each is flagged
+        ``verified=False`` and a single warning is recorded, so unverified code
+        execution is explicit and auditable rather than silent.
+
+        Every loaded module's name, path, SHA-256, and verification state is
+        recorded in :meth:`loaded_plugins`.
         """
         loaded: list[str] = []
         d = Path(directory)
         if not d.is_dir():
             return loaded
+
+        # Resolve the allowlist: explicit arg wins; else an in-dir manifest.
+        allowed = _normalize_allowlist(allowlist)
+        if allowed is None:
+            manifest = d / "allowed.sha256"
+            if manifest.exists():
+                try:
+                    allowed = _read_allowlist_file(manifest)
+                except OSError as exc:
+                    self._record_error("allowed.sha256", exc)
+        enforcing = allowed is not None
+        unverified_loaded = 0
+
         for path in sorted(d.glob("*.py")):
             if path.name.startswith("_"):
                 continue
+            try:
+                digest = sha256_file(path)
+            except OSError as exc:
+                self._record_error(path.name, exc)
+                continue
+
+            if enforcing and digest not in allowed:
+                self._record_error(
+                    path.name,
+                    RuntimeError(
+                        f"not in allowlist (sha256={digest[:12]}…) — skipped"))
+                continue
+
             mod_name = f"valkyrie_plugin_{path.stem}"
             try:
                 spec = importlib.util.spec_from_file_location(mod_name, path)
@@ -252,9 +333,26 @@ class PluginRegistry:
                 if callable(reg):
                     reg(self)
                     loaded.append(path.stem)
+                    with self._lock:
+                        self._loaded.append({
+                            "name": path.stem,
+                            "path": str(path),
+                            "sha256": digest,
+                            "verified": enforcing,
+                        })
+                    if not enforcing:
+                        unverified_loaded += 1
                 else:
                     self._record_error(path.name,
                                        RuntimeError("no register(registry) function"))
             except Exception as exc:          # noqa: BLE001
                 self._record_error(path.name, exc)
+
+        if unverified_loaded:
+            self._record_error(
+                "plugin-trust",
+                RuntimeError(
+                    f"{unverified_loaded} plugin(s) loaded WITHOUT hash "
+                    f"verification — add an allowed.sha256 manifest in "
+                    f"{d} to lock this down"))
         return loaded
