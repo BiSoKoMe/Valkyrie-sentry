@@ -68,6 +68,18 @@ def main() -> int:
         after = len(edr.list_incidents())
         _check("benign ingest creates no incident", res is None and after == before)
 
+        print("\n[4] A flagged network connection also correlates")
+        from valkyrie.network_telemetry import ConnInfo
+        net_ev = ConnInfo(pid=777, name="beacon.exe",
+                          raddr_ip="185.220.101.9", raddr_port=443).to_event(blocked=True)
+        _check("network event is flagged/high",
+               net_ev.action == T.ACT_FLAGGED and net_ev.severity == T.SEV_HIGH)
+        before2 = len(edr.list_incidents())
+        nid = edr.ingest_telemetry(net_ev)
+        _check("threat-intel connection -> incident", bool(nid))
+        _check("a new incident was created",
+               len(edr.list_incidents()) == before2 + 1)
+
         edr.stop()
         store.stop()
 

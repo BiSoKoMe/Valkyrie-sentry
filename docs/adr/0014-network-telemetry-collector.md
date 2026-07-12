@@ -1,8 +1,16 @@
 # ADR 0014 — Network connection telemetry collector
 
-- **Status:** Accepted (module + tests; live wiring deferred)
+- **Status:** Accepted (module + tests + live wiring)
 - **Phase:** 3 (real endpoint telemetry)
 - **Date:** 2026-07-12
+
+> **Update (same day):** now wired into the live pipeline. Under `--endpoint`,
+> `__main__` starts the `NetworkCollector` with `emit → edr.ingest_telemetry`
+> and `ip_reputation = firewall.is_blocked_ip`, alongside the process collector;
+> `AppContext` gains a `network_collector` service. `test_endpoint_integration`
+> now also asserts a flagged threat-intel connection becomes an incident, and a
+> live outbound connection was verified captured. So the "deferred wiring" noted
+> below is done.
 
 ## Context
 
