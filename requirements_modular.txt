@@ -7,6 +7,11 @@ pyyaml>=6.0
 # Web dashboard (used by start_all.bat / start_valkyrie.bat daily flow)
 fastapi>=0.110.0
 uvicorn>=0.29.0
+# WebSocket implementation uvicorn needs to serve the dashboard's live /ws feed.
+# WITHOUT this, uvicorn answers the /ws upgrade with HTTP 404, the dashboard's
+# only live channel is dead, and the page shows its initial snapshot forever
+# (looks like "the dashboard never updates"). Equivalent: install uvicorn[standard].
+websockets>=12.0
 
 # Optional - domain age scoring (WHOIS)
 # python-whois>=0.8.0

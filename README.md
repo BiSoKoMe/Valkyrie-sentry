@@ -154,6 +154,7 @@ python -m valkyrie [options]
 | `--tls` | Enable HTTPS/TLS inspection (needs the optional `mitmproxy` package) |
 | `--kill-telemetry` | Scan and disable Windows telemetry |
 | `--no-edr` | Disable the EDR layer (incidents, hunting, response) |
+| `--endpoint` | Enable endpoint telemetry — observe process starts (LOLBins, Office-spawns-shell, temp-dir execution) **and** outbound connections to threat-intel IPs (catches hard-coded-IP C2 that skips DNS), feeding both into the EDR layer |
 | `--incidents` | Print current EDR incidents and exit |
 | `--hunt NAME` | Run a saved threat hunt and exit (`--hunt list` to see them) |
 | `--edr-plugin-dir DIR` | Load third-party EDR plugins from a directory |

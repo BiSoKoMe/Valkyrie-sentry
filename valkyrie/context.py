@@ -40,6 +40,8 @@ class AppContext:
     mac_randomizer: Optional[object] = None   # valkyrie.mac_randomizer.MacRandomizer
     zero_log:       Optional[object] = None   # valkyrie.zero_log.ZeroLogMode
     self_heal:      Optional[object] = None   # valkyrie.intelligence.SelfHealing
+    process_collector: Optional[object] = None  # valkyrie.process_telemetry.ProcessCollector
+    network_collector: Optional[object] = None  # valkyrie.network_telemetry.NetworkCollector
 
     start_time: float = 0.0
     dns_port:   int   = 0     # actual DNS listen port (for dashboard display)
@@ -48,7 +50,8 @@ class AppContext:
     # Names of the optional service fields, in a stable order for introspection.
     _SERVICES = (
         "store", "firewall", "blocklist", "intelligence", "edr",
-        "mac_randomizer", "zero_log", "self_heal",
+        "mac_randomizer", "zero_log", "self_heal", "process_collector",
+        "network_collector",
     )
 
     def components(self) -> dict[str, bool]:

@@ -261,6 +261,10 @@ def main() -> None:
     parser.add_argument("--edr-plugin-dir", type=str, default="",
                         help="Directory to load third-party EDR plugins from "
                              "(detection/responder/enrichment). Opt-in; trusted code only")
+    parser.add_argument("--endpoint", action="store_true",
+                        help="Enable endpoint process telemetry: observe process "
+                             "starts and feed behavioral detections (LOLBins, "
+                             "Office-spawns-shell, temp-dir execution) into the EDR layer")
     parser.add_argument("--incidents", action="store_true",
                         help="Print current EDR incidents and exit")
     parser.add_argument("--hunt", type=str, default="", metavar="HUNT",
@@ -822,6 +826,8 @@ def main() -> None:
     #     incidents. Stays entirely local (state lives in the same DB).
     # ------------------------------------------------------------------
     edr_engine = None
+    process_collector = None
+    network_collector = None
     from .config import EDR_MODE, EDR_CORRELATION_WINDOW, EDR_PLUGIN_DIR
     if EDR_MODE and not args.no_edr:
         _t = time.monotonic()
@@ -840,6 +846,37 @@ def main() -> None:
         _pi = edr_engine.plugins()
         _tick(f"EDR active ({len(_pi['plugins'])} plugins, "
               f"{len(_pi['actions'])} response actions)", _t)
+
+        # Endpoint process telemetry (opt-in via --endpoint): observe process
+        # starts and feed behavioral detections into the same correlation engine.
+        if args.endpoint:
+            _tp = time.monotonic()
+            from .process_telemetry import ProcessCollector
+            process_collector = ProcessCollector(
+                emit=lambda ev: edr_engine.ingest_telemetry(ev))
+            if process_collector.available():
+                process_collector.start()
+                _tick("Endpoint telemetry active (process collector)", _tp)
+            else:
+                process_collector = None
+                console.print("[yellow]Endpoint telemetry unavailable "
+                              "(psutil not installed)[/yellow]")
+
+            # Network connection telemetry: flag outbound connections to
+            # threat-intel IPs — the hard-coded-IP C2 case DNS never sees (and
+            # that the Windows in-process firewall does not block). Reuses the
+            # firewall's is_blocked_ip reputation set.
+            _tn = time.monotonic()
+            from .network_telemetry import NetworkCollector
+            network_collector = NetworkCollector(
+                emit=lambda ev: edr_engine.ingest_telemetry(ev),
+                ip_reputation=(firewall.is_blocked_ip if firewall is not None
+                               else None))
+            if network_collector.available():
+                network_collector.start()
+                _tick("Endpoint telemetry active (network collector)", _tn)
+            else:
+                network_collector = None
     elif args.debug:
         console.print("[yellow]EDR layer disabled (--no-edr)[/yellow]")
 
@@ -865,6 +902,8 @@ def main() -> None:
             web_port       = args.web_port,
             intelligence   = intelligence,
             edr            = edr_engine,
+            process_collector = process_collector,
+            network_collector = network_collector,
         )
         if args.web_host not in ("127.0.0.1", "::1", "localhost"):
             console.print(

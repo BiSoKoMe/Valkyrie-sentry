@@ -111,14 +111,28 @@ async def _safe_json(request) -> dict:
         return {}
 
 
+def _utc_iso(ts: str) -> str:
+    """Return an ISO-8601 timestamp explicitly marked as UTC.
+
+    Stored event timestamps are naive UTC (``datetime.utcnow().isoformat()``)
+    with no zone suffix. The browser parses a suffix-less ISO date-time as
+    *local* time, which is exactly what produced the "times are N hours off"
+    bug. Appending ``Z`` marks the value as UTC so the dashboard can render it
+    in the viewer's own timezone. Values that already carry a zone/offset are
+    returned unchanged.
+    """
+    if not ts:
+        return ts
+    if ts.endswith("Z") or "+" in ts[10:]:
+        return ts
+    return ts + "Z"
+
+
 def _fmt_events(raw: list) -> list:
     out = []
     for r in raw:
-        ts = r.get("timestamp", "")
-        if "T" in ts:
-            ts = ts[11:19]
         out.append({
-            "timestamp":    ts,
+            "timestamp":    _utc_iso(r.get("timestamp", "")),
             "domain":       r.get("domain", ""),
             "decision":     r.get("decision", ""),
             "process_name": r.get("process_name", ""),
@@ -645,5 +659,27 @@ def run_server(host: str = "0.0.0.0", port: int = 8080,
     except ImportError:
         raise ImportError("uvicorn is required for --web.  Run: pip install fastapi uvicorn")
 
+    # uvicorn needs a WebSocket implementation (websockets or wsproto) to serve
+    # the dashboard's live /ws feed. Plain `pip install uvicorn` does NOT include
+    # one, and uvicorn then answers the /ws upgrade with HTTP 404 — the dashboard
+    # loads its initial snapshot and never updates. Detect that and say so loudly
+    # rather than failing silently; uvicorn auto-selects websockets when present.
+    if not _websocket_impl_available():
+        print("[valkyrie] WARNING: no WebSocket library installed "
+              "(websockets/wsproto). The dashboard's live feed (/ws) will return "
+              "HTTP 404 and the page will NOT update in real time. "
+              "Fix: pip install websockets")
+
     app = create_app(ctx)
     uvicorn.run(app, host=host, port=port, log_level="warning", access_log=False)
+
+
+def _websocket_impl_available() -> bool:
+    """True if uvicorn has a WebSocket backend it can use for /ws."""
+    for mod in ("websockets", "wsproto"):
+        try:
+            __import__(mod)
+            return True
+        except ImportError:
+            continue
+    return False
