@@ -111,14 +111,28 @@ async def _safe_json(request) -> dict:
         return {}
 
 
+def _utc_iso(ts: str) -> str:
+    """Return an ISO-8601 timestamp explicitly marked as UTC.
+
+    Stored event timestamps are naive UTC (``datetime.utcnow().isoformat()``)
+    with no zone suffix. The browser parses a suffix-less ISO date-time as
+    *local* time, which is exactly what produced the "times are N hours off"
+    bug. Appending ``Z`` marks the value as UTC so the dashboard can render it
+    in the viewer's own timezone. Values that already carry a zone/offset are
+    returned unchanged.
+    """
+    if not ts:
+        return ts
+    if ts.endswith("Z") or "+" in ts[10:]:
+        return ts
+    return ts + "Z"
+
+
 def _fmt_events(raw: list) -> list:
     out = []
     for r in raw:
-        ts = r.get("timestamp", "")
-        if "T" in ts:
-            ts = ts[11:19]
         out.append({
-            "timestamp":    ts,
+            "timestamp":    _utc_iso(r.get("timestamp", "")),
             "domain":       r.get("domain", ""),
             "decision":     r.get("decision", ""),
             "process_name": r.get("process_name", ""),

@@ -409,9 +409,14 @@ class Store:
             # per-event dict construction entirely when nobody is listening.
             if self._bus.has_subscribers():
                 for e in evts:
+                    # Ship the full UTC timestamp (explicitly zone-marked) so the
+                    # dashboard renders it in the viewer's local timezone. Stored
+                    # timestamps are naive UTC; a bare ISO string would be parsed
+                    # as local time by the browser (the "times are N hours off"
+                    # bug). The 'Z' suffix marks it UTC.
                     ts = e.timestamp
-                    if "T" in ts:
-                        ts = ts[11:19]   # HH:MM:SS
+                    if ts and not (ts.endswith("Z") or "+" in ts[10:]):
+                        ts = ts + "Z"
                     self._bus.publish({
                         "type": "event",
                         "event": {
