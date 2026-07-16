@@ -624,6 +624,14 @@
 
     <div class="header-spacer"></div>
 
+    <a href="/edr" title="Endpoint Detection &amp; Response console"
+       style="font-size:13px;color:rgba(255,255,255,.55);text-decoration:none;
+              padding:6px 13px;border:1px solid rgba(255,255,255,.12);
+              border-radius:8px;margin-right:14px;transition:.15s"
+       onmouseover="this.style.color='#fff';this.style.borderColor='rgba(255,255,255,.28)'"
+       onmouseout="this.style.color='rgba(255,255,255,.55)';this.style.borderColor='rgba(255,255,255,.12)'">
+       Security · EDR →</a>
+
     <time class="live-clock" id="live-clock">--:--:--</time>
 
     <div class="ws-badge">
@@ -812,6 +820,7 @@
           </div>
           <button class="action-btn" id="mac-rand-btn">Randomise Now</button>
           <button class="action-btn" id="mac-restore-btn">Restore Original</button>
+          <p class="ctl-note" id="mac-note"></p>
         </div>
       </div>
 
@@ -985,8 +994,10 @@ function dispatch(msg) {
     case 'init':
       renderStats(msg.stats);
       renderChart(msg.stats.top_blocked || []);
-      // seed events in chronological order (oldest first) so newest ends at top
-      (msg.events || []).slice().reverse().forEach(prependEvent);
+      // loadInitial() already seeded the feed from /api/events; only fall back to
+      // the WS init payload if that HTTP fetch hasn't populated anything yet.
+      // (Prevents the newest events showing twice — once per source.)
+      if (isBodyEmpty()) renderEvents(msg.events || []);
       break;
     case 'event':
       prependEvent(msg.event);
@@ -1079,7 +1090,7 @@ function makeRow(evt) {
   const row = document.createElement('tr');
   row.className = 'event-row' + (isHttps ? ' event-https' : '');
   row.innerHTML =
-    `<td><span class="cell-time">${x(evt.timestamp)}</span></td>` +
+    `<td><span class="cell-time">${x(fmtTime(evt.timestamp))}</span></td>` +
     `<td>${badge(evt.decision)}</td>` +
     `<td><span class="cell-domain"${domainTitle}>${lock}${x(evt.domain)}</span></td>` +
     `<td><span class="${procCls}">${x(evt.process_name || '')}</span></td>` +
@@ -1108,6 +1119,21 @@ function trimEvents() {
   setTimeout(() => { if (oldest.parentNode) oldest.remove(); }, 220);
 }
 
+// Replace the whole feed from an authoritative newest-first list. Used for the
+// initial paint and for the HTTP polling fallback (when the live WebSocket is
+// unavailable), so new activity still appears instead of the page freezing on
+// its first snapshot. Live WS deltas keep using prependEvent for the animation.
+function isBodyEmpty() {
+  return $body.querySelectorAll('.event-row').length === 0;
+}
+
+function renderEvents(events) {
+  const list = (events || []).slice(0, MAX_EVENTS);   // API returns newest-first
+  $body.innerHTML = list.map(evt => makeRow(evt).outerHTML).join('');
+  eventCount = list.length;
+  $evCount.textContent = `${eventCount.toLocaleString()} events`;
+}
+
 // ── DoH Alerts ────────────────────────────────────────────────────────────
 
 function addDohAlert(evt) {
@@ -1118,7 +1144,7 @@ function addDohAlert(evt) {
   item.className = 'doh-item entering';
   item.innerHTML =
     `<div class="doh-item-proc">${x(evt.process_name || 'unknown')}</div>` +
-    `<div class="doh-item-detail">${x(evt.domain)} &middot; ${x(evt.timestamp)}</div>`;
+    `<div class="doh-item-detail">${x(evt.domain)} &middot; ${x(fmtTime(evt.timestamp))}</div>`;
   $dohList.prepend(item);
   dohCount++;
 
@@ -1178,6 +1204,23 @@ function x(s) {
     .replace(/"/g, '&quot;');
 }
 
+// Render a server timestamp (UTC ISO, e.g. "2026-07-13T04:30:00.123Z") in the
+// viewer's LOCAL time. The backend stores UTC and now ships a zone-marked ISO
+// string; formatting here means the feed matches the wall-clock/header clock
+// instead of being hours off. Falls back gracefully for already-short or
+// unparseable values so an older backend still renders something sane.
+function fmtTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) {
+    const s = String(ts);
+    return (s.includes('T') && s.length >= 19) ? s.slice(11, 19) : s;
+  }
+  return d.toLocaleTimeString('en-GB', {
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+  });
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────
 
 async function loadInitial() {
@@ -1192,12 +1235,43 @@ async function loadInitial() {
       renderChart(stats.top_blocked || []);
     }
     if (eRes.ok) {
-      const events = await eRes.json();
-      // API returns newest-first; reverse so prependEvent builds the list correctly
-      events.slice().reverse().forEach(prependEvent);
+      renderEvents(await eRes.json());   // API returns newest-first
     }
   } catch (_) {
     // Server not ready yet — WS init payload will fill the data once connected
+  }
+}
+
+// ── Polling fallback ────────────────────────────────────────────────────────
+// The live WebSocket is the primary channel, but if it is unavailable for ANY
+// reason (no WS backend on the server, a proxy that drops upgrades, a transient
+// disconnect) the page would otherwise sit frozen on its first snapshot and new
+// sites/apps would never appear. While the socket is not OPEN, poll the REST
+// API so the feed keeps updating. A lightweight signature avoids re-rendering
+// (and re-animating) when nothing has changed.
+let lastFeedSig = '';
+
+function feedSignature(stats, events) {
+  const head = events[0] ? (events[0].timestamp + '|' + events[0].domain) : '';
+  return `${events.length}|${head}|${stats ? stats.total_24h : ''}`;
+}
+
+async function pollFallback() {
+  if (ws && ws.readyState === WebSocket.OPEN) return;   // WS is handling updates
+  try {
+    const [sRes, eRes] = await Promise.all([
+      fetch('/api/stats'),
+      fetch('/api/events'),
+    ]);
+    const stats  = sRes.ok ? await sRes.json() : null;
+    const events = eRes.ok ? await eRes.json() : [];
+    const sig = feedSignature(stats, events);
+    if (sig === lastFeedSig) return;   // nothing new — skip the reflow
+    lastFeedSig = sig;
+    if (stats) { renderStats(stats); renderChart(stats.top_blocked || []); }
+    if (eRes.ok) renderEvents(events);
+  } catch (_) {
+    // Server unreachable — the WS onclose handler already shows "Reconnecting…"
   }
 }
 
@@ -1260,24 +1334,37 @@ async function loadMacStatus() {
 function wireMacButtons() {
   const randBtn    = document.getElementById('mac-rand-btn');
   const restoreBtn = document.getElementById('mac-restore-btn');
+  const note       = document.getElementById('mac-note');
   if (randBtn) {
     randBtn.addEventListener('click', async () => {
-      randBtn.disabled = true;
+      randBtn.disabled = restoreBtn.disabled = true;
+      if (note) note.textContent = 'Randomising...';
       try {
-        await fetch('/api/mac/randomize', { method: 'POST' });
+        const r = await fetch('/api/mac/randomize', { method: 'POST' });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Randomisation failed');
+        if (note) note.textContent = `MAC randomised: ${d.new_mac}`;
         await loadMacStatus();
-      } catch (_) {}
-      randBtn.disabled = false;
+      } catch (err) {
+        if (note) note.textContent = err.message || 'Randomisation failed.';
+      }
+      randBtn.disabled = restoreBtn.disabled = false;
     });
   }
   if (restoreBtn) {
     restoreBtn.addEventListener('click', async () => {
-      restoreBtn.disabled = true;
+      randBtn.disabled = restoreBtn.disabled = true;
+      if (note) note.textContent = 'Restoring...';
       try {
-        await fetch('/api/mac/restore', { method: 'POST' });
+        const r = await fetch('/api/mac/restore', { method: 'POST' });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Restore failed');
+        if (note) note.textContent = `MAC restored: ${d.restored_mac}`;
         await loadMacStatus();
-      } catch (_) {}
-      restoreBtn.disabled = false;
+      } catch (err) {
+        if (note) note.textContent = err.message || 'Restore failed.';
+      }
+      randBtn.disabled = restoreBtn.disabled = false;
     });
   }
 }
@@ -1293,7 +1380,11 @@ async function loadVpnStatus() {
     const ks = document.getElementById('vpn-ks');
     if (h1) h1.textContent = data.hop1_conf_exists ? 'configured' : 'not set';
     if (h2) h2.textContent = data.hop2_conf_exists ? 'configured' : 'not set';
-    if (ks) ks.textContent = 'ACTIVE';
+    // kill_switch_configured only reflects that the PostUp/PreDown iptables
+    // rule is present in the generated config files on disk — it is NOT a
+    // live check that a tunnel is up or that the rule is loaded into the
+    // kernel, which this dashboard cannot verify remotely.
+    if (ks) ks.textContent = data.kill_switch_configured ? 'configured (not verified live)' : 'not configured';
   } catch (_) {}
 }
 
@@ -1484,6 +1575,8 @@ document.addEventListener('DOMContentLoaded', () => {
   wireSystemControl();
   wireMeetingMode();
   refreshMeetingHealth();
+  // Keep the feed live even when the WebSocket is down (see pollFallback).
+  setInterval(pollFallback, 5000);
   // Refresh MAC/zero-log/intelligence status every 30s; heartbeat + meeting every 3s
   setInterval(() => { loadMacStatus(); loadZeroLogStatus(); loadIntelligenceStatus(); }, 30000);
   setInterval(refreshMeetingHealth, 3000);

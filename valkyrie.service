@@ -14,3 +14,14 @@ Environment="PYTHONUNBUFFERED=1"
 
 [Install]
 WantedBy=multi-user.target
+
+# taskkill /F /IM python.exe 2>$null; taskkill /F /IM python3.13.exe 2>$null; Set-DnsClientServerAddress -InterfaceAlias "Ethernet" -ResetServerAddresses; Set-DnsClientServerAddress -InterfaceAlias "Wi-Fi" -ResetServerAddresses; Set-DnsClientServerAddress -InterfaceAlias "Ethernet 2" -ResetServerAddresses; ipconfig /flushdns; netsh advfirewall firewall delete rule name="Valkyrie DNS Inbound UDP 53"; netsh advfirewall firewall delete rule name="Valkyrie DNS Outbound UDP"; netsh advfirewall firewall delete rule name="Valkyrie DNS Outbound TCP"; netsh advfirewall firewall delete rule name="Valkyrie53"; netsh advfirewall firewall delete rule name="Valkyrie DNS"; netsh advfirewall firewall delete rule name="Valkyrie_*"; ipconfig /release; ipconfig /renew; nslookup google.com
+
+
+cd C:\Users\badam\OneDrive\Desktop\Valkyrie
+python -m valkyrie --web --no-ui --web-port 8090
+
+python -m valkyrie --port 5300 --web --no-ui --web-port 8090 --debug
+
+Set-DnsClientServerAddress -InterfaceAlias "Wi-Fi" -ResetServerAddresses
+

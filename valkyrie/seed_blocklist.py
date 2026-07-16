@@ -233,6 +233,30 @@ SEED_DOMAINS: frozenset[str] = frozenset({
     "webgains.com", "profitshare.ro", "2parale.ro", "dwin1.com",
     "belboon.com", "tradedoubler.com", "tradetracker.net", "daisycon.io",
     "kwanko.com", "effiliation.com", "timeone.io", "netaffiliation.com",
+
+    # ── Bucket-A widening (SIGNAL_DESIGN_REPORT.md) ─────────────────────
+    # Dedicated tracker/ad/analytics registrable domains confirmed by
+    # EasyPrivacy and previously novel to Valkyrie. Each is a pure-purpose
+    # tracking domain (not a mixed-use site), so listing the eTLD+1 blocks all
+    # its subdomains without breaking anything users visit — same curation
+    # rules as the rest of this file. Adding these closes the Bucket-A misses
+    # with no new detection logic and no false-positive risk.
+    #   media.net             — contextual-ad network (covers cs.media.net)
+    #   sharethis.com         — share-widget tracker (covers l./seg./count-server.)
+    #   taboolasyndication.com — Taboola ad syndication
+    #   segmentapis.com       — Segment/Twilio CDP ingest API
+    #   browser-intake-datadoghq.com — Datadog RUM ingest (dedicated, not the app)
+    #   posthog.com / plausible.io   — product-analytics vendors (cf. mixpanel/segment above)
+    #   fingerprint.com       — FingerprintJS device fingerprinting
+    #   brandmetrics.com / adalytics.io — ad measurement / analytics
+    # NOTE: ceros.com was classified Bucket-A but is HELD BACK — Ceros serves
+    # user-facing embedded interactive content, so blocking its eTLD+1 could
+    # break real page content (violates curation rule #3). It needs an exact
+    # tracker-host entry, not an eTLD+1 block; left out pending that curation.
+    "media.net", "sharethis.com", "taboolasyndication.com",
+    "segmentapis.com", "browser-intake-datadoghq.com",
+    "posthog.com", "plausible.io", "fingerprint.com",
+    "brandmetrics.com", "adalytics.io",
 })
 
 

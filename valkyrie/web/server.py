@@ -30,6 +30,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from ..config import DATA_DIR
+from ..context import AppContext
 
 _WEB_DIR = Path(__file__).parent
 _PROJECT_ROOT = _WEB_DIR.parent.parent   # .../valkyrie/web -> .../valkyrie -> repo root
@@ -49,21 +50,11 @@ except ImportError:
 # App state (populated by __main__.py before starting the server)
 # ---------------------------------------------------------------------------
 
-class _AppState:
-    store          = None      # valkyrie.store.Store
-    firewall       = None      # valkyrie.firewall.FirewallManager
-    blocklist      = None      # valkyrie.blocklist.BlocklistManager
-    mac_randomizer = None      # valkyrie.mac_randomizer.MacRandomizer (optional)
-    zero_log       = None      # valkyrie.zero_log.ZeroLogMode (optional)
-    heartbeat      = None      # valkyrie.self_test.HeartbeatMonitor (optional)
-    intelligence   = None      # valkyrie.intelligence.Intelligence (optional)
-    self_heal      = None      # valkyrie.intelligence.SelfHealing (optional)
-    start_time: float = 0.0
-    dns_port: int  = 0         # actual DNS listen port (for dashboard display)
-    web_port: int  = 0         # actual web dashboard port
-
-
-state = _AppState()
+# The dashboard reads its services from an AppContext. `__main__` (the
+# composition root) builds one, wires the services in, and injects it via
+# create_app(ctx=...)/run_server(ctx=...). This module-level default keeps the
+# server importable and testable on its own (tests set fields on it directly).
+state = AppContext()
 
 # asyncio event loop captured inside lifespan — used to bridge sync → async
 _loop: Optional[asyncio.AbstractEventLoop] = None
@@ -111,14 +102,37 @@ manager = _ConnectionManager()
 # Helpers
 # ---------------------------------------------------------------------------
 
+async def _safe_json(request) -> dict:
+    """Parse a JSON request body into a dict, tolerating empty/bad bodies."""
+    try:
+        data = await request.json()
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _utc_iso(ts: str) -> str:
+    """Return an ISO-8601 timestamp explicitly marked as UTC.
+
+    Stored event timestamps are naive UTC (``datetime.utcnow().isoformat()``)
+    with no zone suffix. The browser parses a suffix-less ISO date-time as
+    *local* time, which is exactly what produced the "times are N hours off"
+    bug. Appending ``Z`` marks the value as UTC so the dashboard can render it
+    in the viewer's own timezone. Values that already carry a zone/offset are
+    returned unchanged.
+    """
+    if not ts:
+        return ts
+    if ts.endswith("Z") or "+" in ts[10:]:
+        return ts
+    return ts + "Z"
+
+
 def _fmt_events(raw: list) -> list:
     out = []
     for r in raw:
-        ts = r.get("timestamp", "")
-        if "T" in ts:
-            ts = ts[11:19]
         out.append({
-            "timestamp":    ts,
+            "timestamp":    _utc_iso(r.get("timestamp", "")),
             "domain":       r.get("domain", ""),
             "decision":     r.get("decision", ""),
             "process_name": r.get("process_name", ""),
@@ -239,6 +253,22 @@ def _control_guard(request):
     return None
 
 
+def _edr_guard(request):
+    """Gate a state-changing EDR endpoint (respond / status / investigate).
+
+    Same defence-in-depth as the system-control guard — loopback peer, local
+    Origin, and the per-process control token — but cross-platform, since EDR
+    actions (isolate host, kill process, block domain) are not Windows-only.
+    """
+    if not _peer_is_local(request):
+        return JSONResponse({"error": "forbidden: EDR actions are loopback-only"}, status_code=403)
+    if not _origin_is_local(request):
+        return JSONResponse({"error": "forbidden: cross-origin EDR action blocked"}, status_code=403)
+    if not _token_ok(request):
+        return JSONResponse({"error": "forbidden: missing or invalid control token"}, status_code=403)
+    return None
+
+
 def _run_detached_ps(ps_command: str) -> None:
     """Launch a detached PowerShell command that outlives this process.
 
@@ -259,13 +289,33 @@ def _run_detached_ps(ps_command: str) -> None:
     )
 
 
+def _get_mac_randomizer():
+    """Return the shared MacRandomizer, creating one on first use.
+
+    --mac-rand at startup only controls the auto-randomize-on-reconnect
+    monitor thread; the dashboard's manual Randomise/Restore buttons must
+    work regardless of whether that flag was passed.
+    """
+    if state.mac_randomizer is None:
+        from ..mac_randomizer import MacRandomizer
+        state.mac_randomizer = MacRandomizer(store=state.store)
+    return state.mac_randomizer
+
+
 # ---------------------------------------------------------------------------
 # FastAPI app factory
 # ---------------------------------------------------------------------------
 
-def create_app():
+def create_app(ctx: Optional[AppContext] = None):
     if not _FASTAPI_OK:
         raise ImportError("fastapi is required for --web.  Run: pip install fastapi uvicorn")
+
+    # Dependency injection: when the composition root passes a context, adopt it
+    # as the module-global the routes read. Called with no ctx (e.g. in tests),
+    # the existing module-global `state` is used unchanged.
+    if ctx is not None:
+        global state
+        state = ctx
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI):
@@ -274,16 +324,41 @@ def create_app():
         _loop = asyncio.get_running_loop()
         if state.store is not None:
             state.store.subscribe(manager.broadcast_sync)
+        # Stream EDR incidents to dashboards over the same WebSocket.
+        if state.edr is not None:
+            state.edr.subscribe(manager.broadcast_sync)
         yield
         # Shutdown: unregister subscriber
         if state.store is not None:
             state.store.unsubscribe(manager.broadcast_sync)
+        if state.edr is not None:
+            state.edr.unsubscribe(manager.broadcast_sync)
 
     app = FastAPI(title="Valkyrie Dashboard", lifespan=_lifespan,
                   docs_url=None, redoc_url=None)
     # No CORSMiddleware — Starlette's CORS middleware blocks WebSocket upgrades
     # on some versions. The dashboard is served from the same origin, so CORS
     # is unnecessary and the middleware would break the /ws endpoint.
+
+    @app.middleware("http")
+    async def _offloopback_api_guard(request, call_next):
+        # The dashboard's data endpoints expose live DNS/browsing history and
+        # system status. When the server is bound off-loopback (the explicit
+        # --web-host 0.0.0.0 opt-in for router/LAN viewing), every /api/* call
+        # from a non-loopback peer must present the control token. Loopback
+        # callers — the local dashboard on the same machine — are unaffected, so
+        # the default single-user experience is unchanged. State-changing
+        # control/EDR POSTs keep their own stricter loopback+origin+token guards
+        # layered on top of this.
+        path = request.url.path
+        if (path.startswith("/api/")
+                and not _peer_is_local(request)
+                and not _token_ok(request)):
+            return JSONResponse(
+                {"error": "forbidden: off-loopback API access requires the control token"},
+                status_code=403,
+            )
+        return await call_next(request)
 
     # ── Routes ──────────────────────────────────────────────────────────
 
@@ -366,22 +441,29 @@ def create_app():
 
     @app.get("/api/mac/status")
     async def mac_status():
-        if state.mac_randomizer is None:
-            return {"enabled": False, "interfaces": {}}
-        return {"enabled": True, "interfaces": state.mac_randomizer.status()}
+        mac = _get_mac_randomizer()
+        return {"enabled": True, "interfaces": mac.status()}
 
     @app.post("/api/mac/randomize")
     async def mac_randomize():
-        if state.mac_randomizer is None:
-            return JSONResponse({"error": "MAC randomizer not running (start with --mac-rand)"}, status_code=503)
-        new_mac = state.mac_randomizer.randomize()
+        mac = _get_mac_randomizer()
+        new_mac = mac.randomize()
+        if not new_mac:
+            return JSONResponse(
+                {"error": mac.last_error or "MAC randomisation failed"},
+                status_code=500,
+            )
         return {"new_mac": new_mac, "status": "randomised"}
 
     @app.post("/api/mac/restore")
     async def mac_restore():
-        if state.mac_randomizer is None:
-            return JSONResponse({"error": "MAC randomizer not running"}, status_code=503)
-        restored = state.mac_randomizer.restore()
+        mac = _get_mac_randomizer()
+        restored = mac.restore()
+        if not restored:
+            return JSONResponse(
+                {"error": "No backup found to restore (has a MAC ever been randomised?)"},
+                status_code=404,
+            )
         return {"restored_mac": restored, "status": "restored"}
 
     @app.get("/api/vpn/status")
@@ -460,8 +542,113 @@ def create_app():
         from ..meeting_mode import MeetingMode
         return MeetingMode().deactivate()
 
+    # ── EDR / SOC layer ─────────────────────────────────────────────────
+    @app.get("/edr", include_in_schema=False)
+    async def serve_edr_console():
+        return FileResponse(_WEB_DIR / "edr.html", media_type="text/html")
+
+    @app.get("/api/edr/stats")
+    async def edr_stats():
+        if state.edr is None:
+            return {"enabled": False}
+        s = state.edr.stats(); s["enabled"] = True
+        return s
+
+    @app.get("/api/edr/incidents")
+    async def edr_incidents(status: Optional[str] = None,
+                            severity: Optional[str] = None):
+        if state.edr is None:
+            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+        return state.edr.list_incidents(status=status, severity=severity, limit=200)
+
+    @app.get("/api/edr/incidents/{incident_id}")
+    async def edr_incident(incident_id: str):
+        if state.edr is None:
+            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+        inc = state.edr.get_incident(incident_id)
+        if inc is None:
+            return JSONResponse({"error": "unknown incident"}, status_code=404)
+        return inc
+
+    @app.post("/api/edr/incidents/{incident_id}/status")
+    async def edr_incident_status(incident_id: str, request: Request):
+        if state.edr is None:
+            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+        guard = _edr_guard(request)
+        if guard is not None:
+            return guard
+        body = await _safe_json(request)
+        inc = state.edr.update_incident(
+            incident_id, status=body.get("status"), notes=body.get("notes"),
+            assignee=body.get("assignee"), operator="dashboard")
+        if inc is None:
+            return JSONResponse({"error": "unknown incident"}, status_code=404)
+        return inc
+
+    @app.post("/api/edr/incidents/{incident_id}/investigate")
+    async def edr_investigate(incident_id: str, request: Request):
+        if state.edr is None:
+            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+        guard = _edr_guard(request)
+        if guard is not None:
+            return guard
+        body = await _safe_json(request)
+        report = state.edr.investigate(
+            incident_id, use_ai=bool(body.get("use_ai")), operator="dashboard")
+        if report is None:
+            return JSONResponse({"error": "unknown incident"}, status_code=404)
+        return report
+
+    @app.post("/api/edr/respond")
+    async def edr_respond(request: Request):
+        if state.edr is None:
+            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+        guard = _edr_guard(request)
+        if guard is not None:
+            return guard
+        body = await _safe_json(request)
+        action = str(body.get("action", ""))
+        if not action:
+            return JSONResponse({"error": "action is required"}, status_code=400)
+        # dry_run defaults to True — a real action must be explicitly requested.
+        dry_run = bool(body.get("dry_run", True))
+        return state.edr.respond(
+            action, str(body.get("target", "")), dry_run=dry_run,
+            operator="dashboard", incident_id=str(body.get("incident_id", "")))
+
+    @app.get("/api/edr/hunt/saved")
+    async def edr_saved_hunts():
+        if state.edr is None:
+            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+        return {"hunts": state.edr.saved_hunts(),
+                "facets": state.edr.hunt_facets(24)}
+
+    @app.post("/api/edr/hunt")
+    async def edr_hunt(request: Request):
+        if state.edr is None:
+            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+        body = await _safe_json(request)
+        limit = int(body.get("limit", 200) or 200)
+        if body.get("saved"):
+            return state.edr.run_saved_hunt(str(body["saved"]), limit)
+        return state.edr.hunt(body.get("filters") or {}, limit)
+
+    @app.get("/api/edr/plugins")
+    async def edr_plugins():
+        if state.edr is None:
+            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+        return state.edr.plugins()
+
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket):
+        # The live event stream is the single most sensitive surface — real-time
+        # browsing history. The HTTP middleware does not cover WebSocket scope,
+        # so apply the same off-loopback rule here: a non-loopback subscriber
+        # must supply ?token=<control token>. Loopback (the local dashboard) is
+        # trusted and connects with no token, exactly as before.
+        if not _peer_is_local(ws) and not _token_ok(ws):
+            await ws.close(code=1008)   # 1008 = policy violation
+            return
         await ws.accept()
         q: asyncio.Queue = asyncio.Queue(maxsize=500)
         manager.add(ws, q)
@@ -510,12 +697,39 @@ def create_app():
 # Runner (called from __main__.py in a daemon thread)
 # ---------------------------------------------------------------------------
 
-def run_server(host: str = "0.0.0.0", port: int = 8080) -> None:
-    """Block the calling thread running the uvicorn server."""
+def run_server(host: str = "0.0.0.0", port: int = 8080,
+               ctx: Optional[AppContext] = None) -> None:
+    """Block the calling thread running the uvicorn server.
+
+    ``ctx`` is the injected AppContext; when omitted the module-global ``state``
+    is used (preserving the standalone/test entry point).
+    """
     try:
         import uvicorn
     except ImportError:
         raise ImportError("uvicorn is required for --web.  Run: pip install fastapi uvicorn")
 
-    app = create_app()
+    # uvicorn needs a WebSocket implementation (websockets or wsproto) to serve
+    # the dashboard's live /ws feed. Plain `pip install uvicorn` does NOT include
+    # one, and uvicorn then answers the /ws upgrade with HTTP 404 — the dashboard
+    # loads its initial snapshot and never updates. Detect that and say so loudly
+    # rather than failing silently; uvicorn auto-selects websockets when present.
+    if not _websocket_impl_available():
+        print("[valkyrie] WARNING: no WebSocket library installed "
+              "(websockets/wsproto). The dashboard's live feed (/ws) will return "
+              "HTTP 404 and the page will NOT update in real time. "
+              "Fix: pip install websockets")
+
+    app = create_app(ctx)
     uvicorn.run(app, host=host, port=port, log_level="warning", access_log=False)
+
+
+def _websocket_impl_available() -> bool:
+    """True if uvicorn has a WebSocket backend it can use for /ws."""
+    for mod in ("websockets", "wsproto"):
+        try:
+            __import__(mod)
+            return True
+        except ImportError:
+            continue
+    return False

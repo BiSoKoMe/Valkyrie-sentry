@@ -16,3 +16,12 @@ winotify>=1.1.0
  #  python valkyrie.py monitor --dns-port 5353
 
  # start  python -m valkyrie --web --no-ui --web-port 8090
+
+
+
+
+
+ #  .\start_all.bat
+ #  .\stop_all.bat
+
+ #  python -m valkyrie --kill-telemetry

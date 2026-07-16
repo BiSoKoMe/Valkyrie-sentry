@@ -95,26 +95,82 @@ server:
 
     # DNSSEC
     auto-trust-anchor-file: "{trust_anchor}"
+{tls_cert_directive}
+{forward_zone}"""
 
-# Fallback forward zone — used only if recursion fails
-# Remove this block for pure recursive (no upstream) mode.
+_ROOT_HINTS_URL = "https://www.internic.net/domain/named.root"
+
+# DoT forward-zone (Quad9, no-log + DNSSEC-validating): used only when a real
+# certificate-validation source is confirmed present on this machine — see
+# _resolve_tls_cert_directive(). Otherwise plaintext keeps recursion working
+# instead of risking a silent SERVFAIL storm from an unverifiable TLS handshake.
+_DOT_FORWARD_ZONE = """\
+forward-zone:
+    name: "."
+    forward-tls-upstream: yes
+    forward-addr: 9.9.9.9@853#dns.quad9.net
+    forward-addr: 149.112.112.112@853#dns.quad9.net
+"""
+
+_PLAINTEXT_FORWARD_ZONE = """\
 forward-zone:
     name: "."
     forward-addr: 9.9.9.9@53  # Quad9 — no-log, DNSSEC-validating
     forward-addr: 149.112.112.112@53
 """
 
-_ROOT_HINTS_URL = "https://www.internic.net/domain/named.root"
+# Common system CA bundle locations, checked in order — first one that
+# actually exists on this machine is used for tls-cert-bundle.
+_LINUX_CA_BUNDLE_CANDIDATES = [
+    "/etc/ssl/certs/ca-certificates.crt",  # Debian/Ubuntu
+    "/etc/pki/tls/certs/ca-bundle.crt",    # Fedora/RHEL
+    "/etc/ssl/cert.pem",                   # macOS / Alpine
+]
+
+
+def _resolve_tls_cert_directive() -> Optional[str]:
+    """Return the Unbound directive needed to validate upstream DoT certs on
+    this machine, or None if no usable certificate source was found.
+
+    Writing a tls-cert-bundle path that doesn't exist makes Unbound fail
+    every upstream TLS handshake (a silent SERVFAIL storm) — so this only
+    ever returns a directive whose precondition is verified right now,
+    on this machine, not assumed.
+    """
+    if _SYSTEM == "Windows":
+        # Built into Windows (Vista+) — always available, no file to check.
+        return "    tls-win-cert: yes"
+    for path in _LINUX_CA_BUNDLE_CANDIDATES:
+        if Path(path).exists():
+            return f'    tls-cert-bundle: "{path}"'
+    return None
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+# Unbound's Windows installer does not add itself to PATH by default —
+# shutil.which() alone misses a real, working install at this location
+# (confirmed: this is exactly why resolver.py's spawn mode was silently
+# unable to launch Unbound on this machine). Checked only as a fallback.
+_WINDOWS_KNOWN_PATHS = [
+    r"C:\Program Files\Unbound\unbound.exe",
+    r"C:\Program Files (x86)\Unbound\unbound.exe",
+]
+
+
 def _which(binary: str) -> Optional[str]:
     """Return full path to binary or None."""
     import shutil
-    return shutil.which(binary)
+    found = shutil.which(binary)
+    if found:
+        return found
+    if _SYSTEM == "Windows" and binary == "unbound":
+        for candidate in _WINDOWS_KNOWN_PATHS:
+            if Path(candidate).exists():
+                return candidate
+    return None
 
 
 def _fetch_root_hints(dest: Path) -> None:
@@ -325,11 +381,28 @@ class UnboundManager:
 
         _fetch_root_hints(root_hints)
 
+        tls_directive = _resolve_tls_cert_directive()
+        if tls_directive:
+            forward_zone = _DOT_FORWARD_ZONE
+            self._print(
+                "[green]✓[/green] DoT upstream forwarding enabled "
+                "(encrypted on 853, not plaintext 53)"
+            )
+        else:
+            forward_zone = _PLAINTEXT_FORWARD_ZONE
+            self._print(
+                "[yellow]No usable TLS certificate store found[/yellow] — "
+                "upstream forwarding stays plaintext (port 53) rather than "
+                "risk an unverifiable TLS handshake"
+            )
+
         conf = _UNBOUND_CONF_TEMPLATE.format(
-            port         = self._port,
-            logfile      = str(log_path).replace("\\", "/"),
-            root_hints   = str(root_hints).replace("\\", "/"),
-            trust_anchor = str(trust_anchor).replace("\\", "/"),
+            port               = self._port,
+            logfile            = str(log_path).replace("\\", "/"),
+            root_hints         = str(root_hints).replace("\\", "/"),
+            trust_anchor       = str(trust_anchor).replace("\\", "/"),
+            tls_cert_directive = tls_directive or "",
+            forward_zone       = forward_zone,
         )
         self._conf_path.write_text(conf, encoding="utf-8")
 

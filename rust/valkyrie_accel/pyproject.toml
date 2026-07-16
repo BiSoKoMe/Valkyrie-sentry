@@ -1,0 +1,16 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "valkyrie_accel"
+version = "0.1.0"
+description = "Optional native accelerators for Valkyrie (CIDR membership set)."
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[tool.maturin]
+# Pure Rust extension module named `valkyrie_accel`.

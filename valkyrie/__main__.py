@@ -263,15 +263,58 @@ def main() -> None:
                         help="Export learned intelligence to data/intelligence_export.json, then exit")
     parser.add_argument("--no-intelligence", action="store_true",
                         help="Disable the self-learning intelligence layer")
+    parser.add_argument("--no-edr", action="store_true",
+                        help="Disable the EDR layer (incidents, hunting, response)")
+    parser.add_argument("--edr-plugin-dir", type=str, default="",
+                        help="Directory to load third-party EDR plugins from "
+                             "(detection/responder/enrichment). Opt-in; trusted code only")
+    parser.add_argument("--endpoint", action="store_true",
+                        help="Enable endpoint process telemetry: observe process "
+                             "starts and feed behavioral detections (LOLBins, "
+                             "Office-spawns-shell, temp-dir execution) into the EDR layer")
+    parser.add_argument("--incidents", action="store_true",
+                        help="Print current EDR incidents and exit")
+    parser.add_argument("--hunt", type=str, default="", metavar="HUNT",
+                        help="Run a saved threat hunt by id and exit "
+                             "(use --hunt list to see available hunts)")
     parser.add_argument("--download-lists", action="store_true",
                         help="Opt in to downloading external blocklist/IP feeds "
                              "(default: built-in seed list + learned intelligence, no downloads)")
     parser.add_argument("--no-dns-leak", action="store_true",
                         help="Fail-closed DNS: only ever use the local resolver upstream; "
                              "never fall back to public resolvers (auto-enabled when Unbound is active)")
+    parser.add_argument("--fleet-server", action="store_true",
+                        help="Run the fleet control-plane server (blocking) and exit — "
+                             "lets one operator monitor many Valkyrie devices")
+    parser.add_argument("--fleet-agent", type=str, default="", metavar="URL",
+                        help="Report this device's status to a fleet control plane at URL "
+                             "(metadata only — never domains). Requires --fleet-enroll-token on first run")
+    parser.add_argument("--fleet-enroll-token", type=str, default="",
+                        help="Enrollment secret for --fleet-server (to accept devices) "
+                             "or --fleet-agent (to join). Falls back to $VALKYRIE_FLEET_ENROLL_TOKEN")
+    parser.add_argument("--fleet-insecure-http", action="store_true",
+                        help="Allow --fleet-server to bind a non-loopback host over plain "
+                             "HTTP (only if TLS is terminated by a reverse proxy in front)")
     args = parser.parse_args()
 
+    # Frozen exe double-clicked with no arguments: start the dashboard and let
+    # the browser auto-open to the right port, so a user never has to pass
+    # flags or guess a port. Running from source, or with any flag, is
+    # unchanged. (len(sys.argv)==1 means "no args beyond the program name".)
+    if getattr(sys, "frozen", False) and len(sys.argv) == 1:
+        args.web = True
+
     console = Console()
+
+    # Surface any active config-file/environment overrides up front, so an
+    # operator can see at a glance that a non-default setting is in effect
+    # (and where it came from). No output at all on a stock deployment.
+    from . import config as _config
+    for _ov in getattr(_config, "CONFIG_OVERRIDES", []):
+        console.print(
+            f"[cyan]config:[/cyan] {_ov.key} = {_ov.value!r} "
+            f"[dim](from {_ov.source})[/dim]"
+        )
 
     # ------------------------------------------------------------------
     # Early-exit: WireGuard config generator
@@ -279,6 +322,31 @@ def main() -> None:
     if args.setup_wireguard:
         wg = WireGuardConfig(console=console)
         wg.generate(server_ip=args.server_ip, iface=args.wg_iface)
+        return
+
+    # ------------------------------------------------------------------
+    # Early-exit: fleet control-plane server (blocking)
+    # ------------------------------------------------------------------
+    if args.fleet_server:
+        from .fleet.server import run_fleet_server
+        from .config import FLEET_SERVER_PORT
+        console.print(
+            f"[bold cyan]Valkyrie Fleet Control Plane[/bold cyan] — "
+            f"http://localhost:{FLEET_SERVER_PORT}"
+        )
+        console.print("[dim]  Devices report status metadata only (never domains). "
+                      "Ctrl-C to stop.[/dim]")
+        import os as _os
+        try:
+            run_fleet_server(
+                host=args.web_host, port=FLEET_SERVER_PORT,
+                enroll_token=args.fleet_enroll_token,
+                policy_public_key_hex=_os.environ.get("VALKYRIE_FLEET_POLICY_PUBKEY", ""),
+                admin_token=_os.environ.get("VALKYRIE_FLEET_ADMIN_TOKEN", ""),
+                allow_insecure_http=args.fleet_insecure_http,
+            )
+        except SystemExit as exc:
+            console.print(f"[red]{exc}[/red]")
         return
 
     # ------------------------------------------------------------------
@@ -324,6 +392,49 @@ def main() -> None:
                     console.print(f"                     {la['explanation']}")
         finally:
             intel.stop()
+            store.stop()
+        return
+
+    # ------------------------------------------------------------------
+    # Early-exit: EDR incidents / threat hunt (read-only, then exit)
+    # ------------------------------------------------------------------
+    if args.incidents or args.hunt:
+        from .edr import EdrEngine
+        store = Store()
+        store.start()
+        engine = EdrEngine(store)
+        engine.start()
+        try:
+            if args.hunt:
+                if args.hunt == "list":
+                    console.print("[bold]Available threat hunts:[/bold]")
+                    for h in engine.saved_hunts():
+                        console.print(f"  [cyan]{h['id']:20s}[/cyan] {h['description']}")
+                else:
+                    res = engine.run_saved_hunt(args.hunt, limit=50)
+                    if res.get("error"):
+                        console.print(f"[red]{res['error']}[/red] "
+                                      f"(try --hunt list)")
+                    else:
+                        console.print(f"[bold]Hunt '{args.hunt}':[/bold] "
+                                      f"{res['count']} result(s)")
+                        for row in res.get("rows", [])[:50]:
+                            console.print(f"  {row}")
+            else:  # --incidents
+                incs = engine.list_incidents(limit=100)
+                if not incs:
+                    console.print("[dim]No incidents recorded yet.[/dim]")
+                else:
+                    console.print(f"[bold]{len(incs)} incident(s):[/bold]")
+                    for i in incs:
+                        col = {"critical": "red", "high": "red", "medium": "yellow",
+                               "low": "green"}.get(i["severity"], "white")
+                        console.print(
+                            f"  [{col}]{i['severity']:8s}[/{col}] "
+                            f"[{i['status']:13s}] {i['title']}  "
+                            f"[dim]({i['detection_count']} detections)[/dim]")
+        finally:
+            engine.stop()
             store.stop()
         return
 
@@ -505,6 +616,14 @@ def main() -> None:
         zero_log.enable()
         console.print("[bold yellow]WARNING: Zero log mode: no data written to disk[/bold yellow]")
         console.print("[dim]Session data exists in RAM only. Power off to wipe all traces.[/dim]")
+        if args.debug:
+            # --debug prints every resolved domain to stdout, which is a
+            # persistent trace (terminal scrollback, redirected logs) that
+            # defeats the point of zero-log. Suppress the per-query domain
+            # printing while zero-log is active; other startup diagnostics are
+            # unaffected. See docs/TLS_ZEROLOG_AUDIT_REPORT.md.
+            console.print("[dim]  Zero-log: per-domain --debug output suppressed "
+                          "(would leave a domain trace on the terminal).[/dim]")
 
     # ------------------------------------------------------------------
     # 1. Store
@@ -708,13 +827,17 @@ def main() -> None:
             process_watcher = proc_watcher,
             scanner         = scanner,
             intelligence    = intelligence,
+            firewall        = (firewall if not args.no_firewall else None),
             strict          = args.strict,
             host            = args.host,
             port            = args.port,
             upstream_host   = dns_upstream_host,
             upstream_port   = dns_upstream_port,
             allow_external_fallback = allow_external_fallback,
-            debug           = args.debug,
+            # Zero-log forces per-domain stdout off: the interceptor's debug
+            # prints include every queried domain, which would persist in
+            # terminal scrollback and defeat RAM-only operation.
+            debug           = args.debug and not (zero_log is not None and zero_log.is_active()),
         )
         try:
             dns_server.start()
@@ -799,24 +922,102 @@ def main() -> None:
         heartbeat.start()
 
     # ------------------------------------------------------------------
+    # 9c. EDR layer — detection → incident → response on top of the sensors.
+    #     Subscribes to the live event stream and correlates detections into
+    #     incidents. Stays entirely local (state lives in the same DB).
+    # ------------------------------------------------------------------
+    edr_engine = None
+    process_collector = None
+    network_collector = None
+    from .config import EDR_MODE, EDR_CORRELATION_WINDOW, EDR_PLUGIN_DIR
+    if EDR_MODE and not args.no_edr:
+        _t = time.monotonic()
+        from .edr import EdrEngine
+        plugin_dir = args.edr_plugin_dir or (str(EDR_PLUGIN_DIR) if EDR_PLUGIN_DIR.exists() else "")
+        edr_engine = EdrEngine(
+            store,
+            intelligence = intelligence,
+            firewall     = firewall,
+            rules        = rules,
+            blocklist    = blocklist,
+            plugin_dir   = plugin_dir,
+            correlation_window_seconds = EDR_CORRELATION_WINDOW,
+        )
+        edr_engine.start()
+        _pi = edr_engine.plugins()
+        _tick(f"EDR active ({len(_pi['plugins'])} plugins, "
+              f"{len(_pi['actions'])} response actions)", _t)
+
+        # Endpoint process telemetry (opt-in via --endpoint): observe process
+        # starts and feed behavioral detections into the same correlation engine.
+        if args.endpoint:
+            _tp = time.monotonic()
+            from .process_telemetry import ProcessCollector
+            process_collector = ProcessCollector(
+                emit=lambda ev: edr_engine.ingest_telemetry(ev))
+            if process_collector.available():
+                process_collector.start()
+                _tick("Endpoint telemetry active (process collector)", _tp)
+            else:
+                process_collector = None
+                console.print("[yellow]Endpoint telemetry unavailable "
+                              "(psutil not installed)[/yellow]")
+
+            # Network connection telemetry: flag outbound connections to
+            # threat-intel IPs — the hard-coded-IP C2 case DNS never sees (and
+            # that the Windows in-process firewall does not block). Reuses the
+            # firewall's is_blocked_ip reputation set.
+            _tn = time.monotonic()
+            from .network_telemetry import NetworkCollector
+            network_collector = NetworkCollector(
+                emit=lambda ev: edr_engine.ingest_telemetry(ev),
+                ip_reputation=(firewall.is_blocked_ip if firewall is not None
+                               else None))
+            if network_collector.available():
+                network_collector.start()
+                _tick("Endpoint telemetry active (network collector)", _tn)
+            else:
+                network_collector = None
+    elif args.debug:
+        console.print("[yellow]EDR layer disabled (--no-edr)[/yellow]")
+
+    # ------------------------------------------------------------------
     # 10. Web dashboard (optional)
     # ------------------------------------------------------------------
     web_thread = None
+    web_state = None
     if args.web:
-        from .web.server import state as web_state, run_server
-        web_state.store          = store
-        web_state.firewall       = firewall
-        web_state.blocklist      = blocklist
-        web_state.start_time     = time.time()
-        web_state.mac_randomizer = mac_randomizer
-        web_state.zero_log       = zero_log
-        web_state.heartbeat      = heartbeat
-        web_state.dns_port       = args.port
-        web_state.web_port       = args.web_port
-        web_state.intelligence   = intelligence
+        from .web.server import run_server
+        from .context import AppContext
+        # __main__ is the composition root: build the context, wire services in,
+        # and inject it into the web server (create_app/run_server), rather than
+        # mutating a module-global singleton.
+        web_state = AppContext(
+            store          = store,
+            firewall       = firewall,
+            blocklist      = blocklist,
+            start_time     = time.time(),
+            mac_randomizer = mac_randomizer,
+            zero_log       = zero_log,
+            dns_port       = args.port,
+            web_port       = args.web_port,
+            intelligence   = intelligence,
+            edr            = edr_engine,
+            process_collector = process_collector,
+            network_collector = network_collector,
+            heartbeat      = heartbeat,
+        )
+        if args.web_host not in ("127.0.0.1", "::1", "localhost"):
+            console.print(
+                f"[yellow]⚠ Web dashboard bound to {args.web_host} (off-loopback).[/yellow]\n"
+                f"  Live DNS/browsing history is reachable from the network. "
+                f"Off-loopback API and WebSocket calls now require the control "
+                f"token in [cyan]data/control_token.txt[/cyan] "
+                f"(header X-Valkyrie-Token or ?token=…)."
+            )
         web_thread = threading.Thread(
             target=run_server,
-            kwargs={"host": args.web_host, "port": args.web_port},
+            kwargs={"host": args.web_host, "port": args.web_port, "ctx": web_state},
             daemon=True,
             name="web-dashboard",
         )
@@ -887,6 +1088,51 @@ def main() -> None:
             web_state.self_heal = healer
 
     # ------------------------------------------------------------------
+    # 10c. Fleet agent (optional) — report this device to a control plane.
+    #      Sends status METADATA only (counts + component health), never
+    #      domains; see valkyrie/fleet/protocol.py.
+    # ------------------------------------------------------------------
+    fleet_agent = None
+    if args.fleet_agent:
+        import os as _os
+        from .fleet.agent import FleetAgent
+
+        def _fleet_status() -> dict:
+            s = dict(store.stats())
+            s["components"] = {
+                "dns":          dns_server.is_listening() if dns_server is not None else False,
+                "firewall":     not args.no_firewall,
+                "intelligence": intelligence is not None,
+            }
+            return s
+
+        # Remote response: a verified fleet command runs through the local EDR
+        # responder (real apply, audited). Inert unless the fleet policy public
+        # key is pinned via $VALKYRIE_FLEET_POLICY_PUBKEY.
+        def _fleet_command_runner(action: str, target: str):
+            if edr_engine is None:
+                return ("skipped", "EDR not enabled on this device")
+            r = edr_engine.respond(action, target, dry_run=False, operator="fleet")
+            return (r.get("status", "failed"), r.get("result", ""))
+
+        fleet_agent = FleetAgent(
+            server_url      = args.fleet_agent,
+            status_provider = _fleet_status,
+            console         = console,
+            policy_public_key_hex = _os.environ.get("VALKYRIE_FLEET_POLICY_PUBKEY", ""),
+            command_runner  = _fleet_command_runner,
+        )
+        enroll_tok = args.fleet_enroll_token or _os.environ.get(
+            "VALKYRIE_FLEET_ENROLL_TOKEN", "")
+        if fleet_agent.is_enrolled() or fleet_agent.enroll(enroll_tok):
+            fleet_agent.start()
+            console.print(f"[green]✓[/green] Fleet agent reporting to {args.fleet_agent}")
+        else:
+            console.print("[yellow]Fleet agent not started (enrollment failed — "
+                          "check --fleet-enroll-token and server URL)[/yellow]")
+            fleet_agent = None
+
+    # ------------------------------------------------------------------
     # 11. TLS inspection (optional — disabled by default)
     # ------------------------------------------------------------------
     tls_inspector = None
@@ -918,6 +1164,10 @@ def main() -> None:
     if not args.no_firewall:
         status_rows.append(("Firewall", True, f"{firewall.count():,} IP ranges"))
     status_rows.append(("Behavioral AI", True, "active"))
+    if edr_engine is not None:
+        _es = edr_engine.stats()
+        status_rows.append(("EDR", True,
+                            f"{_es['plugins']} plugins, {_es['incidents_open']} open incidents"))
     if intelligence is not None:
         _ist = intelligence.status()
         if _ist["learning"]:
@@ -997,12 +1247,23 @@ def main() -> None:
             mac_randomizer.stop()
         if healer:
             healer.stop()
+        if fleet_agent is not None:
+            fleet_agent.stop()
+        if edr_engine is not None:
+            edr_engine.stop()
         if intelligence:
             intelligence.stop()
         firewall.stop()
-        store.stop()
+        # zero_log.disable() must run BEFORE store.stop(): its secure wipe
+        # deletes rows through a fresh connection to the shared-cache RAM
+        # database, which only works while another connection (the Store's
+        # writer thread) is still open. `file::memory:?cache=shared` DBs are
+        # destroyed the instant their last connection closes, so wiping
+        # after store.stop() would silently target an already-gone database
+        # (see docs/TLS_ZEROLOG_AUDIT_REPORT.md).
         if zero_log:
             zero_log.disable()
+        store.stop()
         console.print("[green]Done.[/green]")
 
 

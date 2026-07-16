@@ -35,7 +35,7 @@ from .config import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-_MAC_RE = re.compile(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
+_MAC_RE = re.compile(r'^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$')
 
 
 def _is_valid_mac(mac: str) -> bool:
@@ -261,16 +261,67 @@ class MacRandomizer:
                              0, winreg.KEY_SET_VALUE) as k:
             winreg.SetValueEx(k, "NetworkAddress", 0, winreg.REG_SZ, reg_mac)
 
-        # Toggle adapter to apply
-        subprocess.run(
-            ["netsh", "interface", "set", "interface", f'"{iface}"', "disable"],
-            capture_output=True,
-        )
-        time.sleep(1)
-        subprocess.run(
-            ["netsh", "interface", "set", "interface", f'"{iface}"', "enable"],
-            capture_output=True,
-        )
+        # Cycle the adapter so Windows actually loads the new NetworkAddress.
+        # netsh matches the alias literally: it must be a bare "name=<alias>"
+        # token — the previous f'"{iface}"' sent embedded quotes and matched
+        # nothing. Check return codes AND read the live MAC back: a registry
+        # write with no successful cycle otherwise looks identical to success.
+        #
+        # netsh can hang indefinitely on some virtual/VPN adapters instead of
+        # erroring — a timeout turns that into a reported failure for this one
+        # interface instead of freezing the whole randomize() call forever.
+        try:
+            dis = subprocess.run(
+                ["netsh", "interface", "set", "interface",
+                 f"name={iface}", "admin=disabled"],
+                capture_output=True, text=True, timeout=15,
+            )
+        except subprocess.TimeoutExpired:
+            # netsh may have taken effect despite timing out on us — best-effort
+            # re-enable so we never strand the adapter disabled with no retry.
+            try:
+                subprocess.run(
+                    ["netsh", "interface", "set", "interface",
+                     f"name={iface}", "admin=enabled"],
+                    capture_output=True, text=True, timeout=15,
+                )
+            except Exception:
+                pass
+            self.last_error = f"Adapter '{iface}' disable timed out after 15s"
+            return False
+        if dis.returncode != 0:
+            self.last_error = (
+                f"Adapter '{iface}' disable failed: "
+                f"{(dis.stdout + dis.stderr).strip()}"
+            )
+            return False
+        time.sleep(2)
+        try:
+            ena = subprocess.run(
+                ["netsh", "interface", "set", "interface",
+                 f"name={iface}", "admin=enabled"],
+                capture_output=True, text=True, timeout=15,
+            )
+        except subprocess.TimeoutExpired:
+            self.last_error = f"Adapter '{iface}' enable timed out after 15s"
+            return False
+        if ena.returncode != 0:
+            self.last_error = (
+                f"Adapter '{iface}' enable failed: "
+                f"{(ena.stdout + ena.stderr).strip()}"
+            )
+            return False
+
+        # Verify on the machine, not by assumption: the live MAC must now match
+        # what we wrote. Give the driver a moment to re-init after enable.
+        time.sleep(2)
+        applied = self._read_current_mac(iface).replace(":", "").upper()
+        if applied != reg_mac:
+            self.last_error = (
+                f"MAC write did not apply: registry={reg_mac} live={applied or '<unreadable>'}"
+                " — adapter cycle did not take effect."
+            )
+            return False
         return True
 
     def _apply_macos(self, iface: str, mac: str) -> bool:
