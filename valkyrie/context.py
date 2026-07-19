@@ -49,6 +49,7 @@ class AppContext:
     threat_intel:   Optional[object] = None   # valkyrie.threat_intel.ThreatIntelManager
     siem:           Optional[object] = None   # valkyrie.siem.SiemExporter
     playbooks:      Optional[object] = None   # valkyrie.edr.playbooks.PlaybookEngine
+    registry:       Optional[object] = None   # valkyrie.components.ComponentRegistry
 
     start_time: float = 0.0
     dns_port:   int   = 0     # actual DNS listen port (for dashboard display)

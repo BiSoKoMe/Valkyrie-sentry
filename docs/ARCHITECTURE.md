@@ -29,6 +29,14 @@ threat intel, SIEM export, fleet — plugs into the **same four spines**:
                    (one DB, RAM-able) (CEF/JSONL)     (AppContext DI)
 ```
 
+**Plugin contract (ADR 0021).** Every subsystem also registers with the
+`ComponentRegistry` (valkyrie/components.py), which adapts its existing
+lifecycle into one uniform surface — health, metrics, config, independent
+restart, and health-transition events on the bus — exposed at
+`GET /api/components`. This is the plugin host the vision calls for; it wraps
+services rather than rewriting them, and composes with (never duplicates) the
+self-heal watchdog's curated recovery.
+
 Rules that keep it one platform:
 
 1. **One event schema.** Every sensor emits `TelemetryEvent`

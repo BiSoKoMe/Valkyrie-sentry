@@ -1100,6 +1100,37 @@ def main() -> None:
             ransomware_shield = None
 
     # ------------------------------------------------------------------
+    # 9e. Component registry — the uniform plugin contract over every
+    #     subsystem (register/health/metrics/config/restart/events). It
+    #     ADAPTS the services built above; nothing is rewritten. See
+    #     docs/adr/0021-component-registry.md.
+    # ------------------------------------------------------------------
+    from .components import ComponentRegistry
+    from .eventbus import EventBus
+    registry = ComponentRegistry(bus=EventBus("components"))
+    _reg_specs = [
+        ("store", store, "storage"),
+        ("firewall", firewall, "network"),
+        ("blocklist", blocklist, "network"),
+        ("threat_intel", threat_intel, "intelligence"),
+        ("intelligence", intelligence, "detection"),
+        ("edr", edr_engine, "detection"),
+        ("sensor_manager", sensor_manager, "sensor"),
+        ("process_collector", process_collector, "sensor"),
+        ("network_collector", network_collector, "sensor"),
+        ("persistence_collector", persistence_collector, "sensor"),
+        ("ransomware_shield", ransomware_shield, "response"),
+        ("siem", siem_exporter, "integration"),
+        ("playbooks", playbook_engine, "response"),
+        ("mac_randomizer", mac_randomizer, "privacy"),
+        ("zero_log", zero_log, "privacy"),
+    ]
+    for _cname, _csvc, _ckind in _reg_specs:
+        if _csvc is not None:
+            registry.register_service(_cname, _csvc, kind=_ckind)
+    _tick(f"Component registry ({len(registry.names())} plugins)", time.monotonic())
+
+    # ------------------------------------------------------------------
     # 10. Web dashboard (optional)
     # ------------------------------------------------------------------
     web_thread = None
@@ -1130,6 +1161,7 @@ def main() -> None:
             threat_intel   = threat_intel,
             siem           = siem_exporter,
             playbooks      = playbook_engine,
+            registry       = registry,
         )
         if args.web_host not in ("127.0.0.1", "::1", "localhost"):
             console.print(

@@ -454,6 +454,28 @@ def create_app(ctx: Optional[AppContext] = None):
         info["enabled"] = True
         return info
 
+    @app.get("/api/components")
+    async def components_list():
+        # Uniform plugin surface: every subsystem's health + metrics + config.
+        if state.registry is None:
+            return {"enabled": False, "components": []}
+        reg = state.registry
+        return {"enabled": True, "overall": reg.overall(),
+                "components": reg.snapshot()}
+
+    @app.post("/api/components/{name}/restart")
+    async def component_restart(name: str, request: Request):
+        # Restarting a subsystem is state-changing — token-gated off loopback.
+        guard = _control_guard(request)
+        if guard is not None:
+            return guard
+        if state.registry is None:
+            return JSONResponse({"error": "registry not active"}, status_code=503)
+        result = state.registry.restart(name)
+        if not result.get("ok") and "no such component" in result.get("error", ""):
+            return JSONResponse(result, status_code=404)
+        return result
+
     @app.get("/api/siem/status")
     async def siem_status():
         if state.siem is None:
