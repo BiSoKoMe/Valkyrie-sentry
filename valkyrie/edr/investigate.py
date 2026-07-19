@@ -90,9 +90,10 @@ class Investigator:
                                       "configured (set ANTHROPIC_API_KEY) — showing the "
                                       "offline analysis.")
             else:
-                narrative = self._ai_narrative(incident, detections, report)
-                if narrative is not None:
-                    report["ai_narrative"] = narrative
+                analysis = self._ai_analysis(incident, detections, report)
+                if analysis is not None:
+                    report["ai_analysis"] = analysis
+                    report["ai_narrative"] = analysis.get("assessment", "")
                     report["analyst"] = "claude"
                 else:
                     report["ai_error"] = ("AI investigation failed (network or SDK) — "
@@ -177,7 +178,18 @@ class Investigator:
     # Claude-assisted narrative (opt-in)
     # ------------------------------------------------------------------
 
-    def _ai_narrative(self, inc: Incident, detections: list, offline: dict) -> Optional[str]:
+    def _ai_analysis(self, inc: Incident, detections: list,
+                     offline: dict) -> Optional[dict]:
+        """Claude as an *explainable assistant*, never a detector.
+
+        The model receives only the compact facts the offline analyst already
+        derived (no raw event dump, no browsing history) and must return a
+        structured verdict: an assessment, a confidence level, and ONE
+        recommended action drawn from the response actions Valkyrie actually
+        ships — with the evidence lines (quoted from the provided facts) that
+        justify it. Structured output makes every conclusion auditable; any
+        failure returns None and the offline analysis stands alone.
+        """
         try:
             import anthropic
         except ImportError:
@@ -200,31 +212,81 @@ class Investigator:
                  "reason": d.details.get("reason", "")}
                 for d in detections[:25]
             ],
+            "available_actions": ["block_domain", "kill_process",
+                                  "isolate_host", "monitor_only"],
+        }
+        schema = {
+            "type": "object",
+            "properties": {
+                "assessment": {
+                    "type": "string",
+                    "description": "3-6 sentence analyst assessment of what "
+                                   "most likely happened and why it matters."},
+                "confidence": {"type": "string",
+                               "enum": ["low", "medium", "high"]},
+                "likely_technique": {
+                    "type": "string",
+                    "description": "The single most relevant MITRE technique "
+                                   "from the provided facts, or empty."},
+                "recommended_action": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string",
+                                   "enum": ["block_domain", "kill_process",
+                                            "isolate_host", "monitor_only"]},
+                        "target": {"type": "string"},
+                        "rationale": {"type": "string"},
+                    },
+                    "required": ["action", "target", "rationale"],
+                    "additionalProperties": False,
+                },
+                "evidence": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Facts from the input that support the "
+                                   "assessment — quote, never invent."},
+            },
+            "required": ["assessment", "confidence", "likely_technique",
+                         "recommended_action", "evidence"],
+            "additionalProperties": False,
         }
         system = (
-            "You are a senior SOC analyst writing a concise incident investigation "
-            "for an endpoint security product called Valkyrie. Given structured "
-            "detection facts, write a short (3-6 sentence) analyst assessment: what "
-            "most likely happened, how confident you are, and the single most "
-            "important next action. Be precise and do not invent indicators that "
-            "aren't in the facts."
+            "You are a senior SOC analyst assisting an endpoint security "
+            "product called Valkyrie. You explain and prioritize — you are "
+            "not a detector, and detections stand on their own without you. "
+            "Analyze ONLY the structured facts provided. Never invent "
+            "indicators, hosts, or techniques that are not in the facts; "
+            "every evidence entry must be traceable to the input. Choose the "
+            "recommended action from available_actions only, preferring the "
+            "least destructive action that contains the threat."
         )
         import json as _json
         try:
             resp = client.messages.create(
                 model=_DEFAULT_MODEL,
-                max_tokens=1024,
+                max_tokens=2048,
                 thinking={"type": "adaptive"},
                 system=system,
+                output_config={"format": {"type": "json_schema",
+                                          "schema": schema}},
                 messages=[{"role": "user",
                            "content": "Investigate this incident:\n" +
                                       _json.dumps(facts, indent=2)}],
             )
         except Exception:
             return None
-        parts = [b.text for b in resp.content if getattr(b, "type", "") == "text"]
-        text = "\n".join(parts).strip()
-        return text or None
+        try:
+            text = next(b.text for b in resp.content
+                        if getattr(b, "type", "") == "text")
+            out = _json.loads(text)
+        except Exception:
+            return None
+        # Defense in depth: even a schema-conforming reply must not smuggle an
+        # action outside the shipped set.
+        if out.get("recommended_action", {}).get("action") not in (
+                "block_domain", "kill_process", "isolate_host", "monitor_only"):
+            return None
+        return out
 
 
 # ---------------------------------------------------------------------------

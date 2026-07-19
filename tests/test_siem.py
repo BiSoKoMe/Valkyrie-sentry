@@ -108,8 +108,11 @@ def main() -> int:
         _check("carries the incident id", "externalId=i1" in text)
     except socket.timeout:
         _check("datagram received as CEF (timeout)", False)
-    st = exp.status()
-    _check("status counts the send", st["sent"] == 1 and st["errors"] == 0)
+    # The datagram can arrive before the sender thread increments the
+    # counter — wait for the count rather than racing it.
+    _check("status counts the send",
+           _wait(lambda: exp.status()["sent"] == 1)
+           and exp.status()["errors"] == 0)
     exp.stop()
     rx.close()
 
