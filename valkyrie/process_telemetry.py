@@ -120,7 +120,11 @@ def classify_process(name: str, path: str = "",
 # ---------------------------------------------------------------------------
 _ENCODED_PS = ("-enc ", "-enc:", "-encodedcommand", "-ec ", " -e ")
 _HIDDEN_FLAGS = ("-w hidden", "-windowstyle hidden", "-nop ", "-noprofile",
-                 "-noni", "-noninteractive")
+                 "-noni", "-noninteractive",
+                 # WScript/CScript silent-batch mode ("wscript //b //nologo x.vbs")
+                 # — a common way to run VBScript/JScript with no window or
+                 # error prompts. Trailing space keeps this off URLs (`//blah`).
+                 "//b ", "//nologo")
 _DOWNLOAD_CRADLES = (
     "downloadstring", "downloadfile", "downloaddata", "invoke-expression",
     "iex(", "iex (", "iex ", "frombase64string", "net.webclient", "webclient",
