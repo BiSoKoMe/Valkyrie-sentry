@@ -15,6 +15,7 @@ import queue
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -86,6 +87,14 @@ class Store:
         """
         self._db_path = db_path
         self._ram_uri = ram_uri          # non-empty → RAM mode
+        # RAM mode: a shared-cache in-memory database only lives while at
+        # least one connection is open. Short-lived sessions now close their
+        # handles, so anchor the database with one connection held for the
+        # Store's whole lifetime.
+        self._ram_anchor: Optional[sqlite3.Connection] = (
+            sqlite3.connect(ram_uri, uri=True, check_same_thread=False)
+            if ram_uri else None
+        )
         self._queue: queue.Queue = queue.Queue(maxsize=STORE_QUEUE_SIZE)
         self._writer_thread = threading.Thread(
             target=self._writer_loop, daemon=True, name="store-writer"
@@ -108,6 +117,12 @@ class Store:
         """Drain the queue and shut down cleanly."""
         self._queue.put(None)           # sentinel
         self._writer_thread.join(timeout=5)
+        if self._ram_anchor is not None:
+            try:
+                self._ram_anchor.close()
+            except Exception:
+                pass
+            self._ram_anchor = None
 
     # ------------------------------------------------------------------
     # Public write API (non-blocking)
@@ -132,7 +147,7 @@ class Store:
     # ------------------------------------------------------------------
 
     def recent_events(self, limit: int = 200) -> list[dict]:
-        with self._connect() as conn:
+        with self._session() as conn:
             rows = conn.execute(
                 "SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)
             ).fetchall()
@@ -141,7 +156,7 @@ class Store:
     def stats(self) -> dict:
         """Return aggregate counters for the last 24 hours."""
         since = (datetime.utcnow() - timedelta(hours=24)).isoformat()
-        with self._connect() as conn:
+        with self._session() as conn:
             total   = conn.execute("SELECT COUNT(*) FROM events WHERE timestamp >= ?", (since,)).fetchone()[0]
             blocked = conn.execute(
                 "SELECT COUNT(*) FROM events WHERE timestamp >= ? AND decision IN ('blocked','behavioral')", (since,)
@@ -169,7 +184,7 @@ class Store:
     def top_blocked_domains(self, limit: int = 5) -> list[dict]:
         """Return top blocked domains in the last 24 hours."""
         since = (datetime.utcnow() - timedelta(hours=24)).isoformat()
-        with self._connect() as conn:
+        with self._session() as conn:
             rows = conn.execute(
                 "SELECT domain, COUNT(*) c FROM events "
                 "WHERE timestamp >= ? AND decision IN ('blocked','behavioral') "
@@ -180,13 +195,13 @@ class Store:
 
     def scanner_decision_count(self) -> int:
         """Total number of scanner decisions made (sum of query_count in cache)."""
-        with self._connect() as conn:
+        with self._session() as conn:
             row = conn.execute("SELECT SUM(query_count) FROM scan_cache").fetchone()
         return row[0] or 0
 
     def cleaned_count(self) -> int:
         """Total number of page-clean events (HTML elements removed by tls_addon)."""
-        with self._connect() as conn:
+        with self._session() as conn:
             row = conn.execute(
                 "SELECT COUNT(*) FROM events WHERE raw_category = 'page_clean'"
             ).fetchone()
@@ -203,7 +218,7 @@ class Store:
         """
         from .config import SCAN_CACHE_TTL_HOURS
         cutoff = (datetime.utcnow() - timedelta(hours=SCAN_CACHE_TTL_HOURS)).isoformat()
-        with self._connect() as conn:
+        with self._session() as conn:
             row = conn.execute(
                 "SELECT decision, confidence, reasons, category FROM scan_cache "
                 "WHERE domain = ? AND last_seen >= ?",
@@ -237,7 +252,7 @@ class Store:
 
     def should_build_baseline(self) -> bool:
         """True once we have >= BASELINE_WINDOW_HOURS of data."""
-        with self._connect() as conn:
+        with self._session() as conn:
             earliest = conn.execute("SELECT MIN(timestamp) FROM events").fetchone()[0]
         if not earliest:
             return False
@@ -247,7 +262,7 @@ class Store:
     def build_baselines(self) -> None:
         """Compute per-process domain sets and avg hourly rates; store in DB."""
         cutoff = (datetime.utcnow() - timedelta(hours=BASELINE_WINDOW_HOURS)).isoformat()
-        with self._connect() as conn:
+        with self._session() as conn:
             rows = conn.execute(
                 "SELECT process_name, domain FROM events WHERE timestamp >= ?", (cutoff,)
             ).fetchall()
@@ -275,7 +290,7 @@ class Store:
             conn.commit()
 
     def get_baseline(self, process_name: str) -> Optional[dict]:
-        with self._connect() as conn:
+        with self._session() as conn:
             row = conn.execute(
                 "SELECT * FROM baselines WHERE process_name = ?", (process_name,)
             ).fetchone()
@@ -327,6 +342,22 @@ class Store:
         """True when this Store is operating entirely in RAM (zero-log mode)."""
         return bool(self._ram_uri)
 
+    @contextmanager
+    def _session(self):
+        """A short-lived connection: transaction-scoped AND closed on exit.
+
+        ``with sqlite3.connect(...)`` alone only commits/rolls back — it never
+        closes, and each leaked handle keeps the DB file locked on Windows
+        until GC. RAM-mode state is safe: the writer thread's long-lived
+        connection keeps the shared in-memory database alive.
+        """
+        conn = self._connect()
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
     def _connect(self) -> sqlite3.Connection:
         if self._ram_uri:
             conn = sqlite3.connect(self._ram_uri, uri=True, check_same_thread=False)
@@ -336,7 +367,7 @@ class Store:
         return conn
 
     def _init_schema(self) -> None:
-        with self._connect() as conn:
+        with self._session() as conn:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS events (
                     id           INTEGER PRIMARY KEY AUTOINCREMENT,

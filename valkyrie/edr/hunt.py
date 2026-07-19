@@ -13,6 +13,7 @@ noisiest talker?", "what did we block in the last hour?").
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -32,8 +33,16 @@ class ThreatHunter:
         self._store = store
         self._edr = edr_store
 
+    @contextmanager
     def _connect(self):
-        return self._store.connection()
+        # Read-only queries, but the handle must still be closed: leaked
+        # connections keep the DB file locked on Windows.
+        conn = self._store.connection()
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     # ------------------------------------------------------------------
     # Ad-hoc structured query

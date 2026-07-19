@@ -93,10 +93,10 @@ def main() -> int:
 
         print("\n[3] /api/events reflects the same store's live writes")
         try:
-            from starlette.testclient import TestClient
+            from testclient_compat import make_client
             # `with` runs the app lifespan (which subscribes the dashboard's
             # broadcast to the store bus and captures the event loop).
-            with TestClient(app, client=("127.0.0.1", 5555)) as client:
+            with make_client(app, "127.0.0.1") as client:
                 _check("/api/events shows the just-logged domain",
                        _wait(lambda: any(
                            e.get("domain") == "facebook.com"

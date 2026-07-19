@@ -50,8 +50,9 @@ def main() -> int:
     state.store = store
     app = create_app()
 
-    local  = TestClient(app, client=("127.0.0.1", 5555))
-    remote = TestClient(app, client=("192.168.1.50", 5555))
+    from testclient_compat import make_client
+    local  = make_client(app, "127.0.0.1")
+    remote = make_client(app, "192.168.1.50")
     good = {"X-Valkyrie-Token": _CONTROL_TOKEN}
 
     print("[1] HTTP data endpoints")

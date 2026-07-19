@@ -57,7 +57,8 @@ def main() -> int:
             empty_ctx = AppContext()
             app = web.create_app(empty_ctx)
             _check("create_app adopts the injected ctx", web.state is empty_ctx)
-            client = TestClient(app, client=("127.0.0.1", 5555))
+            from testclient_compat import make_client
+            client = make_client(app, "127.0.0.1")
             _check("no-store ctx -> /api/events 503",
                    client.get("/api/events").status_code == 503)
 
@@ -67,7 +68,7 @@ def main() -> int:
             wired_ctx = AppContext(store=store, web_port=8090)
             app2 = web.create_app(wired_ctx)
             _check("second injection swaps the active ctx", web.state is wired_ctx)
-            client2 = TestClient(app2, client=("127.0.0.1", 5555))
+            client2 = make_client(app2, "127.0.0.1")
             _check("wired ctx -> /api/events 200",
                    client2.get("/api/events").status_code == 200)
             store.stop()

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -38,8 +39,17 @@ class EdrStore:
         self._store = store
         self._lock = threading.RLock()
 
+    @contextmanager
     def _connect(self):
-        return self._store.connection()
+        # Transaction-scoped AND closed: a bare sqlite3 connection context
+        # manager never closes, and leaked handles hold the DB file lock on
+        # Windows past Store.stop().
+        conn = self._store.connection()
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     # ------------------------------------------------------------------
     # Schema
