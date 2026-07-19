@@ -952,6 +952,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     edr_engine = None
     siem_exporter = None
+    playbook_engine = None
     sensor_manager = None
     process_collector = None
     network_collector = None
@@ -992,6 +993,16 @@ def main() -> None:
             except ValueError as exc:
                 console.print(f"[red]SIEM export disabled: {exc}[/red]")
                 siem_exporter = None
+
+        # SOAR playbooks: analyst-authored YAML mapping incident conditions
+        # onto the audited response actions. Dry-run unless a playbook says
+        # 'mode: enforce'; idle when data/playbooks.yaml doesn't exist.
+        from .edr.playbooks import PlaybookEngine
+        playbook_engine = PlaybookEngine(edr_engine)
+        n_pb = playbook_engine.load()
+        if n_pb:
+            playbook_engine.start()
+            _tick(f"SOAR playbooks active ({n_pb})", _t)
 
         # Endpoint process telemetry (opt-in via --endpoint): observe process
         # starts and feed behavioral detections into the same correlation engine.
@@ -1118,6 +1129,7 @@ def main() -> None:
             ransomware_shield = ransomware_shield,
             threat_intel   = threat_intel,
             siem           = siem_exporter,
+            playbooks      = playbook_engine,
         )
         if args.web_host not in ("127.0.0.1", "::1", "localhost"):
             console.print(
@@ -1381,6 +1393,8 @@ def main() -> None:
             sensor_manager.stop()
         if ransomware_shield is not None:
             ransomware_shield.stop()
+        if playbook_engine is not None:
+            playbook_engine.stop()
         if siem_exporter is not None:
             siem_exporter.stop()
         if edr_engine is not None:

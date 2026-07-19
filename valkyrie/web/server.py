@@ -433,6 +433,14 @@ def create_app(ctx: Optional[AppContext] = None):
             info["self_heal"] = state.self_heal.status()
         return info
 
+    @app.get("/api/edr/playbooks/status")
+    async def playbooks_status():
+        if state.playbooks is None:
+            return {"enabled": False}
+        info = state.playbooks.status()
+        info["enabled"] = True
+        return info
+
     @app.get("/api/siem/status")
     async def siem_status():
         if state.siem is None:
