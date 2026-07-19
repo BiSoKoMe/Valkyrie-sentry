@@ -80,3 +80,20 @@ docs/ARCHITECTURE.md (shipped / buildable / infra-boundary tiers).
 **Next candidates**: (a) digital-forensics triage bundle per incident;
 (b) SOAR-style playbooks over existing response actions; (c) more ETW
 channels; (d) compliance report generator over incident history.
+
+## Cycles 2026-07-19 (continued): four enterprise pillars — SHIPPED
+- **Forensics triage** (ADR 0017): per-incident evidence zip (incident+
+  timeline, ±30min events, process tree, connections, ASEP, host) with
+  SHA256 manifest + tamper-detecting verify_bundle; ~200ms live.
+- **SOAR playbooks** (ADR 0018): YAML incident→response automation through
+  the audited ResponseManager; dry-run default, enforce opt-in, cooldowns.
+- **Compliance evidence reports** (ADR 0019): live-computed MTTR/coverage/
+  audit-trail JSON+Markdown; evidence-not-certification honesty built in.
+- **AI assistant** (ADR 0020): structured evidence-grounded incident
+  analysis, enum-bounded recommendations, explain-only — never a detector.
+
+**Remaining top candidates**: (a) more ETW channels / kernel-ETW consumer
+seam; (b) vulnerability visibility (installed software vs local CVE feed);
+(c) browser protection via TLS-inspector + URLhaus full URLs; (d) update
+*apply* path (staged, rollback-capable); (e) app-side UI for incidents/
+playbooks/forensics (electron/ — the product surface).
