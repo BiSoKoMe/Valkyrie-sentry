@@ -433,6 +433,19 @@ def create_app(ctx: Optional[AppContext] = None):
             info["self_heal"] = state.self_heal.status()
         return info
 
+    @app.get("/api/compliance/report")
+    async def compliance_report(request: Request, hours: int = 720,
+                                format: str = "json"):
+        # Aggregates operational posture — token-gated off loopback like all
+        # data-revealing endpoints (enforced by the global guard middleware).
+        from ..compliance import ComplianceReporter, render_markdown
+        report = ComplianceReporter(state).generate(period_hours=max(1, hours))
+        if format == "md":
+            from fastapi.responses import PlainTextResponse
+            return PlainTextResponse(render_markdown(report),
+                                     media_type="text/markdown")
+        return report
+
     @app.get("/api/edr/playbooks/status")
     async def playbooks_status():
         if state.playbooks is None:
