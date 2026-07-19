@@ -46,6 +46,7 @@ class AppContext:
     persistence_collector: Optional[object] = None  # valkyrie.persistence_telemetry.PersistenceCollector
     heartbeat:      Optional[object] = None   # valkyrie.self_test.HeartbeatMonitor
     ransomware_shield: Optional[object] = None  # valkyrie.ransomware_shield.RansomwareShield
+    threat_intel:   Optional[object] = None   # valkyrie.threat_intel.ThreatIntelManager
 
     start_time: float = 0.0
     dns_port:   int   = 0     # actual DNS listen port (for dashboard display)
@@ -56,7 +57,7 @@ class AppContext:
         "store", "firewall", "blocklist", "intelligence", "edr",
         "mac_randomizer", "zero_log", "self_heal", "process_collector",
         "network_collector", "persistence_collector", "sensor_manager",
-        "heartbeat", "ransomware_shield",
+        "heartbeat", "ransomware_shield", "threat_intel",
     )
 
     def components(self) -> dict[str, bool]:

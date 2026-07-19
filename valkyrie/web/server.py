@@ -433,6 +433,14 @@ def create_app(ctx: Optional[AppContext] = None):
             info["self_heal"] = state.self_heal.status()
         return info
 
+    @app.get("/api/intel/status")
+    async def threat_intel_status():
+        if state.threat_intel is None:
+            return {"enabled": False}
+        info = state.threat_intel.status()
+        info["enabled"] = True
+        return info
+
     @app.get("/api/stats/cleaned")
     async def get_cleaned_stats():
         if state.store is None:

@@ -124,6 +124,31 @@ BLOCKLIST_SOURCES = [
 BLOCKLIST_MAX_AGE_DAYS = 7
 
 # ---------------------------------------------------------------------------
+# Threat-intelligence IOC feeds (valkyrie/threat_intel.py)
+# ---------------------------------------------------------------------------
+# Active threat infrastructure — botnet C2s and live malware-distribution
+# hosts — from abuse.ch's public, no-account feeds. Distinct from the
+# ad/tracker blocklist (different threat class, hours-scale rotation,
+# incident-grade severity on hit). Downloads obey the same opt-in flag as
+# every other list (USE_EXTERNAL_LISTS / --download-lists); matching is
+# always local — no indicator ever leaves the machine.
+# Tuples: (name, kind, category, url)
+THREAT_INTEL_SOURCES = [
+    ("feodo_c2", "ip", "botnet_c2",
+     "https://feodotracker.abuse.ch/downloads/ipblocklist.txt"),
+    ("urlhaus", "domain", "malware_distribution",
+     "https://urlhaus.abuse.ch/downloads/hostfile/"),
+    # ThreatFox recent IOC export (community-confirmed botnet C2s across
+    # malware families; quoted-CSV ip:port rows). Chosen over SSLBL's IP
+    # blacklist, which abuse.ch deprecated on 2025-01-03.
+    ("threatfox_c2", "ip", "botnet_c2",
+     "https://threatfox.abuse.ch/export/csv/ip-port/recent/"),
+]
+THREAT_INTEL_DIR             = DATA_DIR / "threat_intel"
+THREAT_INTEL_MAX_AGE_HOURS   = 6        # C2 infrastructure rotates fast
+THREAT_INTEL_REFRESH_SECONDS = 6 * 3600
+
+# ---------------------------------------------------------------------------
 # Behavioral heuristics
 # ---------------------------------------------------------------------------
 ENTROPY_THRESHOLD      = 3.5    # Shannon entropy above this → suspicious

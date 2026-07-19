@@ -652,10 +652,22 @@ def main() -> None:
     _dl = True if (args.update or args.download_lists) else None
     count = blocklist.load(console=_verbose, allow_download=_dl)
     _tick(f"Blocklist loaded ({count:,} domains)", _t)
+
+    # 2b. Threat-intel IOC feeds (abuse.ch C2/malware indicators). Same
+    # download policy as the blocklist; cached feeds always load offline.
+    # An intel hit is incident-grade: it blocks at DNS, sinkholes resolved
+    # C2 addresses, and flags live connections through the EDR pipeline.
+    _t = time.monotonic()
+    from .threat_intel import ThreatIntelManager
+    threat_intel = ThreatIntelManager()
+    ioc_count = threat_intel.load(console=_verbose, allow_download=_dl)
+    _tick(f"Threat intel loaded ({ioc_count:,} IOCs)", _t)
     if args.update:
-        console.print(f"[green]Update complete.[/green] {count:,} domains.")
+        console.print(f"[green]Update complete.[/green] {count:,} domains, "
+                      f"{ioc_count:,} IOCs.")
         store.stop()
         return
+    threat_intel.start(allow_download=_dl)   # periodic refresh (no-op if downloads off)
 
     # ------------------------------------------------------------------
     # 3. Firewall (IP-level blocking — optional, non-fatal)
@@ -830,6 +842,7 @@ def main() -> None:
             scanner         = scanner,
             intelligence    = intelligence,
             firewall        = (firewall if not args.no_firewall else None),
+            threat_intel    = threat_intel,
             strict          = args.strict,
             host            = args.host,
             port            = args.port,
@@ -973,10 +986,15 @@ def main() -> None:
             # firewall's is_blocked_ip reputation set.
             _tn = time.monotonic()
             from .network_telemetry import NetworkCollector
+            # Reputation = firewall CIDR ranges OR threat-intel C2 IPs; either
+            # source flags the connection into the same incident pipeline.
+            def _ip_bad(ip: str) -> bool:
+                if firewall is not None and firewall.is_blocked_ip(ip):
+                    return True
+                return threat_intel.match_ip(ip) is not None
             network_collector = NetworkCollector(
                 emit=lambda ev: edr_engine.ingest_telemetry(ev),
-                ip_reputation=(firewall.is_blocked_ip if firewall is not None
-                               else None))
+                ip_reputation=_ip_bad)
             if network_collector.available():
                 network_collector.start()
                 _tick("Endpoint telemetry active (network collector)", _tn)
@@ -1070,6 +1088,7 @@ def main() -> None:
             sensor_manager = sensor_manager,
             heartbeat      = heartbeat,
             ransomware_shield = ransomware_shield,
+            threat_intel   = threat_intel,
         )
         if args.web_host not in ("127.0.0.1", "::1", "localhost"):
             console.print(
@@ -1337,6 +1356,8 @@ def main() -> None:
             edr_engine.stop()
         if intelligence:
             intelligence.stop()
+        if threat_intel is not None:
+            threat_intel.stop()
         firewall.stop()
         # zero_log.disable() must run BEFORE store.stop(): its secure wipe
         # deletes rows through a fresh connection to the shared-cache RAM

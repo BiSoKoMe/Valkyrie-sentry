@@ -213,6 +213,7 @@ not-valid-line
         # Exercise the pure method without standing up the full interceptor.
         inst = DNSInterceptor.__new__(DNSInterceptor)
         inst._firewall = screen_fw
+        inst._threat_intel = None   # screening also consults intel when wired
         _check("blocked answer IP is detected",
                inst._answer_blocked_ip(bad_resp.to_wire()) == "185.220.101.50")
         _check("clean answer IP passes (returns None)",

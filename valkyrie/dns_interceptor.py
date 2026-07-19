@@ -98,6 +98,7 @@ class DNSInterceptor:
         scanner: Optional[SiteScanner] = None,
         intelligence=None,          # valkyrie.intelligence.Intelligence (optional)
         firewall=None,              # valkyrie.firewall.FirewallManager (optional)
+        threat_intel=None,          # valkyrie.threat_intel.ThreatIntelManager (optional)
         strict: bool = False,
         host: str          = DNS_LISTEN_HOST,
         port: int          = DNS_LISTEN_PORT,
@@ -119,6 +120,12 @@ class DNSInterceptor:
         # the client a live address. This is what makes those ranges actually
         # enforce on Windows, where kernel CIDR rules are a deliberate no-op.
         self._firewall      = firewall
+        # IOC feed engine (abuse.ch C2/malware indicators). Consulted early in
+        # the decision pipeline — an intel hit is incident-grade and must
+        # outrank the learned known-good fast path, because a previously
+        # trusted domain that turns up in a C2 feed is exactly the
+        # compromised-infrastructure case feeds exist to catch.
+        self._threat_intel  = threat_intel
         self._strict        = strict  # if True: also check blocklist after scanner "allow"
         self._host          = host
         self._port          = port
@@ -331,7 +338,8 @@ class DNSInterceptor:
         so this screening can only ever add blocks, never break resolution.
         """
         fw = self._firewall
-        if fw is None:
+        ti = self._threat_intel
+        if fw is None and ti is None:
             return None
         try:
             msg = dns.message.from_wire(response_wire)
@@ -343,7 +351,11 @@ class DNSInterceptor:
             for rdata in rrset:
                 ip = str(rdata)
                 try:
-                    if fw.is_blocked_ip(ip):
+                    if fw is not None and fw.is_blocked_ip(ip):
+                        return ip
+                    # A clean-looking domain resolving to a known C2 address
+                    # is the fast-flux / rotated-frontend case: sinkhole it.
+                    if ti is not None and ti.match_ip(ip) is not None:
                         return ip
                 except Exception:
                     return None
@@ -367,6 +379,18 @@ class DNSInterceptor:
         # 2. User always_block
         if rules.is_always_blocked(domain, proc.name):
             return "blocked", "user:always_block", 1.0, "user_rule"
+
+        # 2a. Threat-intel IOC feeds — highest-confidence non-user signal.
+        #     Checked before the intelligence fast path so a learned
+        #     known-good domain that appears in a C2/malware feed still
+        #     blocks (compromised-infrastructure case).
+        ti = self._threat_intel
+        if ti is not None:
+            hit = ti.match_domain(domain)
+            if hit is not None:
+                if self._intelligence is not None:
+                    self._intelligence.remember_block(domain, hit.reason)
+                return "blocked", hit.reason, 1.0, "threat_intel"
 
         # 2b. Intelligence: observe, then take the fast path if this domain
         #     was already decided.  Known-good domains were promoted only
