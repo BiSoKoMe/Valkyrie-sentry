@@ -66,3 +66,6 @@ ValkyriePortable.exe
 
 # Next.js build output (desktop/ dashboard prototype)
 desktop/.next/
+
+# Runtime state (portable/dev data dir) — never commit
+ValkyrieData/
