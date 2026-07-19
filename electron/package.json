@@ -1,0 +1,61 @@
+{
+  "name": "valkyrie-desktop",
+  "version": "0.2.0",
+  "description": "Valkyrie — premium privacy & security desktop application",
+  "author": "Valkyrie",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "dist": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.valkyrie.desktop",
+    "productName": "Valkyrie",
+    "copyright": "Valkyrie",
+    "directories": {
+      "output": "../dist_installer",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "engine_payload",
+        "to": "engine"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "ValkyrieSetup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "include": "build/installer.nsh",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Valkyrie",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "uninstallDisplayName": "Valkyrie"
+    },
+    "portable": {
+      "artifactName": "ValkyriePortable.${ext}",
+      "requestExecutionLevel": "user"
+    }
+  }
+}

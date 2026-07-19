@@ -2,26 +2,6 @@ psutil>=5.9.0
 dnslib>=0.9.24
 winotify>=1.1.0
 
-#  start  python valkyrie.py watch --dns
-
-# check system python valkyrie.py alerts --hours 48
-
-
-# live web Invoke-RestMethod -Uri "http://127.0.0.1:8080/stats"
-
-# force windows Set-DnsClientServerAddress -InterfaceAlias "Wi-Fi" -ServerAddresses "127.0.0.1"
-
-# back to normal Clear-DnsClientServerAddress -InterfaceAlias "Wi-Fi"
- 
- #  python valkyrie.py monitor --dns-port 5353
-
- # start  python -m valkyrie --web --no-ui --web-port 8090
-
-
-
-
-
- #  .\start_all.bat
- #  .\stop_all.bat
-
- #  python -m valkyrie --kill-telemetry
+#.\build.ps1                    # → dist\ValkyrieSetup.exe  (full installer)
+#\build.ps1 -FreezeOnly -Run   # → builds the app and launches it, NO installer
+# $.\run-dev.ps1                  # → runs the app straight from source, seconds

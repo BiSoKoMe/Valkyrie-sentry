@@ -30,8 +30,8 @@ function Test-Admin {
 
 if (-not (Test-Admin)) {
     Write-Host "[*] Relaunching with Administrator privileges..."
-    Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList @(
-        "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit",
+    Start-Process -FilePath "powershell.exe" -Verb RunAs -WindowStyle Hidden -ArgumentList @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
         "-File", "`"$PSCommandPath`""
     )
     exit
@@ -84,8 +84,13 @@ if (Test-Path $PidFile) {
 if (-not $stopped) {
     # Fallback: best-effort match by command line, in case the console
     # window was closed manually or the PID file is otherwise missing.
-    $candidates = Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -like "*-m valkyrie*" }
+    # Match both the frozen engine (valkyrie.exe) and a source run
+    # (python.exe -m valkyrie), so stop works whichever way it was started.
+    $candidates = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            ($_.Name -eq 'valkyrie.exe') -or
+            ($_.Name -eq 'python.exe' -and $_.CommandLine -like "*-m valkyrie*")
+        }
     if ($candidates) {
         foreach ($c in $candidates) {
             Write-Host "[*] Stopping Valkyrie process (PID $($c.ProcessId)) found via command-line match..."

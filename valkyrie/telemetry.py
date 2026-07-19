@@ -29,10 +29,19 @@ from typing import Any, Optional
 # ---------------------------------------------------------------------------
 
 # category — what kind of activity
-CAT_DNS     = "dns"
-CAT_PROCESS = "process"
-CAT_NETWORK = "network"
-CATEGORIES  = frozenset({CAT_DNS, CAT_PROCESS, CAT_NETWORK})
+CAT_DNS         = "dns"
+CAT_PROCESS     = "process"
+CAT_NETWORK     = "network"
+CAT_PERSISTENCE = "persistence"     # auto-start extension points (ASEPs)
+CATEGORIES  = frozenset({CAT_DNS, CAT_PROCESS, CAT_NETWORK, CAT_PERSISTENCE})
+
+# persistence activities — which ASEP class changed. Kept as a small vocab so the
+# EDR correlator and dashboard can reason over persistence uniformly.
+PERSIST_RUN_KEY        = "registry_run_key"
+PERSIST_SERVICE        = "service_install"
+PERSIST_SCHEDULED_TASK = "scheduled_task"
+PERSIST_STARTUP_FOLDER = "startup_folder"
+PERSIST_WMI            = "wmi_subscription"    # permanent WMI event consumer
 
 # action — the disposition Valkyrie applied / observed
 ACT_ALLOWED  = "allowed"

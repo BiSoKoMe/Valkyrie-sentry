@@ -265,6 +265,8 @@ def main() -> None:
                         help="Disable the self-learning intelligence layer")
     parser.add_argument("--no-edr", action="store_true",
                         help="Disable the EDR layer (incidents, hunting, response)")
+    parser.add_argument("--no-ransomware-shield", action="store_true",
+                        help="Disable the behavioral ransomware shield (canary tripwires)")
     parser.add_argument("--edr-plugin-dir", type=str, default="",
                         help="Directory to load third-party EDR plugins from "
                              "(detection/responder/enrichment). Opt-in; trusted code only")
@@ -927,8 +929,10 @@ def main() -> None:
     #     incidents. Stays entirely local (state lives in the same DB).
     # ------------------------------------------------------------------
     edr_engine = None
+    sensor_manager = None
     process_collector = None
     network_collector = None
+    persistence_collector = None
     from .config import EDR_MODE, EDR_CORRELATION_WINDOW, EDR_PLUGIN_DIR
     if EDR_MODE and not args.no_edr:
         _t = time.monotonic()
@@ -978,8 +982,65 @@ def main() -> None:
                 _tick("Endpoint telemetry active (network collector)", _tn)
             else:
                 network_collector = None
+
+            # Persistence (ASEP) telemetry: registry Run keys, services,
+            # scheduled tasks, startup folders → the same correlation pipeline.
+            _tpr = time.monotonic()
+            from .persistence_telemetry import PersistenceCollector
+            persistence_collector = PersistenceCollector(
+                emit=lambda ev: edr_engine.ingest_telemetry(ev))
+            if persistence_collector.available():
+                persistence_collector.start()
+                _tick("Endpoint telemetry active (persistence collector)", _tpr)
+            else:
+                persistence_collector = None
+
+            # Real-time ETW-backed sensors (PowerShell script-block today; more
+            # channels next) hosted by the resilient SensorManager — watchdog,
+            # de-dup, and bounded backpressure. Emits into the SAME EDR pipeline.
+            _ts = time.monotonic()
+            from .etw import (SensorManager, PowerShellSensor, WmiActivitySensor,
+                              SysmonSensor)
+            sensor_manager = SensorManager(sink=lambda ev: edr_engine.ingest_telemetry(ev))
+            sensor_manager.register(PowerShellSensor())
+            sensor_manager.register(WmiActivitySensor())
+            sensor_manager.register(SysmonSensor())   # optional; skipped if absent
+            if sensor_manager.start() > 0:
+                _tick(f"Real-time sensors active ({', '.join(sensor_manager.active_sensors())})", _ts)
+            else:
+                sensor_manager.stop()
+                sensor_manager = None
     elif args.debug:
         console.print("[yellow]EDR layer disabled (--no-edr)[/yellow]")
+
+    # ------------------------------------------------------------------
+    # 9d. Ransomware Shield — behavioral, local. Plants canary tripwires,
+    #     confirms encryption by entropy, attributes the writer by disk I/O and
+    #     suspends it, raising a CRITICAL incident through the EDR pipeline.
+    # ------------------------------------------------------------------
+    ransomware_shield = None
+    from .config import (RANSOMWARE_SHIELD_ENABLED, RANSOMWARE_RESPONSE_MODE,
+                         RANSOMWARE_POLL_INTERVAL, RANSOMWARE_MANIFEST_PATH)
+    if RANSOMWARE_SHIELD_ENABLED and not getattr(args, "no_ransomware_shield", False):
+        _t = time.monotonic()
+        from .ransomware_shield import RansomwareShield
+        ransomware_shield = RansomwareShield(
+            manifest_path = RANSOMWARE_MANIFEST_PATH,
+            edr           = edr_engine,
+            store         = store,
+            response_mode = RANSOMWARE_RESPONSE_MODE,
+            poll_interval = RANSOMWARE_POLL_INTERVAL,
+        )
+        try:
+            armed = ransomware_shield.start()
+            _tick(f"Ransomware shield armed ({ransomware_shield.stats['canaries']} canaries, "
+                  f"mode={RANSOMWARE_RESPONSE_MODE})", _t)
+            if not armed:
+                console.print("[yellow]Ransomware shield: no canaries could be placed "
+                              "(no writable user folders?)[/yellow]")
+        except Exception as _e:   # never let it block startup
+            console.print(f"[yellow]Ransomware shield unavailable: {_e}[/yellow]")
+            ransomware_shield = None
 
     # ------------------------------------------------------------------
     # 10. Web dashboard (optional)
@@ -1005,7 +1066,10 @@ def main() -> None:
             edr            = edr_engine,
             process_collector = process_collector,
             network_collector = network_collector,
+            persistence_collector = persistence_collector,
+            sensor_manager = sensor_manager,
             heartbeat      = heartbeat,
+            ransomware_shield = ransomware_shield,
         )
         if args.web_host not in ("127.0.0.1", "::1", "localhost"):
             console.print(
@@ -1082,6 +1146,20 @@ def main() -> None:
                 unbound.start()
 
             healer.register("unbound", _check_unbound, _recover_unbound)
+
+        # Ransomware shield: if the monitor thread dies, restart it (re-arming
+        # canaries), so protection self-heals like every other subsystem.
+        if ransomware_shield is not None:
+            healer.register("ransomware_shield",
+                            ransomware_shield.is_running,
+                            ransomware_shield.start)
+
+        # Real-time sensor host: the manager has an internal per-sensor watchdog,
+        # and the global self-heal loop restarts the whole manager if it dies.
+        if sensor_manager is not None:
+            healer.register("sensor_manager",
+                            sensor_manager.is_healthy,
+                            sensor_manager.start)
 
         healer.start()
         if args.web:
@@ -1249,6 +1327,12 @@ def main() -> None:
             healer.stop()
         if fleet_agent is not None:
             fleet_agent.stop()
+        if persistence_collector is not None:
+            persistence_collector.stop()
+        if sensor_manager is not None:
+            sensor_manager.stop()
+        if ransomware_shield is not None:
+            ransomware_shield.stop()
         if edr_engine is not None:
             edr_engine.stop()
         if intelligence:

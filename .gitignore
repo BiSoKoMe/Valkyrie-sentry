@@ -6,7 +6,7 @@ __pycache__/
 .Python
 *.egg-info/
 dist/
-build/
+/build/
 venv/
 .venv/
 
@@ -52,3 +52,17 @@ blocklists/oisd_full.txt
 # OS
 .DS_Store
 Thumbs.db
+
+# Electron desktop app — dependencies & build outputs (never commit)
+node_modules/
+electron/engine_payload/
+electron/dist/
+dist_installer/
+ValkyrieSetup.exe
+ValkyriePortable.exe
+# ...but electron/build/ holds SOURCE (icon.ico, installer.nsh) — keep it tracked
+!electron/build/
+!electron/build/**
+
+# Next.js build output (desktop/ dashboard prototype)
+desktop/.next/

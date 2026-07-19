@@ -1,5 +1,7 @@
 """Central configuration — all constants, paths, and defaults live here."""
 
+import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -8,24 +10,59 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Frozen-build awareness (PyInstaller). When packaged as valkyrie.exe the
 # module lives inside an ephemeral temp extraction dir (sys._MEIPASS), so
-# writable state (data/, rules, logs) MUST live next to the executable to
-# persist across runs — while read-only bundled assets are read from the
-# bundle dir. When running from source, both are the repo root, exactly as
-# before, so nothing changes for the normal `python -m valkyrie` flow.
+# read-only bundled assets are read from the bundle dir (BUNDLE_DIR), while all
+# writable state is kept OUT of the install directory entirely.
+#
+# Like professional Windows software (Defender, etc.), a packaged install keeps
+# its mutable data — database, logs, rules, keys, caches — under
+# %ProgramData%\Valkyrie, generated fresh on first launch. The installer ships
+# ZERO user data; two machines installing the same ValkyrieSetup.exe get
+# identical software and completely independent local state. Running from source
+# keeps everything in the repo's data/ folder exactly as before.
 if getattr(sys, "frozen", False):
-    BASE_DIR   = Path(sys.executable).resolve().parent            # next to the .exe
+    BASE_DIR   = Path(sys.executable).resolve().parent            # install dir (read-only)
     BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR))         # bundled assets
+    _program_data = os.environ.get("ProgramData") or os.environ.get("PROGRAMDATA") or r"C:\ProgramData"
+    _default_data = Path(_program_data) / "Valkyrie"
 else:
     BASE_DIR   = Path(__file__).resolve().parent.parent
     BUNDLE_DIR = BASE_DIR
+    _default_data = BASE_DIR / "data"
 
-DATA_DIR = BASE_DIR / "data"
+# VALKYRIE_DATA_DIR lets the shell relocate all writable state — used by the
+# Portable build (state beside the executable) and by deterministic tests. When
+# unset, an installed build uses %ProgramData%\Valkyrie and a source checkout
+# uses the repo's data/ folder.
+_data_override = os.environ.get("VALKYRIE_DATA_DIR")
+DATA_DIR = Path(_data_override) if _data_override else _default_data
+
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_PATH        = DATA_DIR / "valkyrie.db"
 BLOCKLIST_PATH = DATA_DIR / "blocklist.txt"
-RULES_PATH     = BASE_DIR / "valkyrie_rules.yaml"
 LOG_PATH       = DATA_DIR / "valkyrie.log"
+
+# ---------------------------------------------------------------------------
+# Ransomware Shield (local behavioral defense — see valkyrie/ransomware_shield.py)
+# ---------------------------------------------------------------------------
+RANSOMWARE_SHIELD_ENABLED  = True
+# monitor = alert only · suspend = pause culprit (default, reversible) · kill
+RANSOMWARE_RESPONSE_MODE   = "suspend"
+RANSOMWARE_POLL_INTERVAL   = 2.0          # seconds between canary checks
+RANSOMWARE_MANIFEST_PATH   = DATA_DIR / "ransomware_canaries.json"
+
+# User-editable rules live in the writable data dir. The read-only factory
+# default is bundled with the app; on first launch (no rules file yet) it is
+# copied out so the user always starts from a clean, generic rule set and their
+# later edits are never clobbered by an update.
+RULES_PATH         = DATA_DIR / "valkyrie_rules.yaml"
+DEFAULT_RULES_PATH = BUNDLE_DIR / "valkyrie" / "defaults" / "rules.default.yaml"
+if not RULES_PATH.exists():
+    try:
+        if DEFAULT_RULES_PATH.exists():
+            shutil.copyfile(DEFAULT_RULES_PATH, RULES_PATH)
+    except OSError:
+        pass   # first-run seeding is best-effort; RulesEngine tolerates absence
 
 # ---------------------------------------------------------------------------
 # Fleet control plane (multi-device management)
@@ -50,16 +87,16 @@ FLEET_ENROLL_TOKEN_ENV    = "VALKYRIE_FLEET_ENROLL_TOKEN"
 # ---------------------------------------------------------------------------
 DNS_LISTEN_HOST  = "127.0.0.1"
 DNS_LISTEN_PORT  = 5300        # 5353 is taken by mDNS (Brave, svchost) on Windows
-DNS_UPSTREAM     = "40.54.1.13"
+DNS_UPSTREAM     = "9.9.9.9"   # Quad9 — privacy-respecting public resolver (default)
 DNS_UPSTREAM_PORT = 53
 DNS_TIMEOUT      = 3.0         # seconds
 
-# Ordered list of upstream resolvers tried in sequence on forward failure
+# Ordered list of public upstream resolvers tried in sequence on forward
+# failure. All privacy-respecting anycast resolvers — no network-specific hosts.
 UPSTREAM_SERVERS: list[str] = [
-    "8.8.8.8",      # Google — primary
+    "9.9.9.9",      # Quad9 — primary (privacy-focused, blocks malware)
     "1.1.1.1",      # Cloudflare — fallback
-    "9.9.9.9",      # Quad9 — fallback
-    "40.54.1.13",   # ISP DNS — moved last (often unreachable off-network)
+    "8.8.8.8",      # Google — fallback
 ]
 
 SINKHOLE_IPV4 = "0.0.0.0"

@@ -36,6 +36,38 @@ _TELEMETRY_TECHNIQUE = {
     "lolbin":             "T1059 — Command & Scripting Interpreter",
     "office_child_shell": "T1566 — Phishing (macro) → shell",
     "suspicious_path":    "T1204 — User Execution",
+    # Command-line heuristics (process collector)
+    "encoded_powershell": "T1027 — Obfuscated/Encoded Command",
+    "download_cradle":    "T1105 — Ingress Tool Transfer",
+    "hidden_window":      "T1564 — Hide Artifacts",
+    # Persistence / ASEP (persistence collector)
+    "persistence_run_key":        "T1547.001 — Registry Run Keys / Startup Folder",
+    "persistence_service":        "T1543.003 — Create or Modify System Process: Windows Service",
+    "persistence_scheduled_task": "T1053.005 — Scheduled Task",
+    "persistence_startup_folder": "T1547.001 — Registry Run Keys / Startup Folder",
+    # PowerShell script-block sensor (ETW-backed, etw.powershell)
+    "encoded_command":     "T1027 — Obfuscated/Encoded Command",
+    "base64_decode":       "T1140 — Deobfuscate/Decode Files or Information",
+    "download":            "T1105 — Ingress Tool Transfer",
+    "dynamic_exec":        "T1059.001 — PowerShell (IEX)",
+    "amsi_bypass":         "T1562.001 — Impair Defenses: Disable/Modify Tools",
+    "defender_tamper":     "T1562.001 — Impair Defenses: Disable/Modify Tools",
+    "credential_access":   "T1003 — OS Credential Dumping",
+    "persistence_task":    "T1053.005 — Scheduled Task",
+    "injection_primitive": "T1055 — Process Injection",
+    "stealth_flags":       "T1059.001 — PowerShell",
+    "obfuscation":         "T1027 — Obfuscated/Encoded Command",
+    # WMI-Activity sensor (etw.wmi)
+    "persistence_wmi":      "T1546.003 — WMI Event Subscription",
+    "wmi_script_consumer":  "T1546.003 — WMI Event Subscription",
+    "wmi_command_consumer": "T1546.003 — WMI Event Subscription",
+    "wmi_timer_trigger":    "T1546.003 — WMI Event Subscription",
+    "wmi_remote":           "T1047 — Windows Management Instrumentation",
+    # Sysmon sensor (etw.sysmon)
+    "unsigned_module":         "T1574 — Hijack Execution Flow",
+    "remote_thread_injection": "T1055 — Process Injection",
+    "lsass_access":            "T1003.001 — LSASS Memory",
+    "process_tampering":       "T1055.012 — Process Hollowing",
 }
 from .store import EdrStore
 
@@ -143,6 +175,16 @@ class EdrEngine:
                      "activity": d.get("activity", "")},
         )
         # _ingest_detection takes the correlation lock itself — do not wrap.
+        self._ingest_detection(det)
+        return det.incident_id
+
+    def report_detection(self, det: Detection) -> Optional[str]:
+        """Public entry for sensors that produce a fully-formed Detection (e.g.
+        the ransomware shield) rather than raw telemetry. Flows through the same
+        correlation → incident → timeline → WebSocket pipeline. Returns the
+        incident id, or None if the engine isn't running."""
+        if not self._running:
+            return None
         self._ingest_detection(det)
         return det.incident_id
 

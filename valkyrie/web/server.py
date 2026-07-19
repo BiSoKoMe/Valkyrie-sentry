@@ -479,6 +479,39 @@ def create_app(ctx: Optional[AppContext] = None):
                     "integrity": "verified", "tampered_files": []}
         return state.zero_log.status()
 
+    # ── Ransomware Shield ────────────────────────────────────────────────
+    @app.get("/api/ransomware/status")
+    async def ransomware_status():
+        rs = getattr(state, "ransomware_shield", None)
+        if rs is None:
+            return {"enabled": False}
+        return rs.status()
+
+    @app.post("/api/ransomware/self-test")
+    async def ransomware_self_test(request: Request):
+        # State-changing only in a throwaway temp dir; still token-gated so a
+        # remote page can't trigger it. Proves the tripwire + entropy logic live.
+        guard = _control_guard(request)
+        if guard is not None:
+            return guard
+        rs = getattr(state, "ransomware_shield", None)
+        if rs is None:
+            return JSONResponse({"error": "ransomware shield not active"}, status_code=503)
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            return rs.simulate(Path(td))
+
+    # ── Endpoint telemetry visibility ────────────────────────────────────
+    @app.get("/api/telemetry/endpoint")
+    async def endpoint_telemetry_status():
+        pc = getattr(state, "persistence_collector", None)
+        return {
+            "process_collector":    getattr(state, "process_collector", None) is not None,
+            "network_collector":    getattr(state, "network_collector", None) is not None,
+            "persistence_collector": pc is not None,
+            "persistence_running":  bool(pc and pc.is_running()),
+        }
+
     # ── System control (launcher / dashboard buttons) ───────────────────
     @app.get("/api/system/token")
     async def system_token(request: Request):
@@ -560,6 +593,16 @@ def create_app(ctx: Optional[AppContext] = None):
         if state.edr is None:
             return JSONResponse({"error": "EDR not enabled"}, status_code=503)
         return state.edr.list_incidents(status=status, severity=severity, limit=200)
+
+    @app.get("/api/sensors/status")
+    async def sensors_status():
+        """Real-time sensor host health + metrics (observability for the
+        SensorManager: per-sensor state, dedup/backpressure drops, restarts)."""
+        sm = getattr(state, "sensor_manager", None)
+        if sm is None:
+            return {"enabled": False}
+        s = sm.stats(); s["enabled"] = True
+        return s
 
     @app.get("/api/edr/incidents/{incident_id}")
     async def edr_incident(incident_id: str):

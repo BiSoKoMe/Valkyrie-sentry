@@ -45,8 +45,10 @@ function Test-Admin {
 
 if (-not (Test-Admin)) {
     Write-Host "[*] Relaunching with Administrator privileges..."
-    Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList @(
-        "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit",
+    # Hidden + no -NoExit so the app-triggered elevated run never leaves a
+    # PowerShell console on screen. (Manual users go through the scheduled task.)
+    Start-Process -FilePath "powershell.exe" -Verb RunAs -WindowStyle Hidden -ArgumentList @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
         "-File", "`"$PSCommandPath`""
     )
     exit
@@ -125,9 +127,19 @@ if ($AlreadyRunning) {
     # 3. Launch Valkyrie in a new visible console window
     # -----------------------------------------------------------------
     Write-Host "[*] Starting Valkyrie on port $DnsPort (dashboard on $WebPort)..."
-    $valkyrieArgs = @("-m", "valkyrie", "--port", "$DnsPort", "--web", "--no-ui", "--web-port", "$WebPort")
-    $proc = Start-Process -FilePath "python" -ArgumentList $valkyrieArgs `
-        -WorkingDirectory $ProjectRoot -WindowStyle Normal -PassThru
+    # Prefer the frozen engine (valkyrie.exe) sitting next to this script - that
+    # is how an installed copy runs, on machines with no Python. Fall back to
+    # `python -m valkyrie` for a source checkout.
+    $FrozenExe = Join-Path $ProjectRoot "valkyrie.exe"
+    if (Test-Path $FrozenExe) {
+        $engineArgs = @("--port", "$DnsPort", "--web", "--no-ui", "--web-port", "$WebPort")
+        $proc = Start-Process -FilePath $FrozenExe -ArgumentList $engineArgs `
+            -WorkingDirectory $ProjectRoot -WindowStyle Normal -PassThru
+    } else {
+        $valkyrieArgs = @("-m", "valkyrie", "--port", "$DnsPort", "--web", "--no-ui", "--web-port", "$WebPort")
+        $proc = Start-Process -FilePath "python" -ArgumentList $valkyrieArgs `
+            -WorkingDirectory $ProjectRoot -WindowStyle Normal -PassThru
+    }
     Set-Content -Path $PidFile -Value "$($proc.Id)" -Encoding utf8 -NoNewline
 
     # -----------------------------------------------------------------

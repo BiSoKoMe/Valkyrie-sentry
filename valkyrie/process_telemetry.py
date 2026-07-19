@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable, Optional
 
 from .telemetry import (
@@ -113,6 +113,52 @@ def classify_process(name: str, path: str = "",
     return severity, labels, "; ".join(reasons)
 
 
+# ---------------------------------------------------------------------------
+# Command-line heuristics (pure, unit-tested). The command line is the single
+# most valuable process-telemetry field: obfuscation, download cradles and
+# hidden-window flags are the clearest signals of malicious LOLBin use.
+# ---------------------------------------------------------------------------
+_ENCODED_PS = ("-enc ", "-enc:", "-encodedcommand", "-ec ", " -e ")
+_HIDDEN_FLAGS = ("-w hidden", "-windowstyle hidden", "-nop ", "-noprofile",
+                 "-noni", "-noninteractive")
+_DOWNLOAD_CRADLES = (
+    "downloadstring", "downloadfile", "downloaddata", "invoke-expression",
+    "iex(", "iex (", "iex ", "frombase64string", "net.webclient", "webclient",
+    "start-bitstransfer", "bitstransfer", "invoke-webrequest", "invoke-restmethod",
+    "certutil -urlcache", "certutil.exe -urlcache", "certutil -decode",
+    "-decodehex", "wget http", "curl http", "wget.exe http", "curl.exe http",
+)
+
+
+def classify_cmdline(name: str, cmdline: str) -> tuple[str, list[str], str]:
+    """Return (severity, labels, reason) from a process command line. Pure."""
+    c = (cmdline or "").lower()
+    severity = SEV_INFO
+    labels: list[str] = []
+    reasons: list[str] = []
+    if not c:
+        return severity, labels, ""
+
+    def _raise(to: str) -> None:
+        nonlocal severity
+        if severity_rank(to) > severity_rank(severity):
+            severity = to
+
+    if any(t in c for t in _ENCODED_PS):
+        labels.append("encoded_powershell")
+        reasons.append("encoded/obfuscated command line")
+        _raise(SEV_HIGH)
+    if any(t in c for t in _DOWNLOAD_CRADLES):
+        labels.append("download_cradle")
+        reasons.append("in-memory download/execute cradle")
+        _raise(SEV_HIGH)
+    if any(t in c for t in _HIDDEN_FLAGS):
+        labels.append("hidden_window")
+        reasons.append("hidden / non-interactive execution flags")
+        _raise(SEV_MEDIUM)
+    return severity, labels, "; ".join(reasons)
+
+
 @dataclass(frozen=True)
 class ProcInfo:
     pid: int
@@ -121,6 +167,8 @@ class ProcInfo:
     ppid: int = 0
     parent_name: str = ""
     create_time: float = 0.0
+    cmdline: str = ""
+    parent_chain: tuple = ()      # (immediate parent, grandparent, …) names
 
     def key(self) -> tuple[int, float]:
         # pid alone is not unique over time (reused); pair with create_time.
@@ -129,6 +177,11 @@ class ProcInfo:
     def to_event(self) -> TelemetryEvent:
         severity, labels, reason = classify_process(
             self.name, self.path, self.parent_name)
+        csev, clabels, creason = classify_cmdline(self.name, self.cmdline)
+        if severity_rank(csev) > severity_rank(severity):
+            severity = csev
+        labels = labels + clabels
+        reason = "; ".join(r for r in (reason, creason) if r)
         action = ACT_FLAGGED if severity_rank(severity) >= severity_rank(SEV_MEDIUM) \
             else ACT_OBSERVED
         return TelemetryEvent(
@@ -138,7 +191,9 @@ class ProcInfo:
             target={"path": self.path},
             severity=severity, reason=reason, source="process_collector",
             labels=labels,
-            fields={"ppid": self.ppid, "parent_name": self.parent_name},
+            fields={"ppid": self.ppid, "parent_name": self.parent_name,
+                    "cmdline": self.cmdline,
+                    "parent_chain": list(self.parent_chain)},
         )
 
 
@@ -216,6 +271,30 @@ class ProcessCollector:
                 continue
         return out
 
+    def _enrich(self, pi: "ProcInfo", pid_index: dict) -> "ProcInfo":
+        """Add the command line and the parent-process name chain to a NEW
+        process. Done only for fresh processes so the per-poll cost stays low
+        (one cmdline() call per new process, not per process in the table)."""
+        cmdline = ""
+        if _PSUTIL:
+            try:
+                parts = psutil.Process(pi.pid).cmdline()
+                cmdline = " ".join(parts) if parts else ""
+            except Exception:
+                cmdline = ""
+        chain: list[str] = []
+        seen: set[int] = set()
+        ppid, depth = pi.ppid, 0
+        while ppid and ppid not in seen and depth < 8:
+            seen.add(ppid)
+            depth += 1
+            par = pid_index.get(ppid)
+            if par is None:
+                break
+            chain.append(par.name)
+            ppid = par.ppid
+        return replace(pi, cmdline=cmdline, parent_chain=tuple(chain))
+
     def poll_once(self) -> int:
         """Take a snapshot, emit events for new processes, return the count.
 
@@ -227,9 +306,10 @@ class ProcessCollector:
             return 0
         fresh = diff_snapshots(self._last, new)
         self._last = new
+        pid_index = {info.pid: info for info in new.values()}
         for pi in fresh:
             try:
-                self._emit(pi.to_event())
+                self._emit(self._enrich(pi, pid_index).to_event())
             except Exception:
                 pass   # a bad emitter must never stop collection
         return len(fresh)

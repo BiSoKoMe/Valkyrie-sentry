@@ -25,12 +25,18 @@ APP_NAME = os.environ.get("VALKYRIE_EXE_NAME", "valkyrie")
 # Read-only assets the running app loads by path (web templates are served via
 # FileResponse; config paths for these resolve into the bundle at runtime).
 # ---------------------------------------------------------------------------
+#
+# IMPORTANT (release hygiene): only read-only, ship-safe assets go here. NEVER
+# add data/, logs, *.db, *.log, *.env, *.pem/*.key, control tokens, or the
+# repo-root working valkyrie_rules.yaml — the installer must contain ZERO user
+# or developer state. The factory-default rule set (rules.default.yaml) is
+# bundled read-only and copied to %ProgramData%\Valkyrie on first launch.
 datas = [
     ("valkyrie/web/dashboard.html", "valkyrie/web"),
     ("valkyrie/web/edr.html",       "valkyrie/web"),
     ("valkyrie/web/launcher.html",  "valkyrie/web"),
     ("valkyrie/fleet/dashboard.html", "valkyrie/fleet"),
-    ("valkyrie_rules.yaml",         "."),   # template; runtime copy lives by the .exe
+    ("valkyrie/defaults/rules.default.yaml", "valkyrie/defaults"),   # factory default
 ]
 
 binaries = []
@@ -96,7 +102,12 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,          # keep the console — Valkyrie prints a live status box
+    # console=False → GUI subsystem: the engine is a background daemon and must
+    # NEVER allocate a console window, no matter how it is launched (service,
+    # portable child, or fallback). It runs with --no-ui and logs to a file;
+    # run_valkyrie.py guards sys.stdout/stderr so windowed mode can't crash on
+    # a stray print. See docs/adr/0001-windowless-engine.md.
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
