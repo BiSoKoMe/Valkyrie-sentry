@@ -433,6 +433,14 @@ def create_app(ctx: Optional[AppContext] = None):
             info["self_heal"] = state.self_heal.status()
         return info
 
+    @app.get("/api/siem/status")
+    async def siem_status():
+        if state.siem is None:
+            return {"enabled": False}
+        info = state.siem.status()
+        info["enabled"] = True
+        return info
+
     @app.get("/api/intel/status")
     async def threat_intel_status():
         if state.threat_intel is None:

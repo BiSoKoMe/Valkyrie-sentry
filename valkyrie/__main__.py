@@ -252,6 +252,15 @@ def main() -> None:
     parser.add_argument("--fingerprint", action="store_true", help="Normalise TCP/IP fingerprint (TTL 64, no timestamps), then exit")
     parser.add_argument("--fingerprint-restore", action="store_true", help="Restore original TCP/IP fingerprint, then exit")
     parser.add_argument("--fingerprint-status", action="store_true", help="Print TCP/IP fingerprint status and exit")
+    parser.add_argument("--siem", type=str, default="", metavar="URL",
+                        help="Export EDR incidents to a SIEM: udp://host:514, "
+                             "tcp://host:514, tls://host:6514 or file:///path "
+                             "(off by default — sends event data off this machine)")
+    parser.add_argument("--siem-format", type=str, default="cef",
+                        choices=("cef", "json"), help="SIEM export format (default: cef)")
+    parser.add_argument("--siem-dns", action="store_true",
+                        help="Also export blocked/flagged DNS events to the SIEM "
+                             "(includes domains — explicit opt-in)")
     parser.add_argument("--skip-selftest", action="store_true", help="Skip the startup self-test (not recommended)")
     parser.add_argument("--debug", action="store_true",
                         help="Verbose DNS forwarding logs — prints every query, upstream tried, and result")
@@ -942,6 +951,7 @@ def main() -> None:
     #     incidents. Stays entirely local (state lives in the same DB).
     # ------------------------------------------------------------------
     edr_engine = None
+    siem_exporter = None
     sensor_manager = None
     process_collector = None
     network_collector = None
@@ -964,6 +974,24 @@ def main() -> None:
         _pi = edr_engine.plugins()
         _tick(f"EDR active ({len(_pi['plugins'])} plugins, "
               f"{len(_pi['actions'])} response actions)", _t)
+
+        # SIEM export (opt-in): stream incidents (and, with --siem-dns, DNS
+        # blocks) to the operator's log pipeline in CEF or JSON Lines. The
+        # exporter is queue-buffered and reconnecting — SIEM downtime never
+        # touches the protection pipeline.
+        if args.siem:
+            _ts = time.monotonic()
+            from .siem import SiemExporter
+            try:
+                siem_exporter = SiemExporter(args.siem, fmt=args.siem_format)
+                siem_exporter.start()
+                edr_engine.subscribe(siem_exporter.export_incident)
+                if args.siem_dns:
+                    store.subscribe(siem_exporter.export_dns)
+                _tick(f"SIEM export active ({args.siem_format} → {args.siem})", _ts)
+            except ValueError as exc:
+                console.print(f"[red]SIEM export disabled: {exc}[/red]")
+                siem_exporter = None
 
         # Endpoint process telemetry (opt-in via --endpoint): observe process
         # starts and feed behavioral detections into the same correlation engine.
@@ -1089,6 +1117,7 @@ def main() -> None:
             heartbeat      = heartbeat,
             ransomware_shield = ransomware_shield,
             threat_intel   = threat_intel,
+            siem           = siem_exporter,
         )
         if args.web_host not in ("127.0.0.1", "::1", "localhost"):
             console.print(
@@ -1352,6 +1381,8 @@ def main() -> None:
             sensor_manager.stop()
         if ransomware_shield is not None:
             ransomware_shield.stop()
+        if siem_exporter is not None:
+            siem_exporter.stop()
         if edr_engine is not None:
             edr_engine.stop()
         if intelligence:

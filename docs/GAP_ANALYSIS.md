@@ -68,3 +68,15 @@ docs/THREAT_INTEL.md. Live verification: 2,394 IOCs from 3/3 feeds in 1.8 s.
 value; (b) behavioral detection depth via more ETW channels; (c) digital
 forensics triage collection. URL-path IOC matching unlocks when the TLS
 inspector exposes URLs to the intel engine.
+
+## Cycle 2026-07-19: SIEM export — SHIPPED
+Rank-4 gap closed (ADR 0016, `valkyrie/siem.py`): CEF + JSON Lines over
+udp/tcp/tls/file, queue-buffered + reconnecting (peer-close MSG_PEEK
+detection), incidents always / DNS blocks behind a second domain-carrying
+opt-in, `/api/siem/status` observability. Tests 22/22 incl. live loopback
+transports and EDR end-to-end. Platform vision codified honestly in
+docs/ARCHITECTURE.md (shipped / buildable / infra-boundary tiers).
+
+**Next candidates**: (a) digital-forensics triage bundle per incident;
+(b) SOAR-style playbooks over existing response actions; (c) more ETW
+channels; (d) compliance report generator over incident history.
