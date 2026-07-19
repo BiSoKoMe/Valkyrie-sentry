@@ -517,6 +517,22 @@ def create_app(ctx: Optional[AppContext] = None):
         with tempfile.TemporaryDirectory() as td:
             return rs.simulate(Path(td))
 
+    @app.post("/api/edr/incidents/{incident_id}/triage")
+    async def collect_triage(incident_id: str, request: Request):
+        # Collects live host state into a local evidence bundle — state-
+        # revealing, so token-gated like every response-capable route.
+        guard = _control_guard(request)
+        if guard is not None:
+            return guard
+        if state.edr is None or state.store is None:
+            return JSONResponse({"error": "EDR not active"}, status_code=503)
+        from ..forensics import TriageCollector
+        try:
+            manifest = TriageCollector(state.edr, state.store).collect(incident_id)
+        except KeyError:
+            return JSONResponse({"error": "incident not found"}, status_code=404)
+        return manifest
+
     # ── Endpoint telemetry visibility ────────────────────────────────────
     @app.get("/api/telemetry/endpoint")
     async def endpoint_telemetry_status():
