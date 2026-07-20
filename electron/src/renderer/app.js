@@ -428,11 +428,25 @@ PAGES.threats = {
     const list = $('edrList'); if (!list) return;
     const arr = Array.isArray(incidents) ? incidents : (incidents.incidents || []);
     if (!arr.length) { list.innerHTML = '<div class="empty">No incidents — endpoint is clean.</div>'; return; }
-    list.innerHTML = arr.slice(0, 20).map((i) => `
-      <div class="list-row"><div class="lr-main">
-        <span class="lr-title">${escapeHtml(i.title || i.name || i.rule || 'Incident')}</span>
-        <span class="lr-sub">${escapeHtml((i.severity || i.status || '') + (i.host ? ' · ' + i.host : ''))}</span>
-      </div><span class="lr-val">${escapeHtml(i.status || i.severity || '')}</span></div>`).join('');
+    list.innerHTML = arr.slice(0, 20).map((i) => {
+      const sev = String(i.severity || '').toLowerCase();
+      const sevClass = /crit/.test(sev) ? 'critical' : /high/.test(sev) ? 'high'
+        : /med/.test(sev) ? 'medium' : /low/.test(sev) ? 'low' : '';
+      const sevText = sevClass || (i.status || 'incident');
+      // MITRE id from a "technique" field, tolerating "T1003.001 — LSASS" strings.
+      const tech = (i.technique || '').toString().match(/T\d{4}(?:\.\d{3})?/);
+      const entity = i.entity || i.host || '';
+      const sub = [i.status, i.host].filter(Boolean).join(' · ');
+      return `<div class="list-row inc-row" data-sev="${sevClass}">
+        <span class="inc-rail"></span>
+        <span class="sev ${sevClass}">${escapeHtml(sevText)}</span>
+        <div class="lr-main">
+          <span class="lr-title">${escapeHtml(i.title || i.name || i.rule || 'Incident')}</span>
+          <span class="lr-sub">${entity ? `<span class="mono-tag">${escapeHtml(entity)}</span> ` : ''}${escapeHtml(sub)}</span>
+        </div>
+        ${tech ? `<span class="mono-tag">${escapeHtml(tech[0])}</span>` : '<span class="lr-val"></span>'}
+      </div>`;
+    }).join('');
   },
 };
 

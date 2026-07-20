@@ -360,6 +360,28 @@ html, body {
 .list-row .lr-sub { color: var(--text-2); font-size: 11.5px; }
 .list-row .lr-val { color: var(--text-1); font-weight: 600; font-variant-numeric: tabular-nums; }
 
+/* Incident rows: a leading severity rail + monochrome severity chip. */
+.list-row.inc-row { grid-template-columns: 3px auto 1fr auto; gap: 14px; padding-left: 0; }
+.inc-rail { align-self: stretch; border-radius: 3px 0 0 3px; background: var(--text-2); margin: -12px 0; }
+.inc-row[data-sev="critical"] .inc-rail { background: #fff; }
+.inc-row[data-sev="high"] .inc-rail { background: var(--text-0); }
+.inc-row[data-sev="medium"] .inc-rail { background: var(--text-1); }
+.inc-row[data-sev="low"] .inc-rail { background: var(--text-2); }
+.sev {
+  display: inline-flex; align-items: center; gap: 7px; font-size: 10px; font-weight: 700;
+  letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-1); white-space: nowrap;
+}
+.sev::before { content: ""; width: 7px; height: 7px; border-radius: 2px; background: var(--text-2); }
+.sev.critical { color: #fff; } .sev.critical::before { background: #fff; box-shadow: 0 0 0 3px rgba(255,255,255,0.14); }
+.sev.high { color: var(--text-0); } .sev.high::before { background: var(--text-0); }
+.sev.medium { color: var(--text-1); } .sev.medium::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-1); }
+.sev.low { color: var(--text-2); } .sev.low::before { background: var(--text-2); }
+.mono-tag {
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  font-size: 10.5px; color: var(--text-1); background: rgba(255,255,255,0.05);
+  border-radius: 5px; padding: 1px 6px; letter-spacing: -0.1px;
+}
+
 .bars { display: flex; flex-direction: column; gap: 12px; margin-top: 6px; }
 .bar-row { display: grid; grid-template-columns: 160px 1fr 56px; align-items: center; gap: 14px; font-size: 12.5px; }
 .bar-row .bn { color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
