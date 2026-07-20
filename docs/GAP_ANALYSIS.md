@@ -97,3 +97,24 @@ seam; (b) vulnerability visibility (installed software vs local CVE feed);
 (c) browser protection via TLS-inspector + URLhaus full URLs; (d) update
 *apply* path (staged, rollback-capable); (e) app-side UI for incidents/
 playbooks/forensics (electron/ — the product surface).
+
+## Cycle 2026-07-19: efficacy coverage for the ETW/sensor classifiers — SHIPPED
+ADR 0023. The efficacy harness (ADR 0022) measured 7 classifiers; four shipped
+families carried real ATT&CK techniques with **zero measurement**. Extended the
+corpus (15→27 malicious, 16→25 benign) to drive `classify_sysmon`
+(T1055 / T1055.012 / T1003.001 / T1574 / T1547.001), `classify_wmi` (T1546.003),
+`classify_process` (T1204.002 / T1218), and `classify_connection` (T1071, via the
+real `ThreatIntelManager`) — each malicious technique paired with a benign
+control. Recall/FPR held at 100% / 0%; measured technique coverage ~doubled
+across 6 tactics. Gate wired into CI (`.github/workflows/tests.yml`). Surfaced a
+**measured DGA blind spot** (high-entropy 2LD C2 domains are allowed by design —
+entropy alone can't clear the block threshold without false-positiving on CDN
+hostnames of identical entropy); recorded honestly rather than gamed into the
+corpus, queued as the next dedicated cycle (corroborated DGA detector).
+
+**Next candidates (re-ranked)**: (a) corroborated DGA detector
+(entropy + n-gram improbability + no known-good parent SLD, FP-validated);
+(b) VM lab (Atomic Red Team + lab beacon) for the sensor-capture dimension the
+in-repo harness structurally cannot measure; (c) vulnerability visibility
+(installed software vs local CVE feed); (d) browser protection via
+TLS-inspector + URLhaus full URLs.

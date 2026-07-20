@@ -62,6 +62,35 @@ def _fires(case: Case, ctx: dict) -> bool:
         data = case.inp if case.inp else os.urandom(4096)  # encrypted-like
         return shannon_entropy(data) >= _ENTROPY_ENCRYPTED
 
+    if d == "sysmon":
+        # inp = (Sysmon EventID, EventData dict). A None result = no emit; an
+        # emit at >= medium severity is "fired as a threat" (same bar as above).
+        from valkyrie.etw.sysmon import classify_sysmon
+        eid, data = case.inp
+        res = classify_sysmon(eid, data)
+        return res is not None and severity_rank(res["severity"]) >= severity_rank(SEV_MEDIUM)
+
+    if d == "wmi":
+        from valkyrie.etw.wmi import classify_wmi
+        sev, _labels, _tech, _reason = classify_wmi(case.inp, "")
+        return severity_rank(sev) >= severity_rank(SEV_MEDIUM)
+
+    if d == "process":
+        # inp = (name, path, parent_name) — process-relationship heuristics.
+        from valkyrie.process_telemetry import classify_process
+        name, path, parent = case.inp
+        sev, _labels, _ = classify_process(name, path, parent)
+        return severity_rank(sev) >= severity_rank(SEV_MEDIUM)
+
+    if d == "network":
+        # inp = (ip, port). Reputation comes from the REAL threat-intel manager,
+        # measuring the end-to-end network-collector → intel path DNS can't see.
+        from valkyrie.network_telemetry import classify_connection
+        ip, port = case.inp
+        blocked = ctx["intel"].match_ip(ip) is not None
+        sev, _labels, _ = classify_connection(ip, port, blocked)
+        return severity_rank(sev) >= severity_rank(SEV_MEDIUM)
+
     if d in ("intel_domain", "intel_ip"):
         mgr = ctx["intel"]
         if d == "intel_domain":

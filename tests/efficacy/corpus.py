@@ -22,7 +22,8 @@ from dataclasses import dataclass, field
 @dataclass(frozen=True)
 class Case:
     id: str
-    detector: str          # cmdline | powershell | persistence | entropy | intel_domain | intel_ip | scanner
+    detector: str          # cmdline | powershell | persistence | entropy | intel_domain |
+                           # intel_ip | scanner | sysmon | wmi | process | network
     malicious: bool        # True = should fire; False = benign control (must not fire)
     technique: str = ""    # MITRE ATT&CK id (malicious cases)
     tactic: str = ""
@@ -91,6 +92,69 @@ MALICIOUS: list[Case] = [
     # Tracker/ad infrastructure (site_scanner) — privacy detection
     Case("tracker-doubleclick", "scanner", True, "T1071", "command-and-control",
          "doubleclick.net", "known ad-tech tracker"),
+
+    # ── ETW Sysmon sensor classification (etw/sysmon.classify_sysmon) ───────
+    # Each case is (Sysmon EventID, EventData dict) — the same shape the real
+    # sensor parses from Microsoft-Windows-Sysmon/Operational XML.
+    Case("sysmon-inject", "sysmon", True, "T1055", "defense-evasion",
+         (8, {"SourceImage": r"C:\Users\v\AppData\Local\Temp\loader.exe",
+              "TargetImage": r"C:\Windows\System32\svchost.exe",
+              "SourceProcessId": "4100", "TargetProcessId": "820",
+              "StartModule": "", "StartFunction": ""}),
+         "CreateRemoteThread injection (EID 8)"),
+    Case("sysmon-lsass", "sysmon", True, "T1003.001", "credential-access",
+         (10, {"SourceImage": r"C:\Users\v\AppData\Local\Temp\mimi.exe",
+               "TargetImage": r"C:\Windows\System32\lsass.exe",
+               "GrantedAccess": "0x1010",
+               "SourceProcessId": "5120", "TargetProcessId": "640"}),
+         "LSASS credential read (EID 10)"),
+    Case("sysmon-tamper", "sysmon", True, "T1055.012", "defense-evasion",
+         (25, {"Image": r"C:\Users\v\AppData\Local\Temp\hollow.exe",
+               "Type": "Image is replaced", "ProcessId": "6200"}),
+         "process hollowing / tampering (EID 25)"),
+    Case("sysmon-unsigned-mod", "sysmon", True, "T1574", "defense-evasion",
+         (7, {"Image": r"C:\Program Files\App\app.exe",
+              "ImageLoaded": r"C:\Users\v\AppData\Local\Temp\evil.dll",
+              "SignatureStatus": "Unavailable", "Signed": "false",
+              "Hashes": "SHA256=DEADBEEF", "ProcessId": "3300"}),
+         "unsigned module load / DLL hijack (EID 7)"),
+    Case("sysmon-runkey", "sysmon", True, "T1547.001", "persistence",
+         (13, {"Image": r"C:\Users\v\AppData\Local\Temp\dropper.exe",
+               "TargetObject": r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\Updater",
+               "Details": r"C:\Users\v\AppData\Local\Temp\payload.exe",
+               "ProcessId": "3300"}),
+         "autorun registry write (EID 13)"),
+    Case("sysmon-startup-drop", "sysmon", True, "T1547.001", "persistence",
+         (11, {"Image": r"C:\Users\v\AppData\Local\Temp\dropper.exe",
+               "TargetFilename": r"C:\Users\v\AppData\Roaming\Microsoft\Windows"
+                                 r"\Start Menu\Programs\Startup\run.vbs",
+               "ProcessId": "3300"}),
+         "file dropped in Startup folder (EID 11)"),
+
+    # ── WMI event-subscription persistence (etw/wmi.classify_wmi) ───────────
+    Case("wmi-activescript", "wmi", True, "T1546.003", "persistence",
+         "__FilterToConsumerBinding ActiveScriptEventConsumer "
+         "ScriptText=\"CreateObject(\\\"WScript.Shell\\\").Run payload\" "
+         "__InstanceModificationEvent WITHIN 60 Win32_LocalTime",
+         "ActiveScript WMI consumer (fileless persistence)"),
+    Case("wmi-cmdline", "wmi", True, "T1546.003", "persistence",
+         "__FilterToConsumerBinding CommandLineEventConsumer "
+         "CommandLineTemplate=\"powershell -nop -w hidden -enc SQBFAFgA\"",
+         "CommandLine WMI consumer with encoded payload"),
+
+    # ── Process-relationship heuristics (process_telemetry.classify_process) ─
+    Case("proc-office-shell", "process", True, "T1204.002", "execution",
+         ("powershell.exe", r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+          "winword.exe"),
+         "Office document spawned a shell (macro execution)"),
+    Case("proc-lolbin-temp", "process", True, "T1218", "defense-evasion",
+         ("rundll32.exe", r"C:\Users\v\AppData\Local\Temp\a.exe", "explorer.exe"),
+         "LOLBin executed from a temp directory"),
+
+    # ── Network connection to threat-intel IP (network_telemetry) ──────────
+    # DNS misses hard-coded-IP C2; the network collector + intel is the seam.
+    Case("net-c2-ip", "network", True, "T1071", "command-and-control",
+         ("45.9.148.99", 443), "outbound connection to known C2 IP"),
 ]
 
 
@@ -138,4 +202,48 @@ BENIGN: list[Case] = [
          note="bank site, must never be blocked"),
     Case("b-scanner-unknown", "scanner", False, inp="some-small-blog-42.dev",
          note="unknown site — default allow"),
+
+    # Sysmon benign controls — ordinary endpoint activity must not fire.
+    Case("b-sysmon-signed-proc", "sysmon", False, inp=(
+        1, {"Image": r"C:\Windows\System32\notepad.exe",
+            "ParentImage": r"C:\Windows\explorer.exe", "ProcessId": "1200"}),
+        note="signed system process from a normal parent (EID 1)"),
+    Case("b-sysmon-signed-mod", "sysmon", False, inp=(
+        7, {"Image": r"C:\Program Files\App\app.exe",
+            "ImageLoaded": r"C:\Windows\System32\kernel32.dll",
+            "SignatureStatus": "Valid", "Signed": "true", "ProcessId": "1200"}),
+        note="validly-signed module load (EID 7)"),
+    Case("b-sysmon-nonlsass", "sysmon", False, inp=(
+        10, {"SourceImage": r"C:\Program Files\Tool\tool.exe",
+             "TargetImage": r"C:\Windows\System32\svchost.exe",
+             "GrantedAccess": "0x1010", "SourceProcessId": "1200",
+             "TargetProcessId": "800"}),
+        note="process access to a non-LSASS target (EID 10)"),
+    Case("b-sysmon-nonautorun-reg", "sysmon", False, inp=(
+        13, {"Image": r"C:\Program Files\App\app.exe",
+             "TargetObject": r"HKCU\Software\App\Settings\Theme",
+             "Details": "dark", "ProcessId": "1200"}),
+        note="registry write outside autorun keys (EID 13)"),
+    Case("b-sysmon-conn", "sysmon", False, inp=(
+        3, {"Image": r"C:\Program Files\Google\Chrome\chrome.exe",
+            "DestinationIp": "140.82.112.3", "DestinationPort": "443",
+            "Initiated": "true", "ProcessId": "1200"}),
+        note="ordinary outbound HTTPS connection (EID 3) — info, not a threat"),
+
+    # WMI benign control — a non-persistence provider event must not fire.
+    Case("b-wmi-provider", "wmi", False, inp=(
+        "Win32_Process provider started; ESS query executed normally"),
+        note="benign WMI provider activity (no consumer binding)"),
+
+    # Process benign controls — normal signed apps must not fire.
+    Case("b-proc-chrome", "process", False, inp=(
+        "chrome.exe", r"C:\Program Files\Google\Chrome\chrome.exe", "explorer.exe"),
+        note="browser launched from Program Files"),
+    Case("b-proc-svchost", "process", False, inp=(
+        "svchost.exe", r"C:\Windows\System32\svchost.exe", "services.exe"),
+        note="service host from System32"),
+
+    # Network benign control — connection to a clean public IP must not fire.
+    Case("b-net-public-ip", "network", False, inp=("140.82.112.3", 443),
+         note="outbound to a legitimate IP (GitHub), not in intel feeds"),
 ]
