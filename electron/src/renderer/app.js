@@ -18,12 +18,10 @@ async function safe(fn, fallback) { try { return await fn(); } catch { return fa
 
 const LOGO = `
 <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <defs><linearGradient id="vg" x1="0" y1="0" x2="1" y2="1">
-    <stop offset="0" stop-color="#dfe7ff"/><stop offset="1" stop-color="#5b8cff"/></linearGradient></defs>
   <path d="M32 4 54 13v14c0 14-9.5 23-22 30C19.5 50 10 41 10 27V13L32 4z"
-        stroke="url(#vg)" stroke-width="2.2" fill="rgba(91,140,255,0.06)"/>
+        stroke="#f6f6f7" stroke-width="2.2" fill="rgba(255,255,255,0.05)"/>
   <path d="M32 16v28M32 20l9 5M32 20l-9 5M32 30l9 5M32 30l-9 5"
-        stroke="url(#vg)" stroke-width="2.2" stroke-linecap="round"/>
+        stroke="#f6f6f7" stroke-width="2.2" stroke-linecap="round"/>
 </svg>`;
 
 const state = { engineUp: false, protected: false, busy: false, route: 'dashboard', tele: null, pageTimer: null };
@@ -96,7 +94,7 @@ function startParticles() {
       p.x += p.vx; p.y += p.vy;
       if (p.y < -10) { p.y = h + 10; p.x = Math.random() * w; }
       ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(150,180,255,${p.a})`; ctx.fill();
+      ctx.fillStyle = `rgba(235,235,240,${p.a})`; ctx.fill();
     }
     raf = requestAnimationFrame(draw);
   };
@@ -628,7 +626,7 @@ function updateTopbar(data) {
   const s = (data && data.stats) || {}, up = !!(data && data.ok), prot = !!(data && data.protected);
   state.engineUp = up; state.protected = prot;
   $('tbStatus').textContent = prot ? 'Protected' : (up ? 'Standby' : 'Off');
-  $('tbStatus').style.color = prot ? 'var(--green)' : 'var(--text-1)';
+  $('tbStatus').style.color = prot ? 'var(--text-0)' : 'var(--text-1)';
   $('tbBlocked').textContent = fmt((s.dns_blocked || 0) + (s.fw_blocked || 0));
   $('tbPrivacy').textContent = up ? privacyScore(s, up) : '—';
   $('tbUptime').textContent = up ? fmtUptime(s.uptime_seconds) : '—';
