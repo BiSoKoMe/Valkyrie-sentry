@@ -188,6 +188,24 @@ SUSPICIOUS_TLDS: frozenset[str] = frozenset({
 SUSPICIOUS_TLD_WEIGHT = 0.15    # supplementary weight in the behavioral combine
 
 # ---------------------------------------------------------------------------
+# DGA (Domain Generation Algorithm) detection — valkyrie/dga.py
+# ---------------------------------------------------------------------------
+# A confirmed-DGA registrable label is a high-confidence C2 signal (T1568.002).
+# The detector fires ONLY when all three corroborators clear their floors, which
+# is what keeps it off legitimate random-looking hostnames (CDN hashes, short
+# consonant-heavy brands). Tuned for precision on a hard benign control set that
+# includes CDN hostnames and odd-spelled brands (see docs + tests/test_dga.py):
+#   * MIN_LEN 12   — short brands (netflix=7, spotify=7) can never qualify.
+#   * MIN_ENTROPY 3.6 — repetitive / dictionary labels are excluded.
+#   * MIN_RARE_BIGRAM 0.55 — the linguistic discriminator: >=55% of the label's
+#     character pairs must be implausible in real words/brands. Real long
+#     dictionary domains (washingtonpost, bankofamerica) sit well below this.
+DGA_MIN_LEN          = 12
+DGA_MIN_ENTROPY      = 3.0
+DGA_MIN_RARE_BIGRAM  = 0.55
+DGA_BLOCK_CONFIDENCE = 0.70     # a fired DGA verdict is block-worthy on its own
+
+# ---------------------------------------------------------------------------
 # DoH bypass detection
 # ---------------------------------------------------------------------------
 DOH_PROVIDER_IPS = {

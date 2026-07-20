@@ -98,6 +98,28 @@ seam; (b) vulnerability visibility (installed software vs local CVE feed);
 *apply* path (staged, rollback-capable); (e) app-side UI for incidents/
 playbooks/forensics (electron/ — the product surface).
 
+## Cycle 2026-07-19: detection-efficacy program + DGA C2 detection — SHIPPED
+Measurement-first cycles closing the "unmeasured detector" gap (Validation
+Philosophy: *if a detector cannot be measured, it is incomplete*):
+- **Efficacy harness** (ADR 0022): `tests/efficacy/` drives the real
+  classifiers against a MITRE-tagged corpus + benign controls; scores
+  recall/FPR as a regression gate. First run found + fixed a real WScript
+  `//b` silent-exec gap.
+- **ETW/sensor coverage + CI gate** (ADR 0023): extended to `classify_sysmon`
+  (T1055/T1003.001/T1055.012/T1574/T1547.001), `classify_wmi` (T1546.003),
+  `classify_process` (T1204.002/T1218), `classify_connection` (T1071); gate
+  wired into CI. Measured coverage ~doubled; surfaced the DGA blind spot.
+- **DGA C2 detection** (ADR 0024): closed the measured blind spot with a
+  corroborated, precision-first classifier (`valkyrie/dga.py`) — registrable-
+  label scoring + length/entropy/bigram-implausibility corroboration, wired
+  into `SiteScanner` (T1568.002). Baseline **0% → 76% recall at 100%
+  precision, 0% FPR** on a hard CDN/brand/foreign benign set. Short-label DGA
+  remains the honest "needs infra" boundary — not faked.
+- **Host-safety fix**: `test_firewall.py` section 9 (live `netsh` rule
+  install) is now opt-in behind `VALKYRIE_TEST_LIVE_FIREWALL=1` and always
+  tears down in a `finally`, so a routine `run_tests.py` can never strand the
+  host offline. (Reliability Philosophy: never harm the machine it runs on.)
+
 ## Cycle 2026-07-19: efficacy coverage for the ETW/sensor classifiers — SHIPPED
 ADR 0023. The efficacy harness (ADR 0022) measured 7 classifiers; four shipped
 families carried real ATT&CK techniques with **zero measurement**. Extended the

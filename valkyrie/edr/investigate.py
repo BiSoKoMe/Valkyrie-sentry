@@ -41,6 +41,10 @@ _MEANING = {
                     "behaviour it has learned on this machine.",
     "behavioral":   "The hostname looks algorithmically generated (high entropy), "
                     "a hallmark of malware domain-generation algorithms.",
+    "dga":          "The registrable domain is algorithmically generated — its "
+                    "length, entropy, and implausible letter sequences all agree "
+                    "— which is how malware families rendezvous with rotating "
+                    "command-and-control infrastructure (T1568.002).",
     "doh_bypass":   "A process tried to tunnel its DNS over HTTPS to evade the "
                     "local filter — an active evasion attempt.",
     "anomaly":      "A process reached a destination outside its learned baseline "
@@ -54,6 +58,7 @@ _RECOMMEND = {
     "firewall_ip":  ["isolate_host", "kill_process", "block_domain"],
     "intelligence": ["block_domain", "kill_process"],
     "behavioral":   ["block_domain"],
+    "dga":          ["block_domain", "kill_process"],
     "doh_bypass":   ["kill_process", "block_domain"],
     "anomaly":      ["block_domain"],
     "tracker":      ["block_domain"],

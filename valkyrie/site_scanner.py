@@ -33,6 +33,7 @@ from .config import (
     TRACKER_SLD_PREFIXES,
     TRACKER_SLDS,
 )
+from .dga import classify_dga
 
 
 # ---------------------------------------------------------------------------
@@ -207,15 +208,29 @@ class SiteScanner:
             score += 0.25
             reasons.append(f"short cryptic subdomain label: {first}")
 
+        # S7 — confirmed DGA registrable label (T1568.002 — C2). This is a
+        # different threat class from trackers (algorithmic malware C2, not
+        # ad-tech), and is a corroborated, precision-first verdict — length +
+        # entropy + bigram-implausibility must all agree — so it is strong
+        # enough to block on its own. Evaluated on the REGISTRABLE label, so a
+        # gibberish CDN hostname under a real parent (d1anzk….cloudfront.net)
+        # never triggers it. See valkyrie/dga.py for the honest boundary.
+        dga = classify_dga(domain)
+        if dga.is_dga:
+            score = max(score, dga.confidence)
+            reasons.append(dga.reason)
+
         score = min(1.0, score)
 
-        # Decision — default is ALLOW
+        # Decision — default is ALLOW. A fired DGA verdict is categorised "dga"
+        # (its own MITRE technique / severity), otherwise a positive is a tracker.
+        threat_category = "dga" if dga.is_dga else "tracker"
         if score >= SCANNER_BLOCK_THRESHOLD:
             decision = "block"
-            category = "tracker"
+            category = threat_category
         elif score >= SCANNER_FLAG_THRESHOLD:
             decision = "flag"
-            category = "tracker"
+            category = threat_category
         else:
             decision = "allow"
             category = "legitimate"

@@ -8,6 +8,7 @@ Usage:
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -228,18 +229,35 @@ not-valid-line
         print(f"  [-] SKIP — dnspython not available: {exc}")
 
     # ------------------------------------------------------------------
-    # 9. Kernel rule installation (admin/root required — non-fatal)
+    # 9. Kernel rule installation (admin/root required — HOST-AFFECTING)
+    #
+    # start() installs REAL `netsh` outbound-block rules (on Windows: the DoH
+    # resolver IPs on TCP/443). If this process is interrupted between start()
+    # and stop(), those rules persist and can break DNS/connectivity on the
+    # host — which is exactly why this section is OPT-IN. It is skipped unless
+    # VALKYRIE_TEST_LIVE_FIREWALL=1, so a routine `run_tests.py` can never take
+    # a live machine offline. CI still exercises every pure-logic check above.
+    # To run it deliberately (in a throwaway VM): set the env var.
     # ------------------------------------------------------------------
-    print("\n[9] Kernel rule installation (requires admin/root)")
-    fw3 = FirewallManager()
-    count = fw3.start()
-    if count == 0:
-        print("  [-] SKIP — no elevated privileges (firewall degraded gracefully)")
+    print("\n[9] Kernel rule installation (HOST-AFFECTING — opt-in)")
+    if os.environ.get("VALKYRIE_TEST_LIVE_FIREWALL") != "1":
+        print("  [-] SKIP — host-affecting; set VALKYRIE_TEST_LIVE_FIREWALL=1 to run "
+              "(installs real firewall rules; use a VM)")
     else:
-        _check("rules installed (count > 0)", count > 0)
-        fw3.stop()
-        _check("stop() did not raise",        True)
-        print(f"       {count:,} rules installed and removed cleanly")
+        fw3 = FirewallManager()
+        count = fw3.start()
+        try:
+            if count == 0:
+                print("  [-] SKIP — no elevated privileges (firewall degraded gracefully)")
+            else:
+                _check("rules installed (count > 0)", count > 0)
+        finally:
+            # Always tear down, even if a check above raised, so live rules can
+            # never leak out of this test and strand the host offline.
+            fw3.stop()
+        if count:
+            _check("stop() did not raise", True)
+            print(f"       {count:,} rules installed and removed cleanly")
 
     # ------------------------------------------------------------------
     # Summary

@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 class Case:
     id: str
     detector: str          # cmdline | powershell | persistence | entropy | intel_domain |
-                           # intel_ip | scanner | sysmon | wmi | process | network
+                           # intel_ip | scanner | sysmon | wmi | process | network | dga
     malicious: bool        # True = should fire; False = benign control (must not fire)
     technique: str = ""    # MITRE ATT&CK id (malicious cases)
     tactic: str = ""
@@ -155,6 +155,16 @@ MALICIOUS: list[Case] = [
     # DNS misses hard-coded-IP C2; the network collector + intel is the seam.
     Case("net-c2-ip", "network", True, "T1071", "command-and-control",
          ("45.9.148.99", 443), "outbound connection to known C2 IP"),
+
+    # ── DGA C2 domains (dga.classify_dga → scanner block) ──────────────────
+    # Algorithmic malware rendezvous domains — the blind spot ADR 0023 measured
+    # and this cycle closed. Long-label PRNG style (the target family class).
+    Case("dga-necurs", "dga", True, "T1568.002", "command-and-control",
+         "xjkqvw92hd8skwlqz3ty.com", "PRNG-style DGA registrable label"),
+    Case("dga-ramnit", "dga", True, "T1568.002", "command-and-control",
+         "myfpbcadkbfcdcj.com", "consonant-heavy DGA label"),
+    Case("dga-digits", "dga", True, "T1568.002", "command-and-control",
+         "k2v9q3xw8pjh4m1tzr7f.top", "DGA label with interleaved digits"),
 ]
 
 
@@ -246,4 +256,14 @@ BENIGN: list[Case] = [
     # Network benign control — connection to a clean public IP must not fire.
     Case("b-net-public-ip", "network", False, inp=("140.82.112.3", 443),
          note="outbound to a legitimate IP (GitHub), not in intel feeds"),
+
+    # DGA benign controls — the hard cases a naive entropy detector breaks on.
+    Case("b-dga-cdn", "dga", False, inp="d1anzknqnc1kmb.cloudfront.net",
+         note="gibberish CDN SUBDOMAIN under a real parent — must not fire"),
+    Case("b-dga-longword", "dga", False, inp="nationalgeographic.com",
+         note="long dictionary domain (len>=12) — must not fire"),
+    Case("b-dga-hyphen", "dga", False, inp="real-estate-services.com",
+         note="hyphenated legitimate brand — hyphens must not inflate score"),
+    Case("b-dga-brand", "dga", False, inp="crunchyroll.com",
+         note="consonant-heavy real brand — must not fire"),
 ]

@@ -9,15 +9,15 @@ mocks, no reimplementation — with a MITRE-ATT&CK-tagged corpus of
 technique-representative malicious inputs and a benign control set, and
 scores recall (true-positive rate) and false-positive rate.
 
-## Result (2026-07-19, corpus expanded to the ETW/sensor classifiers)
+## Result (2026-07-19, corpus expanded to the ETW/sensor classifiers + DGA)
 
 | Metric | Value |
 |---|---|
-| Recall (malicious detected) | **27 / 27 = 100%** |
-| False-positive rate (benign wrongly flagged) | **0 / 25 = 0%** |
+| Recall (malicious detected) | **30 / 30 = 100%** |
+| False-positive rate (benign wrongly flagged) | **0 / 29 = 0%** |
 | Precision | 100% |
 
-Per-tactic recall: command-and-control 7/7 · credential-access 2/2 ·
+Per-tactic recall: command-and-control 10/10 · credential-access 2/2 ·
 defense-evasion 10/10 · execution 1/1 · impact 1/1 · persistence 6/6.
 
 Detectors exercised (all real code): `process_telemetry.classify_cmdline`
@@ -26,7 +26,8 @@ and `.classify_process`, `etw/powershell.classify_powershell`,
 `persistence_telemetry._persistence_severity`,
 `network_telemetry.classify_connection` (reputation via the real
 `ThreatIntelManager`), `ransomware_shield.shannon_entropy`,
-`threat_intel.match_domain/match_ip`, `site_scanner.analyze`.
+`threat_intel.match_domain/match_ip`, `site_scanner.analyze`,
+`dga.classify_dga` (new — corroborated DGA C2 detection).
 
 ### 2026-07-19 expansion — measuring the ETW sensor classifiers (ADR 0023)
 
@@ -87,37 +88,52 @@ FP/FN trade-off and an operator risk-appetite dimension**, so it is
 documented here rather than silently retuned. It is deliberately kept out of
 the benign corpus so it does not conflate a design choice with a regression.
 
-## A measured blind spot this expansion confirmed: DGA C2 domains
+## Closed this cycle: DGA C2 domains (ADR 0024)
 
-Probing the real pipeline surfaced a genuine, reproducible false-negative:
-**algorithmically-generated (DGA) command-and-control domains are not
-caught.** Driving `SiteScanner.analyze` and `BehavioralEngine.should_block`
-directly:
+The previous expansion *measured* a genuine blind spot: **algorithmically-
+generated (DGA) command-and-control domains were not caught** — 0% recall.
+Driving the real pipeline confirmed entropy alone could never reach the block
+threshold (`xjkqvw92hd8skwlqz3ty.com` scored 0.30 behavioral / scanner-allow),
+and a naive high-entropy block would false-positive on CDN hostnames with
+identical entropy (`d1anzknqnc1kmb.cloudfront.net` = 3.18). This cycle closed
+it with a **corroborated** detector (`valkyrie/dga.py`, wired into
+`SiteScanner`).
 
-| Domain | leftmost-label entropy | scanner | behavioral score (block @ 0.70) |
+**The detector.** It scores only the **registrable (2LD) label** — so a
+gibberish CDN *subdomain* under a real parent (`d1anzk….cloudfront.net`) is
+structurally ignored, eliminating the entire CDN false-positive class — and
+fires only when three independent signals agree: length ≥ 12, Shannon entropy
+≥ 3.0, and a **bigram-implausibility fraction ≥ 0.55** from an embedded
+English/brand bigram model (the linguistic discriminator). Hyphen-adjacent
+pairs are treated as a negative signal so hyphenated brands (`libjpeg-turbo`,
+`coca-cola`) stay clear.
+
+**Measured, before → after**, on a hard labeled set (25 long-label DGA vs. 75
+benign chosen to break a naive detector — CDN hash hostnames, odd-spelled
+brands, long dictionary/foreign domains, hyphenated brands):
+
+| Detector | Recall | Precision | FPR |
 |---|---|---|---|
-| `xjkqvw92hd8skwlqz3ty.com` | 4.02 | allow | 0.30 |
-| `k2v9q3xw8pjh4m1tzr7f.top` | 4.32 | allow | 0.48 |
-| `uqwxkcjznqvbhlpm.net` | 3.88 | allow | 0.29 |
+| Baseline (`site_scanner` + `behavioral`) | **0%** | — | — |
+| `classify_dga` (this cycle) | **76%** | **100%** | **0%** |
 
-Root cause: the behavioral entropy signal contributes at most `0.5 × weight`,
-so entropy **alone can never reach the 0.70 block threshold**, and for a bare
-registered (2LD) DGA domain there is no subdomain for the scanner's
-entropy/rate signals to corroborate. This is a *deliberate* precision choice,
-not an accidental bug — a pure high-entropy block would false-positive on
-legitimate CDN hostnames with identical entropy (`d1anzknqnc1kmb.cloudfront.net`
-is 3.18, `googleusercontent.com` 3.18), which per project policy ("precision >
-aggression; a false positive breaks a real site") is unacceptable.
+The highest benign label sits at rare-bigram 0.40 — a comfortable margin below
+the 0.55 floor. On the representative PRNG-style corpus in `tests/test_dga.py`
+recall is 100% at 100% precision; the 76% figure reflects a deliberately harder
+mixed set that also includes keyboard-walk strings.
 
-It is **not** added to the malicious corpus as a passing case, because it does
-not pass — recording it as caught would game the scorecard. It is logged here
-as the honest current state and queued as the next dedicated cycle: a
-*corroborated* DGA detector (entropy **+** n-gram improbability **+** absence
-of a known-good parent SLD **+** length/character-class gating), validated
-against a large benign CDN/hostname control set before it ships. A
-model-based DGA classifier trained on internet-scale domains is the
-commercial approach and is explicitly marked "needs infra" in
-docs/GAP_ANALYSIS.md — we will not fake it.
+**Honest boundary.** This targets **long-label** DGA families (necurs, ramnit,
+gozi, murofet, qakbot). **Short-label** DGAs (some Conficker variants, 8–11
+chars) and clean keyboard-walk strings remain out of scope — at that length the
+signal cannot separate DGA from real short brands without the internet-scale
+trained model still marked "needs infra" in docs/GAP_ANALYSIS.md. This is a
+strong local signal corroborated by DNS timing, intel, and process context in
+the pipeline — not a standalone model, and it does not claim to be one.
+
+Three DGA cases (`dga-necurs`, `dga-ramnit`, `dga-digits`) and four hard benign
+controls (CDN subdomain, long dictionary domain, hyphenated brand, consonant-
+heavy brand) are now in the efficacy corpus, so a regression that reopens this
+gap fails the gate.
 
 ## Honest boundary — read this before trusting the number
 

@@ -91,6 +91,11 @@ def _fires(case: Case, ctx: dict) -> bool:
         sev, _labels, _ = classify_connection(ip, port, blocked)
         return severity_rank(sev) >= severity_rank(SEV_MEDIUM)
 
+    if d == "dga":
+        # Corroborated DGA classifier (length + entropy + bigram implausibility).
+        from valkyrie.dga import classify_dga
+        return classify_dga(case.inp).is_dga
+
     if d in ("intel_domain", "intel_ip"):
         mgr = ctx["intel"]
         if d == "intel_domain":

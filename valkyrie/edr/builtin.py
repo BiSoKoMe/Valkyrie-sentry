@@ -37,6 +37,7 @@ _TECHNIQUE = {
     "firewall_ip":  "T1071 — Application Layer Protocol (C2)",
     "intelligence": "T1071.004 — DNS C2 / beaconing",
     "behavioral":   "T1568.002 — Domain Generation Algorithm",
+    "dga":          "T1568.002 — Domain Generation Algorithm",
     "anomaly":      "T1071.004 — Anomalous DNS",
     "doh_bypass":   "T1572 — Protocol Tunnelling (DoH bypass)",
     "tracker":      "T1041 — Exfiltration / tracking",
@@ -133,10 +134,22 @@ class DohBypassDetection(DetectionPlugin):
 
 class DgaDetection(DetectionPlugin):
     name = "dns.dga"
-    description = "High-entropy hostname — algorithmically generated (DGA) domain"
+    description = "Algorithmically generated (DGA) domain — likely malware C2 rendezvous"
 
     def analyze(self, event, ctx):
         domain, decision, pname, pid, cat, susp, reason = _ev(event)
+        # Confirmed DGA from the corroborated classifier (valkyrie/dga.py, wired
+        # into the scanner) — length + entropy + bigram-implausibility all agree,
+        # so this is a high-confidence C2 signal.
+        if cat == "dga":
+            return [Detection(
+                source=self.name, severity="high", category="dga",
+                title=f"DGA C2 domain contacted by {pname or 'a process'}",
+                entity=domain, process_name=pname, process_pid=pid,
+                technique="T1568.002 — Domain Generation Algorithm",
+                details={"reason": reason, "suspicion": susp},
+            )]
+        # Looser legacy signal: a behavioral block whose reason cites entropy.
         is_beh = decision == "behavioral" or cat == "behavioral"
         if is_beh and "entropy" in reason.lower():
             return [Detection(
