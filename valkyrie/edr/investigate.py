@@ -51,9 +51,28 @@ _MEANING = {
                     "— unusual, though not necessarily malicious.",
     "tracker":      "Known advertising/tracking infrastructure was blocked — a "
                     "privacy signal rather than a compromise.",
+    # Endpoint (telemetry-path) categories — CAT_PROCESS / CAT_PERSISTENCE /
+    # CAT_NETWORK. These carry Valkyrie's most severe detections and previously
+    # fell through to the generic fallback with no meaning and no recommended
+    # action (see tests/test_explainability.py, the gate that now prevents this).
+    "process":      "A process on this endpoint showed malicious behaviour — "
+                    "reading LSASS memory, injecting into another process, or "
+                    "executing from an untrusted location. Endpoint process "
+                    "telemetry (ETW/Sysmon or the process collector) is the "
+                    "evidence; treat as a likely hands-on-keyboard or malware step.",
+    "persistence":  "An auto-start extension point was created — a registry Run "
+                    "key, service, scheduled task, Startup-folder item, or WMI "
+                    "event subscription — the mechanism an attacker uses to "
+                    "survive reboot and re-establish a foothold.",
+    "network":      "This endpoint made an outbound connection to infrastructure "
+                    "on a threat-intelligence blocklist — a strong command-and-"
+                    "control signal that DNS filtering alone cannot see because "
+                    "the destination was reached by hard-coded IP.",
 }
 
 # Category -> which response actions the analyst recommends, in priority order.
+# Every action here MUST be a shipped responder in edr/response.py
+# (block_domain, kill_process, isolate_host) — never an aspirational one.
 _RECOMMEND = {
     "firewall_ip":  ["isolate_host", "kill_process", "block_domain"],
     "intelligence": ["block_domain", "kill_process"],
@@ -62,7 +81,24 @@ _RECOMMEND = {
     "doh_bypass":   ["kill_process", "block_domain"],
     "anomaly":      ["block_domain"],
     "tracker":      ["block_domain"],
+    # Endpoint categories: contain the host first, then stop the offending
+    # process. (block_domain is omitted for `network` because its entity is an
+    # IP, which the domain responder does not enforce.)
+    "process":      ["isolate_host", "kill_process"],
+    "persistence":  ["kill_process", "isolate_host"],
+    "network":      ["isolate_host", "kill_process"],
 }
+
+# The canonical set of categories an incident can carry — the single source of
+# truth the explainability gate checks. DNS-path categories are the normalized
+# Detection.category values set by the built-in plugins (edr/builtin.py); the
+# endpoint categories are telemetry CAT_PROCESS/CAT_PERSISTENCE/CAT_NETWORK
+# (telemetry.py) as flowed through EdrEngine. Adding a new category here without
+# a _MEANING and _RECOMMEND entry fails tests/test_explainability.py by design.
+KNOWN_INCIDENT_CATEGORIES = frozenset({
+    "firewall_ip", "intelligence", "behavioral", "dga", "doh_bypass",
+    "anomaly", "tracker", "process", "persistence", "network",
+})
 
 
 class Investigator:
