@@ -75,6 +75,15 @@ function rowsPanel(pairs) {
 function badge(text, kind) {
   return `<span class="badge ${kind || ''}"><span class="bdot"></span>${text}</span>`;
 }
+/* Reusable empty / offline / error state — the one component every page uses so
+   an absence of data is always communicated honestly and consistently.
+   kind: 'offline' (engine not monitoring) | 'empty' (monitoring, nothing found)
+       | 'error' (couldn't load). */
+function stateBlock(kind, title, sub) {
+  const ic = { offline: ICON.power, empty: ICON.shieldCheck || ICON.shield, error: ICON.alert }[kind] || ICON.shield;
+  return `<div class="state-block ${kind}"><div class="sb-ic">${ic || ''}</div>
+    <div class="sb-t">${escapeHtml(title)}</div>${sub ? `<div class="sb-s">${escapeHtml(sub)}</div>` : ''}</div>`;
+}
 
 /* ============================ Particles ============================== */
 function startParticles() {
@@ -423,18 +432,31 @@ PAGES.threats = {
     };
   },
   async poll() {
+    const cards = $('edrCards');
+    const list = $('edrList'); if (!list) return;
+    // Honesty first: never imply "clean" when the engine isn't monitoring. A
+    // security product that shows reassurance while protection is off is worse
+    // than one that shows nothing. state.engineUp is driven by live telemetry.
+    if (!state.engineUp) {
+      if (cards) cards.innerHTML = '';
+      list.innerHTML = stateBlock('offline', 'Protection is off',
+        'Valkyrie is not monitoring this endpoint right now. Start protection to see incidents and live detections.');
+      return;
+    }
     const [stats, incidents] = await Promise.all([
       safe(() => V.api.get('/api/edr/stats'), {}),
       safe(() => V.api.get('/api/edr/incidents'), []),
     ]);
-    const cards = $('edrCards');
     if (cards) cards.innerHTML = `
       <div class="card accent-green"><div class="label">${ICON.alert}Open Incidents</div><div class="value">${fmt(stats.open || stats.open_incidents || 0)}</div></div>
       <div class="card"><div class="label">${ICON.shield}Total Incidents</div><div class="value">${fmt(stats.total || stats.total_incidents || (Array.isArray(incidents) ? incidents.length : 0))}</div></div>
       <div class="card"><div class="label">${ICON.activity}Telemetry Events</div><div class="value">${fmt(stats.events || stats.event_count || 0)}</div></div>`;
-    const list = $('edrList'); if (!list) return;
     const arr = Array.isArray(incidents) ? incidents : (incidents.incidents || []);
-    if (!arr.length) { list.innerHTML = '<div class="empty">No incidents — endpoint is clean.</div>'; return; }
+    if (!arr.length) {
+      list.innerHTML = stateBlock('empty', 'No incidents detected',
+        'The behavioral engine is monitoring this endpoint — no threats found.');
+      return;
+    }
     list.innerHTML = arr.slice(0, 20).map((i) => {
       const sev = String(i.severity || '').toLowerCase();
       const sevClass = /crit/.test(sev) ? 'critical' : /high/.test(sev) ? 'high'

@@ -555,3 +555,17 @@ html, body {
   transition: opacity 0.15s ease; white-space: nowrap; font-weight: 600; }
 .inc-row:hover .rp-open { opacity: 1; }
 @media (max-width: 760px) { .rp-body { grid-template-columns: 1fr; } .rp-side { display: none; } }
+
+/* ======================================================================
+   State block — reusable empty / offline / error state (design system)
+   ====================================================================== */
+.state-block {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; gap: 10px; padding: 46px 22px; color: var(--text-2);
+}
+.state-block .sb-ic { width: 34px; height: 34px; opacity: 0.45; color: var(--text-1); }
+.state-block .sb-ic svg { width: 100%; height: 100%; }
+.state-block .sb-t { font-size: 14px; font-weight: 600; color: var(--text-1); letter-spacing: 0.005em; }
+.state-block .sb-s { font-size: 12.5px; color: var(--text-2); max-width: 360px; line-height: 1.55; }
+.state-block.offline .sb-ic { opacity: 0.7; }
+.state-block.error .sb-ic { opacity: 0.7; }
