@@ -414,6 +414,13 @@ PAGES.threats = {
       <div class="grid" id="edrCards"><div class="empty">Loading EDR…</div></div>
       ${sectionHead('Recent Incidents')}
       <div class="list" id="edrList"><div class="empty">Loading…</div></div>`;
+    // Delegated: click an incident to replay it step-by-step. Survives the
+    // poll's innerHTML refresh because the listener lives on the parent.
+    const list = $('edrList');
+    if (list) list.onclick = (e) => {
+      const row = e.target.closest('.inc-row');
+      if (row && row.dataset.id) openReplay(row.dataset.id);
+    };
   },
   async poll() {
     const [stats, incidents] = await Promise.all([
@@ -437,14 +444,15 @@ PAGES.threats = {
       const tech = (i.technique || '').toString().match(/T\d{4}(?:\.\d{3})?/);
       const entity = i.entity || i.host || '';
       const sub = [i.status, i.host].filter(Boolean).join(' · ');
-      return `<div class="list-row inc-row" data-sev="${sevClass}">
+      return `<div class="list-row inc-row" data-sev="${sevClass}" data-id="${escapeHtml(i.id || '')}">
         <span class="inc-rail"></span>
         <span class="sev ${sevClass}">${escapeHtml(sevText)}</span>
         <div class="lr-main">
           <span class="lr-title">${escapeHtml(i.title || i.name || i.rule || 'Incident')}</span>
           <span class="lr-sub">${entity ? `<span class="mono-tag">${escapeHtml(entity)}</span> ` : ''}${escapeHtml(sub)}</span>
         </div>
-        ${tech ? `<span class="mono-tag">${escapeHtml(tech[0])}</span>` : '<span class="lr-val"></span>'}
+        ${tech ? `<span class="mono-tag">${escapeHtml(tech[0])}</span>` : ''}
+        <span class="rp-open">▶ Replay</span>
       </div>`;
     }).join('');
   },
@@ -645,6 +653,208 @@ function updateTopbar(data) {
   $('tbPrivacy').textContent = up ? privacyScore(s, up) : '—';
   $('tbUptime').textContent = up ? fmtUptime(s.uptime_seconds) : '—';
 }
+
+/* ============================ Replay Mode ===========================
+   Opens an incident and replays its correlated telemetry step-by-step —
+   the attack chain, MITRE techniques, and evidence unfolding in sequence.
+   Driven by the REAL /api/edr/incidents/{id} timeline; no synthetic data.
+   =================================================================== */
+const RP_ICON = {
+  play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v13.72L19 12 8 5.14z"/></svg>',
+  pause: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h3v14H7zM14 5h3v14h-3z"/></svg>',
+  prev: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h2v14H7zM19 5 9 12l10 7V5z"/></svg>',
+  next: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M15 5h2v14h-2zM5 5l10 7L5 19V5z"/></svg>',
+  restart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>',
+  x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+};
+
+function rpTime(v) {
+  if (v == null || v === '') return '';
+  let d;
+  if (typeof v === 'number' || /^\d+(\.\d+)?$/.test(v)) {
+    let ms = Number(v); if (ms < 1e12) ms *= 1000; d = new Date(ms);
+  } else { d = new Date(v); }
+  return isNaN(d.getTime()) ? String(v) : d.toTimeString().slice(0, 8);
+}
+function rpSevClass(s) {
+  s = String(s || '').toLowerCase();
+  return /crit/.test(s) ? 'critical' : /high/.test(s) ? 'high'
+    : /med/.test(s) ? 'medium' : /low/.test(s) ? 'low' : '';
+}
+function rpTech(t) { const m = String(t || '').match(/T\d{4}(?:\.\d{3})?/); return m ? m[0] : ''; }
+
+function normalizeSteps(inc) {
+  let tl = (inc && (inc.timeline || inc.events)) || [];
+  if (!Array.isArray(tl)) tl = [];
+  const steps = tl.map((t) => ({
+    t: t.timestamp != null ? t.timestamp : (t.ts != null ? t.ts : t.time),
+    sev: rpSevClass(t.severity),
+    title: t.title || t.reason || t.activity || t.source || 'Event',
+    entity: t.entity || t.target || '',
+    tech: rpTech(t.technique),
+    techLabel: t.technique || '',
+    source: t.source || '',
+  }));
+  // Ascending by time when timestamps are present.
+  if (steps.every((s) => s.t != null)) {
+    steps.sort((a, b) => rpTime(a.t) < rpTime(b.t) ? -1 : 1);
+  }
+  if (!steps.length && inc) {
+    steps.push({ t: inc.created || inc.timestamp, sev: rpSevClass(inc.severity),
+      title: inc.title || 'Incident', entity: inc.entity || '',
+      tech: rpTech(inc.technique), techLabel: inc.technique || '', source: '' });
+  }
+  return steps;
+}
+
+const Replay = {
+  steps: [], idx: 0, playing: false, speed: 1, timer: null, root: null, keyHandler: null,
+  BASE: 1150,
+
+  async open(id) {
+    this.close();
+    const scrim = el('div', 'rp-scrim');
+    scrim.innerHTML = `<div class="rp"><div class="rp-body" style="grid-template-columns:1fr">
+      <div class="rp-stage"><div class="empty" style="padding:40px 0">Loading replay…</div></div></div></div>`;
+    scrim.addEventListener('click', (e) => { if (e.target === scrim) this.close(); });
+    document.body.appendChild(scrim);
+    this.root = scrim;
+    const inc = await safe(() => V.api.get('/api/edr/incidents/' + id), null);
+    if (this.root !== scrim) return;               // closed while loading
+    this.mount(inc || { id, title: 'Incident' }, normalizeSteps(inc));
+  },
+
+  mount(inc, steps) {
+    this.inc = inc; this.steps = steps; this.idx = 0; this.playing = false; this.speed = 1;
+    const sev = rpSevClass(inc.severity);
+    const chain = steps.map((s, i) => `
+      <div class="rp-ev" data-sev="${s.sev}" data-i="${i}">
+        <span class="rp-node"></span>
+        <div class="rp-row1"><span class="rp-time">${escapeHtml(rpTime(s.t) || ('step ' + (i + 1)))}</span>
+          <span class="rp-ttl">${escapeHtml(s.title)}</span>
+          ${s.tech ? `<span class="rp-chip">${escapeHtml(s.tech)}</span>` : ''}</div>
+        <div class="rp-desc">${s.entity ? `<span class="m">${escapeHtml(s.entity)}</span>` : ''}${s.source ? `${s.entity ? ' · ' : ''}${escapeHtml(s.source)}` : ''}</div>
+      </div>`).join('');
+    // Ordered unique techniques and the step each first appears.
+    const seen = {}; this.techList = [];
+    steps.forEach((s, i) => { if (s.tech && !(s.tech in seen)) { seen[s.tech] = i; this.techList.push({ id: s.tech, label: s.techLabel, at: i }); } });
+    const techHtml = this.techList.length ? this.techList.map((t) =>
+      `<div class="rp-tech" data-at="${t.at}"><span class="rp-tid off">${escapeHtml(t.id)}</span><span>${escapeHtml((t.label || '').replace(/^T\d{4}(?:\.\d{3})?\s*[—-]?\s*/, '') || t.id)}</span></div>`).join('')
+      : '<div class="rp-desc" style="opacity:.6">No MITRE techniques mapped.</div>';
+
+    this.root.innerHTML = `<div class="rp">
+      <div class="rp-head">
+        <div class="rp-tt"><h3>${escapeHtml(inc.title || 'Incident')}</h3>
+          <div class="rp-meta"><span class="sev ${sev}">${escapeHtml(sev || (inc.status || 'incident'))}</span>
+            <span>${escapeHtml(String(inc.id || ''))}</span><span>·</span><span>${steps.length} steps replayed</span></div></div>
+        <button class="rp-x" data-a="close">${RP_ICON.x}</button>
+      </div>
+      <div class="rp-body">
+        <div class="rp-stage"><div class="rp-chain">${chain}</div></div>
+        <div class="rp-side">
+          <div class="rp-sec">Current step</div>
+          <div class="rp-now"><div class="rp-now-t"></div><div class="rp-now-h"></div><div class="rp-now-d"></div></div>
+          <div class="rp-sec">MITRE ATT&amp;CK — observed</div>
+          <div class="rp-techs">${techHtml}</div>
+        </div>
+      </div>
+      <div class="rp-ctrl">
+        <div class="rp-btns">
+          <button class="rp-b" data-a="restart" title="Restart">${RP_ICON.restart}</button>
+          <button class="rp-b" data-a="prev" title="Step back">${RP_ICON.prev}</button>
+          <button class="rp-b play" data-a="toggle" title="Play / pause (space)">${RP_ICON.play}</button>
+          <button class="rp-b" data-a="next" title="Step forward">${RP_ICON.next}</button>
+        </div>
+        <div class="rp-track"><div class="rp-fill"></div></div>
+        <span class="rp-count"></span>
+        <div class="rp-speed">
+          <button class="rp-sp on" data-s="1">1×</button>
+          <button class="rp-sp" data-s="2">2×</button>
+          <button class="rp-sp" data-s="4">4×</button>
+        </div>
+      </div></div>`;
+
+    this.root.querySelectorAll('[data-a]').forEach((b) => b.onclick = () => {
+      const a = b.dataset.a;
+      if (a === 'close') this.close();
+      else if (a === 'toggle') this.toggle();
+      else if (a === 'next') { this.pause(); this.seek(this.idx + 1); }
+      else if (a === 'prev') { this.pause(); this.seek(this.idx - 1); }
+      else if (a === 'restart') { this.pause(); this.seek(0); }
+    });
+    this.root.querySelectorAll('.rp-sp').forEach((b) => b.onclick = () => this.setSpeed(Number(b.dataset.s)));
+    const track = this.root.querySelector('.rp-track');
+    track.onclick = (e) => {
+      const r = track.getBoundingClientRect();
+      const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+      this.pause(); this.seek(Math.round(frac * (this.steps.length - 1)));
+    };
+    this.keyHandler = (e) => {
+      if (e.key === 'Escape') this.close();
+      else if (e.key === ' ') { e.preventDefault(); this.toggle(); }
+      else if (e.key === 'ArrowRight') { this.pause(); this.seek(this.idx + 1); }
+      else if (e.key === 'ArrowLeft') { this.pause(); this.seek(this.idx - 1); }
+    };
+    document.addEventListener('keydown', this.keyHandler);
+
+    this.update();
+    if (this.steps.length > 1) this.timer = setTimeout(() => this.play(), 400);
+  },
+
+  update() {
+    const n = this.steps.length, s = this.steps[this.idx] || {};
+    this.root.querySelectorAll('.rp-ev').forEach((ev) => {
+      const i = Number(ev.dataset.i);
+      ev.classList.toggle('shown', i <= this.idx);
+      ev.classList.toggle('active', i === this.idx);
+      if (i === this.idx) ev.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    });
+    const now = this.root.querySelector('.rp-now');
+    now.querySelector('.rp-now-t').textContent = rpTime(s.t) || ('Step ' + (this.idx + 1));
+    now.querySelector('.rp-now-h').textContent = s.title || '';
+    now.querySelector('.rp-now-d').innerHTML = (s.entity ? `<span style="font-family:ui-monospace,Consolas,monospace">${escapeHtml(s.entity)}</span>` : '')
+      + (s.techLabel ? `${s.entity ? '<br>' : ''}${escapeHtml(s.techLabel)}` : '');
+    this.root.querySelectorAll('.rp-tech').forEach((t) => {
+      const on = Number(t.dataset.at) <= this.idx;
+      t.classList.toggle('hit', on);
+      const tid = t.querySelector('.rp-tid'); if (tid) tid.classList.toggle('off', !on);
+    });
+    this.root.querySelector('.rp-fill').style.width = (n > 1 ? (this.idx / (n - 1)) * 100 : 100) + '%';
+    this.root.querySelector('.rp-count').textContent = `${this.idx + 1} / ${n}`;
+    this.root.querySelector('.rp-b.play').innerHTML = this.playing ? RP_ICON.pause : RP_ICON.play;
+  },
+
+  seek(i) {
+    this.idx = Math.max(0, Math.min(this.steps.length - 1, i));
+    this.update();
+  },
+  toggle() { this.playing ? this.pause() : this.play(); },
+  play() {
+    if (this.steps.length <= 1) return;
+    if (this.idx >= this.steps.length - 1) this.idx = 0;   // replay from start
+    this.playing = true; this.update(); this._tick();
+  },
+  _tick() {
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      if (!this.playing) return;
+      if (this.idx >= this.steps.length - 1) { this.pause(); return; }
+      this.idx += 1; this.update(); this._tick();
+    }, this.BASE / this.speed);
+  },
+  pause() { this.playing = false; clearTimeout(this.timer); if (this.root) this.update(); },
+  setSpeed(x) {
+    this.speed = x;
+    this.root.querySelectorAll('.rp-sp').forEach((b) => b.classList.toggle('on', Number(b.dataset.s) === x));
+  },
+  close() {
+    clearTimeout(this.timer); this.timer = null; this.playing = false;
+    if (this.keyHandler) { document.removeEventListener('keydown', this.keyHandler); this.keyHandler = null; }
+    if (this.root && this.root.parentNode) this.root.parentNode.removeChild(this.root);
+    this.root = null;
+  },
+};
+function openReplay(id) { Replay.open(id); }
 
 /* ============================ Boot ================================== */
 async function init() {
