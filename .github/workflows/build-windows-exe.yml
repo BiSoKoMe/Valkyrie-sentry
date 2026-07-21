@@ -41,8 +41,9 @@ jobs:
           python -m pip install -r requirements_modular.txt pyinstaller
           # Bundle the optional extras so valkyrie_test.exe contains ALL features:
           #   cryptography -> signed remote response over the fleet
-          #   anthropic    -> AI-assisted investigation (still opt-in at runtime)
-          python -m pip install cryptography anthropic
+          #   httpx        -> vendor-neutral AI investigation providers (opt-in at
+          #                   runtime) + fleet control-plane client
+          python -m pip install cryptography httpx
 
       - name: Build valkyrie_test.exe
         shell: pwsh

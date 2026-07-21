@@ -12,8 +12,8 @@
 #  Flags:
 #     -SkipEngine   reuse the existing dist\valkyrie.exe (fast: only rebuild
 #                   the installer, e.g. after editing installer.py / scripts).
-#     -WithAI       bundle the optional Claude-assisted investigation into the
-#                   engine (passes through to the engine build).
+#     -WithAI       (deprecated no-op) AI investigation now needs no vendor SDK;
+#                   its providers speak plain HTTP via httpx, bundled by default.
 #
 #  Hand the resulting ValkyrieSetup.exe to any Windows box and double-click it:
 #  it self-elevates and installs to Program Files with no-prompt Start/Stop.
@@ -40,11 +40,8 @@ if ($SkipEngine) {
     Write-Host "`n [1/3] Building engine (dist\valkyrie.exe)..." -ForegroundColor Cyan
     python -m pip install --upgrade pip | Out-Null
     python -m pip install -r requirements_modular.txt pyinstaller
-    python -m pip install cryptography
-    if ($WithAI) {
-        Write-Host "     + bundling optional AI investigation (anthropic)..." -ForegroundColor DarkCyan
-        python -m pip install anthropic
-    }
+    python -m pip install cryptography httpx
+    # AI investigation is vendor-neutral over httpx (installed above) — no AI SDK.
     python -m PyInstaller --clean --noconfirm valkyrie.spec
     if (-not (Test-Path $engineExe)) {
         throw "Engine build failed - dist\valkyrie.exe was not produced. Check the log above."

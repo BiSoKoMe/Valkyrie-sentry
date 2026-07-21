@@ -32,7 +32,7 @@ build is a turn-key `pyinstaller valkyrie.spec`, not a debugging project.
    build_exe.bat
    ```
    ```powershell
-   .\build_exe.ps1              # add -WithAI to also bundle Claude investigation
+   .\build_exe.ps1              # AI investigation is bundled by default (httpx; no vendor SDK)
    ```
 
    Or directly:
@@ -74,7 +74,7 @@ whole `dist\` folder. (This is handled by the frozen-path logic in
 
 | Optional | How |
 |---|---|
-| **Claude-assisted** investigation narrative | `build_exe.ps1 -WithAI`, or `pip install anthropic` before building; still off by default at runtime and needs `ANTHROPIC_API_KEY` |
+| **LLM-assisted** investigation narrative (vendor-neutral) | Bundled by default via `httpx` — no vendor SDK. Off by default at runtime; configure a provider with `VALKYRIE_AI_PROVIDER` / `VALKYRIE_AI_KEY` (or use `local` for on-box) |
 | TLS inspection (`--tls`) | `pip install mitmproxy` before building |
 
 Third-party EDR plugins are **not** frozen into the exe — drop them into a
@@ -92,7 +92,7 @@ rebuilding.
   static analysis misses: `uvicorn` (dynamic protocol/loop modules), `fastapi`,
   `starlette`, `anyio`, `dnspython`, and every `valkyrie.*` submodule. Web HTML
   is added as data at `valkyrie/web` and `valkyrie/fleet` so `FileResponse`
-  finds it inside the bundle. Optional extras (`anthropic`, `cryptography`, …)
+  finds it inside the bundle. Optional extras (`httpx`, `cryptography`, …)
   are collected only if present in the build environment.
 - `valkyrie/config.py` — when `sys.frozen` is set, writable paths resolve next
   to the executable and read-only assets to `sys._MEIPASS`.

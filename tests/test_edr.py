@@ -253,12 +253,12 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     check("investigation recommends actions", len(report["recommended_actions"]) >= 1)
     check("investigation lists MITRE techniques", len(report["techniques"]) >= 1)
     check("investigation has a human summary", len(report["summary"]) > 20)
-    # AI stays off unless explicitly enabled AND a key exists.
-    import os as _os
-    had_key = bool(_os.environ.get("ANTHROPIC_API_KEY") or _os.environ.get("VALKYRIE_AI_KEY"))
+    # AI stays off unless explicitly enabled AND a provider is configured.
+    from valkyrie.edr.ai_provider import get_provider
+    had_provider = get_provider().available()
     report_ai = engine.investigate(inc_id, use_ai=True)
-    if had_key:
-        check("AI path attempted when key present", "analyst" in report_ai)
+    if had_provider:
+        check("AI path attempted when a provider is configured", "analyst" in report_ai)
     else:
         check("AI opt-in without a key falls back to offline",
               report_ai["analyst"] == "offline" and "ai_error" in report_ai)

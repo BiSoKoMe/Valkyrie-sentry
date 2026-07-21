@@ -121,8 +121,10 @@ into things a defender actually works with.
   incident with a severity rationale, MITRE ATT&CK techniques, and recommended
   actions. This analyst is **deterministic (rule-based), not a machine-learning
   model** — it runs entirely offline and nothing leaves your machine. An optional
-  Claude-assisted narrative (a real LLM) is available but **off by default** (it
-  sends incident details to a third party — opt in only if you want that).
+  LLM-assisted narrative is available but **off by default**, and the AI backend
+  is **vendor-neutral** (Anthropic, OpenAI, or a fully-local OpenAI-compatible
+  server). A network provider sends incident details to the configured endpoint —
+  opt in only if you want that; the local provider keeps everything on-box.
 - **Plugin architecture** — drop a `*.py` file into `data/plugins/` to add your
   own detections, responders, or enrichers. Plugins run as ordinary Python with
   Valkyrie's privileges, so loading is gated on trust: place an `allowed.sha256`

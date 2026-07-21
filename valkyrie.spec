@@ -64,7 +64,10 @@ hiddenimports += _uv_hidden
 
 # Optional runtime extras — bundle them only if they're installed in the build
 # environment, so the offline paths still work when they're absent.
-for _opt in ("anthropic", "cryptography", "h11", "httptools", "websockets", "click"):
+# httpx backs the vendor-neutral AI investigation providers (ai_provider.py) and
+# the fleet control-plane client; bundled when present so those paths work in the
+# frozen build. No AI-vendor SDK is bundled — providers speak plain HTTP.
+for _opt in ("httpx", "cryptography", "h11", "httptools", "websockets", "click"):
     try:
         _d, _b, _h = collect_all(_opt)
         datas += _d

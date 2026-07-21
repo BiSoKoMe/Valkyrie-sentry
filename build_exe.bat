@@ -17,11 +17,10 @@ if errorlevel 1 goto :fail
 
 REM Optional extras baked into the .exe:
 REM   cryptography  -> enables signed remote-response over the fleet
-REM   anthropic     -> enables the opt-in Claude-assisted investigation
-REM The offline analyst and local response work without either. Installing
-REM cryptography by default (small); uncomment anthropic to bundle AI too.
-python -m pip install cryptography
-REM python -m pip install anthropic
+REM   httpx         -> vendor-neutral AI investigation providers + fleet client
+REM The offline analyst and local response work without either. Both are small,
+REM so bundle them by default. No AI-vendor SDK is needed.
+python -m pip install cryptography httpx
 
 echo.
 echo  [2/3] Building valkyrie.exe with PyInstaller...
