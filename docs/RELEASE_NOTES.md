@@ -45,8 +45,18 @@ inventory and `docs/GAP_ANALYSIS.md` for the honest ranking vs commercial EDRs.
 - **Premium monochrome desktop app** — black / white / grey with a single
   restrained blue accent, custom title bar, cinematic splash, and a reusable
   design-system state component (empty / offline / error).
+- **Component Health page** — the uniform health/metrics/restart contract
+  every subsystem already runs through (`components.py`, ADR 0021 — DNS,
+  firewall, EDR, sensors, threat intel, SIEM, and more) had a fully-built,
+  token-gated API (`GET /api/components`, `POST /{name}/restart`) and no UI.
+  Now it's the **Components** page: live health badge per subsystem
+  (healthy / degraded / down / disabled / **error** — a health probe that
+  itself throws is shown as an error state, not silently hidden), expandable
+  raw metrics, and a restart control that requires arming before it fires
+  (restarting a live security subsystem has real effect — a brief gap in
+  that subsystem's coverage — so it doesn't fire on a single misclick).
 - **Command palette (Ctrl+K)** — instant, keyboard-first search over the app's
-  13 pages, 5 quick actions (start/stop protection, meeting mode, kill
+  14 pages, 5 quick actions (start/stop protection, meeting mode, kill
   telemetry, randomize MAC, open logs), and recent EDR incidents (jumps
   straight into Replay). Ranking is pure, unit-tested logic
   (`electron/src/renderer/command-index.js`); every action it runs is the
@@ -74,7 +84,7 @@ inventory and `docs/GAP_ANALYSIS.md` for the honest ranking vs commercial EDRs.
 - Graceful degradation is a platform rule: every sensor/subsystem isolates
   failures, restarts independently, and degrades to a no-op rather than crashing
   the app. The renderer talks to the engine only through a sandboxed IPC bridge.
-- **Keyboard accessibility fix.** The sidebar (13 pages) and the incident list
+- **Keyboard accessibility fix.** The sidebar (14 pages) and the incident list
   on the Threats page were `<div>`s with a click handler only — invisible to
   keyboard-only and screen-reader users, a real procurement blocker for
   enterprise/accessibility-conscious buyers. Both are now proper `role="button"`
@@ -111,14 +121,18 @@ Honest boundaries, documented rather than hidden:
   local-first product; the intended path is OS AMSI/Defender integration.
 - **Desktop scope for 0.1.** Attack Replay, Dashboard, Threats, Privacy,
   Firewall, DNS, Intelligence, Applications, Network, Devices, Updates,
-  Settings, and About ship. **Command palette (Ctrl+K) covers navigation,
-  quick actions and recent incidents only** — it does not (yet) index MITRE
-  technique reference data, threat-intel entries, playbooks, or log contents,
-  because those don't have a real per-item detail view to jump to today;
-  indexing them without a destination would be search theater, not search.
+  Components, Settings, and About ship — 14 pages. **Command palette
+  (Ctrl+K) covers navigation, quick actions and recent incidents only** —
+  it does not (yet) index MITRE technique reference data, threat-intel
+  entries, playbooks, or log contents, because those don't have a real
+  per-item detail view to jump to today; indexing them without a destination
+  would be search theater, not search.
   **Not yet in the desktop app:** a full incident-detail workspace (process
-  tree / network graph panels beyond Replay), and a Fleet management UI (the
-  fleet *backend* exists). These are planned follow-ups, not implied to exist.
+  tree / network graph panels beyond Replay), a Threat Hunting UI
+  (`edr/hunt.py`), a Compliance / SOAR / Forensics UI (`compliance.py`,
+  `edr/playbooks.py`, `forensics.py`), and a Fleet management UI
+  (`fleet/`) — each a real, tested backend module with no desktop surface
+  yet. These are planned follow-ups, not implied to exist today.
 - **AI investigation is opt-in and off by default.** A network provider sends
   compact incident facts to the configured endpoint; use the `local` provider to
   avoid that entirely.
@@ -138,7 +152,7 @@ Honest boundaries, documented rather than hidden:
 |---|---|
 | Core protection (DNS/firewall/EDR) stable | ✅ |
 | Installer works on clean Windows | ✅ (release-audited build) |
-| Dashboard / Threats / Privacy / Firewall / DNS / Settings / About | ✅ |
+| Dashboard / Threats / Privacy / Firewall / DNS / Components / Settings / About | ✅ |
 | Attack Reconstruction (Replay Mode) | ✅ |
 | Investigation explainability (meaning + actions, all categories) | ✅ |
 | Vendor-neutral AI, opt-in | ✅ |
@@ -148,8 +162,11 @@ Honest boundaries, documented rather than hidden:
 | Toast notifications (reusable component) | ✅ |
 | Incident investigation + triage (Replay → Investigation tab) | ✅ explainability, recommended response, status/assignee/notes |
 | Keyboard-accessible sidebar + incident list, app-wide focus ring | ✅ |
+| Component health page (per-subsystem status, metrics, restart) | ✅ ~15 subsystems, arm-then-confirm restart |
 | Full incident-detail workspace (process tree / network graph) | ⏳ partial (Replay covers timeline + explainability + triage; no process-tree/network-graph panels yet) |
-| Fleet management UI | ⏳ backend only |
+| Threat Hunting UI | ⏳ backend only (`edr/hunt.py`) |
+| Compliance / SOAR / Forensics UI | ⏳ backend only (`compliance.py`, `edr/playbooks.py`, `forensics.py`) |
+| Fleet management UI | ⏳ backend only (`fleet/`) |
 | Documentation & known limitations | ✅ (`docs/`) |
 
 ## Provenance

@@ -164,7 +164,9 @@ DGAs need an internet-scale model — not faked.*
   protected machines.
 - **Component registry** (`components.py`, ADR 0021) — uniform health / metrics /
   status / restart contract over ~15 subsystems; `GET /api/components`,
-  token-gated restart, health-transition events.
+  token-gated restart, health-transition events. Surfaced in the desktop app
+  as the **Components** page (per-subsystem health badge, expandable raw
+  metrics, arm-then-confirm restart).
 - **Signed auto-update** (`updater.py`) — signature-verified update
   verification (the security-critical half of the local update path).
 

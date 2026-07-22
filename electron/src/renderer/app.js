@@ -214,8 +214,8 @@ const NAV = [
   ['threats', 'Threats', 'alert'], ['intelligence', 'Intelligence', 'brain'],
   ['applications', 'Applications', 'apps'], ['network', 'Network', 'network'],
   ['dns', 'DNS', 'dns'], ['devices', 'Devices', 'devices'],
-  ['updates', 'Updates', 'download'], ['settings', 'Settings', 'settings'],
-  ['about', 'About', 'info'],
+  ['updates', 'Updates', 'download'], ['components', 'Components', 'cpu'],
+  ['settings', 'Settings', 'settings'], ['about', 'About', 'info'],
 ];
 function buildChrome() {
   $('brandMark').innerHTML = ICON.shieldCheck;
@@ -630,6 +630,139 @@ PAGES.updates = {
       ])}
       <div class="btn-row"><button class="btn" id="upLogs">${ICON.activity}<span>Open Logs</span></button></div>`;
     const b = $('upLogs'); if (b) b.onclick = () => V && V.openLogs();
+  },
+};
+
+/* ---- Components ---- */
+// The uniform plugin contract every subsystem already runs through
+// (valkyrie/components.py, ADR 0021) — register/health/metrics/config/
+// restart, fault-isolated so a broken health probe reports "error" instead
+// of crashing anything. GET /api/components + POST /{name}/restart already
+// existed with zero UI; this is that UI, not a new backend.
+const COMPONENT_ICON = {
+  storage: 'devices', network: 'network', intelligence: 'brain', detection: 'shieldCheck',
+  sensor: 'activity', response: 'flame', integration: 'apps', privacy: 'lock',
+};
+function compHealthBadge(st) {
+  return {
+    up: badge('Healthy', 'ok'), degraded: badge('Degraded', 'warn'),
+    down: badge('Down', 'off'), disabled: badge('Not available', 'off'),
+    error: badge('Error', 'err'),
+  }[st] || badge(st || 'Unknown', 'off');
+}
+PAGES.components = {
+  restartArmed: null, restarting: null, armTimer: null, expanded: {}, lastComps: null,
+  render() {
+    $('page').innerHTML = `
+      <div class="page-intro">Every subsystem Valkyrie runs — DNS, firewall, EDR, sensors, threat intel and more —
+      reports through one uniform health contract. A subsystem whose health check itself fails is isolated and
+      shown as an error, never silently swallowed.</div>
+      <div class="grid" id="compCards"><div class="empty">Loading…</div></div>
+      ${sectionHead('Subsystems')}
+      <div id="compList"><div class="empty">Loading…</div></div>`;
+    this.restartArmed = null; this.restarting = null; this.expanded = {}; this.lastComps = null;
+  },
+  async poll() {
+    const cards = $('compCards'), list = $('compList'); if (!list) return;
+    if (!state.engineUp) {
+      cards.innerHTML = '';
+      list.innerHTML = stateBlock('offline', 'Protection is off',
+        'Component health is reported by the engine — start protection to see live subsystem status.');
+      return;
+    }
+    const data = await safe(() => V.api.get('/api/components'), null);
+    if (!data || data.enabled === false) {
+      cards.innerHTML = '';
+      list.innerHTML = stateBlock('error', 'Component registry unavailable',
+        'Could not reach the engine for subsystem health.');
+      return;
+    }
+    const comps = data.components || [];
+    const counts = (data.overall && data.overall.counts) || {};
+    const healthy = counts.up || 0;
+    const attention = (counts.degraded || 0) + (counts.down || 0) + (counts.error || 0);
+    cards.innerHTML = `
+      <div class="card"><div class="label">${ICON.cpu}Total Subsystems</div><div class="value"><span class="num" id="card-compTotal" data-v="0">0</span></div></div>
+      <div class="card accent-green"><div class="label">${ICON.shieldCheck}Healthy</div><div class="value"><span class="num" id="card-compHealthy" data-v="0">0</span></div></div>
+      <div class="card"><div class="label">${ICON.alert}Needs Attention</div><div class="value"><span class="num" id="card-compAttn" data-v="0">0</span></div></div>`;
+    animateNumber($('card-compTotal'), comps.length);
+    animateNumber($('card-compHealthy'), healthy);
+    animateNumber($('card-compAttn'), attention);
+    this.lastComps = comps;   // cached so arm/disarm can re-render without a re-fetch
+    this.renderList();
+  },
+  // Rebuilds the list from the last fetch only — no network call. Used both
+  // after a poll and whenever local UI state (armed restart, expanded
+  // metrics) changes, so a poll landing mid-confirm can never silently
+  // reset a restart the user already armed.
+  renderList() {
+    const list = $('compList'); if (!list) return;
+    const comps = this.lastComps || [];
+    if (!comps.length) {
+      list.innerHTML = stateBlock('empty', 'No components registered', 'Nothing to show yet.');
+      return;
+    }
+    const expanded = this.expanded || {};
+    list.innerHTML = `<div class="comp-list">${comps.map((c) => this.row(c, !!expanded[c.name])).join('')}</div>`;
+    list.querySelectorAll('[data-restart]').forEach((b) => { b.onclick = () => this.handleRestart(b.dataset.restart); });
+    list.querySelectorAll('.comp-toggle').forEach((b) => {
+      b.onclick = () => {
+        const name = b.dataset.name;
+        this.expanded = this.expanded || {};
+        this.expanded[name] = !this.expanded[name];
+        this.renderList();
+      };
+    });
+  },
+  row(c, isExpanded) {
+    const h = c.health || {};
+    const metrics = c.metrics || {};
+    const keys = Object.keys(metrics).filter((k) => k !== '_error');
+    const metricsHtml = keys.length
+      ? keys.slice(0, 12).map((k) => `<div class="comp-metric"><span>${escapeHtml(k)}</span><span>${escapeHtml(String(metrics[k]))}</span></div>`).join('')
+      : '<div class="comp-metric" style="opacity:.6">No metrics reported.</div>';
+    const armed = this.restartArmed === c.name;
+    const restarting = this.restarting === c.name;
+    return `<div class="comp-item">
+      <div class="comp-row">
+        <span class="comp-ic">${ICON[COMPONENT_ICON[c.kind]] || ICON.cpu}</span>
+        <div class="comp-main">
+          <span class="comp-name">${escapeHtml(c.name)}</span>
+          <span class="comp-sub"><span class="mono-tag">${escapeHtml(c.kind || 'service')}</span>${h.detail ? ' ' + escapeHtml(h.detail) : ''}</span>
+        </div>
+        <div class="comp-actions">
+          ${compHealthBadge(h.state)}
+          <button class="icon-btn comp-toggle" data-name="${escapeHtml(c.name)}" aria-expanded="${isExpanded}" title="Show metrics">${ICON.activity}</button>
+          ${c.restartable ? `<button class="btn${armed ? ' danger' : ''}" data-restart="${escapeHtml(c.name)}" title="Briefly restarts this subsystem" ${restarting ? 'disabled' : ''}>
+            ${ICON.power}<span>${restarting ? 'Restarting…' : armed ? 'Confirm restart?' : 'Restart'}</span></button>` : ''}
+        </div>
+      </div>
+      <div class="comp-metrics" ${isExpanded ? '' : 'hidden'}>${metricsHtml}</div>
+    </div>`;
+  },
+  async handleRestart(name) {
+    // Restarting a live security subsystem has real effect (a brief gap in
+    // that subsystem's coverage) — arm-then-confirm instead of firing on the
+    // first click. State lives on the page object (not the DOM node), and
+    // every render (poll or local) reads it, so a poll landing mid-confirm
+    // can never silently reset a restart the user already armed.
+    if (this.restartArmed !== name) {
+      this.restartArmed = name;
+      clearTimeout(this.armTimer);
+      this.armTimer = setTimeout(() => {
+        if (this.restartArmed === name) { this.restartArmed = null; this.renderList(); }
+      }, 4000);
+      this.renderList();
+      return;
+    }
+    clearTimeout(this.armTimer); this.restartArmed = null;
+    this.restarting = name;
+    this.renderList();
+    const res = await safe(() => V.api.post('/api/components/' + encodeURIComponent(name) + '/restart'), null);
+    this.restarting = null;
+    if (res && res.ok) toast(`${name} restarted.`, 'ok');
+    else toast(`Could not restart ${name}${res && res.error ? ': ' + res.error : ''}.`, 'error');
+    this.poll();
   },
 };
 
