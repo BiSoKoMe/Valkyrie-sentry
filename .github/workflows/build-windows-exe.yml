@@ -65,11 +65,17 @@ jobs:
           Write-Host "Frozen exe smoke test passed."
 
       - name: Upload valkyrie_test.exe artifact
+        # Skip on tag builds: the next step already attaches the exe to the
+        # GitHub Release, which is downloadable on its own — uploading it a
+        # second time as an Actions artifact just doubles storage use for no
+        # reason, on every single tagged release.
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: actions/upload-artifact@v4
         with:
           name: valkyrie_test-windows
           path: dist/valkyrie_test.exe
           if-no-files-found: error
+          retention-days: 14
 
       - name: Attach exe to release (tag builds only)
         if: startsWith(github.ref, 'refs/tags/v')
