@@ -99,6 +99,27 @@ function apiGet(pathname, timeoutMs = 1500) {
   });
 }
 
+// Same as apiGet but for endpoints that intentionally return non-JSON text
+// (e.g. the compliance report's ?format=md), so apiGet's JSON.parse never
+// gets in the way of a body that was never meant to be JSON.
+function apiGetText(pathname, timeoutMs = 4000) {
+  return new Promise((resolve, reject) => {
+    const req = http.get(
+      { host: HOST, port: WEB_PORT, path: pathname, timeout: timeoutMs },
+      (res) => {
+        let body = '';
+        res.on('data', (c) => (body += c));
+        res.on('end', () => {
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) resolve(body);
+          else reject(new Error(`HTTP ${res.statusCode}`));
+        });
+      }
+    );
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', reject);
+  });
+}
+
 // Generic request (GET/POST) against the loopback API. Control POSTs carry the
 // per-process token; a Node caller sends no Origin header, which the engine
 // treats as same-origin, so token + loopback is sufficient.
@@ -255,6 +276,7 @@ module.exports = {
   waitUntilReady,
   telemetry,
   apiGet,
+  apiGetText,
   apiPost,
   isProtected,
   engineRoot,

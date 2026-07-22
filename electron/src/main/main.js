@@ -202,6 +202,12 @@ function registerIpc() {
     typeof p === 'string' && p.startsWith('/api/')
       ? engine.apiGet(p, 4000)
       : Promise.reject(new Error('blocked')));
+  // Same allowlist as api:get, for the handful of endpoints that
+  // intentionally return plain text (e.g. ?format=md reports) instead of JSON.
+  ipcMain.handle('api:getText', (_e, p) =>
+    typeof p === 'string' && p.startsWith('/api/')
+      ? engine.apiGetText(p, 4000)
+      : Promise.reject(new Error('blocked')));
   ipcMain.handle('api:post', (_e, { path: p, body }) =>
     typeof p === 'string' && p.startsWith('/api/')
       ? engine.apiPost(p, body)

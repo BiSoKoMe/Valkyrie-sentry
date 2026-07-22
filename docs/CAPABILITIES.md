@@ -165,7 +165,9 @@ DGAs need an internet-scale model — not faked.*
   incident export opt-in, domain-carrying DNS export a second explicit opt-in.
 - **Compliance evidence reports** (`compliance.py`, ADR 0019) — live-computed
   MTTR / coverage / audit-trail as JSON + Markdown, with an honest
-  evidence-not-certification disclaimer.
+  evidence-not-certification disclaimer. Surfaced in the desktop app as the
+  **Compliance** page (period selector, per-section framework references,
+  "Copy as Markdown").
 - **Fleet management** (`valkyrie/fleet/`) — multi-endpoint agent/controller/
   server, signed policy distribution, and command dispatch for managing many
   protected machines.

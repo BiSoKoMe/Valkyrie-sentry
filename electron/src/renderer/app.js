@@ -216,6 +216,7 @@ const NAV = [
   ['applications', 'Applications', 'apps'], ['network', 'Network', 'network'],
   ['dns', 'DNS', 'dns'], ['devices', 'Devices', 'devices'],
   ['updates', 'Updates', 'download'], ['components', 'Components', 'cpu'],
+  ['compliance', 'Compliance', 'shieldCheck'],
   ['settings', 'Settings', 'settings'], ['about', 'About', 'info'],
 ];
 const NAV_SYSTEM_START = 'network';   // first item of the "System" sidebar section
@@ -881,6 +882,108 @@ PAGES.components = {
     if (res && res.ok) toast(`${name} restarted.`, 'ok');
     else toast(`Could not restart ${name}${res && res.error ? ': ' + res.error : ''}.`, 'error');
     this.poll();
+  },
+};
+
+function frameworkRefs(refs) { return (refs && refs.length) ? refs.join(' · ') : ''; }
+function mttrText(minutes) {
+  if (minutes == null) return '—';
+  return minutes < 60 ? `${Math.round(minutes)}m` : fmtUptime(minutes * 60);
+}
+
+/* ---- Compliance ---- */
+// Evidence, not certification — the backend (compliance.py) is explicit that
+// it never claims compliance, only reports what actually happened, computed
+// live with no hardcoded "OK" fields. The UI's job is to not lose that
+// framing: the disclaimer ships from the API and is shown verbatim, first.
+PAGES.compliance = {
+  report: null,
+  render() {
+    $('page').innerHTML = `
+      <div class="page-intro">Point-in-time operational evidence for auditors (SOC 2, ISO 27001, insurers) —
+      generated live from what Valkyrie actually recorded. This is evidence toward the referenced controls,
+      never a certification.</div>
+      <div class="hunt-filters" style="margin-bottom:20px">
+        <select class="rp-select" id="compPeriod" aria-label="Reporting period">
+          <option value="24">Last 24 hours</option>
+          <option value="168">Last 7 days</option>
+          <option value="720" selected>Last 30 days</option>
+          <option value="2160">Last 90 days</option>
+        </select>
+        <button class="btn" id="compCopyMd">${ICON.activity}<span>Copy as Markdown</span></button>
+      </div>
+      <div id="complianceBody"><div class="empty">Loading…</div></div>`;
+    $('compPeriod').onchange = () => this.load();
+    $('compCopyMd').onclick = () => this.copyMarkdown();
+    this.load();
+  },
+  async load() {
+    const box = $('complianceBody'); if (!box) return;
+    if (!state.engineUp) {
+      box.innerHTML = stateBlock('offline', 'Protection is off',
+        'Compliance evidence is computed from live monitoring data — start protection to generate a report.');
+      return;
+    }
+    box.innerHTML = '<div class="empty">Generating report…</div>';
+    const hours = $('compPeriod').value;
+    const report = await safe(() => V.api.get(`/api/compliance/report?hours=${hours}&format=json`), null);
+    this.report = report;
+    this.renderReport(report);
+  },
+  renderReport(r) {
+    const box = $('complianceBody'); if (!box) return;
+    if (!r || !r.sections) {
+      box.innerHTML = stateBlock('error', 'Could not generate report', 'The compliance engine did not return a report.');
+      return;
+    }
+    const s = r.sections;
+    const mon = s.monitoring || {}, det = s.detection_response || {}, intel = s.threat_intel || {}, audit = s.audit_trail || {};
+    const wiredRows = Object.entries(mon.components_wired || {})
+      .map(([k, v]) => [escapeHtml(k), v ? badge('Wired', 'ok') : badge('Not wired', 'off'), 'cpu']);
+    box.innerHTML = `
+      <div class="comp-disclaimer">${escapeHtml(r.disclaimer || '')}</div>
+      <div class="grid">
+        <div class="card"><div class="label">${ICON.cpu}Components Wired</div>
+          <div class="value">${fmt(mon.wired_count || 0)}<span class="unit">/ ${fmt(mon.component_total || 0)}</span></div></div>
+        <div class="card"><div class="label">${ICON.alert}Incidents in Period</div><div class="value">${fmt(det.incidents_in_period || 0)}</div></div>
+        <div class="card"><div class="label">${ICON.flame}Open High/Critical</div><div class="value">${fmt(det.open_high_or_critical || 0)}</div></div>
+        <div class="card accent-green"><div class="label">${ICON.check}Median Time to Resolve</div><div class="value">${mttrText(det.median_time_to_resolve_minutes)}</div></div>
+      </div>
+      ${sectionHead('Detection &amp; Response', frameworkRefs(det.framework_refs))}
+      ${det.available === false ? stateBlock('empty', 'EDR not available', '') : rowsPanel([
+        ['Incidents in period', fmt(det.incidents_in_period || 0), 'alert'],
+        ['Resolved', fmt(det.resolved_count || 0), 'check'],
+        ['Open (high/critical)', fmt(det.open_high_or_critical || 0), 'flame'],
+        ['Mean time to resolve', mttrText(det.mean_time_to_resolve_minutes), 'activity'],
+      ])}
+      ${sectionHead('Monitoring', frameworkRefs(mon.framework_refs))}
+      ${wiredRows.length ? rowsPanel(wiredRows) : stateBlock('empty', 'No components reporting', '')}
+      ${sectionHead('Threat Intelligence', frameworkRefs(intel.framework_refs))}
+      ${intel.available === false ? stateBlock('empty', 'Threat intelligence not available', intel.error || '') : rowsPanel([
+        ['Feeds tracked', fmt(Object.keys(intel.feeds || {}).length), 'globe'],
+        ['Stale feeds', fmt((intel.stale_feeds || []).length), 'alert'],
+      ])}
+      ${sectionHead('Audit Trail', frameworkRefs(audit.framework_refs))}
+      ${rowsPanel([
+        ['Response actions audited', audit.response_audit_available ? badge('Yes', 'ok') : badge('No', 'off'), 'shield'],
+      ])}`;
+  },
+  async copyMarkdown() {
+    const btn = $('compCopyMd'); if (!btn) return;
+    const span = btn.querySelector('span'); const original = span ? span.textContent : '';
+    if (span) span.textContent = 'Copying…';
+    btn.disabled = true;
+    const hours = $('compPeriod').value;
+    const md = await safe(() => V.api.getText(`/api/compliance/report?hours=${hours}&format=md`), null);
+    btn.disabled = false;
+    if (span) span.textContent = original;
+    if (!md) { toast('Could not generate the report.', 'error'); return; }
+    try {
+      await navigator.clipboard.writeText(md);
+      toast('Compliance report copied as Markdown.', 'ok');
+    } catch {
+      toast('Could not access the clipboard.', 'error');
+    }
   },
 };
 

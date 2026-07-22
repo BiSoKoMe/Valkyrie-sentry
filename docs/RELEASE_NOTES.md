@@ -69,8 +69,23 @@ inventory and `docs/GAP_ANALYSIS.md` for the honest ranking vs commercial EDRs.
   return different shapes, so the table doesn't assume one. No query
   language, autocomplete-from-history, or saved/pinned queries are implied
   beyond what the backend supports.
+- **Compliance evidence page** — the fourth backend-with-no-UI gap this pass:
+  `compliance.py` computes a live SOC 2 / ISO 27001 evidence report
+  (monitoring coverage, incident MTTR, threat-intel freshness, audit trail)
+  with an explicit "evidence, not certification" disclaimer built into the
+  API response itself — and no page ever called it. Now a page: the
+  disclaimer shown verbatim and first (never buried), a period selector,
+  summary cards, and a per-section breakdown with each framework reference
+  (SOC 2 / ISO 27001 control ID) the section is evidence toward. Adds a
+  "Copy as Markdown" action against the same endpoint's `?format=md`
+  rendering — which needed a small, real architecture extension: the
+  existing `api:get` IPC bridge always `JSON.parse`s the response body, so
+  a plain-text endpoint would have silently failed through it. Added
+  `api:getText` (same `/api/*` allowlist, same 4 s timeout, no JSON parsing)
+  rather than build a feature on a call path that would reject its own
+  response (`electron/src/main/engine.js`, `main.js`, `preload.js`).
 - **Command palette (Ctrl+K)** — instant, keyboard-first search over the app's
-  15 pages, 5 quick actions (start/stop protection, meeting mode, kill
+  16 pages, 5 quick actions (start/stop protection, meeting mode, kill
   telemetry, randomize MAC, open logs), and recent EDR incidents (jumps
   straight into Replay). Ranking is pure, unit-tested logic
   (`electron/src/renderer/command-index.js`); every action it runs is the
@@ -98,7 +113,7 @@ inventory and `docs/GAP_ANALYSIS.md` for the honest ranking vs commercial EDRs.
 - Graceful degradation is a platform rule: every sensor/subsystem isolates
   failures, restarts independently, and degrades to a no-op rather than crashing
   the app. The renderer talks to the engine only through a sandboxed IPC bridge.
-- **Keyboard accessibility fix.** The sidebar (15 pages) and the incident list
+- **Keyboard accessibility fix.** The sidebar (16 pages) and the incident list
   on the Threats page were `<div>`s with a click handler only — invisible to
   keyboard-only and screen-reader users, a real procurement blocker for
   enterprise/accessibility-conscious buyers. Both are now proper `role="button"`
@@ -135,18 +150,17 @@ Honest boundaries, documented rather than hidden:
   local-first product; the intended path is OS AMSI/Defender integration.
 - **Desktop scope for 0.1.** Attack Replay, Dashboard, Threats, Threat
   Hunting, Privacy, Firewall, DNS, Intelligence, Applications, Network,
-  Devices, Updates, Components, Settings, and About ship — 15 pages.
-  **Command palette (Ctrl+K) covers navigation, quick actions and recent
-  incidents only** — it does not (yet) index MITRE technique reference data,
-  threat-intel entries, playbooks, or log contents, because those don't have
-  a real per-item detail view to jump to today; indexing them without a
-  destination would be search theater, not search.
+  Devices, Updates, Components, Compliance, Settings, and About ship — 16
+  pages. **Command palette (Ctrl+K) covers navigation, quick actions and
+  recent incidents only** — it does not (yet) index MITRE technique
+  reference data, threat-intel entries, playbooks, or log contents, because
+  those don't have a real per-item detail view to jump to today; indexing
+  them without a destination would be search theater, not search.
   **Not yet in the desktop app:** a full incident-detail workspace (process
-  tree / network graph panels beyond Replay), a Compliance / SOAR /
-  Forensics UI (`compliance.py`, `edr/playbooks.py`, `forensics.py`), and a
-  Fleet management UI (`fleet/`) — each a real, tested backend module with
-  no desktop surface yet. These are planned follow-ups, not implied to
-  exist today.
+  tree / network graph panels beyond Replay), a SOAR / Forensics UI
+  (`edr/playbooks.py`, `forensics.py`), and a Fleet management UI
+  (`fleet/`) — each a real, tested backend module with no desktop surface
+  yet. These are planned follow-ups, not implied to exist today.
 - **AI investigation is opt-in and off by default.** A network provider sends
   compact incident facts to the configured endpoint; use the `local` provider to
   avoid that entirely.
@@ -166,7 +180,7 @@ Honest boundaries, documented rather than hidden:
 |---|---|
 | Core protection (DNS/firewall/EDR) stable | ✅ |
 | Installer works on clean Windows | ✅ (release-audited build) |
-| Dashboard / Threats / Privacy / Firewall / DNS / Components / Settings / About | ✅ |
+| Dashboard / Threats / Privacy / Firewall / DNS / Components / Compliance / Settings / About | ✅ |
 | Threat Hunting (saved hunts, quick pivots, ad-hoc filter query) | ✅ read-only, backed by `edr/hunt.py` |
 | Attack Reconstruction (Replay Mode) | ✅ |
 | Investigation explainability (meaning + actions, all categories) | ✅ |
@@ -178,9 +192,9 @@ Honest boundaries, documented rather than hidden:
 | Incident investigation + triage (Replay → Investigation tab) | ✅ explainability, recommended response, status/assignee/notes |
 | Keyboard-accessible sidebar + incident list, app-wide focus ring | ✅ |
 | Component health page (per-subsystem status, metrics, restart) | ✅ ~15 subsystems, arm-then-confirm restart |
+| Compliance evidence page (SOC 2 / ISO 27001, MTTR, Markdown export) | ✅ backed by `compliance.py` |
 | Full incident-detail workspace (process tree / network graph) | ⏳ partial (Replay covers timeline + explainability + triage; no process-tree/network-graph panels yet) |
-| Threat Hunting UI | ⏳ backend only (`edr/hunt.py`) |
-| Compliance / SOAR / Forensics UI | ⏳ backend only (`compliance.py`, `edr/playbooks.py`, `forensics.py`) |
+| SOAR / Forensics UI | ⏳ backend only (`edr/playbooks.py`, `forensics.py`) |
 | Fleet management UI | ⏳ backend only (`fleet/`) |
 | Documentation & known limitations | ✅ (`docs/`) |
 

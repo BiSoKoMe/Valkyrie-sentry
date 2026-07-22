@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('valkyrie', {
   // Allowlisted live-data bridge for per-page views.
   api: {
     get: (p) => ipcRenderer.invoke('api:get', p),
+    getText: (p) => ipcRenderer.invoke('api:getText', p),
     post: (p, body) => ipcRenderer.invoke('api:post', { path: p, body }),
   },
 
