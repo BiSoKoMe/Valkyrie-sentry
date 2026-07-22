@@ -80,6 +80,7 @@ $payload = @(
     @{ src = "installer\payload\arm-protection.ps1";       dst = "arm-protection.ps1" },
     @{ src = "installer\payload\disarm-protection.ps1";    dst = "disarm-protection.ps1" },
     @{ src = "installer\payload\register-tasks.ps1";       dst = "register-tasks.ps1" },
+    @{ src = "installer\payload\run-hidden.vbs";           dst = "run-hidden.vbs" },
     @{ src = "installer\payload\unregister-tasks.ps1";     dst = "unregister-tasks.ps1" },
     @{ src = "installer\payload\service-install.ps1";      dst = "service-install.ps1" },
     @{ src = "installer\payload\service-uninstall.ps1";    dst = "service-uninstall.ps1" },

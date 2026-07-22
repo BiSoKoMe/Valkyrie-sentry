@@ -31,7 +31,17 @@
     and skips re-launch; DNS/service changes are naturally idempotent.
 #>
 
+param(
+    # Set by the Electron app's source-checkout fallback (engine.js) — the
+    # app has its own splash/progress UI, so the engine must launch with no
+    # visible window at all, unlike a developer running this script by hand
+    # from a terminal (where seeing the engine's own console is a feature:
+    # the error branch below tells them to check it). Manual/CLI runs keep
+    # the existing visible-console behavior; nothing changes for that case.
+    [switch]$Silent
+)
 $ErrorActionPreference = 'Stop'
+$EngineWindowStyle = if ($Silent) { 'Hidden' } else { 'Normal' }
 
 # ---------------------------------------------------------------------------
 # 1. Self-elevate
@@ -47,10 +57,10 @@ if (-not (Test-Admin)) {
     Write-Host "[*] Relaunching with Administrator privileges..."
     # Hidden + no -NoExit so the app-triggered elevated run never leaves a
     # PowerShell console on screen. (Manual users go through the scheduled task.)
-    Start-Process -FilePath "powershell.exe" -Verb RunAs -WindowStyle Hidden -ArgumentList @(
-        "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
-        "-File", "`"$PSCommandPath`""
-    )
+    $relaunchArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+        "-File", "`"$PSCommandPath`"")
+    if ($Silent) { $relaunchArgs += "-Silent" }
+    Start-Process -FilePath "powershell.exe" -Verb RunAs -WindowStyle Hidden -ArgumentList $relaunchArgs
     exit
 }
 
@@ -132,13 +142,18 @@ if ($AlreadyRunning) {
     # `python -m valkyrie` for a source checkout.
     $FrozenExe = Join-Path $ProjectRoot "valkyrie.exe"
     if (Test-Path $FrozenExe) {
+        # valkyrie.exe is a GUI-subsystem binary (verified by
+        # tests/no_console_startup.ps1 in the release build) - it never
+        # allocates a console at all, so $EngineWindowStyle has no visible
+        # effect here either way. Kept for the python.exe fallback below,
+        # where it matters.
         $engineArgs = @("--port", "$DnsPort", "--web", "--no-ui", "--web-port", "$WebPort")
         $proc = Start-Process -FilePath $FrozenExe -ArgumentList $engineArgs `
-            -WorkingDirectory $ProjectRoot -WindowStyle Normal -PassThru
+            -WorkingDirectory $ProjectRoot -WindowStyle $EngineWindowStyle -PassThru
     } else {
         $valkyrieArgs = @("-m", "valkyrie", "--port", "$DnsPort", "--web", "--no-ui", "--web-port", "$WebPort")
         $proc = Start-Process -FilePath "python" -ArgumentList $valkyrieArgs `
-            -WorkingDirectory $ProjectRoot -WindowStyle Normal -PassThru
+            -WorkingDirectory $ProjectRoot -WindowStyle $EngineWindowStyle -PassThru
     }
     Set-Content -Path $PidFile -Value "$($proc.Id)" -Encoding utf8 -NoNewline
 

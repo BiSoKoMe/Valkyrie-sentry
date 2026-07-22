@@ -188,14 +188,18 @@ function runTask(name) {
 
 // Spawn a PowerShell script detached (used as the source-checkout fallback,
 // where the scheduled tasks are not registered). start_all.ps1 self-elevates.
-function runScriptDetached(name) {
+// `windowsHide: true` makes PowerShell itself invisible (Node sets
+// CREATE_NO_WINDOW, applied before the process is even created — unlike
+// `-WindowStyle Hidden`, which hides the console after Windows has already
+// shown it, hence the extraArgs below rather than relying on that alone).
+function runScriptDetached(name, extraArgs = []) {
   const script = scriptPath(name);
   if (!fs.existsSync(script)) {
     return Promise.reject(new Error(`missing ${name} at ${script}`));
   }
   const child = spawn(
     POWERSHELL,
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script],
+    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, ...extraArgs],
     { detached: true, stdio: 'ignore', windowsHide: true }
   );
   child.unref();
@@ -229,7 +233,10 @@ async function start() {
     await runTask('ValkyrieStart');
     return { started: true, via: 'task' };
   }
-  await runScriptDetached('start_all.ps1');
+  // -Silent: the app has its own splash/progress UI, so the engine must
+  // launch with no visible window — unlike a developer running this script
+  // by hand from a terminal, where the console is deliberately kept.
+  await runScriptDetached('start_all.ps1', ['-Silent']);
   return { started: true, via: 'script' };
 }
 

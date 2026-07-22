@@ -162,6 +162,87 @@ inventory and `docs/GAP_ANALYSIS.md` for the honest ranking vs commercial EDRs.
   sort/export. Buttons are labeled "Copy," not "Export" — nothing is
   written to disk, everything goes to the clipboard, matching the
   Compliance page's Markdown export.
+- **Eliminated the PowerShell console flash on Start/Stop Protection.**
+  **Root cause:** the no-prompt `ValkyrieArm`/`ValkyrieDisarm` scheduled
+  tasks — what actually runs on every Start/Stop Protection click in an
+  installed product — invoked `powershell.exe -WindowStyle Hidden -File
+  ...` directly. `-WindowStyle Hidden` is not deterministic: Windows
+  allocates and shows the console as part of normal process creation, and
+  PowerShell only hides it *after* it starts running and parses its own
+  argument — a well-documented race that can flash a console for a frame
+  or two, worse under load or on slower machines. This fired on every
+  single toggle, in the properly installed product, not an edge case.
+  **Full audit** of every PowerShell/CMD/console launch path in the repo
+  (`electron/src/main/engine.js`, `electron/src/main/main.js`,
+  `electron/src/main/lifecycle.js`, `electron/src/preload/preload.js`,
+  `start_all.ps1`/`stop_all.ps1`, everything under `installer/payload/`,
+  `electron/build/installer.nsh`): the scheduled-task action above was the
+  one real, high-frequency bug. Also found and fixed a second, lower-
+  frequency one — `start_all.ps1`'s source-checkout fallback path (used
+  only when no scheduled tasks are registered, e.g. running the app from
+  a dev checkout) launched the engine with `-WindowStyle Normal`,
+  genuinely visible, by design, for a developer running the script
+  directly from a terminal (the error branch tells them to check that
+  console). But the same script is also the app's own fallback
+  (`engine.js: runScriptDetached`), where a visible window is wrong.
+  Confirmed clean and needing no change: `execFile(schtasks.exe, …,
+  {windowsHide:true})` (`CREATE_NO_WINDOW`, applied before the process
+  exists — the reliable mechanism, unlike `-WindowStyle Hidden`);
+  `spawn(powershell.exe, …, {windowsHide:true})` in
+  `runScriptDetached()` for the same reason; every `nsExec::ExecToLog`
+  call in the NSIS installer (that plugin is purpose-built for invisible
+  execution); `unregister-tasks.ps1`, `service-install.ps1`,
+  `service-uninstall.ps1` (no window-showing calls at all).
+  **Fix:** `ValkyrieArm`/`ValkyrieDisarm` now launch via a new
+  `installer/payload/run-hidden.vbs` wrapper
+  (`wscript.exe //B //NoLogo run-hidden.vbs <script> [args]`) instead of
+  `powershell.exe -WindowStyle Hidden` directly. `WScript.Shell.Run`'s
+  window-style parameter is written into the child process's
+  `STARTUPINFO` *before* `CreateProcess` runs, so the window is never
+  created at all — the only fully deterministic fix on Windows short of a
+  compiled native helper, and the same category of guarantee
+  `CREATE_NO_WINDOW` already gave the other paths. `start_all.ps1` gained
+  a `-Silent` switch (default off, so manual/CLI use is unchanged) that
+  the app now passes; `engine.js: runScriptDetached()` gained an
+  `extraArgs` parameter to carry it through.
+  **Why this is better than just hiding harder:** `-WindowStyle Hidden`
+  is "ask the child process to hide itself once it notices," which is
+  exactly the race that causes the flash; `CREATE_NO_WINDOW` and
+  `WScript.Shell.Run`'s window style are both "tell the OS not to create
+  the window in the first place," decided before the child process exists
+  at all — there is no window to race against.
+  **Performance:** negligible — `wscript.exe` is a lightweight native
+  host; the extra hop (`wscript.exe` → `powershell.exe`) adds low
+  single-digit milliseconds versus the multi-second DNS-adapter-change
+  and port-53-probe work the arm/disarm scripts already do. No measurable
+  startup-time change.
+  **Validation:** every touched `.ps1` parsed cleanly via
+  `[System.Management.Automation.Language.Parser]::ParseFile` (syntax
+  check, not execution). The `run-hidden.vbs` mechanism was tested
+  end-to-end against a harmless dummy script (no DNS/service calls): it
+  executes the target, correctly waits for completion (verified via a
+  timestamped marker file only the target could write), and correctly
+  propagates the target's exit code back through `wscript.exe`'s own exit
+  code (tested with an explicit non-zero exit). `node --check` clean on
+  `engine.js`; 42/42 renderer unit tests still pass (unrelated to this
+  change; run to confirm no regression). **Not validated**: the actual
+  installed product's Start/Stop Protection click was not exercised live
+  end-to-end (that requires an elevated install + real UAC/task-scheduler
+  execution) — the underlying mechanism is validated directly and is a
+  well-established Windows technique, but a live click-through on a real
+  install is the one remaining step before calling this fully closed.
+  **Remaining, intentionally-justified exception:** the self-elevation
+  fallback inside `start_all.ps1`, `stop_all.ps1`, `arm-protection.ps1`,
+  and `disarm-protection.ps1` (`if (-not admin) { Start-Process -Verb
+  RunAs -WindowStyle Hidden ... }`) still uses `-WindowStyle Hidden`
+  rather than the VBS wrapper. Left as is because: it only fires when a
+  script is run without already being elevated, which for the scheduled-
+  task path (registered at `RunLevel Highest`) essentially never happens;
+  and when it does fire, the user is about to see a native UAC consent
+  prompt regardless — real, expected security friction, not a bug —
+  making a secondary flash on the post-consent relaunch a minor,
+  low-frequency cosmetic gap rather than the "click a button, see a
+  console" bug this pass was about.
 
 ## Validation (measured, honest)
 
