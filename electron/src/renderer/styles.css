@@ -61,6 +61,15 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* Keyboard focus — one consistent ring app-wide, the same restrained blue
+   used for the Replay playhead and the command-palette active row. Only
+   shows for keyboard/programmatic focus (:focus-visible), never on a mouse
+   click, so it never adds visual noise to the monochrome surface. */
+:focus-visible {
+  outline: 2px solid var(--rp-accent, #5b9dff);
+  outline-offset: 2px;
+}
+
 html, body {
   height: 100%;
   overflow: hidden;
@@ -132,7 +141,7 @@ html, body {
   color: var(--text-2); padding: 15px 12px 6px;
 }
 .nav-item {
-  display: flex; align-items: center; gap: 12px;
+  display: flex; align-items: center; gap: 12px; cursor: pointer;
   padding: 9px 12px; border-radius: var(--radius-sm);
   color: var(--text-1); font-weight: 500; font-size: 13.5px;
   position: relative; transition: color 0.18s var(--ease), background 0.18s var(--ease);
@@ -528,6 +537,31 @@ html, body {
 .rp-tech .rp-tid { font-family: ui-monospace, Consolas, monospace; font-size: 10.5px; color: var(--rp-accent); }
 .rp-tech .rp-tid.off { color: var(--text-2, #6b7280); }
 
+/* Side-panel tabs (Playback / Investigation) */
+.rp-tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border, #23262d); }
+.rp-tab { flex: 1; background: none; border: none; padding: 0 0 10px; font-size: 12px; font-weight: 600;
+  color: var(--text-2, #7c828b); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  transition: color 0.2s ease, border-color 0.2s ease; }
+.rp-tab:hover { color: var(--text-1, #b6bcc4); }
+.rp-tab.active { color: var(--text-0, #f4f5f7); border-bottom-color: var(--rp-accent); }
+.rp-desc { font-size: 12px; color: var(--text-1, #aeb4bc); line-height: 1.55; }
+
+/* Investigation — recommended-response cards */
+.rp-rec { border: 1px solid var(--border, #23262d); border-radius: 9px; padding: 10px 11px; margin-bottom: 8px; }
+.rp-rec-head { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+.rp-rec-t { font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: var(--text-1, #aeb4bc); }
+
+/* Investigation — triage form */
+.rp-triage { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
+.rp-field { display: flex; flex-direction: column; gap: 5px; }
+.rp-field > span { font-size: 10.5px; color: var(--text-2, #7c828b); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
+.rp-input, .rp-select, .rp-textarea {
+  background: rgba(255,255,255,0.03); border: 1px solid var(--border, #23262d); border-radius: 8px;
+  color: var(--text-0, #f4f5f7); font-size: 12.5px; font-family: inherit; padding: 8px 10px; resize: vertical;
+}
+.rp-textarea { min-height: 64px; line-height: 1.5; }
+.rp-select { appearance: none; cursor: pointer; }
+
 /* Transport controls */
 .rp-ctrl { display: flex; align-items: center; gap: 14px; padding: 14px 20px;
   border-top: 1px solid var(--border, #23262d); }
@@ -569,3 +603,82 @@ html, body {
 .state-block .sb-s { font-size: 12.5px; color: var(--text-2); max-width: 360px; line-height: 1.55; }
 .state-block.offline .sb-ic { opacity: 0.7; }
 .state-block.error .sb-ic { opacity: 0.7; }
+
+/* ======================================================================
+   Toasts — one reusable feedback surface for actions with no page of
+   their own to update (e.g. a command run from the palette).
+   ====================================================================== */
+.toast-host {
+  position: fixed; right: 22px; bottom: 22px; z-index: 400;
+  display: flex; flex-direction: column-reverse; gap: 8px; pointer-events: none;
+}
+.toast {
+  display: flex; align-items: center; gap: 9px; padding: 11px 15px;
+  background: var(--bg-2, #111113); border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow-2);
+  color: var(--text-0); font-size: 12.5px; font-weight: 500; max-width: 320px;
+  opacity: 0; transform: translateY(8px) scale(0.98); cursor: pointer;
+  transition: opacity 0.22s var(--ease), transform 0.22s var(--ease);
+  pointer-events: auto;
+}
+.toast.show { opacity: 1; transform: none; }
+.toast .toast-ic { width: 16px; height: 16px; flex: 0 0 auto; color: var(--text-1); }
+.toast.error .toast-ic { color: #fff; }
+.toast .toast-ic svg { width: 100%; height: 100%; }
+.toast .toast-msg { line-height: 1.4; }
+
+/* ======================================================================
+   Command Palette (Ctrl+K) — global search + quick actions. Same overlay
+   language as Replay (.rp-scrim): centered card over a blurred scrim, one
+   restrained blue accent for the active row.
+   ====================================================================== */
+.cmdk-scrim {
+  position: fixed; inset: 0; z-index: 300; display: flex; flex-direction: column;
+  align-items: center; padding-top: 12vh;
+  background: rgba(6, 7, 9, 0.72); backdrop-filter: blur(6px);
+  animation: rp-fade 0.15s ease;
+}
+.cmdk {
+  width: min(640px, 92vw); max-height: 60vh; display: flex; flex-direction: column;
+  background: var(--surface, #101216); border: 1px solid var(--border, #23262d);
+  border-radius: 16px; overflow: hidden; box-shadow: 0 40px 120px rgba(0,0,0,0.6);
+}
+.cmdk-inputwrap {
+  display: flex; align-items: center; gap: 12px; padding: 16px 18px;
+  border-bottom: 1px solid var(--border, #23262d); flex: 0 0 auto;
+}
+.cmdk-inputwrap > svg { width: 18px; height: 18px; color: var(--text-2); flex: 0 0 auto; }
+.cmdk-input {
+  flex: 1; background: none; border: none; outline: none; color: var(--text-0);
+  font-size: 15px; font-family: inherit;
+}
+.cmdk-input::placeholder { color: var(--text-2); }
+.cmdk-esc {
+  font-family: ui-monospace, Consolas, monospace; font-size: 10.5px; color: var(--text-2);
+  border: 1px solid var(--border, #23262d); border-radius: 5px; padding: 2px 6px;
+}
+.cmdk-results { flex: 1; overflow-y: auto; padding: 8px; min-height: 0; }
+.cmdk-group {
+  font-size: 10px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--text-2);
+  font-weight: 600; padding: 12px 10px 6px;
+}
+.cmdk-item {
+  display: flex; align-items: center; gap: 11px; padding: 9px 10px; border-radius: 9px;
+  cursor: pointer; color: var(--text-1);
+}
+.cmdk-item-ic { width: 16px; height: 16px; flex: 0 0 auto; color: var(--text-2); }
+.cmdk-item-ic svg { width: 100%; height: 100%; }
+.cmdk-item-label { flex: 1; min-width: 0; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-0); }
+.cmdk-item.active { background: var(--rp-accent-dim); }
+.cmdk-item.active .cmdk-item-ic,
+.cmdk-item.active .cmdk-item-label { color: var(--text-0); }
+.cmdk-item.active .cmdk-item-ic { color: var(--rp-accent); }
+.cmdk-footer {
+  display: flex; align-items: center; gap: 16px; padding: 10px 16px;
+  border-top: 1px solid var(--border, #23262d); flex: 0 0 auto;
+  font-size: 11px; color: var(--text-2);
+}
+.cmdk-key {
+  font-family: ui-monospace, Consolas, monospace; font-size: 10px; color: var(--text-1);
+  border: 1px solid var(--border, #23262d); border-radius: 4px; padding: 1px 5px; margin-right: 4px;
+}

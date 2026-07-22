@@ -29,13 +29,31 @@ inventory and `docs/GAP_ANALYSIS.md` for the honest ranking vs commercial EDRs.
   the `local` provider keeps everything on-box. `valkyrie/edr/ai_provider.py`.
 - **100 % incident explainability coverage** — every incident category has a
   plain-English "what this means" and recommended actions built only from real
-  shipped responders, guarded by a regression test. `edr/investigate.py`.
+  shipped responders, guarded by a regression test. `edr/investigate.py`. **Now
+  surfaced in the app**, not just the API: open any incident's Replay and
+  switch to the new **Investigation** tab for the offline analysis (what
+  happened, why it matters, recommended response with rationale), an explicit
+  opt-in "Ask AI" for a deeper narrative (never called automatically — same
+  opt-in-by-default stance as the rest of the app), and a **Triage** panel
+  (status, assignee, analyst notes) that writes through the existing audited
+  `POST /api/edr/incidents/{id}/status` endpoint. This backend has been fully
+  built and tested since before 0.1 shipped; it had no UI until this pass —
+  closing that gap was higher priority than any new page.
 - **Detection-efficacy harness + CI gate** (ADRs 0022–0024) — drives the real
   classifiers against a MITRE-tagged corpus and fails CI if recall < 85 % or
   FPR > 5 %.
 - **Premium monochrome desktop app** — black / white / grey with a single
   restrained blue accent, custom title bar, cinematic splash, and a reusable
   design-system state component (empty / offline / error).
+- **Command palette (Ctrl+K)** — instant, keyboard-first search over the app's
+  13 pages, 5 quick actions (start/stop protection, meeting mode, kill
+  telemetry, randomize MAC, open logs), and recent EDR incidents (jumps
+  straight into Replay). Ranking is pure, unit-tested logic
+  (`electron/src/renderer/command-index.js`); every action it runs is the
+  *exact* shared function a page's own button calls — no second
+  implementation to drift out of sync. Reports live results via toast
+  feedback (`electron/src/renderer/app.js` `toast()`), a new reusable
+  component of the design system.
 
 ## Reliability & trust fixes in 0.1
 
@@ -43,11 +61,27 @@ inventory and `docs/GAP_ANALYSIS.md` for the honest ranking vs commercial EDRs.
   "endpoint is clean" even when the engine was not running. It now distinguishes
   **"Protection is off — not monitoring"** from **"monitoring, no incidents"** —
   a security product must never imply safety while protection is down. Delivered
-  via a new reusable `stateBlock()` empty/offline/error component so this stays
-  consistent as more pages adopt it.
+  via a reusable `stateBlock()` empty/offline/error component, now rolled out to
+  every live panel that can be observed before protection is ever started:
+  Dashboard (recent activity feed), Firewall and DNS (top-blocked lists),
+  Applications (process activity), Privacy and Intelligence (subsystem status).
+  Each panel used to show a generic "no data yet" message regardless of whether
+  the engine was actually running — indistinguishable from "checked, found
+  nothing." The offline/empty split is pure decision logic
+  (`electron/src/renderer/view-state.js`, unit tested independently of the DOM:
+  `npm test` in `electron/`) so the same honesty guarantee is easy to extend to
+  any future panel.
 - Graceful degradation is a platform rule: every sensor/subsystem isolates
   failures, restarts independently, and degrades to a no-op rather than crashing
   the app. The renderer talks to the engine only through a sandboxed IPC bridge.
+- **Keyboard accessibility fix.** The sidebar (13 pages) and the incident list
+  on the Threats page were `<div>`s with a click handler only — invisible to
+  keyboard-only and screen-reader users, a real procurement blocker for
+  enterprise/accessibility-conscious buyers. Both are now proper `role="button"`
+  controls with `tabindex`, Enter/Space activation, and `aria-current`/
+  `aria-label`. Every interactive element also gets one consistent
+  `:focus-visible` ring (the same restrained blue used elsewhere) instead of
+  either no visible focus state or the unstyled browser default.
 
 ## Validation (measured, honest)
 
@@ -77,10 +111,14 @@ Honest boundaries, documented rather than hidden:
   local-first product; the intended path is OS AMSI/Defender integration.
 - **Desktop scope for 0.1.** Attack Replay, Dashboard, Threats, Privacy,
   Firewall, DNS, Intelligence, Applications, Network, Devices, Updates,
-  Settings, and About ship. **Not yet in the desktop app:** a global command
-  palette / cross-entity search, a full incident-detail workspace (process tree
-  / network graph panels beyond Replay), and a Fleet management UI (the fleet
-  *backend* exists). These are planned follow-ups, not implied to exist.
+  Settings, and About ship. **Command palette (Ctrl+K) covers navigation,
+  quick actions and recent incidents only** — it does not (yet) index MITRE
+  technique reference data, threat-intel entries, playbooks, or log contents,
+  because those don't have a real per-item detail view to jump to today;
+  indexing them without a destination would be search theater, not search.
+  **Not yet in the desktop app:** a full incident-detail workspace (process
+  tree / network graph panels beyond Replay), and a Fleet management UI (the
+  fleet *backend* exists). These are planned follow-ups, not implied to exist.
 - **AI investigation is opt-in and off by default.** A network provider sends
   compact incident facts to the configured endpoint; use the `local` provider to
   avoid that entirely.
@@ -105,9 +143,12 @@ Honest boundaries, documented rather than hidden:
 | Investigation explainability (meaning + actions, all categories) | ✅ |
 | Vendor-neutral AI, opt-in | ✅ |
 | Tests passing; efficacy gate green | ✅ |
-| Honest empty/offline/error states (reusable component) | ✅ Threats; rolling out to other pages |
-| Global search / command palette | ⏳ planned (not in 0.1) |
-| Full incident-detail workspace (process tree / network graph) | ⏳ partial (Replay covers the timeline) |
+| Honest empty/offline/error states (reusable component) | ✅ Threats, Dashboard, Firewall, DNS, Applications, Privacy, Intelligence |
+| Command palette (Ctrl+K) | ✅ navigation, quick actions, recent incidents — not full cross-entity search |
+| Toast notifications (reusable component) | ✅ |
+| Incident investigation + triage (Replay → Investigation tab) | ✅ explainability, recommended response, status/assignee/notes |
+| Keyboard-accessible sidebar + incident list, app-wide focus ring | ✅ |
+| Full incident-detail workspace (process tree / network graph) | ⏳ partial (Replay covers timeline + explainability + triage; no process-tree/network-graph panels yet) |
 | Fleet management UI | ⏳ backend only |
 | Documentation & known limitations | ✅ (`docs/`) |
 

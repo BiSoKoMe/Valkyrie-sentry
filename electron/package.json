@@ -9,7 +9,8 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "dist": "electron-builder --win nsis"
+    "dist": "electron-builder --win nsis",
+    "test": "node --test src/renderer/*.test.js"
   },
   "devDependencies": {
     "electron": "^31.0.0",

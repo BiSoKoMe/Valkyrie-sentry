@@ -221,12 +221,20 @@ function buildChrome() {
   $('brandMark').innerHTML = ICON.shieldCheck;
   $('minBtn').innerHTML = ICON.min; $('maxBtn').innerHTML = ICON.max;
   $('closeBtn').innerHTML = ICON.x; $('notifBtn').innerHTML = ICON.bell;
+  $('searchBtn').innerHTML = ICON.search;
+  $('searchBtn').onclick = () => CommandPalette.open();
   const sb = $('sidebar');
   sb.appendChild(el('div', 'section-label', 'Protection'));
   NAV.forEach(([id, label, icon], idx) => {
     if (idx === 7) sb.appendChild(el('div', 'section-label', 'System'));
     const item = el('div', 'nav-item' + (id === 'dashboard' ? ' active' : ''), `${ICON[icon]}<span>${label}</span>`);
-    item.dataset.route = id; item.onclick = () => route(id); sb.appendChild(item);
+    item.dataset.route = id;
+    item.tabIndex = 0;
+    item.setAttribute('role', 'button');
+    item.setAttribute('aria-current', id === 'dashboard' ? 'page' : 'false');
+    item.onclick = () => route(id);
+    item.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); route(id); } };
+    sb.appendChild(item);
   });
   if (V) {
     $('minBtn').onclick = () => V.minimize();
@@ -238,7 +246,11 @@ function buildChrome() {
 function route(id) {
   if (state.pageTimer) { clearInterval(state.pageTimer); state.pageTimer = null; }
   state.route = id;
-  document.querySelectorAll('.nav-item').forEach((n) => n.classList.toggle('active', n.dataset.route === id));
+  document.querySelectorAll('.nav-item').forEach((n) => {
+    const on = n.dataset.route === id;
+    n.classList.toggle('active', on);
+    n.setAttribute('aria-current', on ? 'page' : 'false');
+  });
   const meta = NAV.find((n) => n[0] === id);
   $('pageTitle').textContent = meta ? meta[1] : 'Valkyrie';
   const page = PAGES[id] || PAGES.dashboard;
@@ -287,12 +299,13 @@ PAGES.dashboard = {
       elements_cleaned: stats.elements_cleaned || 0, scanner_decisions: stats.scanner_decisions || 0, privacy: ps,
     };
     for (const [k, v] of Object.entries(vals)) animateNumber($('card-' + k), v);
-    renderFeed((data && data.events) || []);
+    renderFeed((data && data.events) || [], up);
   },
 };
-function renderFeed(events) {
+function renderFeed(events, up) {
   const feed = $('feed'); if (!feed) return;
-  if (!events.length) { feed.innerHTML = '<div class="empty">No events yet — activity appears here live.</div>'; return; }
+  const vs = ViewState.feedState(up, events);
+  if (vs.kind !== 'list') { feed.innerHTML = stateBlock(vs.kind, vs.title, vs.sub); return; }
   feed.innerHTML = '';
   events.slice(0, 40).forEach((e) => {
     const verdict = (e.action || e.verdict || e.decision || '').toString().toLowerCase();
@@ -320,10 +333,7 @@ PAGES.protection = {
       </div>`;
     $('protToggle').onclick = toggleProtection;
     $('protLogs').onclick = () => V && V.openLogs();
-    $('protMeeting').onclick = async () => {
-      const m = await safe(() => V.api.get('/api/meeting/status'), {});
-      await safe(() => V.api.post(m && m.active ? '/api/meeting/stop' : '/api/meeting/start'), null);
-    };
+    $('protMeeting').onclick = toggleMeetingMode;
   },
   onTele(data) {
     const s = (data && data.stats) || {}, up = !!(data && data.ok), prot = !!(data && data.protected);
@@ -355,8 +365,8 @@ PAGES.privacy = {
         <button class="btn" id="pvKill">${ICON.shield}<span>Kill Telemetry</span></button>
         <button class="btn" id="pvMac">${ICON.network}<span>Randomize MAC</span></button>
       </div>`;
-    $('pvKill').onclick = async () => { await safe(() => V.api.post('/api/telemetry/kill'), null); this.poll(); };
-    $('pvMac').onclick = async () => { await safe(() => V.api.post('/api/mac/randomize'), null); this.poll(); };
+    $('pvKill').onclick = killTelemetry;
+    $('pvMac').onclick = randomizeMac;
   },
   onTele(data) {
     const s = (data && data.stats) || {};
@@ -364,12 +374,14 @@ PAGES.privacy = {
     animateNumber($('card-pblocked'), (s.dns_blocked || 0) + (s.fw_blocked || 0));
   },
   async poll() {
+    const box = $('privRows'); if (!box) return;
+    const vs = ViewState.privacyRowsState(state.engineUp);
+    if (vs.kind !== 'list') { box.innerHTML = stateBlock(vs.kind, vs.title, vs.sub); return; }
     const [tel, vpn, zero] = await Promise.all([
       safe(() => V.api.get('/api/telemetry/status'), {}),
       safe(() => V.api.get('/api/vpn/status'), {}),
       safe(() => V.api.get('/api/zero-log/status'), {}),
     ]);
-    const box = $('privRows'); if (!box) return;
     const telStatus = tel.status === 'KILLED' ? badge('Killed', 'ok')
       : tel.status === 'ACTIVE' ? badge('Telemetry active', 'warn')
       : tel.status === 'PARTIAL' ? badge('Partial', 'warn') : badge('Unknown', 'off');
@@ -396,15 +408,16 @@ PAGES.firewall = {
       <div class="bars" id="fwBars"><div class="empty">No blocks recorded yet.</div></div>`;
   },
   onTele(data) {
-    const s = (data && data.stats) || {};
+    const s = (data && data.stats) || {}, up = !!(data && data.ok);
     animateNumber($('card-fw'), s.fw_blocked || 0);
     animateNumber($('card-fwallowed'), s.allowed || 0);
-    renderTopBlocked($('fwBars'), s.top_blocked || []);
+    renderTopBlocked($('fwBars'), s.top_blocked || [], up);
   },
 };
-function renderTopBlocked(box, top) {
+function renderTopBlocked(box, top, up) {
   if (!box) return;
-  if (!top.length) { box.innerHTML = '<div class="empty">No blocks recorded yet.</div>'; return; }
+  const vs = ViewState.topBlockedState(up, top);
+  if (vs.kind !== 'list') { box.innerHTML = stateBlock(vs.kind, vs.title, vs.sub); return; }
   const max = Math.max(...top.map((t) => t[1] || t.count || 0), 1);
   box.innerHTML = top.slice(0, 8).map((t) => {
     const name = Array.isArray(t) ? t[0] : (t.domain || t.name);
@@ -423,13 +436,21 @@ PAGES.threats = {
       <div class="grid" id="edrCards"><div class="empty">Loading EDR…</div></div>
       ${sectionHead('Recent Incidents')}
       <div class="list" id="edrList"><div class="empty">Loading…</div></div>`;
-    // Delegated: click an incident to replay it step-by-step. Survives the
-    // poll's innerHTML refresh because the listener lives on the parent.
+    // Delegated: click or keyboard-activate an incident to replay it
+    // step-by-step. Survives the poll's innerHTML refresh because the
+    // listener lives on the parent, not the (replaced) rows.
     const list = $('edrList');
-    if (list) list.onclick = (e) => {
-      const row = e.target.closest('.inc-row');
-      if (row && row.dataset.id) openReplay(row.dataset.id);
-    };
+    if (list) {
+      list.onclick = (e) => {
+        const row = e.target.closest('.inc-row');
+        if (row && row.dataset.id) openReplay(row.dataset.id);
+      };
+      list.onkeydown = (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        const row = e.target.closest('.inc-row');
+        if (row && row.dataset.id) { e.preventDefault(); openReplay(row.dataset.id); }
+      };
+    }
   },
   async poll() {
     const cards = $('edrCards');
@@ -466,11 +487,13 @@ PAGES.threats = {
       const tech = (i.technique || '').toString().match(/T\d{4}(?:\.\d{3})?/);
       const entity = i.entity || i.host || '';
       const sub = [i.status, i.host].filter(Boolean).join(' · ');
-      return `<div class="list-row inc-row" data-sev="${sevClass}" data-id="${escapeHtml(i.id || '')}">
+      const title = i.title || i.name || i.rule || 'Incident';
+      return `<div class="list-row inc-row" data-sev="${sevClass}" data-id="${escapeHtml(i.id || '')}"
+        tabindex="0" role="button" aria-label="Replay incident: ${escapeHtml(title)}, ${escapeHtml(sevText)}">
         <span class="inc-rail"></span>
         <span class="sev ${sevClass}">${escapeHtml(sevText)}</span>
         <div class="lr-main">
-          <span class="lr-title">${escapeHtml(i.title || i.name || i.rule || 'Incident')}</span>
+          <span class="lr-title">${escapeHtml(title)}</span>
           <span class="lr-sub">${entity ? `<span class="mono-tag">${escapeHtml(entity)}</span> ` : ''}${escapeHtml(sub)}</span>
         </div>
         ${tech ? `<span class="mono-tag">${escapeHtml(tech[0])}</span>` : ''}
@@ -487,6 +510,12 @@ PAGES.intelligence = {
     <div id="intelCards" class="grid"><div class="empty">Loading…</div></div>
     <div id="intelRows"></div>`; },
   async poll() {
+    const vs = ViewState.intelRowsState(state.engineUp);
+    if (vs.kind !== 'list') {
+      const cards = $('intelCards'); if (cards) cards.innerHTML = '';
+      const rows = $('intelRows'); if (rows) rows.innerHTML = stateBlock(vs.kind, vs.title, vs.sub);
+      return;
+    }
     const info = await safe(() => V.api.get('/api/intelligence'), { enabled: false });
     const cards = $('intelCards');
     if (cards) cards.innerHTML = `
@@ -509,7 +538,7 @@ PAGES.applications = {
     ${sectionHead('Active Processes')}
     <div class="list" id="appList"><div class="empty">Watching for process activity…</div></div>`; },
   onTele(data) {
-    const s = (data && data.stats) || {}, events = (data && data.events) || [];
+    const s = (data && data.stats) || {}, events = (data && data.events) || [], up = !!(data && data.ok);
     $('appTop').innerHTML = rowsPanel([
       ['Busiest process', escapeHtml(s.top_process || '—'), 'apps'],
       ['Top destination', escapeHtml(s.top_domain || '—'), 'globe'],
@@ -518,7 +547,8 @@ PAGES.applications = {
     events.forEach((e) => { const p = e.process; if (p) byProc[p] = (byProc[p] || 0) + 1; });
     const rows = Object.entries(byProc).sort((a, b) => b[1] - a[1]).slice(0, 15);
     const list = $('appList'); if (!list) return;
-    if (!rows.length) { list.innerHTML = '<div class="empty">Watching for process activity…</div>'; return; }
+    const vs = ViewState.processListState(up, rows);
+    if (vs.kind !== 'list') { list.innerHTML = stateBlock(vs.kind, vs.title, vs.sub); return; }
     list.innerHTML = rows.map(([p, n]) =>
       `<div class="list-row"><div class="lr-main"><span class="lr-title">${escapeHtml(p)}</span>
         <span class="lr-sub">network events</span></div><span class="lr-val">${fmt(n)}</span></div>`).join('');
@@ -563,11 +593,11 @@ PAGES.dns = {
     ${sectionHead('Top Blocked Domains')}
     <div class="bars" id="dnsBars"><div class="empty">No blocks yet.</div></div>`; },
   onTele(data) {
-    const s = (data && data.stats) || {};
+    const s = (data && data.stats) || {}, up = !!(data && data.ok);
     animateNumber($('card-dTotal'), s.total_24h || 0);
     animateNumber($('card-dBlocked'), s.dns_blocked || 0);
     animateNumber($('card-dAllowed'), s.allowed || 0);
-    renderTopBlocked($('dnsBars'), s.top_blocked || []);
+    renderTopBlocked($('dnsBars'), s.top_blocked || [], up);
   },
 };
 
@@ -658,6 +688,58 @@ async function toggleProtection() {
   } finally { state.busy = false; }
 }
 
+/* ============================ Toasts =================================
+   One reusable, honest feedback surface for actions that don't already have
+   somewhere to show their result (a button on the current page updates its
+   own panel; an action run from the command palette has no visible panel at
+   all). Stacked, auto-dismiss, screen-reader announced via aria-live.
+   ========================================================================= */
+function toastHost() {
+  let host = $('toastHost');
+  if (!host) {
+    host = el('div', 'toast-host');
+    host.id = 'toastHost'; host.setAttribute('aria-live', 'polite'); host.setAttribute('role', 'status');
+    document.body.appendChild(host);
+  }
+  return host;
+}
+function toast(message, kind) {
+  const host = toastHost();
+  const node = el('div', 'toast ' + (kind || 'ok'),
+    `<span class="toast-ic">${kind === 'error' ? ICON.alert : ICON.check}</span><span class="toast-msg"></span>`);
+  node.querySelector('.toast-msg').textContent = message;
+  host.appendChild(node);
+  requestAnimationFrame(() => node.classList.add('show'));
+  const kill = () => { node.classList.remove('show'); setTimeout(() => node.remove(), 220); };
+  setTimeout(kill, 3600);
+  node.onclick = kill;
+}
+
+/* ============================ Shared quick actions ====================
+   Named, reusable functions (not per-page closures) so the exact same logic
+   runs whether triggered from a page's button or from the command palette —
+   no duplicated action logic, one source of truth per action.
+   ========================================================================= */
+async function toggleMeetingMode() {
+  if (!V) return;
+  const m = await safe(() => V.api.get('/api/meeting/status'), {});
+  const turningOn = !(m && m.active);
+  await safe(() => V.api.post(turningOn ? '/api/meeting/start' : '/api/meeting/stop'), null);
+  toast(turningOn ? 'Meeting mode on — alerts stay quiet while you present.' : 'Meeting mode off.', 'ok');
+}
+async function killTelemetry() {
+  if (!V) return;
+  await safe(() => V.api.post('/api/telemetry/kill'), null);
+  toast('Windows telemetry settings locked down.', 'ok');
+  if (PAGES.privacy.poll) PAGES.privacy.poll();
+}
+async function randomizeMac() {
+  if (!V) return;
+  await safe(() => V.api.post('/api/mac/randomize'), null);
+  toast('Network adapter MAC address randomized.', 'ok');
+  if (PAGES.privacy.poll) PAGES.privacy.poll();
+}
+
 /* ============================ Live topbar =========================== */
 function setProtectionUI(on) {
   const wrap = $('orbWrap'), label = $('orbLabel'), pill = $('statusPill'), txt = $('statusText');
@@ -729,9 +811,13 @@ function normalizeSteps(inc) {
   return steps;
 }
 
+// The incident lifecycle the engine actually models (valkyrie/edr/schema.py
+// INCIDENT_STATES) — a fixed, documented enum, not invented UI vocabulary.
+const INCIDENT_STATES = ['open', 'investigating', 'contained', 'resolved', 'dismissed'];
+
 const Replay = {
   steps: [], idx: 0, playing: false, speed: 1, timer: null, root: null, keyHandler: null,
-  BASE: 1150,
+  report: null, BASE: 1150,
 
   async open(id) {
     this.close();
@@ -748,6 +834,7 @@ const Replay = {
 
   mount(inc, steps) {
     this.inc = inc; this.steps = steps; this.idx = 0; this.playing = false; this.speed = 1;
+    this.report = null;
     const sev = rpSevClass(inc.severity);
     const chain = steps.map((s, i) => `
       <div class="rp-ev" data-sev="${s.sev}" data-i="${i}">
@@ -774,10 +861,19 @@ const Replay = {
       <div class="rp-body">
         <div class="rp-stage"><div class="rp-chain">${chain}</div></div>
         <div class="rp-side">
-          <div class="rp-sec">Current step</div>
-          <div class="rp-now"><div class="rp-now-t"></div><div class="rp-now-h"></div><div class="rp-now-d"></div></div>
-          <div class="rp-sec">MITRE ATT&amp;CK — observed</div>
-          <div class="rp-techs">${techHtml}</div>
+          <div class="rp-tabs" role="tablist">
+            <button class="rp-tab active" id="rptab-playback" role="tab" aria-selected="true" data-tab="playback">Playback</button>
+            <button class="rp-tab" id="rptab-investigate" role="tab" aria-selected="false" data-tab="investigate">Investigation</button>
+          </div>
+          <div class="rp-tabpane" data-pane="playback" role="tabpanel" aria-labelledby="rptab-playback">
+            <div class="rp-sec">Current step</div>
+            <div class="rp-now"><div class="rp-now-t"></div><div class="rp-now-h"></div><div class="rp-now-d"></div></div>
+            <div class="rp-sec">MITRE ATT&amp;CK — observed</div>
+            <div class="rp-techs">${techHtml}</div>
+          </div>
+          <div class="rp-tabpane" data-pane="investigate" role="tabpanel" aria-labelledby="rptab-investigate" hidden>
+            <div id="rpInv"></div>
+          </div>
         </div>
       </div>
       <div class="rp-ctrl">
@@ -805,6 +901,7 @@ const Replay = {
       else if (a === 'restart') { this.pause(); this.seek(0); }
     });
     this.root.querySelectorAll('.rp-sp').forEach((b) => b.onclick = () => this.setSpeed(Number(b.dataset.s)));
+    this.root.querySelectorAll('.rp-tab').forEach((b) => b.onclick = () => this.switchTab(b.dataset.tab));
     const track = this.root.querySelector('.rp-track');
     track.onclick = (e) => {
       const r = track.getBoundingClientRect();
@@ -873,15 +970,275 @@ const Replay = {
     clearTimeout(this.timer); this.timer = null; this.playing = false;
     if (this.keyHandler) { document.removeEventListener('keydown', this.keyHandler); this.keyHandler = null; }
     if (this.root && this.root.parentNode) this.root.parentNode.removeChild(this.root);
-    this.root = null;
+    this.root = null; this.report = null;
+  },
+
+  /* -------------------------- Investigation tab --------------------------
+     Wires the already-shipped explainability + triage backend
+     (edr/investigate.py, POST .../status) into the one incident-detail
+     surface the app has, instead of a second modal. Offline analysis loads
+     by default (no network call); the AI narrative is a separate, explicit
+     opt-in click, matching the app's opt-in-AI stance elsewhere. */
+  switchTab(tab) {
+    this.root.querySelectorAll('.rp-tab').forEach((b) => {
+      const on = b.dataset.tab === tab;
+      b.classList.toggle('active', on); b.setAttribute('aria-selected', String(on));
+    });
+    this.root.querySelectorAll('.rp-tabpane').forEach((p) => { p.hidden = p.dataset.pane !== tab; });
+    if (tab === 'investigate' && !this.report) this.loadInvestigation(false);
+  },
+
+  async loadInvestigation(useAi) {
+    const box = this.root && this.root.querySelector('#rpInv'); if (!box) return;
+    box.innerHTML = `<div class="empty" style="padding:20px 0">${useAi ? 'Asking the AI provider…' : 'Loading investigation…'}</div>`;
+    const incId = this.inc.id;
+    const rep = await safe(() => V.api.post('/api/edr/incidents/' + incId + '/investigate', { use_ai: !!useAi }), null);
+    if (!this.root || this.inc.id !== incId) return;   // closed, or a different incident opened meanwhile
+    this.report = rep;
+    this.renderInvestigation();
+  },
+
+  renderInvestigation() {
+    const box = this.root && this.root.querySelector('#rpInv'); if (!box) return;
+    const r = this.report;
+    if (!r) {
+      box.innerHTML = stateBlock('error', 'Investigation unavailable',
+        'Could not reach the engine for an analysis of this incident.');
+      return;
+    }
+    const actions = (r.recommended_actions || []).map((a) => `
+      <div class="rp-rec">
+        <div class="rp-rec-head"><span class="mono-tag">${escapeHtml(a.action || '')}</span>${a.target ? `<span class="rp-rec-t">${escapeHtml(a.target)}</span>` : ''}</div>
+        <div class="rp-desc">${escapeHtml(a.rationale || '')}</div>
+      </div>`).join('')
+      || '<div class="rp-desc" style="opacity:.6">No specific response action recommended.</div>';
+
+    const aiBtn = (r.ai_available && !r.ai_narrative)
+      ? `<button class="btn" id="rpAskAi" style="margin-top:4px">${ICON.brain}<span>Ask AI for a deeper narrative</span></button>` : '';
+    const aiBlock = r.ai_narrative
+      ? `<div class="rp-sec" style="margin-top:16px">AI narrative — ${escapeHtml(r.analyst || 'ai')}</div>
+         <div class="rp-desc">${escapeHtml(r.ai_narrative)}</div>` : '';
+    const aiErr = r.ai_error ? `<div class="rp-desc" style="opacity:.75;margin-top:8px">${escapeHtml(r.ai_error)}</div>` : '';
+
+    const statusVal = this.inc.status || 'open';
+    box.innerHTML = `
+      <div class="rp-sec">What happened</div>
+      <div class="rp-desc">${escapeHtml(r.summary || 'No summary available.')}</div>
+      <div class="rp-sec" style="margin-top:16px">Why it matters</div>
+      <div class="rp-desc">${escapeHtml(r.meaning || '—')}</div>
+      <div class="rp-sec" style="margin-top:16px">Recommended response</div>
+      ${actions}
+      ${aiBtn}${aiBlock}${aiErr}
+      <div class="rp-sec" style="margin-top:18px">Triage</div>
+      <div class="rp-triage">
+        <label class="rp-field"><span>Status</span>
+          <select class="rp-select" id="rpStatus">${INCIDENT_STATES.map((s) =>
+            `<option value="${s}"${s === statusVal ? ' selected' : ''}>${s.charAt(0).toUpperCase() + s.slice(1)}</option>`).join('')}
+          </select>
+        </label>
+        <label class="rp-field"><span>Assignee</span>
+          <input class="rp-input" id="rpAssignee" value="${escapeHtml(this.inc.assignee || '')}" placeholder="Unassigned" />
+        </label>
+        <label class="rp-field"><span>Notes</span>
+          <textarea class="rp-textarea" id="rpNotes" rows="3" placeholder="Analyst notes…">${escapeHtml(this.inc.notes || '')}</textarea>
+        </label>
+        <button class="btn primary" id="rpSaveTriage">${ICON.check}<span>Save Triage</span></button>
+      </div>`;
+
+    const askBtn = box.querySelector('#rpAskAi');
+    if (askBtn) askBtn.onclick = () => this.loadInvestigation(true);
+    const saveBtn = box.querySelector('#rpSaveTriage');
+    if (saveBtn) saveBtn.onclick = () => this.saveTriage();
+  },
+
+  async saveTriage() {
+    const box = this.root && this.root.querySelector('#rpInv'); if (!box) return;
+    const status = box.querySelector('#rpStatus').value;
+    const assignee = box.querySelector('#rpAssignee').value.trim();
+    const notes = box.querySelector('#rpNotes').value;
+    const saveBtn = box.querySelector('#rpSaveTriage');
+    if (saveBtn) saveBtn.disabled = true;
+    const updated = await safe(() => V.api.post('/api/edr/incidents/' + this.inc.id + '/status',
+      { status, assignee, notes }), null);
+    if (saveBtn) saveBtn.disabled = false;
+    if (updated && updated.id) {
+      this.inc = updated;
+      toast('Incident triage saved.', 'ok');
+    } else {
+      toast('Could not save triage — is protection running?', 'error');
+    }
   },
 };
 function openReplay(id) { Replay.open(id); }
+
+/* ============================ Command Palette (Ctrl+K) ===============
+   Global search + quick actions. Ranking/grouping is pure CommandIndex
+   logic (unit tested in command-index.test.js); this object is only the
+   DOM binding — open/close, keyboard nav, painting results. Reuses the
+   same shared action functions (toggleProtection, toggleMeetingMode, …)
+   the pages themselves call, so running a command here is never a
+   second implementation of what a button already does.
+   ========================================================================= */
+function buildBaseCommands() {
+  const cmds = NAV.map(([id, label, icon]) =>
+    ({ id: 'nav:' + id, group: 'Navigate', label, icon, run: () => route(id) }));
+  cmds.push(
+    { id: 'act:toggle-protection', group: 'Actions',
+      label: state.protected ? 'Stop Protection' : 'Start Protection',
+      icon: 'power', keywords: ['start', 'stop', 'engine'], run: toggleProtection },
+    { id: 'act:meeting', group: 'Actions', label: 'Toggle Meeting Mode',
+      icon: 'lock', keywords: ['quiet', 'presenting', 'mute alerts'], run: toggleMeetingMode },
+    { id: 'act:kill-telemetry', group: 'Actions', label: 'Kill Windows Telemetry',
+      icon: 'shield', keywords: ['privacy'], run: killTelemetry },
+    { id: 'act:randomize-mac', group: 'Actions', label: 'Randomize MAC Address',
+      icon: 'network', keywords: ['privacy', 'identity'], run: randomizeMac },
+    { id: 'act:open-logs', group: 'Actions', label: 'Open Logs Folder',
+      icon: 'activity', keywords: ['debug', 'diagnostics'], run: () => V && V.openLogs() },
+  );
+  return cmds;
+}
+// Recent incidents, fetched fresh each time the palette opens — read-only,
+// same endpoint the Threats page already uses. Empty (not faked) if the
+// engine isn't reporting or there's nothing to show.
+async function fetchIncidentCommands() {
+  if (!V || !state.engineUp) return [];
+  const raw = await safe(() => V.api.get('/api/edr/incidents'), []);
+  const arr = Array.isArray(raw) ? raw : (raw.incidents || []);
+  return arr.slice(0, 25).map((i) => ({
+    id: 'inc:' + (i.id || ''), group: 'Recent Incidents',
+    label: i.title || i.name || i.rule || 'Incident',
+    hint: (i.technique || '').toString().match(/T\d{4}(?:\.\d{3})?/)?.[0] || '',
+    keywords: [i.entity, i.host, i.status, i.severity].filter(Boolean),
+    icon: 'alert', run: () => openReplay(i.id),
+  }));
+}
+
+const CommandPalette = {
+  root: null, keyHandler: null, base: [], incidents: [], groups: [], display: [], active: 0,
+
+  toggle() { this.root ? this.close() : this.open(); },
+
+  open() {
+    if (this.root) { this.focusInput(); return; }
+    this.base = buildBaseCommands();
+    this.incidents = [];
+    this.mount();
+    this.filter('');
+    fetchIncidentCommands().then((inc) => {
+      if (!this.root) return; // closed before the fetch resolved
+      this.incidents = inc;
+      this.filter(this.root.querySelector('.cmdk-input').value);
+    });
+  },
+
+  mount() {
+    const scrim = el('div', 'cmdk-scrim');
+    scrim.innerHTML = `<div class="cmdk" role="dialog" aria-label="Command palette">
+      <div class="cmdk-inputwrap">${ICON.search}
+        <input class="cmdk-input" placeholder="Search pages, actions and recent incidents…" autocomplete="off"
+          spellcheck="false" role="combobox" aria-expanded="true" aria-controls="cmdkResults" aria-autocomplete="list" />
+        <span class="cmdk-esc">ESC</span>
+      </div>
+      <div class="cmdk-results" id="cmdkResults" role="listbox"></div>
+      <div class="cmdk-footer">
+        <span><span class="cmdk-key">&uarr;&darr;</span> Navigate</span>
+        <span><span class="cmdk-key">&crarr;</span> Select</span>
+        <span><span class="cmdk-key">Esc</span> Close</span>
+      </div>
+    </div>`;
+    scrim.addEventListener('mousedown', (e) => { if (e.target === scrim) this.close(); });
+    document.body.appendChild(scrim);
+    this.root = scrim;
+
+    const input = scrim.querySelector('.cmdk-input');
+    input.addEventListener('input', () => this.filter(input.value));
+    this.keyHandler = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); this.close(); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); this.move(1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); this.move(-1); }
+      else if (e.key === 'Enter') { e.preventDefault(); this.runActive(); }
+    };
+    document.addEventListener('keydown', this.keyHandler);
+  },
+
+  focusInput() {
+    const input = this.root && this.root.querySelector('.cmdk-input');
+    if (input) { input.value = ''; input.focus(); }
+  },
+
+  filter(q) {
+    const ranked = CommandIndex.filterCommands(q, this.base.concat(this.incidents));
+    this.groups = CommandIndex.groupCommands(ranked);
+    this.display = this.groups.flatMap((g) => g.items);
+    this.active = 0;
+    this.paint();
+  },
+
+  paint() {
+    const box = this.root && this.root.querySelector('.cmdk-results'); if (!box) return;
+    if (!this.display.length) {
+      box.innerHTML = stateBlock('empty', 'No matches', 'Try a page name, an action, or an incident title.');
+      return;
+    }
+    let i = 0;
+    box.innerHTML = this.groups.map((g) => `
+      <div class="cmdk-group">${escapeHtml(g.group)}</div>
+      ${g.items.map((c) => {
+        const idx = i++;
+        return `<div class="cmdk-item${idx === this.active ? ' active' : ''}" id="cmdk-opt-${idx}"
+          data-i="${idx}" role="option" aria-selected="${idx === this.active}">
+          <span class="cmdk-item-ic">${ICON[c.icon] || ICON.check}</span>
+          <span class="cmdk-item-label">${escapeHtml(c.label)}</span>
+          ${c.hint ? `<span class="mono-tag">${escapeHtml(c.hint)}</span>` : ''}
+        </div>`;
+      }).join('')}`).join('');
+    box.querySelectorAll('.cmdk-item').forEach((n) => {
+      n.onclick = () => { this.active = Number(n.dataset.i); this.runActive(); };
+      n.onmouseenter = () => { this.active = Number(n.dataset.i); this.highlight(); };
+    });
+    this.highlight();
+  },
+
+  highlight() {
+    const box = this.root && this.root.querySelector('.cmdk-results'); if (!box) return;
+    box.querySelectorAll('.cmdk-item').forEach((n) => {
+      const on = Number(n.dataset.i) === this.active;
+      n.classList.toggle('active', on);
+      n.setAttribute('aria-selected', String(on));
+    });
+    const input = this.root.querySelector('.cmdk-input');
+    if (input) input.setAttribute('aria-activedescendant', 'cmdk-opt-' + this.active);
+    const on = box.querySelector('.cmdk-item.active');
+    if (on) on.scrollIntoView({ block: 'nearest' });
+  },
+
+  move(delta) {
+    if (!this.display.length) return;
+    this.active = (this.active + delta + this.display.length) % this.display.length;
+    this.highlight();
+  },
+
+  runActive() {
+    const cmd = this.display[this.active];
+    if (!cmd) return;
+    this.close();
+    try { cmd.run && cmd.run(); } catch {}
+  },
+
+  close() {
+    if (this.keyHandler) { document.removeEventListener('keydown', this.keyHandler); this.keyHandler = null; }
+    if (this.root && this.root.parentNode) this.root.parentNode.removeChild(this.root);
+    this.root = null; this.groups = []; this.display = []; this.active = 0;
+  },
+};
 
 /* ============================ Boot ================================== */
 async function init() {
   buildChrome();
   PAGES.dashboard.render();
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); CommandPalette.toggle(); }
+  });
   if (V) {
     V.onTelemetry((data) => {
       state.tele = data;

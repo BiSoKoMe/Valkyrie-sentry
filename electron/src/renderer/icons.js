@@ -25,6 +25,7 @@ const ICON = (() => {
     dns: s('<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/>'),
     activity: s('<path d="M3 12h4l3 8 4-16 3 8h4"/>'),
     cpu: s('<rect x="7" y="7" width="10" height="10" rx="2"/><path d="M10 3v2M14 3v2M10 19v2M14 19v2M3 10h2M3 14h2M19 10h2M19 14h2"/>'),
+    search: s('<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/>'),
     min: s('<path d="M5 12h14"/>'),
     max: s('<rect x="5" y="5" width="14" height="14" rx="2"/>'),
     x: s('<path d="M6 6l12 12M18 6L6 18"/>'),
