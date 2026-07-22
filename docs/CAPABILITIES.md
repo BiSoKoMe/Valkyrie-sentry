@@ -76,10 +76,17 @@ The behavioral heart of the platform (`valkyrie/edr/`), fed by these sensors:
     (T1055), LSASS access (T1003.001), registry/startup persistence, process
     tampering (`classify_sysmon`).
 - **Detections → incidents** (`edr/engine.py`, `edr/schema.py`) — cheap
-  detections are correlated into a small set of triable incidents with severity,
-  MITRE ATT&CK technique, timeline, process tree and affected entity.
+  detections are correlated into a small set of triable incidents with
+  severity, MITRE ATT&CK technique (per detection), a timeline and an
+  affected entity/process. (Correction: an earlier version of this doc
+  claimed a process-tree field on the incident model; `Incident` in
+  `edr/schema.py` has no such field. Process ancestry exists as a separate
+  capability — `forensics.py: collect_process_tree()` and the parent-chain
+  walk in `process_telemetry.py` — not yet attached to an incident.)
 - **Threat hunting** (`edr/hunt.py`) — saved and ad-hoc queries over the event
-  store.
+  store, parameterised (never raw SQL) via `GET /api/edr/hunt/saved` /
+  `POST /api/edr/hunt`. Surfaced in the desktop app as the **Threat Hunting**
+  page: saved-hunt chips, a 24h quick-pivot summary, and an ad-hoc filter form.
 - **Investigation + AI** (`edr/investigate.py`, ADR 0020) — builds an incident
   report (meaning, evidence, recommended actions) and an **evidence-grounded AI
   narrative** that only references real evidence, never invents detections, and

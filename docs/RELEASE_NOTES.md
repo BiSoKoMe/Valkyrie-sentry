@@ -55,8 +55,22 @@ inventory and `docs/GAP_ANALYSIS.md` for the honest ranking vs commercial EDRs.
   raw metrics, and a restart control that requires arming before it fires
   (restarting a live security subsystem has real effect — a brief gap in
   that subsystem's coverage — so it doesn't fire on a single misclick).
+- **Threat Hunting page** — the third "fully-built backend, zero UI" gap
+  found this pass: `edr/hunt.py` is a real, safe, read-only query surface
+  (a small validated filter spec compiled to parameterised SQL — never
+  arbitrary queries) with six saved hunts ("beacon candidates," "noisiest
+  talkers," "rare domains," …) and a facets endpoint, all already wired to
+  `GET /api/edr/hunt/saved` / `POST /api/edr/hunt`, with no page calling
+  either. Now a page: saved-hunt chips, a 24h quick-pivot summary (top
+  processes/categories/decisions, also seeding the category field's
+  suggestions from real observed data), an ad-hoc filter form matching
+  exactly the fields the backend accepts, and a results table whose columns
+  are read from whatever the query actually returned — different hunts
+  return different shapes, so the table doesn't assume one. No query
+  language, autocomplete-from-history, or saved/pinned queries are implied
+  beyond what the backend supports.
 - **Command palette (Ctrl+K)** — instant, keyboard-first search over the app's
-  14 pages, 5 quick actions (start/stop protection, meeting mode, kill
+  15 pages, 5 quick actions (start/stop protection, meeting mode, kill
   telemetry, randomize MAC, open logs), and recent EDR incidents (jumps
   straight into Replay). Ranking is pure, unit-tested logic
   (`electron/src/renderer/command-index.js`); every action it runs is the
@@ -84,7 +98,7 @@ inventory and `docs/GAP_ANALYSIS.md` for the honest ranking vs commercial EDRs.
 - Graceful degradation is a platform rule: every sensor/subsystem isolates
   failures, restarts independently, and degrades to a no-op rather than crashing
   the app. The renderer talks to the engine only through a sandboxed IPC bridge.
-- **Keyboard accessibility fix.** The sidebar (14 pages) and the incident list
+- **Keyboard accessibility fix.** The sidebar (15 pages) and the incident list
   on the Threats page were `<div>`s with a click handler only — invisible to
   keyboard-only and screen-reader users, a real procurement blocker for
   enterprise/accessibility-conscious buyers. Both are now proper `role="button"`
@@ -119,20 +133,20 @@ Honest boundaries, documented rather than hidden:
   require a signed driver (documented extension points).
 - **No signature-based file AV** and **no global/cloud ML** — out of scope for a
   local-first product; the intended path is OS AMSI/Defender integration.
-- **Desktop scope for 0.1.** Attack Replay, Dashboard, Threats, Privacy,
-  Firewall, DNS, Intelligence, Applications, Network, Devices, Updates,
-  Components, Settings, and About ship — 14 pages. **Command palette
-  (Ctrl+K) covers navigation, quick actions and recent incidents only** —
-  it does not (yet) index MITRE technique reference data, threat-intel
-  entries, playbooks, or log contents, because those don't have a real
-  per-item detail view to jump to today; indexing them without a destination
-  would be search theater, not search.
+- **Desktop scope for 0.1.** Attack Replay, Dashboard, Threats, Threat
+  Hunting, Privacy, Firewall, DNS, Intelligence, Applications, Network,
+  Devices, Updates, Components, Settings, and About ship — 15 pages.
+  **Command palette (Ctrl+K) covers navigation, quick actions and recent
+  incidents only** — it does not (yet) index MITRE technique reference data,
+  threat-intel entries, playbooks, or log contents, because those don't have
+  a real per-item detail view to jump to today; indexing them without a
+  destination would be search theater, not search.
   **Not yet in the desktop app:** a full incident-detail workspace (process
-  tree / network graph panels beyond Replay), a Threat Hunting UI
-  (`edr/hunt.py`), a Compliance / SOAR / Forensics UI (`compliance.py`,
-  `edr/playbooks.py`, `forensics.py`), and a Fleet management UI
-  (`fleet/`) — each a real, tested backend module with no desktop surface
-  yet. These are planned follow-ups, not implied to exist today.
+  tree / network graph panels beyond Replay), a Compliance / SOAR /
+  Forensics UI (`compliance.py`, `edr/playbooks.py`, `forensics.py`), and a
+  Fleet management UI (`fleet/`) — each a real, tested backend module with
+  no desktop surface yet. These are planned follow-ups, not implied to
+  exist today.
 - **AI investigation is opt-in and off by default.** A network provider sends
   compact incident facts to the configured endpoint; use the `local` provider to
   avoid that entirely.
@@ -153,6 +167,7 @@ Honest boundaries, documented rather than hidden:
 | Core protection (DNS/firewall/EDR) stable | ✅ |
 | Installer works on clean Windows | ✅ (release-audited build) |
 | Dashboard / Threats / Privacy / Firewall / DNS / Components / Settings / About | ✅ |
+| Threat Hunting (saved hunts, quick pivots, ad-hoc filter query) | ✅ read-only, backed by `edr/hunt.py` |
 | Attack Reconstruction (Replay Mode) | ✅ |
 | Investigation explainability (meaning + actions, all categories) | ✅ |
 | Vendor-neutral AI, opt-in | ✅ |

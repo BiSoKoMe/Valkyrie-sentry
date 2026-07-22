@@ -211,12 +211,14 @@ async function runSetupSplash(scenario) {
 const NAV = [
   ['dashboard', 'Dashboard', 'dashboard'], ['protection', 'Protection', 'shield'],
   ['privacy', 'Privacy', 'lock'], ['firewall', 'Firewall', 'flame'],
-  ['threats', 'Threats', 'alert'], ['intelligence', 'Intelligence', 'brain'],
+  ['threats', 'Threats', 'alert'], ['hunting', 'Threat Hunting', 'search'],
+  ['intelligence', 'Intelligence', 'brain'],
   ['applications', 'Applications', 'apps'], ['network', 'Network', 'network'],
   ['dns', 'DNS', 'dns'], ['devices', 'Devices', 'devices'],
   ['updates', 'Updates', 'download'], ['components', 'Components', 'cpu'],
   ['settings', 'Settings', 'settings'], ['about', 'About', 'info'],
 ];
+const NAV_SYSTEM_START = 'network';   // first item of the "System" sidebar section
 function buildChrome() {
   $('brandMark').innerHTML = ICON.shieldCheck;
   $('minBtn').innerHTML = ICON.min; $('maxBtn').innerHTML = ICON.max;
@@ -225,8 +227,8 @@ function buildChrome() {
   $('searchBtn').onclick = () => CommandPalette.open();
   const sb = $('sidebar');
   sb.appendChild(el('div', 'section-label', 'Protection'));
-  NAV.forEach(([id, label, icon], idx) => {
-    if (idx === 7) sb.appendChild(el('div', 'section-label', 'System'));
+  NAV.forEach(([id, label, icon]) => {
+    if (id === NAV_SYSTEM_START) sb.appendChild(el('div', 'section-label', 'System'));
     const item = el('div', 'nav-item' + (id === 'dashboard' ? ' active' : ''), `${ICON[icon]}<span>${label}</span>`);
     item.dataset.route = id;
     item.tabIndex = 0;
@@ -500,6 +502,122 @@ PAGES.threats = {
         <span class="rp-open">▶ Replay</span>
       </div>`;
     }).join('');
+  },
+};
+
+function fmtCell(v) {
+  if (v == null || v === '') return '—';
+  if (typeof v === 'number') return Number.isInteger(v) ? fmt(v) : v.toFixed(2);
+  return String(v);
+}
+
+/* ---- Threat Hunting ---- */
+// A real, safe, read-only query surface (edr/hunt.py): a small validated
+// filter spec compiled to a parameterised query — never arbitrary SQL — plus
+// six canned "saved hunts" for the questions defenders ask most. No query
+// language, autocomplete-from-history, or saved/pinned queries beyond that
+// exist server-side, so none of that is invented client-side either.
+PAGES.hunting = {
+  async render() {
+    $('page').innerHTML = `
+      <div class="page-intro">Structured, read-only queries over Valkyrie's event history — pivot by process,
+      domain, category, decision or suspicion score. Six saved hunts cover the questions defenders ask most.</div>
+      ${sectionHead('Saved Hunts')}
+      <div class="hunt-saved" id="huntSaved"><div class="empty">Loading…</div></div>
+      ${sectionHead('Quick Pivots', 'last 24h')}
+      <div id="huntFacets"><div class="empty">Loading…</div></div>
+      ${sectionHead('Ad-hoc Query')}
+      <div class="hunt-filters">
+        <input class="rp-input" id="hfDomain" placeholder="Domain contains…" aria-label="Domain contains" />
+        <input class="rp-input" id="hfProcess" placeholder="Process name (exact)" aria-label="Process name, exact match" />
+        <select class="rp-select" id="hfDecision" aria-label="Decision">
+          <option value="">Any decision</option>
+          <option value="blocked">Blocked</option><option value="allowed">Allowed</option>
+          <option value="flagged">Flagged</option><option value="behavioral">Behavioral</option>
+        </select>
+        <input class="rp-input" id="hfCategory" placeholder="Category" list="huntCatList" aria-label="Category" />
+        <datalist id="huntCatList"></datalist>
+        <select class="rp-select" id="hfSince" aria-label="Time window">
+          <option value="0">Any time</option><option value="1">Last hour</option>
+          <option value="24" selected>Last 24h</option><option value="168">Last 7 days</option>
+        </select>
+        <input class="rp-input" id="hfSuspicion" type="number" min="0" max="1" step="0.05" placeholder="Min suspicion" aria-label="Minimum suspicion score, 0 to 1" />
+        <button class="btn primary" id="hfRun">${ICON.search}<span>Run</span></button>
+      </div>
+      ${sectionHead('Results')}
+      <div id="huntResults">${stateBlock('empty', 'No query run yet', 'Pick a saved hunt above or run an ad-hoc query.')}</div>`;
+    $('hfRun').onclick = () => this.runAdhoc();
+    ['hfDomain', 'hfProcess', 'hfCategory', 'hfSuspicion'].forEach((id) => {
+      $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') this.runAdhoc(); });
+    });
+
+    if (!state.engineUp) {
+      $('huntSaved').innerHTML = stateBlock('offline', 'Protection is off',
+        'Hunting queries the live event history — start protection to use it.');
+      $('huntFacets').innerHTML = '';
+      return;
+    }
+    const data = await safe(() => V.api.get('/api/edr/hunt/saved'), null);
+    this.renderSaved((data && data.hunts) || []);
+    this.renderFacets((data && data.facets) || {});
+  },
+  renderSaved(hunts) {
+    const box = $('huntSaved'); if (!box) return;
+    if (!hunts.length) { box.innerHTML = stateBlock('empty', 'No saved hunts available', ''); return; }
+    box.innerHTML = hunts.map((h) =>
+      `<button class="hunt-chip" data-saved="${escapeHtml(h.id)}" title="${escapeHtml(h.description || '')}">${escapeHtml(h.name)}</button>`).join('');
+    box.querySelectorAll('[data-saved]').forEach((b) => { b.onclick = () => this.runSaved(b.dataset.saved, b); });
+  },
+  renderFacets(f) {
+    const box = $('huntFacets'); if (!box) return;
+    const procs = f.top_processes || [], cats = f.top_categories || [], dec = f.decisions || {};
+    if (!procs.length && !cats.length && !Object.keys(dec).length) {
+      box.innerHTML = stateBlock('empty', 'No activity in the last 24h', '');
+    } else {
+      const row = (label, chips) => chips
+        ? `<div class="hunt-facet"><span class="hunt-facet-l">${escapeHtml(label)}</span><div class="hunt-facet-chips">${chips}</div></div>` : '';
+      box.innerHTML =
+        row('Top processes', procs.map((p) => `<span class="mono-tag">${escapeHtml(p.process_name || '—')} · ${fmt(p.c)}</span>`).join('')) +
+        row('Top categories', cats.map((c) => `<span class="mono-tag">${escapeHtml(c.raw_category || '—')} · ${fmt(c.c)}</span>`).join('')) +
+        row('Decisions', Object.entries(dec).map(([k, v]) => `<span class="mono-tag">${escapeHtml(k)} · ${fmt(v)}</span>`).join(''));
+    }
+    // Feed the category suggestion list from real, observed categories only.
+    const dl = $('huntCatList');
+    if (dl) dl.innerHTML = cats.map((c) => `<option value="${escapeHtml(c.raw_category)}">`).join('');
+  },
+  async runSaved(id, btn) {
+    document.querySelectorAll('.hunt-chip').forEach((c) => c.classList.remove('active'));
+    if (btn) btn.classList.add('active');
+    $('huntResults').innerHTML = `<div class="empty">Running "${escapeHtml(btn ? btn.textContent : id)}"…</div>`;
+    const res = await safe(() => V.api.post('/api/edr/hunt', { saved: id, limit: 200 }), null);
+    this.renderResults(res);
+  },
+  async runAdhoc() {
+    document.querySelectorAll('.hunt-chip').forEach((c) => c.classList.remove('active'));
+    const filters = {
+      domain_contains: $('hfDomain').value.trim(),
+      process: $('hfProcess').value.trim(),
+      decision: $('hfDecision').value || undefined,
+      category: $('hfCategory').value.trim(),
+      since_hours: Number($('hfSince').value) || 0,
+      min_suspicion: Number($('hfSuspicion').value) || 0,
+    };
+    $('huntResults').innerHTML = '<div class="empty">Running query…</div>';
+    const res = await safe(() => V.api.post('/api/edr/hunt', { filters, limit: 200 }), null);
+    this.renderResults(res);
+  },
+  renderResults(res) {
+    const box = $('huntResults'); if (!box) return;
+    if (!res) { box.innerHTML = stateBlock('error', 'Query failed', 'Could not reach the engine.'); return; }
+    if (res.error) { box.innerHTML = stateBlock('error', 'Query failed', res.error); return; }
+    const rows = res.rows || [];
+    if (!rows.length) { box.innerHTML = stateBlock('empty', 'No matches', 'Nothing in the event history matched this query.'); return; }
+    const cols = Object.keys(rows[0]);
+    box.innerHTML = `<div class="hunt-table-wrap"><table class="hunt-table">
+        <thead><tr>${cols.map((c) => `<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>
+        <tbody>${rows.map((r) => `<tr>${cols.map((c) => `<td>${escapeHtml(fmtCell(r[c]))}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table></div>
+      <div class="hunt-count">${fmt(rows.length)} row${rows.length === 1 ? '' : 's'}</div>`;
   },
 };
 

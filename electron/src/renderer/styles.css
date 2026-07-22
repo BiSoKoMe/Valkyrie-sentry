@@ -421,6 +421,41 @@ html, body {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%;
 }
 
+/* ======================================================================
+   Threat Hunting — saved-hunt chips, facet pivots, an ad-hoc filter form,
+   and a generic results table (columns come from whatever the query
+   actually returned — different hunts return different shapes).
+   ====================================================================== */
+.hunt-saved { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 22px; }
+.hunt-chip {
+  border: 1px solid var(--line); background: var(--card); color: var(--text-1);
+  font-size: 12.5px; font-weight: 500; padding: 8px 14px; border-radius: 999px; cursor: pointer;
+  transition: all 0.18s var(--ease);
+}
+.hunt-chip:hover { background: var(--card-hover); color: var(--text-0); }
+.hunt-chip.active { background: #fff; color: #000; border-color: #fff; }
+.hunt-facet { margin-bottom: 14px; }
+.hunt-facet-l { font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); font-weight: 600; }
+.hunt-facet-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.hunt-filters { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0 24px; align-items: center; }
+.hunt-filters .rp-input, .hunt-filters .rp-select { width: auto; min-width: 140px; }
+.hunt-filters #hfSuspicion { width: 110px; min-width: 0; }
+.hunt-filters .btn { margin-left: auto; }
+.hunt-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.hunt-table { width: 100%; border-collapse: collapse; font-size: 12px; white-space: nowrap; }
+.hunt-table th {
+  text-align: left; font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-2); font-weight: 600; padding: 10px 14px; border-bottom: 1px solid var(--line);
+  background: rgba(255,255,255,0.02); position: sticky; top: 0;
+}
+.hunt-table td {
+  padding: 9px 14px; border-bottom: 1px solid var(--line); color: var(--text-1);
+  font-variant-numeric: tabular-nums; max-width: 320px; overflow: hidden; text-overflow: ellipsis;
+}
+.hunt-table tbody tr:hover { background: var(--card-hover); }
+.hunt-table tbody tr:last-child td { border-bottom: none; }
+.hunt-count { color: var(--text-2); font-size: 11.5px; margin-top: 10px; }
+
 .bars { display: flex; flex-direction: column; gap: 12px; margin-top: 6px; }
 .bar-row { display: grid; grid-template-columns: 160px 1fr 56px; align-items: center; gap: 14px; font-size: 12.5px; }
 .bar-row .bn { color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
