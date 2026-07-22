@@ -243,6 +243,48 @@ inventory and `docs/GAP_ANALYSIS.md` for the honest ranking vs commercial EDRs.
   making a secondary flash on the post-consent relaunch a minor,
   low-frequency cosmetic gap rather than the "click a button, see a
   console" bug this pass was about.
+- **Installer payload audit.** Inspected everything that actually ships —
+  `resources/engine` (11 whitelisted files + `valkyrie.exe` + `vc_redist`,
+  from `build_app.ps1`'s explicit staging list, not a raw copy of anything)
+  and `app.asar` (via `asar list`, not just reading source) — against the
+  live-installed copy on this machine for ground truth. Source code, tests,
+  docs, ADRs, `.git`, CI config, and the developer's working `data/` are
+  never reachable in the first place: electron-builder's `files` glob is
+  scoped to `electron/`, and `build_app.ps1`'s engine payload is an
+  explicit whitelist, not an exclude-list — there's no repo-root path for
+  any of that to leak through, confirmed by direct inspection rather than
+  assumption. **Found and fixed:** `app.asar` shipped three `.test.js`
+  files (`command-index.test.js`, `data-table.test.js`,
+  `view-state.test.js`) because `electron/package.json`'s `files: ["src/**/*"]`
+  is a broad glob with no test exclusion — confirmed present in the
+  currently-installed `C:\Program Files\Valkyrie\resources\app.asar` before
+  this fix. More significant: the release-blocking audit
+  (`installer/audit_build.ps1`) already has test-file/forbidden-name
+  detection, but never actually applied it to `app.asar`'s contents —
+  `Get-ChildItem` can't see inside an archive, so the existing check only
+  scanned `app.asar` as an opaque blob for embedded dev-path strings, never
+  by filename. That's the real gap: the tooling meant to catch exactly
+  this class of leak had a blind spot for the one place it happened. Fixed
+  both — `files` now excludes `*.test.js`, and the audit lists `app.asar`'s
+  contents via `asar.cmd` (already present in `electron/node_modules/.bin`,
+  no new dependency) and applies the same forbidden-name/test-file rules
+  used for real directories. Also hardened while auditing: DevTools was
+  never auto-opened but was never blocked either — `main.js` now closes it
+  immediately if opened and blocks F12/Ctrl+Shift+I, gated on
+  `app.isPackaged` so `npm run dev` is unaffected. The Rust accelerator
+  crate (`rust/valkyrie_accel`) is not currently wired into the release
+  build at all — confirmed absent from every shipped artifact — but its
+  `[profile.release]` gained `strip = "symbols"` regardless, so if/when it
+  is wired in, debug info was never a decision left to chance.
+  **Honest limitation, stated plainly per the audit's own instructions:**
+  none of this is a security boundary. `valkyrie.exe` is a PyInstaller
+  freeze — compiled `.pyc` bytecode in a PYZ archive, trivially recoverable
+  with public decompilers (`pycdc`, `decompyle3`) by anyone who wants to.
+  Nothing here was built or described as "hiding" the implementation;
+  minimizing what ships is about attack surface and professionalism
+  (no test harnesses, no leftover dev artifacts in a product an enterprise
+  customer pays for), not obfuscation-as-security. An administrator owns
+  their machine and can always recover what's shipped.
 
 ## Validation (measured, honest)
 

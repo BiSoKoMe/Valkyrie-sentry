@@ -70,6 +70,19 @@ function createWindow() {
   });
   win.webContents.on('will-navigate', (e) => e.preventDefault());
 
+  // DevTools is never opened programmatically, and is explicitly blocked in
+  // packaged builds: a security product should not leave an open console
+  // into its own renderer reachable by anyone with local access to the
+  // machine. app.isPackaged (not the --dev flag) is the check, since it
+  // reflects how the app was actually built, not what it was launched with.
+  if (app.isPackaged) {
+    win.webContents.on('devtools-opened', () => win.webContents.closeDevTools());
+    win.webContents.on('before-input-event', (event, input) => {
+      const key = (input.key || '').toLowerCase();
+      if (key === 'f12' || (input.control && input.shift && key === 'i')) event.preventDefault();
+    });
+  }
+
   win.on('maximize', () => win.webContents.send('window:state', { maximized: true }));
   win.on('unmaximize', () => win.webContents.send('window:state', { maximized: false }));
   win.on('closed', () => { win = null; });

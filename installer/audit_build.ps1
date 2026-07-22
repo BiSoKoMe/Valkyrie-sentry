@@ -12,6 +12,11 @@
     Third-party binaries (nssm, vc_redist) are scanned too — they should be
     clean, and a hit means something is wrong.
 
+    app.asar is an archive, not a directory — Get-ChildItem cannot see inside
+    it, so its contents are additionally listed by name (via `asar list`) and
+    checked against the same forbidden-name/test-file rules used for real
+    directories, not just scanned as an opaque blob for embedded strings.
+
 .PARAMETER Stage
     The staged engine payload directory (electron\engine_payload).
 .PARAMETER Unpacked
@@ -119,7 +124,34 @@ Get-ChildItem $Stage -Recurse -File -Force | ForEach-Object { Invoke-ScanFile -P
 # 3) The packaged app code (app.asar) if a build output was provided.
 if ($Unpacked) {
     $asar = Join-Path $Unpacked 'resources\app.asar'
-    if (Test-Path $asar) { Write-Host "[audit] Scanning $asar"; Invoke-ScanFile -Path $asar }
+    if (Test-Path $asar) {
+        Write-Host "[audit] Scanning $asar"
+        Invoke-ScanFile -Path $asar
+
+        # asar is an archive, not a directory - Get-ChildItem can't see what's
+        # inside it, so the binary-needle scan above only catches embedded
+        # strings (paths/usernames), never a file that shouldn't be there by
+        # name (e.g. a x.test.js that got swept up by a broad `files` glob).
+        # List its contents by name and apply the same rules as a real dir.
+        # asar.cmd is a direct dependency of electron-builder, so it's in
+        # electron's own node_modules\.bin - no need to go through npx.
+        $repoRoot = Split-Path $PSScriptRoot -Parent
+        $asarTool = Join-Path $repoRoot 'electron\node_modules\.bin\asar.cmd'
+        if (Test-Path $asarTool) {
+            $entries = & $asarTool list $asar 2>$null
+            foreach ($entry in $entries) {
+                $leaf = Split-Path $entry -Leaf
+                if (-not $leaf) { continue }
+                if ($forbiddenNames -contains $leaf) { $script:violations.Add("[app.asar] forbidden file: $leaf") }
+                if ($leaf -match $testFileRe)        { $script:violations.Add("[app.asar] test file shipped: $leaf") }
+                foreach ($pat in $forbiddenFilePatterns) {
+                    if ($leaf -match $pat) { $script:violations.Add("[app.asar] forbidden file type: $leaf") }
+                }
+            }
+        } else {
+            $script:warnings.Add("could not locate asar.cmd ($asarTool) - app.asar contents were only binary-needle-scanned, not checked by filename")
+        }
+    }
     # The bundled engine must be as clean as the stage (forbidden files, test
     # files, source maps, .pyc, oversized, duplicates).
     Invoke-ScanForbidden -Dir (Join-Path $Unpacked 'resources\engine') -Label 'packaged-engine'
