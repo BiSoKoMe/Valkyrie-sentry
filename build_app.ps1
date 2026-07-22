@@ -26,7 +26,8 @@
 #     -Portable     build the portable single-exe instead of the installer.
 #     -SkipEngine   reuse the existing dist\valkyrie.exe (fast: only re-stage +
 #                   rebuild the Electron output).
-#     -WithAI       bundle the optional Claude-assisted investigation.
+#     -WithAI       (deprecated no-op) AI investigation now needs no vendor SDK —
+#                   its providers speak plain HTTP via httpx, which is bundled.
 #     -NoVCRedist   skip the best-effort VC++ runtime download.
 # ===================================================================
 param(
@@ -58,8 +59,8 @@ if ($SkipEngine) {
 } else {
     Write-Host "`n [1/4] Building engine (dist\valkyrie.exe)..." -ForegroundColor Cyan
     python -m pip install --upgrade pip | Out-Null
-    python -m pip install -r requirements_modular.txt pyinstaller cryptography
-    if ($WithAI) { python -m pip install anthropic }
+    python -m pip install -r requirements_modular.txt pyinstaller cryptography httpx
+    # AI investigation is vendor-neutral over httpx (installed above); no AI SDK.
     python -m PyInstaller --clean --noconfirm valkyrie.spec
     if (-not (Test-Path $engineExe)) { throw "Engine build failed - dist\valkyrie.exe not produced." }
 }
@@ -79,6 +80,7 @@ $payload = @(
     @{ src = "installer\payload\arm-protection.ps1";       dst = "arm-protection.ps1" },
     @{ src = "installer\payload\disarm-protection.ps1";    dst = "disarm-protection.ps1" },
     @{ src = "installer\payload\register-tasks.ps1";       dst = "register-tasks.ps1" },
+    @{ src = "installer\payload\run-hidden.vbs";           dst = "run-hidden.vbs" },
     @{ src = "installer\payload\unregister-tasks.ps1";     dst = "unregister-tasks.ps1" },
     @{ src = "installer\payload\service-install.ps1";      dst = "service-install.ps1" },
     @{ src = "installer\payload\service-uninstall.ps1";    dst = "service-uninstall.ps1" },

@@ -7,8 +7,8 @@
 #  Requires Python 3.10+ on PATH. Result: dist\valkyrie.exe
 #
 #  Flags:
-#      -WithAI   also bundle the optional Claude-assisted investigation
-#                (installs the 'anthropic' package into the .exe)
+#      -WithAI   (deprecated no-op) AI investigation needs no vendor SDK — its
+#                providers speak plain HTTP via httpx, bundled by default.
 # ===================================================================
 param([switch]$WithAI)
 
@@ -18,12 +18,9 @@ Set-Location -Path $PSScriptRoot
 Write-Host "`n [1/3] Installing build + runtime dependencies..." -ForegroundColor Cyan
 python -m pip install --upgrade pip | Out-Null
 python -m pip install -r requirements_modular.txt pyinstaller
-# cryptography enables signed remote-response; small, so bundle it by default.
-python -m pip install cryptography
-if ($WithAI) {
-    Write-Host "     + bundling optional AI investigation (anthropic)..." -ForegroundColor DarkCyan
-    python -m pip install anthropic
-}
+# cryptography enables signed remote-response; httpx backs the vendor-neutral AI
+# investigation providers and the fleet client. Both small — bundle by default.
+python -m pip install cryptography httpx
 
 Write-Host "`n [2/3] Building valkyrie.exe with PyInstaller..." -ForegroundColor Cyan
 python -m PyInstaller --clean --noconfirm valkyrie.spec

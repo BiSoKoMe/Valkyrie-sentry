@@ -30,7 +30,7 @@ and nothing new touches disk.
 | **Threat hunting** — structured queries + 6 saved hunts | **Built + tested** | `edr/hunt.py` |
 | **Response** — block domain, kill process, isolate host (dry-run-first, audited) | **Built + tested** | `edr/response.py` |
 | **AI-assisted investigation** — offline analyst (default) | **Built + tested** | `edr/investigate.py` |
-| AI-assisted investigation — Claude API (opt-in) | **Built, off by default** | `edr/investigate.py` |
+| AI-assisted investigation — LLM provider (opt-in, vendor-neutral) | **Built, off by default** | `edr/investigate.py`, `edr/ai_provider.py` |
 | **Remote response** — signed operator→device commands over the fleet | **Built + tested** | `fleet/command.py`, `fleet/controller.py`, `fleet/agent.py` |
 | Professional **EDR console** (incidents, timelines, hunt, response) | **Built** | `web/edr.html`, `web/server.py` |
 | Live incident streaming over the dashboard WebSocket | **Built** | `web/server.py` |
@@ -82,15 +82,22 @@ Investigation has two modes:
   writeup built from the incident's own detections: severity rationale, observed
   MITRE ATT&CK techniques, affected process/entities, a timeline digest, and
   concrete recommended response actions. No network, no key.
-- **Claude-assisted (opt-in, off by default).** If the operator explicitly asks
-  *and* an API key is present, the incident is summarised by Claude for a richer
-  narrative. **This sends incident details (including domains) to a third
-  party** — so it is gated exactly like the roadmap requires of anything that
-  leaves the machine: opt-in, off by default, clearly disclosed. Any error (no
-  key, no SDK, network blocked) silently falls back to the offline analyst.
+- **LLM-assisted (opt-in, off by default).** If the operator explicitly asks
+  *and* an AI provider is configured, the incident is summarised by an LLM for a
+  richer narrative. The backend is **vendor-neutral** (`edr/ai_provider.py`):
+  Anthropic, OpenAI, a local OpenAI-compatible server (Ollama/LM Studio/
+  llama.cpp), or offline — the investigation engine depends only on the provider
+  interface, never a single vendor. A **network** provider sends incident details
+  (including domains) to the configured endpoint — so it is gated exactly like
+  the roadmap requires of anything that leaves the machine: opt-in, off by
+  default, clearly disclosed. The **local** provider keeps everything on-box. Any
+  error (no provider, network blocked) silently falls back to the offline analyst.
 
-Enable it per-investigation from the console ("AI investigate"), or set
-`ANTHROPIC_API_KEY`. The model is configurable via `VALKYRIE_AI_MODEL`.
+Enable it per-investigation from the console ("AI investigate"). Configure via
+`VALKYRIE_AI_PROVIDER` (`anthropic`|`openai`|`local`|`offline`),
+`VALKYRIE_AI_KEY`, `VALKYRIE_AI_MODEL`, and `VALKYRIE_AI_BASE_URL`. Existing
+`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` are honored as fall-backs, so nothing
+breaks. No AI-vendor SDK is required — providers speak plain HTTP over `httpx`.
 
 ---
 
@@ -181,5 +188,6 @@ turns Valkyrie's existing signal into triable incidents with a genuine
 response path, and it does so without weakening the privacy story: EDR data
 never leaves the machine, and the fleet only ever carries control commands and
 status metadata — never browsing history. The one place data can leave — the
-optional Claude-assisted investigation — is off by default and clearly
-disclosed, exactly where the trade-off belongs.
+optional LLM-assisted investigation, when pointed at a network provider — is off
+by default and clearly disclosed, exactly where the trade-off belongs (and the
+local provider avoids it entirely).

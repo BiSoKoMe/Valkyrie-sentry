@@ -10,27 +10,26 @@ Two modes:
     rationale, observed MITRE techniques, affected process/entities, a timeline
     digest, and concrete recommended response actions. No network, no key.
 
-  * **Claude-assisted (opt-in, off by default).** If — and only if — the
-    operator explicitly enables it AND an API key is present, the incident is
-    summarised by Claude for a richer narrative. This SENDS incident details
-    (including domains) to a third party, so it is deliberately gated: it
-    respects the same "opt-in, off by default, clearly disclosed" rule the
-    platform roadmap sets for any telemetry that leaves the machine. Any error
-    (no key, no SDK, network blocked) silently falls back to the offline
-    analyst — the investigation always returns something useful.
+  * **LLM-assisted (opt-in, off by default).** If — and only if — the operator
+    explicitly enables it AND an AI provider is configured, the incident is
+    summarised by an LLM for a richer narrative. The backend is vendor-neutral
+    (see ``ai_provider.py`` — Anthropic, OpenAI, a local OpenAI-compatible
+    server, or offline); this module never depends on a specific vendor. A
+    network provider SENDS incident details (including domains) to the
+    configured endpoint, so it is deliberately gated: it respects the same
+    "opt-in, off by default, clearly disclosed" rule the platform roadmap sets
+    for any telemetry that leaves the machine. Any error (no provider, network
+    blocked) silently falls back to the offline analyst — the investigation
+    always returns something useful. Use the ``local`` provider to keep
+    everything on-box.
 """
 
 from __future__ import annotations
 
-import os
 from typing import Optional
 
+from .ai_provider import AIProvider, get_provider
 from .schema import Incident, severity_rank
-
-
-# The model is a product configuration, overridable by the operator. Defaults to
-# the latest widely-available Claude model per the Anthropic SDK guidance.
-_DEFAULT_MODEL = os.environ.get("VALKYRIE_AI_MODEL", "claude-opus-4-8")
 
 # Category -> plain-English "what this means" for the offline analyst.
 _MEANING = {
@@ -114,8 +113,9 @@ class Investigator:
         """Return an investigation dict for ``incident``.
 
         Always includes the offline heuristic report. When ``use_ai`` is set
-        and a key/SDK are available, adds an ``ai_narrative`` and marks
-        ``analyst = "claude"``; otherwise ``analyst = "offline"``.
+        and an AI provider is available, adds an ``ai_narrative`` and marks
+        ``analyst`` with the provider name (e.g. ``"anthropic"``, ``"openai"``,
+        ``"local"``); otherwise ``analyst = "offline"``.
         """
         detections = []
         if self._store is not None:
@@ -123,22 +123,24 @@ class Investigator:
 
         report = self._offline_report(incident, detections)
         report["analyst"] = "offline"
-        report["ai_available"] = _ai_available()
+        provider = get_provider()
+        report["ai_available"] = provider.available()
 
         if use_ai:
-            if not _ai_available():
-                report["ai_error"] = ("AI investigation requested but no API key is "
-                                      "configured (set ANTHROPIC_API_KEY) — showing the "
+            if not provider.available():
+                report["ai_error"] = ("AI investigation requested but no provider is "
+                                      "configured (set VALKYRIE_AI_KEY, or "
+                                      "VALKYRIE_AI_PROVIDER=local) — showing the "
                                       "offline analysis.")
             else:
-                analysis = self._ai_analysis(incident, detections, report)
+                analysis = self._ai_analysis(provider, incident, detections, report)
                 if analysis is not None:
                     report["ai_analysis"] = analysis
                     report["ai_narrative"] = analysis.get("assessment", "")
-                    report["analyst"] = "claude"
+                    report["analyst"] = provider.name
                 else:
-                    report["ai_error"] = ("AI investigation failed (network or SDK) — "
-                                          "showing the offline analysis.")
+                    report["ai_error"] = ("AI investigation failed (network or "
+                                          "provider) — showing the offline analysis.")
         return report
 
     # ------------------------------------------------------------------
@@ -216,12 +218,12 @@ class Investigator:
         }
 
     # ------------------------------------------------------------------
-    # Claude-assisted narrative (opt-in)
+    # LLM-assisted narrative (opt-in, vendor-neutral)
     # ------------------------------------------------------------------
 
-    def _ai_analysis(self, inc: Incident, detections: list,
+    def _ai_analysis(self, provider: AIProvider, inc: Incident, detections: list,
                      offline: dict) -> Optional[dict]:
-        """Claude as an *explainable assistant*, never a detector.
+        """The LLM as an *explainable assistant*, never a detector.
 
         The model receives only the compact facts the offline analyst already
         derived (no raw event dump, no browsing history) and must return a
@@ -229,17 +231,9 @@ class Investigator:
         recommended action drawn from the response actions Valkyrie actually
         ships — with the evidence lines (quoted from the provided facts) that
         justify it. Structured output makes every conclusion auditable; any
-        failure returns None and the offline analysis stands alone.
+        failure returns None and the offline analysis stands alone. The
+        ``provider`` is any vendor-neutral backend (see ai_provider.py).
         """
-        try:
-            import anthropic
-        except ImportError:
-            return None
-        try:
-            client = anthropic.Anthropic()
-        except Exception:
-            return None
-
         # Compact, structured facts for the model — no raw event dump.
         facts = {
             "title": inc.title,
@@ -299,31 +293,21 @@ class Investigator:
             "indicators, hosts, or techniques that are not in the facts; "
             "every evidence entry must be traceable to the input. Choose the "
             "recommended action from available_actions only, preferring the "
-            "least destructive action that contains the threat."
+            "least destructive action that contains the threat. Respond with "
+            "ONLY a JSON object conforming to the given schema — no prose."
         )
         import json as _json
-        try:
-            resp = client.messages.create(
-                model=_DEFAULT_MODEL,
-                max_tokens=2048,
-                thinking={"type": "adaptive"},
-                system=system,
-                output_config={"format": {"type": "json_schema",
-                                          "schema": schema}},
-                messages=[{"role": "user",
-                           "content": "Investigate this incident:\n" +
-                                      _json.dumps(facts, indent=2)}],
-            )
-        except Exception:
-            return None
-        try:
-            text = next(b.text for b in resp.content
-                        if getattr(b, "type", "") == "text")
-            out = _json.loads(text)
-        except Exception:
+        user = (
+            "Investigate this incident and reply with ONLY a JSON object that "
+            "conforms to this JSON Schema:\n" + _json.dumps(schema) +
+            "\n\nIncident facts:\n" + _json.dumps(facts, indent=2)
+        )
+        # Delegate the transport to the vendor-neutral provider.
+        out = provider.analyze(system, user, schema)
+        if not isinstance(out, dict):
             return None
         # Defense in depth: even a schema-conforming reply must not smuggle an
-        # action outside the shipped set.
+        # action outside the shipped set (provider-independent guard).
         if out.get("recommended_action", {}).get("action") not in (
                 "block_domain", "kill_process", "isolate_host", "monitor_only"):
             return None
@@ -335,14 +319,8 @@ class Investigator:
 # ---------------------------------------------------------------------------
 
 def _ai_available() -> bool:
-    """True only if a key is present AND the SDK importable — never assumes."""
-    if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("VALKYRIE_AI_KEY")):
-        return False
-    try:
-        import anthropic  # noqa: F401
-        return True
-    except ImportError:
-        return False
+    """True only if a configured AI provider can actually be called."""
+    return get_provider().available()
 
 
 def _distinct(items: list) -> list:

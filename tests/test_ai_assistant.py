@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
-"""AI assistant seam — offline tests with a fake Anthropic client.
+"""AI assistant seam — offline tests with a fake, vendor-neutral provider.
 
 The philosophy under test: AI explains, it never detects. The offline
-heuristic analyst must always produce a complete report; Claude output is
+heuristic analyst must always produce a complete report; LLM output is
 additive, structured, evidence-grounded, and every failure mode falls back
-cleanly.
+cleanly. The backend is abstracted behind ``ai_provider.AIProvider`` — this
+test injects a fake provider, so it is vendor-neutral (no SDK, no network).
 
-  [1] Offline analyst always works (no key, no SDK, no network)
-  [2] use_ai without a key -> ai_error + offline analysis intact
-  [3] Structured AI analysis attached via a fake client; facts sent to the
-      model are compact (no raw event dump) and the request uses structured
-      output with the shipped-actions enum
+  [1] Offline analyst always works (no provider, no network)
+  [2] use_ai without a provider -> ai_error + offline analysis intact
+  [3] Structured analysis via a fake provider; the facts sent are compact
+      (no raw event dump) and the prompt is explain-only
   [4] Guard: schema-conforming reply with an unshipped action is rejected
-  [5] Fake client raising -> ai_error fallback, report intact
+  [5] Provider failure (returns None) -> ai_error fallback, report intact
 """
 
 from __future__ import annotations
 
-import json
+import os
 import sys
 import tempfile
-import types
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -34,37 +33,31 @@ def _check(label: str, ok: bool) -> None:
         _FAILURES.append(label)
 
 
-class _FakeResp:
-    def __init__(self, payload: dict) -> None:
-        block = types.SimpleNamespace(type="text", text=json.dumps(payload))
-        self.content = [block]
+class _FakeProvider:
+    """A stand-in AIProvider that records the prompts it received."""
+    name = "testllm"
+    last_system = ""
+    last_user = ""
+    last_schema: dict = {}
+    reply = None            # dict -> returned; None -> simulates a failure
 
+    def available(self) -> bool:
+        return True
 
-class _FakeClient:
-    """Stands in for anthropic.Anthropic; records the request it received."""
-    last_kwargs: dict = {}
-    reply: dict = {}
-    raise_on_call = False
-
-    class _Messages:
-        def create(self, **kwargs):
-            _FakeClient.last_kwargs = kwargs
-            if _FakeClient.raise_on_call:
-                raise ConnectionError("network down")
-            return _FakeResp(_FakeClient.reply)
-
-    def __init__(self, *a, **k) -> None:
-        self.messages = self._Messages()
+    def analyze(self, system, user, schema):
+        _FakeProvider.last_system = system
+        _FakeProvider.last_user = user
+        _FakeProvider.last_schema = schema
+        return _FakeProvider.reply
 
 
 def main() -> int:
-    import os
     from valkyrie.store import Store
     from valkyrie.edr import EdrEngine
     from valkyrie.edr.schema import Detection
     import valkyrie.edr.investigate as inv
 
-    print("\n=== AI assistant seam (explain-only) ===\n")
+    print("\n=== AI assistant seam (explain-only, vendor-neutral) ===\n")
 
     with tempfile.TemporaryDirectory() as td:
         store = Store(db_path=Path(td) / "ai.db")
@@ -76,8 +69,8 @@ def main() -> int:
             title="connection to threat-intel IP", entity="evil.example",
             process_name="mal.exe", technique="T1071"))
         inc = engine._edr.get_incident(inc_id)
-        dets = engine._edr.list_detections(incident_id=inc_id)
         investigator = inv.Investigator(engine._edr)
+        real_get_provider = inv.get_provider
 
         print("[1] Offline analyst always works")
         rep = investigator.investigate(inc)
@@ -89,26 +82,25 @@ def main() -> int:
                    for a in rep["recommended_actions"]))
         _check("MITRE technique surfaced", "T1071" in rep["techniques"])
 
-        print("\n[2] use_ai without a key -> honest error + fallback")
-        old_key = os.environ.pop("ANTHROPIC_API_KEY", None)
-        old_vk = os.environ.pop("VALKYRIE_AI_KEY", None)
+        print("\n[2] use_ai without a provider -> honest error + fallback")
+        saved = {k: os.environ.pop(k, None) for k in
+                 ("ANTHROPIC_API_KEY", "VALKYRIE_AI_KEY", "OPENAI_API_KEY",
+                  "VALKYRIE_AI_PROVIDER", "VALKYRIE_AI_BASE_URL")}
         try:
-            rep2 = investigator.investigate(inc, use_ai=True)
-            _check("ai_error explains missing key",
-                   "no API key" in rep2.get("ai_error", ""))
+            rep2 = investigator.investigate(inc, use_ai=True)   # real -> offline provider
+            _check("ai_error explains missing provider",
+                   "no provider" in rep2.get("ai_error", ""))
             _check("offline analysis still present", rep2["summary"])
             _check("analyst stays offline", rep2["analyst"] == "offline")
         finally:
-            if old_key: os.environ["ANTHROPIC_API_KEY"] = old_key
-            if old_vk: os.environ["VALKYRIE_AI_KEY"] = old_vk
+            for k, v in saved.items():
+                if v is not None:
+                    os.environ[k] = v
 
-        print("\n[3] Structured analysis via fake client")
-        fake_mod = types.SimpleNamespace(Anthropic=_FakeClient)
-        real_import = inv._ai_available
-        inv._ai_available = lambda: True
-        sys.modules["anthropic"] = fake_mod   # investigate imports lazily
+        print("\n[3] Structured analysis via a fake provider")
+        inv.get_provider = lambda: _FakeProvider()
         try:
-            _FakeClient.reply = {
+            _FakeProvider.reply = {
                 "assessment": "mal.exe beaconed to evil.example, a known "
                               "threat-intel indicator.",
                 "confidence": "high",
@@ -118,43 +110,37 @@ def main() -> int:
                                        "rationale": "stop the beacon"},
                 "evidence": ["connection to threat-intel IP"],
             }
-            _FakeClient.raise_on_call = False
             rep3 = investigator.investigate(inc, use_ai=True)
-            _check("analyst=claude with structured analysis",
-                   rep3["analyst"] == "claude"
+            _check("analyst=<provider name> with structured analysis",
+                   rep3["analyst"] == "testllm"
                    and rep3["ai_analysis"]["confidence"] == "high")
             _check("narrative mirrors assessment",
                    rep3["ai_narrative"].startswith("mal.exe beaconed"))
-            sent = _FakeClient.last_kwargs
-            body = sent["messages"][0]["content"]
-            _check("structured output requested (json_schema)",
-                   sent.get("output_config", {}).get("format", {}).get("type")
-                   == "json_schema")
-            _check("adaptive thinking + pinned model",
-                   sent.get("thinking", {}).get("type") == "adaptive"
-                   and sent.get("model"))
+            _check("schema passed to provider (structured output)",
+                   _FakeProvider.last_schema.get("required")
+                   and "recommended_action" in _FakeProvider.last_schema["required"])
             _check("facts are compact (no raw event dump)",
-                   "raw_category" not in body and len(body) < 4000)
+                   "raw_category" not in _FakeProvider.last_user
+                   and len(_FakeProvider.last_user) < 6000)
             _check("explain-only system prompt (not a detector)",
-                   "not a detector" in sent.get("system", ""))
+                   "not a detector" in _FakeProvider.last_system)
 
             print("\n[4] Unshipped action rejected despite valid shape")
-            _FakeClient.reply = dict(_FakeClient.reply,
-                                     recommended_action={"action": "wipe_disk",
-                                                         "target": "C:",
-                                                         "rationale": "no"})
+            _FakeProvider.reply = dict(_FakeProvider.reply,
+                                       recommended_action={"action": "wipe_disk",
+                                                           "target": "C:",
+                                                           "rationale": "no"})
             rep4 = investigator.investigate(inc, use_ai=True)
             _check("dangerous action rejected -> fallback to offline",
                    rep4["analyst"] == "offline" and "ai_error" in rep4)
 
-            print("\n[5] Network failure -> honest fallback")
-            _FakeClient.raise_on_call = True
+            print("\n[5] Provider failure -> honest fallback")
+            _FakeProvider.reply = None
             rep5 = investigator.investigate(inc, use_ai=True)
             _check("ai_error on failure, offline analysis intact",
                    "failed" in rep5.get("ai_error", "") and rep5["summary"])
         finally:
-            inv._ai_available = real_import
-            sys.modules.pop("anthropic", None)
+            inv.get_provider = real_get_provider
 
         engine.stop()
         store.stop()

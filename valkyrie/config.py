@@ -511,8 +511,11 @@ EDR_CORRELATION_WINDOW      = 600      # seconds: a detection folds into an open
 # Empty by default — discovery is opt-in and only from a directory you control.
 EDR_PLUGIN_DIR              = DATA_DIR / "plugins"
 # AI-assisted investigation. OFF by default: turning it on SENDS incident
-# details (including domains) to the Claude API, so it is opt-in and clearly
-# disclosed, matching the roadmap's rule for anything that leaves the machine.
+# details (including domains) to the configured AI provider (a network LLM
+# backend), so it is opt-in and clearly disclosed, matching the roadmap's rule
+# for anything that leaves the machine. Provider is vendor-neutral and
+# selectable (see valkyrie/edr/ai_provider.py); the `local` provider keeps
+# everything on-box.
 EDR_AI_INVESTIGATION        = False
 
 # ---------------------------------------------------------------------------

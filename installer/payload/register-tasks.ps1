@@ -18,7 +18,8 @@ $ErrorActionPreference = 'Stop'
 
 $armPs    = Join-Path $Root 'arm-protection.ps1'
 $disarmPs = Join-Path $Root 'disarm-protection.ps1'
-foreach ($f in @($armPs, $disarmPs)) {
+$wrapper  = Join-Path $Root 'run-hidden.vbs'
+foreach ($f in @($armPs, $disarmPs, $wrapper)) {
     if (-not (Test-Path $f)) { throw "Required script not found: $f" }
 }
 
@@ -30,10 +31,17 @@ $settings = New-ScheduledTaskSettingsSet `
 
 function Register-ValkyrieTask {
     param([string]$Name, [string]$Script, [string]$Description)
-    # -WindowStyle Hidden so arming/disarming protection never flashes a console
-    # window — the app must feel like a native product, not a script.
-    $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-        -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$Script`"" -WorkingDirectory $Root
+    # Launch via the run-hidden.vbs wrapper (WScript.Shell.Run, window style
+    # 0), NOT `powershell.exe -WindowStyle Hidden` directly. -WindowStyle
+    # Hidden hides the console *after* Windows has already created and shown
+    # it — a well-documented race that can flash a console for a frame or
+    # two on arm/disarm, i.e. on literally every Start/Stop Protection click.
+    # WScript.Shell.Run sets the hidden-window flag in the process's
+    # STARTUPINFO *before* CreateProcess runs, so the window is never shown
+    # at all — the only fully deterministic fix on Windows short of a
+    # compiled native helper. See run-hidden.vbs for the full explanation.
+    $action = New-ScheduledTaskAction -Execute 'wscript.exe' `
+        -Argument "//B //NoLogo `"$wrapper`" `"$Script`"" -WorkingDirectory $Root
     Register-ScheduledTask -TaskName $Name -Action $action -Principal $principal `
         -Settings $settings -Description $Description -Force | Out-Null
     Write-Host "[OK] Registered on-demand task: $Name"

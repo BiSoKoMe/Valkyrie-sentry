@@ -126,7 +126,8 @@ def main():
     print("  Recommended response actions:")
     for a in rep["recommended_actions"]:
         print(f"    → {a['action']:14} {a['target'] or '':24} {a['rationale']}")
-    print(f"  (AI narrative available: {rep['ai_available']} — set ANTHROPIC_API_KEY + use_ai=true)")
+    print(f"  (AI narrative available: {rep['ai_available']} — configure a provider via "
+          f"VALKYRIE_AI_KEY / VALKYRIE_AI_PROVIDER, then use_ai=true)")
 
     # 5. RESPONSE ------------------------------------------------------------
     hr("5. RESPONSE ACTION  (POST /api/edr/respond — dry-run first, always audited)")

@@ -243,7 +243,7 @@ async function openIncident(id){
 
     <div class="sec"><h3>Respond</h3><div class="actions">
       <button class="primary" onclick="investigate('${d.id}',false)">Investigate</button>
-      <button class="primary" onclick="investigate('${d.id}',true)" title="Sends incident details to the Claude API (opt-in)">AI investigate</button>
+      <button class="primary" onclick="investigate('${d.id}',true)" title="Sends incident details to the configured AI provider (opt-in)">AI investigate</button>
       <button onclick="respond('block_domain','${esc(d.entity)}','${d.id}')">Block domain</button>
       <button class="danger" onclick="respond('kill_process','','${d.id}')">Kill process</button>
       <button class="danger" onclick="respond('isolate_host','','${d.id}')">Isolate host</button>

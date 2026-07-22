@@ -60,3 +60,19 @@ offline-only investigation with no other changes.
 Single-incident explanation only — no cross-incident AI correlation, no
 AI-assisted hunting query generation, no FP-reduction feedback loop.
 Each is an extension of the same facts→schema pattern when justified.
+
+## Update (2026-07-19) — vendor-neutral provider layer
+
+The original implementation called the Anthropic SDK directly and read
+`ANTHROPIC_API_KEY`. To remove single-vendor lock-in, the transport is now
+abstracted behind `edr/ai_provider.py` (`AIProvider`): **Anthropic, OpenAI, a
+local OpenAI-compatible server, and Offline** providers, all over plain HTTP
+(`httpx`) — **no AI-vendor SDK dependency**. `investigate.py` depends only on the
+interface and reports the provider name as `analyst`. The structured-facts →
+JSON-schema → enum-guard → offline-fallback contract above is unchanged and still
+enforced (now provider-independently). Selection: `VALKYRIE_AI_PROVIDER` /
+`VALKYRIE_AI_KEY` / `VALKYRIE_AI_MODEL` / `VALKYRIE_AI_BASE_URL`, with
+`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` honored as fall-backs (backward
+compatible). Tests: `tests/test_ai_provider.py` (real request/parse per dialect
+via a stubbed `httpx.post`, selection, JSON extraction) + the rewritten
+`tests/test_ai_assistant.py` (seam behavior via an injected fake provider).

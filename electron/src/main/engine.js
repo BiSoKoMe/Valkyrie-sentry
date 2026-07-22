@@ -99,6 +99,27 @@ function apiGet(pathname, timeoutMs = 1500) {
   });
 }
 
+// Same as apiGet but for endpoints that intentionally return non-JSON text
+// (e.g. the compliance report's ?format=md), so apiGet's JSON.parse never
+// gets in the way of a body that was never meant to be JSON.
+function apiGetText(pathname, timeoutMs = 4000) {
+  return new Promise((resolve, reject) => {
+    const req = http.get(
+      { host: HOST, port: WEB_PORT, path: pathname, timeout: timeoutMs },
+      (res) => {
+        let body = '';
+        res.on('data', (c) => (body += c));
+        res.on('end', () => {
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) resolve(body);
+          else reject(new Error(`HTTP ${res.statusCode}`));
+        });
+      }
+    );
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', reject);
+  });
+}
+
 // Generic request (GET/POST) against the loopback API. Control POSTs carry the
 // per-process token; a Node caller sends no Origin header, which the engine
 // treats as same-origin, so token + loopback is sufficient.
@@ -167,14 +188,18 @@ function runTask(name) {
 
 // Spawn a PowerShell script detached (used as the source-checkout fallback,
 // where the scheduled tasks are not registered). start_all.ps1 self-elevates.
-function runScriptDetached(name) {
+// `windowsHide: true` makes PowerShell itself invisible (Node sets
+// CREATE_NO_WINDOW, applied before the process is even created — unlike
+// `-WindowStyle Hidden`, which hides the console after Windows has already
+// shown it, hence the extraArgs below rather than relying on that alone).
+function runScriptDetached(name, extraArgs = []) {
   const script = scriptPath(name);
   if (!fs.existsSync(script)) {
     return Promise.reject(new Error(`missing ${name} at ${script}`));
   }
   const child = spawn(
     POWERSHELL,
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script],
+    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, ...extraArgs],
     { detached: true, stdio: 'ignore', windowsHide: true }
   );
   child.unref();
@@ -208,7 +233,10 @@ async function start() {
     await runTask('ValkyrieStart');
     return { started: true, via: 'task' };
   }
-  await runScriptDetached('start_all.ps1');
+  // -Silent: the app has its own splash/progress UI, so the engine must
+  // launch with no visible window — unlike a developer running this script
+  // by hand from a terminal, where the console is deliberately kept.
+  await runScriptDetached('start_all.ps1', ['-Silent']);
   return { started: true, via: 'script' };
 }
 
@@ -255,6 +283,7 @@ module.exports = {
   waitUntilReady,
   telemetry,
   apiGet,
+  apiGetText,
   apiPost,
   isProtected,
   engineRoot,

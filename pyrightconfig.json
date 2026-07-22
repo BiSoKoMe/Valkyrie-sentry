@@ -1,5 +1,5 @@
 {
-  "//": "Type-checker config for Pyright / basedpyright. basedpyright defaults to a very strict mode that floods this pragmatic, stdlib-heavy codebase with warnings; 'basic' keeps genuine errors while cutting the noise. Note: the dns.* / mitmproxy / anthropic / cryptography 'could not be resolved' warnings mean those packages are not installed in the selected interpreter — install requirements_modular.txt (and any optional extras you use) rather than suppressing them.",
+  "//": "Type-checker config for Pyright / basedpyright. basedpyright defaults to a very strict mode that floods this pragmatic, stdlib-heavy codebase with warnings; 'basic' keeps genuine errors while cutting the noise. Note: the dns.* / mitmproxy / httpx / cryptography 'could not be resolved' warnings mean those packages are not installed in the selected interpreter — install requirements_modular.txt (and any optional extras you use) rather than suppressing them.",
   "pythonVersion": "3.10",
   "typeCheckingMode": "basic",
   "reportMissingModuleSource": "none",
