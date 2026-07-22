@@ -35,12 +35,20 @@ function trapFocus(container) {
   return () => container.removeEventListener('keydown', handler);
 }
 
+// Twin-wing "V" mark — angular, faceted (two fill tones per blade to read as
+// folded metal), converging on a center spike. Monochrome, matches the
+// design system's black/white/grey rule; no color.
 const LOGO = `
 <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <path d="M32 4 54 13v14c0 14-9.5 23-22 30C19.5 50 10 41 10 27V13L32 4z"
-        stroke="#f6f6f7" stroke-width="2.2" fill="rgba(255,255,255,0.05)"/>
-  <path d="M32 16v28M32 20l9 5M32 20l-9 5M32 30l9 5M32 30l-9 5"
-        stroke="#f6f6f7" stroke-width="2.2" stroke-linecap="round"/>
+  <polygon points="29,4 2,14 9,19" fill="#f6f6f7" opacity="0.72"/>
+  <polygon points="35,4 62,14 55,19" fill="#f6f6f7" opacity="0.72"/>
+  <polygon points="18,12 2,22 7.5,25.5" fill="#f6f6f7" opacity="0.72"/>
+  <polygon points="46,12 62,22 56.5,25.5" fill="#f6f6f7" opacity="0.72"/>
+  <polygon points="29,4 25.5,8.5 2,14" fill="#f6f6f7"/>
+  <polygon points="35,4 38.5,8.5 62,14" fill="#f6f6f7"/>
+  <polygon points="18,12 15.5,16 2,22" fill="#f6f6f7"/>
+  <polygon points="46,12 48.5,16 62,22" fill="#f6f6f7"/>
+  <polygon points="30,19 32,31 34,19" fill="#f6f6f7"/>
 </svg>`;
 
 const state = { engineUp: false, protected: false, busy: false, route: 'dashboard', tele: null, pageTimer: null };
@@ -240,7 +248,7 @@ const NAV = [
 ];
 const NAV_SYSTEM_START = 'network';   // first item of the "System" sidebar section
 function buildChrome() {
-  $('brandMark').innerHTML = ICON.shieldCheck;
+  $('brandMark').innerHTML = ICON.mark;
   $('minBtn').innerHTML = ICON.min; $('maxBtn').innerHTML = ICON.max;
   $('closeBtn').innerHTML = ICON.x; $('notifBtn').innerHTML = ICON.bell;
   $('searchBtn').innerHTML = ICON.search;

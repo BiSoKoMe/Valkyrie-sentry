@@ -45,6 +45,16 @@ inventory and `docs/GAP_ANALYSIS.md` for the honest ranking vs commercial EDRs.
 - **Premium monochrome desktop app** — black / white / grey with a single
   restrained blue accent, custom title bar, cinematic splash, and a reusable
   design-system state component (empty / offline / error).
+- **New brand mark** — a twin-wing "V" emblem replaces the previous shield
+  glyph, used consistently for the splash screen, the About page, the
+  titlebar brand icon (`electron/src/renderer/icons.js`: `ICON.mark`, same
+  geometry as `app.js`'s `LOGO` — one shape, two call sites, not a
+  duplicate), and the packaged app/installer/uninstaller icon
+  (`electron/build/icon.ico`, regenerated at all 7 Windows icon sizes with a
+  simplified bold silhouette below 32px so it doesn't blur into a blob in
+  the taskbar). Strictly monochrome, matching the design system — the
+  previous `icon.ico` had drifted to a blue card background inconsistent
+  with the rest of the app; corrected as part of this change.
 - **Component Health page** — the uniform health/metrics/restart contract
   every subsystem already runs through (`components.py`, ADR 0021 — DNS,
   firewall, EDR, sensors, threat intel, SIEM, and more) had a fully-built,
