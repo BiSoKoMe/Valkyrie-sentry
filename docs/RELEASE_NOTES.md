@@ -121,6 +121,37 @@ inventory and `docs/GAP_ANALYSIS.md` for the honest ranking vs commercial EDRs.
   `aria-label`. Every interactive element also gets one consistent
   `:focus-visible` ring (the same restrained blue used elsewhere) instead of
   either no visible focus state or the unstyled browser default.
+- **Keyboard-trap bug fix in Replay.** Adding the Investigation tab's form
+  fields (assignee, notes) exposed a real regression: Replay's global
+  transport shortcuts (Space = play/pause, ←/→ = seek) fired unconditionally
+  on every keydown, so typing a space into the Notes field also toggled
+  playback and ate the keystroke — the triage form was effectively broken
+  for any note containing a space. Fixed by skipping transport shortcuts
+  when the event target is an editable control; Escape still closes the
+  modal from anywhere, matching normal dialog convention.
+- **Modal focus trapping.** Replay and the Command Palette are full-screen
+  overlays but Tab could leak focus out to the sidebar/page behind them —
+  a real WCAG dialog violation, not just a nicety. Added one shared
+  `trapFocus()` helper (cycles Tab/Shift+Tab within the open dialog) used
+  by both; both also now move focus into the dialog on open and restore it
+  to whatever triggered them on close, instead of leaving focus wherever it
+  happened to land.
+- **Reopen where you left off.** The app always restarted on Dashboard
+  regardless of what the analyst was last looking at. The last-visited page
+  is now remembered locally (`localStorage`, never synced) and restored on
+  next launch — unless the app was opened with an explicit deep-link
+  `startPage`, which still takes priority.
+- **Perfected the one real data table.** The Threat Hunting results table
+  had no sort and no way to get data out of the app. Added a reusable,
+  unit-tested `DataTable` module (`electron/src/renderer/data-table.js`) —
+  stable sort per column (click a header; numbers sort numerically, text
+  sorts naturally; missing values always sort last, never first), "Copy
+  CSV," "Copy JSON," and click-a-row to copy it as tab-separated text. This
+  is a design-system component, not a one-off: any future table (e.g. a
+  Fleet inventory view) reuses the same module instead of re-implementing
+  sort/export. Buttons are labeled "Copy," not "Export" — nothing is
+  written to disk, everything goes to the clipboard, matching the
+  Compliance page's Markdown export.
 
 ## Validation (measured, honest)
 
@@ -193,6 +224,9 @@ Honest boundaries, documented rather than hidden:
 | Keyboard-accessible sidebar + incident list, app-wide focus ring | ✅ |
 | Component health page (per-subsystem status, metrics, restart) | ✅ ~15 subsystems, arm-then-confirm restart |
 | Compliance evidence page (SOC 2 / ISO 27001, MTTR, Markdown export) | ✅ backed by `compliance.py` |
+| Modal focus trapping (Replay, Command Palette) | ✅ shared `trapFocus()`, focus returns to opener on close |
+| Reopen on last-visited page | ✅ `localStorage`, deep-link `startPage` still takes priority |
+| Reusable sortable/exportable data table (`data-table.js`) | ✅ used by Threat Hunting; column sort, copy row, copy CSV/JSON |
 | Full incident-detail workspace (process tree / network graph) | ⏳ partial (Replay covers timeline + explainability + triage; no process-tree/network-graph panels yet) |
 | SOAR / Forensics UI | ⏳ backend only (`edr/playbooks.py`, `forensics.py`) |
 | Fleet management UI | ⏳ backend only (`fleet/`) |

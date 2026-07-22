@@ -16,6 +16,25 @@ const el = (tag, cls, html) => {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function safe(fn, fallback) { try { return await fn(); } catch { return fallback; } }
 
+// Shared modal focus trap — used by every full-screen overlay (Replay,
+// Command Palette) so Tab/Shift+Tab cycle within the dialog instead of
+// leaking focus back to the page behind it. Returns a disposer.
+const FOCUSABLE_SEL = 'a[href], button:not([disabled]), input:not([disabled]), ' +
+  'select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+function trapFocus(container) {
+  const handler = (e) => {
+    if (e.key !== 'Tab') return;
+    const nodes = Array.from(container.querySelectorAll(FOCUSABLE_SEL))
+      .filter((n) => n.offsetParent !== null);
+    if (!nodes.length) return;
+    const first = nodes[0], last = nodes[nodes.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  };
+  container.addEventListener('keydown', handler);
+  return () => container.removeEventListener('keydown', handler);
+}
+
 const LOGO = `
 <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
   <path d="M32 4 54 13v14c0 14-9.5 23-22 30C19.5 50 10 41 10 27V13L32 4z"
@@ -246,6 +265,16 @@ function buildChrome() {
     $('notifBtn').onclick = () => V.openLogs();
   }
 }
+// Reopen where the analyst left off — persisted locally only, never synced.
+const LAST_ROUTE_KEY = 'valkyrie:lastRoute';
+function saveLastRoute(id) { try { localStorage.setItem(LAST_ROUTE_KEY, id); } catch {} }
+function loadLastRoute() {
+  try {
+    const id = localStorage.getItem(LAST_ROUTE_KEY);
+    return NAV.some((n) => n[0] === id) ? id : null;   // only trust a route that still exists
+  } catch { return null; }
+}
+
 function route(id) {
   if (state.pageTimer) { clearInterval(state.pageTimer); state.pageTimer = null; }
   state.route = id;
@@ -256,6 +285,7 @@ function route(id) {
   });
   const meta = NAV.find((n) => n[0] === id);
   $('pageTitle').textContent = meta ? meta[1] : 'Valkyrie';
+  if (meta) saveLastRoute(id);
   const page = PAGES[id] || PAGES.dashboard;
   page.render();
   if (state.tele && page.onTele) page.onTele(state.tele);
@@ -608,17 +638,58 @@ PAGES.hunting = {
     this.renderResults(res);
   },
   renderResults(res) {
+    if (!res) { $('huntResults').innerHTML = stateBlock('error', 'Query failed', 'Could not reach the engine.'); return; }
+    if (res.error) { $('huntResults').innerHTML = stateBlock('error', 'Query failed', res.error); return; }
+    this.resultRows = res.rows || [];
+    this.resultCols = this.resultRows.length ? Object.keys(this.resultRows[0]) : [];
+    this.sortCol = null; this.sortDir = 'asc';
+    this.paintResults();
+  },
+  // Sort state lives on the page object, not the DOM, so re-sorting never
+  // re-fetches — the same "local re-render from cached state" pattern the
+  // Components page uses for its restart-arm state.
+  paintResults() {
     const box = $('huntResults'); if (!box) return;
-    if (!res) { box.innerHTML = stateBlock('error', 'Query failed', 'Could not reach the engine.'); return; }
-    if (res.error) { box.innerHTML = stateBlock('error', 'Query failed', res.error); return; }
-    const rows = res.rows || [];
+    const rows = this.resultRows || [], cols = this.resultCols || [];
     if (!rows.length) { box.innerHTML = stateBlock('empty', 'No matches', 'Nothing in the event history matched this query.'); return; }
-    const cols = Object.keys(rows[0]);
-    box.innerHTML = `<div class="hunt-table-wrap"><table class="hunt-table">
-        <thead><tr>${cols.map((c) => `<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>
-        <tbody>${rows.map((r) => `<tr>${cols.map((c) => `<td>${escapeHtml(fmtCell(r[c]))}</td>`).join('')}</tr>`).join('')}</tbody>
-      </table></div>
-      <div class="hunt-count">${fmt(rows.length)} row${rows.length === 1 ? '' : 's'}</div>`;
+    const sorted = DataTable.sortRows(rows, this.sortCol, this.sortDir);
+    const arrow = (c) => c !== this.sortCol ? '' : (this.sortDir === 'asc' ? ' ▲' : ' ▼');
+    box.innerHTML = `
+      <div class="hunt-toolbar">
+        <span class="hunt-count">${fmt(rows.length)} row${rows.length === 1 ? '' : 's'}</span>
+        <div class="hunt-toolbar-actions">
+          <button class="btn" id="huntCopyCsv">${ICON.download}<span>Copy CSV</span></button>
+          <button class="btn" id="huntCopyJson">${ICON.download}<span>Copy JSON</span></button>
+        </div>
+      </div>
+      <div class="hunt-table-wrap"><table class="hunt-table">
+        <thead><tr>${cols.map((c) => `<th data-col="${escapeHtml(c)}" tabindex="0" role="button"
+          aria-label="Sort by ${escapeHtml(c)}" title="Sort by ${escapeHtml(c)}">${escapeHtml(c)}${arrow(c)}</th>`).join('')}</tr></thead>
+        <tbody>${sorted.map((r) => `<tr tabindex="0" role="button" title="Click to copy this row">
+          ${cols.map((c) => `<td>${escapeHtml(fmtCell(r[c]))}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table></div>`;
+    box.querySelectorAll('.hunt-table th').forEach((th) => {
+      const activate = () => {
+        const col = th.dataset.col;
+        this.sortDir = (this.sortCol === col && this.sortDir === 'asc') ? 'desc' : 'asc';
+        this.sortCol = col;
+        this.paintResults();
+      };
+      th.onclick = activate;
+      th.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); } };
+    });
+    box.querySelectorAll('.hunt-table tbody tr').forEach((tr, i) => {
+      const copy = () => this.copyRow(sorted[i], cols);
+      tr.onclick = copy;
+      tr.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); copy(); } };
+    });
+    $('huntCopyCsv').onclick = () => this.copyText(DataTable.toCSV(rows, cols), 'Results copied as CSV.');
+    $('huntCopyJson').onclick = () => this.copyText(DataTable.toJSON(rows), 'Results copied as JSON.');
+  },
+  async copyRow(row, cols) { this.copyText(DataTable.rowToTSV(row, cols), 'Row copied.'); },
+  async copyText(text, okMessage) {
+    try { await navigator.clipboard.writeText(text); toast(okMessage, 'ok'); }
+    catch { toast('Could not access the clipboard.', 'error'); }
   },
 };
 
@@ -1171,10 +1242,11 @@ const INCIDENT_STATES = ['open', 'investigating', 'contained', 'resolved', 'dism
 
 const Replay = {
   steps: [], idx: 0, playing: false, speed: 1, timer: null, root: null, keyHandler: null,
-  report: null, BASE: 1150,
+  report: null, releaseFocusTrap: null, opener: null, BASE: 1150,
 
   async open(id) {
     this.close();
+    this.opener = document.activeElement;
     const scrim = el('div', 'rp-scrim');
     scrim.innerHTML = `<div class="rp"><div class="rp-body" style="grid-template-columns:1fr">
       <div class="rp-stage"><div class="empty" style="padding:40px 0">Loading replay…</div></div></div></div>`;
@@ -1263,12 +1335,22 @@ const Replay = {
       this.pause(); this.seek(Math.round(frac * (this.steps.length - 1)));
     };
     this.keyHandler = (e) => {
-      if (e.key === 'Escape') this.close();
-      else if (e.key === ' ') { e.preventDefault(); this.toggle(); }
+      if (e.key === 'Escape') { this.close(); return; }
+      // The Investigation tab has real text fields (assignee, notes) — space
+      // and the arrow keys must behave like normal text editing there, not
+      // hijack playback. Transport shortcuts only apply when nothing is
+      // being typed into.
+      const t = e.target;
+      const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+      if (typing) return;
+      if (e.key === ' ') { e.preventDefault(); this.toggle(); }
       else if (e.key === 'ArrowRight') { this.pause(); this.seek(this.idx + 1); }
       else if (e.key === 'ArrowLeft') { this.pause(); this.seek(this.idx - 1); }
     };
     document.addEventListener('keydown', this.keyHandler);
+    this.releaseFocusTrap = trapFocus(this.root);
+    const closeBtn = this.root.querySelector('.rp-x');
+    if (closeBtn) closeBtn.focus();
 
     this.update();
     if (this.steps.length > 1) this.timer = setTimeout(() => this.play(), 400);
@@ -1323,8 +1405,11 @@ const Replay = {
   close() {
     clearTimeout(this.timer); this.timer = null; this.playing = false;
     if (this.keyHandler) { document.removeEventListener('keydown', this.keyHandler); this.keyHandler = null; }
+    if (this.releaseFocusTrap) { this.releaseFocusTrap(); this.releaseFocusTrap = null; }
     if (this.root && this.root.parentNode) this.root.parentNode.removeChild(this.root);
     this.root = null; this.report = null;
+    if (this.opener && this.opener.focus) this.opener.focus();
+    this.opener = null;
   },
 
   /* -------------------------- Investigation tab --------------------------
@@ -1468,12 +1553,14 @@ async function fetchIncidentCommands() {
 }
 
 const CommandPalette = {
-  root: null, keyHandler: null, base: [], incidents: [], groups: [], display: [], active: 0,
+  root: null, keyHandler: null, releaseFocusTrap: null, opener: null,
+  base: [], incidents: [], groups: [], display: [], active: 0,
 
   toggle() { this.root ? this.close() : this.open(); },
 
   open() {
     if (this.root) { this.focusInput(); return; }
+    this.opener = document.activeElement;
     this.base = buildBaseCommands();
     this.incidents = [];
     this.mount();
@@ -1513,6 +1600,7 @@ const CommandPalette = {
       else if (e.key === 'Enter') { e.preventDefault(); this.runActive(); }
     };
     document.addEventListener('keydown', this.keyHandler);
+    this.releaseFocusTrap = trapFocus(scrim);
   },
 
   focusInput() {
@@ -1581,8 +1669,11 @@ const CommandPalette = {
 
   close() {
     if (this.keyHandler) { document.removeEventListener('keydown', this.keyHandler); this.keyHandler = null; }
+    if (this.releaseFocusTrap) { this.releaseFocusTrap(); this.releaseFocusTrap = null; }
     if (this.root && this.root.parentNode) this.root.parentNode.removeChild(this.root);
     this.root = null; this.groups = []; this.display = []; this.active = 0;
+    if (this.opener && this.opener.focus) this.opener.focus();
+    this.opener = null;
   },
 };
 
@@ -1600,7 +1691,12 @@ async function init() {
       const page = PAGES[state.route];
       if (page && page.onTele) page.onTele(data);
     });
-    V.appInfo().then((info) => { if (info && info.startPage) route(info.startPage); }).catch(() => {});
+    // An explicit startPage (deep link / notification click) wins; otherwise
+    // reopen on whatever page the analyst was last looking at.
+    V.appInfo().then((info) => {
+      const target = (info && info.startPage) || loadLastRoute();
+      if (target && target !== 'dashboard') route(target);
+    }).catch(() => {});
   }
 
   // Pick the boot experience: a deliberate setup sequence for a fresh install /
