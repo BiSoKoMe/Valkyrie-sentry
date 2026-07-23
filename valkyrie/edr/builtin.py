@@ -38,6 +38,8 @@ _TECHNIQUE = {
     "intelligence": "T1071.004 — DNS C2 / beaconing",
     "behavioral":   "T1568.002 — Domain Generation Algorithm",
     "dga":          "T1568.002 — Domain Generation Algorithm",
+    "tunnel":       "T1048.003 — Exfiltration Over Alternative Protocol (DNS tunnelling)",
+    "dyndns":       "T1568 — Dynamic Resolution (wildcard DNS)",
     "anomaly":      "T1071.004 — Anomalous DNS",
     "doh_bypass":   "T1572 — Protocol Tunnelling (DoH bypass)",
     "tracker":      "T1041 — Exfiltration / tracking",
@@ -162,6 +164,39 @@ class DgaDetection(DetectionPlugin):
         return []
 
 
+class TunnelDetection(DetectionPlugin):
+    name = "dns.tunnel"
+    description = "DNS tunnelling — a stream of unique generated subdomains under one base"
+
+    def analyze(self, event, ctx):
+        domain, decision, pname, pid, cat, susp, reason = _ev(event)
+        # The scanner's unique-subdomain flood verdict (site_scanner S9 /
+        # dns_tunnel.py): many never-seen machine-generated labels under one
+        # registrable base in a short window — the shape of DNS exfil/C2,
+        # invisible to any single-query signal.
+        if cat == "tunnel":
+            return [Detection(
+                source=self.name, severity="high", category="tunnel",
+                title=f"DNS tunnelling pattern from {pname or 'a process'}",
+                entity=domain, process_name=pname, process_pid=pid,
+                technique="T1048.003 — Exfiltration Over Alternative Protocol (DNS tunnelling)",
+                details={"reason": reason, "suspicion": susp},
+            )]
+        # A blocked generated-looking hostname on a wildcard IP-echo provider —
+        # not yet a corroborated flood, but the same technique family (hiding
+        # traffic under a legitimate wildcard base). Medium: real signal,
+        # single-query evidence.
+        if cat == "dyndns" and decision in ("blocked", "behavioral"):
+            return [Detection(
+                source=self.name, severity="medium", category="dyndns",
+                title=f"Suspicious wildcard-DNS hostname from {pname or 'a process'}",
+                entity=domain, process_name=pname, process_pid=pid,
+                technique="T1568 — Dynamic Resolution (wildcard DNS)",
+                details={"reason": reason, "suspicion": susp},
+            )]
+        return []
+
+
 class AnomalyDetection(DetectionPlugin):
     name = "dns.anomaly"
     description = "A process reached a domain outside its learned baseline"
@@ -205,6 +240,7 @@ BUILTIN_DETECTIONS = [
     IntelBlockDetection,
     DohBypassDetection,
     DgaDetection,
+    TunnelDetection,
     AnomalyDetection,
     TrackerDetection,
 ]

@@ -365,6 +365,58 @@ SCAN_CACHE_TTL_HOURS:    int   = 24
 # NOTE: RATE_MAX_QUERIES is defined once under "Behavioral heuristics" above.
 
 # ---------------------------------------------------------------------------
+# DNS tunnelling / exfiltration detection (dns_tunnel.py + scanner S8/S9)
+# ---------------------------------------------------------------------------
+# Wildcard "IP-echo" DNS providers: anything.<ip>.nip.io resolves to <ip>.
+# Completely legitimate dev tools — but because the registrable domain is the
+# provider's (nip.io), domain-reputation and DGA analysis of the SLD are blind
+# to whatever an attacker stuffs into the subdomain. For these roots the
+# scanner analyses the LEFTMOST label as the effective payload label instead.
+DYNDNS_WILDCARD_ROOTS: frozenset[str] = frozenset({
+    "nip.io", "sslip.io", "xip.io", "traefik.me",
+    "localtest.me", "lvh.me", "vcap.me",
+})
+
+# Unique-subdomain flood (the classic DNS-tunnel/exfil shape: many never-seen
+# machine-generated labels under one base in a short window). Thresholds are
+# deliberately conservative — a handful of unique cryptic labels is normal
+# CDN/sharding behaviour, a sustained stream is not.
+TUNNEL_WINDOW_SECONDS: float = 60.0
+TUNNEL_FLAG_UNIQUE:    int   = 3     # unique cryptic labels → combining signal
+TUNNEL_BLOCK_UNIQUE:   int   = 5     # unique cryptic labels → block-alone
+
+# Media/CDN roots that legitimately fan out many machine-generated hostnames
+# (video shards, blob stores). The flood detector never counts these — the
+# false-positive cost of blocking one would be broken video/storage for the
+# user, and their sharded hostnames are exactly the pattern the detector
+# hunts. Reputation for these roots comes from the other layers.
+TUNNEL_EXEMPT_ROOTS: frozenset[str] = frozenset({
+    "googlevideo.com", "gvt1.com", "gvt2.com", "ytimg.com",
+    "akamaized.net", "akamaiedge.net", "akamai.net",
+    "edgekey.net", "edgesuite.net",
+    "cloudfront.net", "fastly.net", "fastlylb.net",
+    "fbcdn.net", "cdninstagram.com",
+    "llnwd.net", "msedge.net", "azureedge.net",
+    "amazonaws.com", "awsstatic.com", "windows.net", "azure.com",
+    "aaplimg.com", "apple-dns.net", "cdn-apple.com",
+    "steamcontent.com", "steamstatic.com",
+    "nflxvideo.net", "nflximg.net",
+    "ttvnw.net", "twitchcdn.net",
+    "scdn.co", "spotifycdn.com",
+    "trafficmanager.net", "cloudflarestorage.com",
+})
+
+# Subdomain labels so common on legitimate multi-service sites that they can
+# never count toward a tunnel flood, whatever their shape.
+COMMON_SUBDOMAIN_LABELS: frozenset[str] = frozenset({
+    "www", "api", "cdn", "static", "img", "images", "mail", "smtp", "imap",
+    "app", "apps", "dev", "staging", "test", "web", "m", "mobile", "shop",
+    "blog", "docs", "news", "media", "assets", "files", "download", "ftp",
+    "login", "auth", "sso", "id", "account", "accounts", "portal", "admin",
+    "status", "help", "support", "store", "video", "play", "music", "maps",
+})
+
+# ---------------------------------------------------------------------------
 # Web dashboard
 # ---------------------------------------------------------------------------
 # Loopback by default. The dashboard exposes live DNS/browsing history, system

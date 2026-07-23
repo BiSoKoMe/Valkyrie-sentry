@@ -93,6 +93,25 @@ MALICIOUS: list[Case] = [
     Case("tracker-doubleclick", "scanner", True, "T1071", "command-and-control",
          "doubleclick.net", "known ad-tech tracker"),
 
+    # ── DNS tunnelling / exfil (site_scanner S8/S9 + dns_tunnel.py) ──────────
+    # inp = a STREAM of hostnames (tunnelling is an aggregate shape). These
+    # pin the exact miss that let an Atomic Red Team DNS burst through as
+    # "allowed" before the flood/wildcard-provider signals existed.
+    Case("tunnel-art-nipio", "tunnel", True, "T1048.003", "exfiltration",
+         tuple(f"atomicredteam-{n}.127.0.0.1.nip.io"
+               for n in (703907, 435169, 339451, 583611, 478539, 636933)),
+         "Atomic Red Team DNS burst over nip.io wildcard provider"),
+    Case("tunnel-exfil-hex", "tunnel", True, "T1048.003", "exfiltration",
+         tuple(f"{chunk}.tunnel.evil-exfil.example"
+               for chunk in ("4d5a90000300", "0000000400000f", "ffff0000b800",
+                             "0000000040001a", "0000000000e01f", "ba0e00b409cd")),
+         "hex-encoded payload chunks streamed as subdomains"),
+    Case("tunnel-b64-stream", "tunnel", True, "T1048.003", "exfiltration",
+         tuple(f"{chunk}.dnscat.evil-c2.example"
+               for chunk in ("aGVsbG8wd29ybGQx", "c2VjcmV0ZGF0YTk5", "ZXhmaWx0cmF0aW9u",
+                             "bW9yZWRhdGFoZXJl", "ZmluYWxjaHVua3oz", "dGhlbGFzdG9uZTQ0")),
+         "base64 DNS tunnel (dnscat-style)"),
+
     # ── ETW Sysmon sensor classification (etw/sysmon.classify_sysmon) ───────
     # Each case is (Sysmon EventID, EventData dict) — the same shape the real
     # sensor parses from Microsoft-Windows-Sysmon/Operational XML.
@@ -212,6 +231,23 @@ BENIGN: list[Case] = [
          note="bank site, must never be blocked"),
     Case("b-scanner-unknown", "scanner", False, inp="some-small-blog-42.dev",
          note="unknown site — default allow"),
+
+    # DNS-tunnel FALSE-POSITIVE controls — legitimate high-fan-out subdomain
+    # traffic that must NOT be flagged as a tunnel. The cost of a miss here is
+    # broken video / storage / dev tooling for the user.
+    Case("b-tunnel-googlevideo", "tunnel", False,
+         inp=tuple(f"rr{i}---sn-4g5e6nsz{i}.googlevideo.com" for i in range(8)),
+         note="YouTube video shard fan-out (exempt CDN root)"),
+    Case("b-tunnel-cdn-shards", "tunnel", False,
+         inp=tuple(f"d{i}abc{i}xyz.cloudfront.net" for i in range(8)),
+         note="CloudFront distribution hostnames (exempt CDN root)"),
+    Case("b-tunnel-normal-web", "tunnel", False,
+         inp=("www.github.com", "api.github.com", "avatars.githubusercontent.com",
+              "codeload.github.com", "docs.github.com"),
+         note="ordinary multi-service site — common labels, no flood"),
+    Case("b-tunnel-nipio-dev", "tunnel", False,
+         inp=("myapp.127.0.0.1.nip.io", "myapp.127.0.0.1.nip.io"),
+         note="legit local dev over nip.io — flagged at most, never blocked"),
 
     # Sysmon benign controls — ordinary endpoint activity must not fire.
     Case("b-sysmon-signed-proc", "sysmon", False, inp=(

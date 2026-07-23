@@ -107,6 +107,17 @@ def _fires(case: Case, ctx: dict) -> bool:
         res = scanner.analyze(case.inp, "chrome.exe")
         return res.decision in ("block", "flag")
 
+    if d == "tunnel":
+        # inp = tuple of hostnames — a query STREAM, because tunnelling is an
+        # aggregate shape no single query shows. Fresh scanner per case so the
+        # flood window is isolated and cases stay order-independent. Fires
+        # only if the stream produced an outright BLOCK (flag is not enough
+        # for a malicious tunnel case to count as caught).
+        from valkyrie.site_scanner import SiteScanner
+        scanner = SiteScanner(store=None)
+        return any(scanner.analyze(dm, "powershell.exe").decision == "block"
+                   for dm in case.inp)
+
     raise ValueError(f"unknown detector: {case.detector}")
 
 
