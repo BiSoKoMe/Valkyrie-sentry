@@ -37,6 +37,7 @@ datas = [
     ("valkyrie/web/launcher.html",  "valkyrie/web"),
     ("valkyrie/fleet/dashboard.html", "valkyrie/fleet"),
     ("valkyrie/defaults/rules.default.yaml", "valkyrie/defaults"),   # factory default
+    ("valkyrie/defaults/playbooks.default.yaml", "valkyrie/defaults"),  # default SOAR playbooks
 ]
 
 binaries = []

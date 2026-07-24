@@ -64,6 +64,20 @@ if not RULES_PATH.exists():
     except OSError:
         pass   # first-run seeding is best-effort; RulesEngine tolerates absence
 
+# Response playbooks (SOAR) follow the same seed-on-first-launch pattern as
+# rules: a curated, conservative default ships ENABLED so confirmed-malicious
+# incidents are auto-blocked and audited out of the box (before this the engine
+# started with zero playbooks and every incident was observe-only). The user's
+# later edits to the copied-out file are never clobbered by an update.
+PLAYBOOKS_PATH         = DATA_DIR / "playbooks.yaml"
+DEFAULT_PLAYBOOKS_PATH = BUNDLE_DIR / "valkyrie" / "defaults" / "playbooks.default.yaml"
+if not PLAYBOOKS_PATH.exists():
+    try:
+        if DEFAULT_PLAYBOOKS_PATH.exists():
+            shutil.copyfile(DEFAULT_PLAYBOOKS_PATH, PLAYBOOKS_PATH)
+    except OSError:
+        pass   # best-effort; PlaybookEngine falls back to the bundled default
+
 # ---------------------------------------------------------------------------
 # Fleet control plane (multi-device management)
 # ---------------------------------------------------------------------------

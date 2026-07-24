@@ -54,7 +54,8 @@ def main() -> int:
     from valkyrie.store import Store
     from valkyrie.edr import EdrEngine
     from valkyrie.edr.schema import Detection
-    from valkyrie.edr.playbooks import Playbook, PlaybookAction, PlaybookEngine
+    from valkyrie.edr.playbooks import (
+        Playbook, PlaybookAction, PlaybookEngine, _parse_playbook)
 
     print("\n=== SOAR playbooks ===\n")
 
@@ -142,9 +143,36 @@ def main() -> int:
         _check("playbook engine still active", pbe.status()["active"])
         _check("EDR still correlating", len(engine.list_incidents()) >= 2)
 
+        print("\n[7] kill_process resolves the incident PID (not the name)")
+        pb_kill = _parse_playbook({
+            "id": "kill", "min_severity": "critical", "categories": ["process"],
+            "actions": [{"action": "kill_process", "target_from": "process_pid"}],
+        })
+        _check("process_pid is a valid target_from", pb_kill.actions[0].target_from == "process_pid")
+        pbe._playbooks = [pb_kill]                      # dry-run (default mode)
+        pk = engine.report_detection(Detection(
+            source="etw", severity="critical", category="process",
+            title="injection", entity="C:/x.exe", process_name="mal.exe",
+            process_pid=2147480000))                   # unused high PID → no such process
+        deadline = time.monotonic() + 3
+        pinc = engine.get_incident(pk)
+        while time.monotonic() < deadline and not (pinc and pinc.get("responses")):
+            time.sleep(0.05); pinc = engine.get_incident(pk)
+        presp = (pinc or {}).get("responses") or []
+        _check("kill fired on the process incident", len(presp) == 1)
+        if presp:
+            # The point: the target parsed as a PID. Whatever the outcome
+            # (dry_run "would terminate", or "no such process"), it must NOT be
+            # the old "invalid pid: 'mal.exe'" — that was the name-not-PID bug.
+            _check("target resolved as a PID, not the process name",
+                   "invalid pid" not in presp[0].get("result", ""))
+
         pbe.stop()
         engine.stop()
         store.stop()
+
+    print("\n[8] Shipped default playbook set")
+    _default_playbooks_checks()
 
     print("\n" + "=" * 48)
     if _FAILURES:
@@ -154,6 +182,40 @@ def main() -> int:
         return 1
     print("All checks PASSED.")
     return 0
+
+
+def _default_playbooks_checks() -> None:
+    """The shipped default (valkyrie/defaults/playbooks.default.yaml) must ship
+    enabled, safe, and parseable — it's what makes auto-response ON out of the
+    box instead of the old zero-playbook observe-only posture."""
+    import yaml
+    from valkyrie.config import DEFAULT_PLAYBOOKS_PATH
+    from valkyrie.edr.playbooks import _parse_playbook
+
+    _check("default playbook file is bundled", DEFAULT_PLAYBOOKS_PATH.exists())
+    raw = yaml.safe_load(DEFAULT_PLAYBOOKS_PATH.read_text(encoding="utf-8")) or {}
+    books = [_parse_playbook(e) for e in raw.get("playbooks") or []]
+    by_id = {b.id: b for b in books}
+
+    _check("default set parses without error", len(books) >= 3)
+    # Domain blocks are reversible → ship enforce; process kill is destructive
+    # → must ship dry_run so it only simulates until consciously armed.
+    domain_blockers = [b for b in books
+                       if any(a.action == "block_domain" for a in b.actions)]
+    _check("domain-block playbooks present", len(domain_blockers) >= 1)
+    _check("every domain-block ships in ENFORCE",
+           all(b.mode == "enforce" for b in domain_blockers))
+    _check("dga C2 is auto-blocked", "dga" in by_id.get("block-dga-c2").categories
+           if "block-dga-c2" in by_id else False)
+    _check("dns tunnelling is auto-blocked",
+           "tunnel" in by_id.get("block-dns-tunnel").categories
+           if "block-dns-tunnel" in by_id else False)
+    killers = [b for b in books
+               if any(a.action == "kill_process" for a in b.actions)]
+    _check("any process-kill playbook ships DRY_RUN (never auto-kills by default)",
+           all(b.mode == "dry_run" for b in killers))
+    _check("no domain-block targets a bare TLD or wildcard root (would over-block)",
+           all(a.target_from == "entity" for b in domain_blockers for a in b.actions))
 
 
 if __name__ == "__main__":

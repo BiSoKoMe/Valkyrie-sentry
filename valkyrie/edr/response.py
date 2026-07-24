@@ -22,6 +22,7 @@ actions (quarantine file, disable NIC, notify SIEM, …) via the same registry.
 
 from __future__ import annotations
 
+import logging
 import os
 import platform
 import threading
@@ -30,6 +31,8 @@ from typing import Optional
 from ..config import RULES_PATH
 from .plugins import PluginContext, ResponderPlugin
 from .schema import ResponseAction
+
+log = logging.getLogger("valkyrie.response")
 
 _SYSTEM = platform.system()
 
@@ -266,5 +269,10 @@ class ResponseManager:
             try:
                 self._store.record_response(act)
             except Exception:
-                pass
+                # An audit-trail write failing must never crash the response
+                # path, but it must not vanish either — a response that
+                # "succeeded" yet was never recorded is exactly the kind of
+                # gap an EDR cannot afford to have silently.
+                log.exception("failed to record response audit row for action %s (incident %s)",
+                             act.action, act.incident_id)
         return act

@@ -71,7 +71,13 @@ def _run_one(path: Path, timeout: int) -> tuple[bool, float, str]:
     elapsed = time.monotonic() - start
     if proc.returncode == 0:
         return (True, elapsed, "")
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-8:])
+    # Full output, not just a tail: these files print one line per check, so
+    # an 8-line tail routinely cut off the actual failing check whenever a
+    # test earlier in the file printed enough PASS lines to push it out —
+    # which is exactly what happened with test_endpoint_telemetry.py and
+    # test_playbooks.py in CI: "10/11 passed" with no way to tell which
+    # check, or why, because the one line that said so was already gone.
+    tail = (proc.stdout + proc.stderr).strip()
     return (False, elapsed, tail)
 
 

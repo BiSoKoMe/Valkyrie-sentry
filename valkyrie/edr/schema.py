@@ -149,6 +149,7 @@ class Incident:
     entity:       str = ""                  # primary subject (process or domain)
     status:       str = "open"
     process_name: str = ""
+    process_pid:  int = 0                    # live only; not persisted (see store)
     assignee:     str = ""
     notes:        str = ""
     detection_count: int = 0

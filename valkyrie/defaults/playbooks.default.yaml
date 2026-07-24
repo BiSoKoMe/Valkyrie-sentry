@@ -1,0 +1,68 @@
+# Valkyrie — default response playbooks (SOAR)
+# ---------------------------------------------------------------------------
+# Auto-response for HIGH-CONFIDENCE, LOW-RISK incidents, so a confirmed threat
+# is BLOCKED and AUDITED, not merely recorded. Every action is written to the
+# incident timeline with operator "playbook:<id>", and a (playbook, target)
+# pair will not re-fire within cooldown_seconds.
+#
+# Safety model:
+#   * Domain blocks ship in ENFORCE mode — a block is just a reversible DNS
+#     rule (unblock any time from Threats → the domain), so acting
+#     automatically on a confirmed-malicious domain is safe and durable.
+#   * Process termination ships in DRY_RUN — killing a process is destructive
+#     and can hit false positives, so it only SIMULATES ("would terminate …")
+#     until you consciously arm it. Protected system PIDs/names are always
+#     refused even when armed.
+#
+# This file is copied to %ProgramData%\Valkyrie\playbooks.yaml on first launch.
+# Edit that copy to customise; delete it to restore this shipped default.
+# ---------------------------------------------------------------------------
+
+playbooks:
+  # Confirmed algorithmically-generated C2 rendezvous (T1568.002). The DGA
+  # classifier only fires when length, entropy and bigram-implausibility all
+  # agree, so a durable block here is safe.
+  - id: block-dga-c2
+    min_severity: high
+    categories: [dga]
+    mode: enforce
+    actions:
+      - action: block_domain
+        target_from: entity
+
+  # DNS tunnelling / exfiltration (T1048.003) — durably block the specific
+  # generated hostname carrying the tunnel. Blocks the exact host, never the
+  # wildcard provider root, so legitimate use of the same provider is intact.
+  - id: block-dns-tunnel
+    min_severity: high
+    categories: [tunnel]
+    mode: enforce
+    actions:
+      - action: block_domain
+        target_from: entity
+
+  # Known-bad / beaconing infrastructure surfaced by the threat-intel feeds
+  # and the behavioural intelligence layer (T1071.004). High severity only.
+  - id: block-known-bad-domain
+    min_severity: high
+    categories: [intelligence, threat_intel]
+    mode: enforce
+    actions:
+      - action: block_domain
+        target_from: entity
+
+  # Malicious PROCESS activity (injection, credential access, LOLBin abuse)
+  # raised by the endpoint sensors. DRY-RUN by default: you will see the
+  # simulated "would terminate …" action on the incident timeline. Review the
+  # matches you get, then change mode to `enforce` to arm real termination.
+  # (Endpoint execution cannot be *prevented* without a kernel driver, which
+  # Valkyrie does not ship — this is kill-after-detect, the honest ceiling of
+  # a user-mode agent.)
+  - id: kill-malicious-process
+    min_severity: critical
+    categories: [process]
+    mode: dry_run
+    cooldown_seconds: 30
+    actions:
+      - action: kill_process
+        target_from: process_pid

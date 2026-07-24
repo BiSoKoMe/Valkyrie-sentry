@@ -197,7 +197,7 @@ class EdrEngine:
                 inc = Incident(
                     title=det.title, severity=det.severity, category=det.category,
                     entity=det.entity, process_name=det.process_name,
-                    detection_count=1,
+                    process_pid=det.process_pid, detection_count=1,
                 )
                 inc.timeline.append(TimelineEntry(
                     kind="detection", summary=det.title,
@@ -358,6 +358,7 @@ def _inc_wire(inc: Incident) -> dict:
         "category": inc.category,
         "entity": inc.entity,
         "process_name": inc.process_name,
+        "process_pid": inc.process_pid,
         "status": inc.status,
         "detection_count": inc.detection_count,
         "created_at": inc.created_at,
