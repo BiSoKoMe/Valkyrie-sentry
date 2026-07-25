@@ -22,10 +22,14 @@ high-impact tactic like encryption or exfiltration), so every number is
 explainable and testable — there are no learned weights or opaque thresholds.
 
 Honest boundaries:
-  * The actor key is the process NAME. True process-lineage (parent→child
-    across powershell→rundll32→…) needs a consistent PID/parent map at the
-    detection layer, which the user-mode sensors don't yet guarantee; naming
-    is the pragmatic, honest key today and is noted as future work.
+  * Lineage is PID-based when the collector provides it (process_telemetry
+    and Sysmon carry ppid/parent): a child process folds into its parent's
+    chain via the parent→child PID edge. Where a detection has NO attributed
+    PID (e.g. a DNS query the resolver couldn't map to a process), the actor
+    NAME is the identity — precise where PIDs exist, best-effort where they
+    don't. Two detections in different namespaces (one with a PID, one with
+    only a name) will not merge; that residual gap is the honest limit of
+    user-mode attribution.
   * This correlates detections that were ALREADY produced — it raises no new
     primary signal, only escalates confidence when independent detectors
     already agree. It cannot conjure a chain the sensors never saw.
@@ -130,57 +134,75 @@ def score_chain(tactics: set[str]) -> tuple[float, str]:
 
 
 class KillChainCorrelator:
-    """Per-actor sliding window of distinct ATT&CK tactics.
+    """Lineage-aware sliding window of distinct ATT&CK tactics per attack.
 
-    ``observe`` is fed every real detection; it returns a chain summary only
-    when an actor crosses into (or extends) a multi-tactic chain, so the
-    engine raises ONE correlated incident that grows, not a storm of alerts.
+    A "chain" is a connected component of process identities. Detections are
+    linked into the same chain when they share a PID (same process, different
+    tactic) or a parent→child PID edge (``ppid``), so an intrusion that walks
+    ``powershell.exe → rundll32.exe → …`` is scored as ONE attack instead of
+    one-per-process. When PIDs are unavailable (e.g. a DNS detection with no
+    attributed process), the actor NAME is the identity — precise where PIDs
+    exist, best-effort where they don't.
+
+    ``observe`` returns a chain summary only when a chain crosses into (or
+    extends) a multi-tactic state, so the engine raises ONE correlated
+    incident that grows, not a storm of alerts.
     """
 
-    _MAX_ACTORS = 2048
+    _MAX_CHAINS = 2048
 
     def __init__(self, window_seconds: float = 600.0, min_tactics: int = 2) -> None:
         self._window = window_seconds
         self._min = min_tactics
-        # actor → deque[(ts, tactic, technique, title)]
-        self._events: dict[str, collections.deque] = {}
-        # actor → frozenset of tactics last reported (to emit only on growth)
-        self._reported: dict[str, frozenset] = {}
+        # chain id → deque[(ts, tactic, technique, title, actor_name)]
+        self._chains: dict[int, collections.deque] = {}
+        # identity token ("pid:N" | "name:X") → chain id (union-find, flattened)
+        self._token_chain: dict[str, int] = {}
+        # chain id → frozenset of tactics last reported (emit only on growth)
+        self._reported: dict[int, frozenset] = {}
+        self._next_cid = 1
         self._lock = threading.RLock()
 
-    def observe(self, actor: str, technique: str, title: str,
-                ts: float) -> Optional[dict]:
-        """Record one detection for ``actor``; return a chain summary dict if
-        this observation forms or extends a multi-stage chain, else None.
+    def observe(self, actor: str, technique: str, title: str, ts: float,
+                pid: int = 0, ppid: int = 0) -> Optional[dict]:
+        """Record one detection; return a chain summary dict if it forms or
+        extends a multi-stage chain, else None.
 
-        ``ts`` is a caller-supplied monotonic-style timestamp (seconds), so
-        scoring stays clock-free and testable.
+        ``pid``/``ppid`` (when the collector knows them) link a child process
+        to its parent's chain. ``ts`` is a caller-supplied monotonic-style
+        timestamp so scoring stays clock-free and testable.
         """
         tactic = tactic_for(technique)
         if not actor or tactic is None:
             return None                      # unattributable / unmapped → no chain
+        primary = f"pid:{pid}" if pid > 0 else f"name:{actor}"
+        parent = f"pid:{ppid}" if ppid > 0 else None
+        tokens = [primary] + ([parent] if parent else [])
         with self._lock:
-            dq = self._events.get(actor)
-            if dq is None:
-                if len(self._events) >= self._MAX_ACTORS:
-                    self._evict(ts)
-                dq = self._events[actor] = collections.deque()
+            cid = self._chain_for(tokens, ts)
+            for tok in tokens:
+                self._token_chain[tok] = cid
+            dq = self._chains[cid]
             while dq and ts - dq[0][0] > self._window:
                 dq.popleft()
-            dq.append((ts, tactic, extract_technique_id(technique) or technique, title))
-            tactics = {t for _, t, _, _ in dq}
+            dq.append((ts, tactic, extract_technique_id(technique) or technique,
+                       title, actor))
+            tactics = {t for _, t, _, _, _ in dq}
             if len(tactics) < self._min:
                 return None
             frozen = frozenset(tactics)
-            if self._reported.get(actor) == frozen:
+            if self._reported.get(cid) == frozen:
                 return None                  # no NEW tactic since last report → quiet
-            self._reported[actor] = frozen
-            steps = [{"tactic": t, "technique": tech, "title": ttl, "ts": t0}
-                     for (t0, t, tech, ttl) in dq]
+            self._reported[cid] = frozen
+            steps = [{"tactic": t, "technique": tech, "title": ttl, "ts": t0,
+                      "actor": act} for (t0, t, tech, ttl, act) in dq]
+            actors = list(dict.fromkeys(act for *_, act in dq))   # unique, in order
         score, severity = score_chain(tactics)
         ordered = [t for t in TACTIC_LABEL if t in tactics]
         return {
             "actor": actor,
+            "actors": actors,
+            "processes": len(actors),
             "tactics": ordered,
             "techniques": sorted({s["technique"] for s in steps}),
             "distinct_tactics": len(tactics),
@@ -188,14 +210,42 @@ class KillChainCorrelator:
             "severity": severity,
             "reaches_objective": bool(tactics & HIGH_IMPACT_TACTICS),
             "steps": steps,
-            "explanation": self._explain(actor, ordered, score, tactics),
+            "explanation": self._explain(actors, ordered, score, tactics),
         }
 
+    def _chain_for(self, tokens: list[str], now: float) -> int:
+        """Resolve the chain id for these identity tokens, merging existing
+        chains when a parent→child edge joins two of them. Called under lock."""
+        found = sorted({self._token_chain[t] for t in tokens
+                        if t in self._token_chain})
+        if not found:
+            if len(self._chains) >= self._MAX_CHAINS:
+                self._evict(now)
+            cid = self._next_cid
+            self._next_cid += 1
+            self._chains[cid] = collections.deque()
+            return cid
+        keep = found[0]
+        for other in found[1:]:               # merge child+parent chains into one
+            self._chains[keep].extend(self._chains.pop(other, ()))
+            for tok, c in list(self._token_chain.items()):
+                if c == other:
+                    self._token_chain[tok] = keep
+            self._reported.pop(other, None)
+        if len(found) > 1:
+            # merged deque is no longer time-ordered; sort so window eviction
+            # (popleft of oldest) stays correct
+            self._chains[keep] = collections.deque(sorted(self._chains[keep]))
+            self._reported.pop(keep, None)    # force re-evaluation of the union
+        return keep
+
     @staticmethod
-    def _explain(actor: str, ordered: list[str], score: float,
+    def _explain(actors: list[str], ordered: list[str], score: float,
                  tactics: set[str]) -> str:
+        who = " → ".join(actors) if len(actors) > 1 else (actors[0] if actors else "an actor")
         chain = " → ".join(TACTIC_LABEL[t] for t in ordered)
-        base = (f"{len(tactics)} independent ATT&CK tactics on {actor}: {chain}. "
+        span = f"across {len(actors)} linked processes ({who})" if len(actors) > 1 else who
+        base = (f"{len(tactics)} independent ATT&CK tactics {span}: {chain}. "
                 f"Confidence {int(score * 100)}% — it rises with each distinct stage.")
         if tactics & HIGH_IMPACT_TACTICS:
             hit = ", ".join(TACTIC_LABEL[t] for t in ordered if t in HIGH_IMPACT_TACTICS)
@@ -203,14 +253,20 @@ class KillChainCorrelator:
         return base
 
     def _evict(self, now: float) -> None:
-        """Drop actors whose whole window has expired (called under lock)."""
-        stale = [a for a, dq in self._events.items()
+        """Drop chains whose whole window has expired, plus their tokens
+        (called under lock)."""
+        stale = [cid for cid, dq in self._chains.items()
                  if not dq or now - dq[-1][0] > self._window]
-        for a in stale:
-            self._events.pop(a, None)
-            self._reported.pop(a, None)
-        if len(self._events) >= self._MAX_ACTORS:      # still full → oldest-touched
-            oldest = sorted(self._events.items(), key=lambda kv: kv[1][-1][0])
-            for a, _ in oldest[: len(self._events) - self._MAX_ACTORS + 1]:
-                self._events.pop(a, None)
-                self._reported.pop(a, None)
+        for cid in stale:
+            self._drop(cid)
+        if len(self._chains) >= self._MAX_CHAINS:      # still full → oldest-touched
+            oldest = sorted(self._chains.items(), key=lambda kv: kv[1][-1][0])
+            for cid, _ in oldest[: len(self._chains) - self._MAX_CHAINS + 1]:
+                self._drop(cid)
+
+    def _drop(self, cid: int) -> None:
+        self._chains.pop(cid, None)
+        self._reported.pop(cid, None)
+        for tok, c in list(self._token_chain.items()):
+            if c == cid:
+                self._token_chain.pop(tok, None)

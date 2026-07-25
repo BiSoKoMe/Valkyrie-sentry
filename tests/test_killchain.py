@@ -94,6 +94,34 @@ def main() -> int:
     _check("stale first tactic evicted → second alone is no chain",
            kc2.observe("mal.exe", "T1071.004", "c2", 500.0) is None)
 
+    print("\n[2b] Process lineage (parent → child via ppid)")
+    kl = KillChainCorrelator(window_seconds=600, min_tactics=2)
+    # Parent powershell (pid 100) executes; child rundll32 (pid 200, ppid 100)
+    # beacons. Different process NAMES and PIDs, but the ppid edge links them.
+    _check("parent's first tactic alone → no chain",
+           kl.observe("powershell.exe", "T1059.001", "exec", 1000.0, pid=100) is None)
+    cl = kl.observe("rundll32.exe", "T1071.004", "beacon", 1001.0, pid=200, ppid=100)
+    _check("child links to parent's chain via ppid", cl is not None)
+    _check("chain spans 2 linked processes", cl and cl["processes"] == 2)
+    _check("chain lists both process names",
+           cl and set(cl["actors"]) == {"powershell.exe", "rundll32.exe"})
+    _check("explanation names the linked processes",
+           cl and "linked processes" in cl["explanation"])
+    # Grandchild (pid 300, ppid 200) adds persistence → 3 tactics, 3 processes
+    cg = kl.observe("reg.exe", "T1547.001", "run key", 1002.0, pid=300, ppid=200)
+    _check("grandchild extends the same chain", cg is not None and cg["processes"] == 3)
+    _check("three-stage lineage chain scores higher", cg and cg["score"] > cl["score"])
+    # Two unrelated PIDs with NO ppid edge must NOT merge
+    kd = KillChainCorrelator(window_seconds=600, min_tactics=2)
+    kd.observe("a.exe", "T1059.001", "exec", 1.0, pid=5001)
+    _check("unrelated PID (no ppid edge) does not merge",
+           kd.observe("b.exe", "T1071.004", "c2", 2.0, pid=6002) is None)
+    # Same PID across tactics still merges (same process, no ppid needed)
+    ks = KillChainCorrelator(window_seconds=600, min_tactics=2)
+    ks.observe("x.exe", "T1059.001", "exec", 1.0, pid=7003)
+    _check("same PID across tactics merges",
+           ks.observe("x.exe", "T1486", "encrypt", 2.0, pid=7003) is not None)
+
     print("\n[3] Engine end-to-end")
     import tempfile
     from valkyrie.store import Store
@@ -142,6 +170,31 @@ def main() -> int:
             _check(f"'{cat}' has meaning + recommendation",
                    cat in KNOWN_INCIDENT_CATEGORIES and cat in _MEANING and cat in _RECOMMEND)
 
+        engine.stop(); store.stop()
+
+    print("\n[3b] Lineage end-to-end via ingest_telemetry (fields.ppid → chain)")
+    with tempfile.TemporaryDirectory() as td:
+        store = Store(db_path=Path(td) / "kc2.db"); store.start()
+        engine = EdrEngine(store); engine.start()
+        # Parent powershell (pid 100) — execution.
+        engine.ingest_telemetry({
+            "category": "process", "activity": "exec", "action": "flagged",
+            "severity": "high", "labels": ["stealth_flags"], "reason": "stealthy PS",
+            "actor_name": "powershell.exe", "actor_pid": 100, "fields": {}})
+        # Child rundll32 (pid 200, ppid 100) — defense-evasion (injection).
+        engine.ingest_telemetry({
+            "category": "process", "activity": "inject", "action": "flagged",
+            "severity": "high", "labels": ["remote_thread_injection"],
+            "reason": "remote thread", "actor_name": "rundll32.exe",
+            "actor_pid": 200, "fields": {"ppid": 100, "parent_name": "powershell.exe"}})
+        time.sleep(0.2)
+        chains = [i for i in engine.list_incidents() if i["category"] == "attack_chain"]
+        _check("parent→child telemetry raised ONE chain incident", len(chains) == 1)
+        if chains:
+            ch = engine.get_incident(chains[0]["id"])
+            chain_data = ((ch.get("detections") or [{}])[0].get("details") or {}).get("chain", {})
+            _check("chain spans both processes end-to-end",
+                   chain_data.get("processes") == 2)
         engine.stop(); store.stop()
 
     print("\n" + "=" * 50)

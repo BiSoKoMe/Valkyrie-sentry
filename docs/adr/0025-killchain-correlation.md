@@ -68,14 +68,26 @@ confidence when **independent detectors already agree**.
   (single-tactic C2 fan-out; repeated admin PowerShell). Efficacy gate holds
   at recall 100% / FPR 0%.
 
+## Update — PID lineage (same feature, extended)
+
+The first cut keyed chains on the process NAME. That was extended to be
+**lineage-aware**: `process_telemetry` and the Sysmon sensor already capture
+`ppid`/`parent` (they were being dropped at the Detection boundary), so those
+are now plumbed through `ingest_telemetry` into `details` and the correlator
+links a child into its parent's chain via the parent→child PID edge. The
+correlator is a small union-find over identity tokens (`pid:N` preferred,
+`name:X` fallback): detections merge when they share a PID or a ppid edge, so
+`powershell.exe → rundll32.exe → reg.exe` scores as ONE attack across three
+linked processes (validated in `test_killchain.py` [2b]/[3b]).
+
 ## Honest boundaries (what this is NOT)
 
-- **Actor = process name, not true lineage.** A real chain often spans
-  `powershell → rundll32 → …`; correlating across a parent→child process tree
-  needs a consistent PID/parent map at the detection layer that the user-mode
-  sensors don't yet guarantee. Naming is the pragmatic key today; PID-level
-  lineage is future work (and is one of the things a kernel driver would make
-  reliable — see below).
+- **PID lineage where PIDs exist; name where they don't.** A detection with an
+  attributed PID links precisely by PID/ppid. A detection with no PID (e.g. a
+  DNS query the resolver couldn't map to a process) links only by name, and a
+  PID-namespace chain and a name-namespace chain won't merge. That residual
+  gap is the honest limit of *user-mode* attribution — a kernel driver's
+  authoritative process/handle table is what would close it.
 - **Correlation, not clairvoyance.** This raises confidence when independent
   detectors agree; it cannot manufacture a stage the sensors never observed.
   If a technique isn't detected upstream, it isn't in the chain.

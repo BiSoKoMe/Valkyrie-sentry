@@ -166,6 +166,13 @@ class EdrEngine:
         entity = str(d.get("actor_path") or d.get("actor_name") or "")
         title = str(d.get("reason") or
                     f"{d.get('activity','')} {d.get('actor_name','')}".strip())
+        # Process lineage, when the collector captured it (process_telemetry
+        # fields ppid/parent_name/parent_chain; sysmon parent_pid/parent_image).
+        # Carried in details so kill-chain correlation can link a child process
+        # to its parent's chain — no DB-schema change (details is JSON).
+        fields = d.get("fields") or {}
+        ppid = int(fields.get("ppid") or fields.get("parent_pid") or 0)
+        parent_name = str(fields.get("parent_name") or fields.get("parent_image") or "")
         det = Detection(
             source=str(d.get("source", "collector")),
             severity=severity,
@@ -176,7 +183,9 @@ class EdrEngine:
             process_pid=int(d.get("actor_pid", 0) or 0),
             technique=technique,
             details={"labels": labels, "target": d.get("target", {}),
-                     "activity": d.get("activity", "")},
+                     "activity": d.get("activity", ""),
+                     "ppid": ppid, "parent_name": parent_name,
+                     "parent_chain": list(fields.get("parent_chain") or [])},
         )
         # _ingest_detection takes the correlation lock itself — do not wrap.
         self._ingest_detection(det)
@@ -243,20 +252,28 @@ class EdrEngine:
         try:
             chain = self._killchain.observe(
                 actor=det.process_name, technique=det.technique,
-                title=det.title, ts=time.monotonic())
+                title=det.title, ts=time.monotonic(),
+                pid=det.process_pid,
+                ppid=int((det.details or {}).get("ppid") or 0))
         except Exception:
             return
         if not chain:
             return
         actor = chain["actor"]
         n = chain["distinct_tactics"]
+        procs = chain.get("processes", 1)
+        # Correlate the chain incident on the ORIGIN process so a growing
+        # multi-process chain folds into one incident rather than reopening
+        # per child process.
+        origin = (chain.get("actors") or [actor])[0]
+        span = f" across {procs} linked processes" if procs > 1 else ""
         chain_det = Detection(
             source="edr.killchain",
             severity=chain["severity"],
             category="attack_chain",
-            title=f"Multi-stage attack on {actor}: {n} ATT&CK tactics",
-            entity=actor,
-            process_name=actor,
+            title=f"Multi-stage attack on {origin}: {n} ATT&CK tactics{span}",
+            entity=origin,
+            process_name=origin,
             process_pid=det.process_pid,
             technique="; ".join(chain["techniques"]),
             details={"chain": chain, "reason": chain["explanation"],
