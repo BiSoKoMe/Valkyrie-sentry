@@ -1062,6 +1062,12 @@ def main() -> None:
             sensor_manager.register(PowerShellSensor())
             sensor_manager.register(WmiActivitySensor())
             sensor_manager.register(SysmonSensor())   # optional; skipped if absent
+            # Kernel driver bridge — authoritative process lineage + LSASS
+            # credential-theft protection when the signed driver is loaded;
+            # self-disables (available()==False) otherwise, so this is safe to
+            # register unconditionally. See driver/valkyrie_km + ADR 0026.
+            from .kernel_bridge import KernelSensor
+            sensor_manager.register(KernelSensor())
             if sensor_manager.start() > 0:
                 _tick(f"Real-time sensors active ({', '.join(sensor_manager.active_sensors())})", _ts)
             else:

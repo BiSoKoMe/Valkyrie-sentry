@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Minimal WDK (KMDF-less, WDM) driver project for valkyrie_km.
+  Build with Visual Studio + the Windows Driver Kit (WDK) installed, or from a
+  Developer/EWDK command prompt with MSBuild. See driver/README.md for the full
+  build + sign + load procedure. This file is provided so the driver is a real,
+  buildable component — it is NOT built by this repo's CI.
+-->
+<Project DefaultTargets="Build" ToolsVersion="Current"
+         xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{8F2B1C44-0D3E-4A21-9C7B-VALKYRIE0001}</ProjectGuid>
+    <TargetVersion>Windows10</TargetVersion>
+    <DriverType>WDM</DriverType>
+    <Configuration>Release</Configuration>
+    <Platform>x64</Platform>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Driver</ConfigurationType>
+    <DriverType>WDM</DriverType>
+    <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
+    <UseDebugLibraries>false</UseDebugLibraries>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <Optimization>MaxSpeed</Optimization>
+    </ClCompile>
+    <Link>
+      <SubSystem>Native</SubSystem>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="valkyrie_km.c" />
+    <ClInclude Include="valkyrie_shared.h" />
+    <Inf Include="valkyrie_km.inf" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

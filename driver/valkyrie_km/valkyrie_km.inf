@@ -1,0 +1,45 @@
+;
+; valkyrie_km.inf — install information for the Valkyrie kernel driver.
+;
+; This is a legacy/software driver (no hardware); it is installed as a kernel
+; service. Loading it requires the binary to be signed (EV cert + attestation,
+; or test-signing mode for development). See driver/README.md.
+;
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+CatalogFile = valkyrie_km.cat
+DriverVer   =
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 12   ; %windir%\System32\drivers
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+valkyrie_km.sys = 1,,
+
+[DefaultInstall.NTamd64]
+CopyFiles = DriverCopy
+
+[DefaultInstall.NTamd64.Services]
+AddService = ValkyrieKm,,ServiceInstall
+
+[DriverCopy]
+valkyrie_km.sys
+
+[ServiceInstall]
+DisplayName   = %ServiceDesc%
+ServiceType   = 1              ; SERVICE_KERNEL_DRIVER
+StartType     = 3             ; SERVICE_DEMAND_START (start explicitly / on service launch)
+ErrorControl  = 1             ; SERVICE_ERROR_NORMAL
+ServiceBinary = %12%\valkyrie_km.sys
+
+[Strings]
+ProviderName = "Valkyrie"
+DiskName     = "Valkyrie Driver Install Disk"
+ServiceDesc  = "Valkyrie Kernel Telemetry & Protection"

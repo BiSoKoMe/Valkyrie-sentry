@@ -225,10 +225,19 @@ Per project policy, capabilities needing external scale or a signed kernel drive
 are built as the strongest **local** version with clean extension points, and
 labeled — never faked:
 
-- **No kernel driver.** Firewall is userland `netsh`; sensors are userland
-  pollers + ETW event-log readers, not a kernel ETW consumer or minifilter.
-  Deterministic pre-write ransomware blocking, exact-PID attribution, and
-  tamper-proof kernel telemetry require a signed driver — documented seams.
+- **Kernel driver: source component, not a shipped binary.** `driver/valkyrie_km`
+  is a *real, buildable* WDM driver — authoritative process lineage
+  (`PsSetCreateProcessNotifyRoutineEx`), module-load visibility, and LSASS
+  credential-theft protection (`ObRegisterCallbacks` handle-strip) — with a
+  fully-integrated, unit-tested user-mode bridge (`valkyrie/kernel_bridge.py`)
+  that self-disables when the driver isn't loaded. **It is NOT built, signed,
+  loaded, or detonation-tested in this repo** (no WDK/signing/VM here); loading
+  needs an EV cert + attestation (Ob callbacks need the ELAM-class entitlement),
+  and the LSASS protection is *unproven until VM detonation*. See ADR 0026 and
+  `driver/README.md` — status table, build/sign/load, and the validation gate.
+  Firewall remains userland `netsh`; the remaining userland sensors are pollers
+  + ETW event-log readers. Deterministic pre-write ransomware blocking (a
+  minifilter) and network callouts (WFP) are deliberately still out of scope.
 - **No signature-based file AV.** Valkyrie does not ship a malware signature
   engine; the intended path is integrating the OS's AMSI/Defender rather than
   faking an internet-scale signature cloud.
