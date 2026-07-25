@@ -20,6 +20,7 @@ WebSocket.
 from __future__ import annotations
 
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
@@ -27,6 +28,7 @@ from ..eventbus import EventBus
 from .builtin import register_builtin
 from .investigate import Investigator
 from .hunt import ThreatHunter
+from .killchain import KillChainCorrelator
 from .plugins import PluginContext, PluginRegistry
 from .response import ResponseManager, register_responders
 from .schema import Detection, Incident, TimelineEntry, max_severity, severity_rank
@@ -99,6 +101,8 @@ class EdrEngine:
         # Incident fan-out to the web dashboard runs over the shared EventBus.
         self._bus = EventBus("edr")
         self._corr_lock = threading.Lock()   # serialise correlation writes
+        # Multi-stage kill-chain correlator (same window as base correlation).
+        self._killchain = KillChainCorrelator(window_seconds=correlation_window_seconds)
         self._running = False
 
     # ------------------------------------------------------------------
@@ -223,6 +227,42 @@ class EdrEngine:
                 self._edr.save_incident(existing)
                 self._notify({"type": "incident", "incident": _inc_wire(existing),
                               "new": False})
+
+        # Kill-chain correlation runs AFTER the correlation lock is released —
+        # it may re-enter _ingest_detection to raise the chain incident, and
+        # _corr_lock is a plain Lock (re-acquiring would deadlock). A raised
+        # chain detection carries category "attack_chain" and is never fed back
+        # into the correlator, so there is no unbounded recursion.
+        if det.category != "attack_chain":
+            self._correlate_chain(det)
+
+    def _correlate_chain(self, det: Detection) -> None:
+        """Feed a real detection to the kill-chain correlator; if the same
+        actor now spans multiple ATT&CK tactics, raise ONE escalating
+        'attack_chain' incident that grows as new stages appear."""
+        try:
+            chain = self._killchain.observe(
+                actor=det.process_name, technique=det.technique,
+                title=det.title, ts=time.monotonic())
+        except Exception:
+            return
+        if not chain:
+            return
+        actor = chain["actor"]
+        n = chain["distinct_tactics"]
+        chain_det = Detection(
+            source="edr.killchain",
+            severity=chain["severity"],
+            category="attack_chain",
+            title=f"Multi-stage attack on {actor}: {n} ATT&CK tactics",
+            entity=actor,
+            process_name=actor,
+            process_pid=det.process_pid,
+            technique="; ".join(chain["techniques"]),
+            details={"chain": chain, "reason": chain["explanation"],
+                     "confidence": chain["score"]},
+        )
+        self._ingest_detection(chain_det)
 
     # ------------------------------------------------------------------
     # Subscriptions (for the web WebSocket)

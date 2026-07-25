@@ -67,6 +67,20 @@ _MEANING = {
                     "on a threat-intelligence blocklist — a strong command-and-"
                     "control signal that DNS filtering alone cannot see because "
                     "the destination was reached by hard-coded IP.",
+    "tunnel":       "A process streamed many unique, machine-generated subdomains "
+                    "under one base in a short window — the shape of DNS tunnelling "
+                    "used to exfiltrate data or carry C2 over DNS (T1048.003), a "
+                    "pattern no single DNS query reveals.",
+    "dyndns":       "A process resolved a generated-looking hostname on a wildcard "
+                    "IP-echo DNS provider (e.g. nip.io) — a way to hide traffic "
+                    "under a legitimate base domain that ordinary reputation checks "
+                    "can't see (T1568 — Dynamic Resolution).",
+    "attack_chain": "One actor crossed MULTIPLE independent ATT&CK tactics in a "
+                    "short window (e.g. execution → command-and-control → "
+                    "persistence) — the correlated shape of a real intrusion. This "
+                    "incident is more than the sum of its parts: confidence is high "
+                    "precisely because several independent detectors agree on the "
+                    "same process.",
 }
 
 # Category -> which response actions the analyst recommends, in priority order.
@@ -86,6 +100,11 @@ _RECOMMEND = {
     "process":      ["isolate_host", "kill_process"],
     "persistence":  ["kill_process", "isolate_host"],
     "network":      ["isolate_host", "kill_process"],
+    "tunnel":       ["block_domain", "isolate_host"],
+    "dyndns":       ["block_domain"],
+    # A confirmed multi-stage chain is the strongest reason to contain the
+    # host outright, then stop the offending process.
+    "attack_chain": ["isolate_host", "kill_process", "block_domain"],
 }
 
 # The canonical set of categories an incident can carry — the single source of
@@ -97,6 +116,7 @@ _RECOMMEND = {
 KNOWN_INCIDENT_CATEGORIES = frozenset({
     "firewall_ip", "intelligence", "behavioral", "dga", "doh_bypass",
     "anomaly", "tracker", "process", "persistence", "network",
+    "tunnel", "dyndns", "attack_chain",
 })
 
 

@@ -40,6 +40,7 @@ _TECHNIQUE = {
     "dga":          "T1568.002 — Domain Generation Algorithm",
     "tunnel":       "T1048.003 — Exfiltration Over Alternative Protocol (DNS tunnelling)",
     "dyndns":       "T1568 — Dynamic Resolution (wildcard DNS)",
+    "attack_chain": "Multi-stage attack (correlated ATT&CK tactics)",
     "anomaly":      "T1071.004 — Anomalous DNS",
     "doh_bypass":   "T1572 — Protocol Tunnelling (DoH bypass)",
     "tracker":      "T1041 — Exfiltration / tracking",

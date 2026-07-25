@@ -112,6 +112,26 @@ MALICIOUS: list[Case] = [
                              "bW9yZWRhdGFoZXJl", "ZmluYWxjaHVua3oz", "dGhlbGFzdG9uZTQ0")),
          "base64 DNS tunnel (dnscat-style)"),
 
+    # ── Multi-stage kill-chain correlation (edr/killchain.py) ───────────────
+    # inp = (actor, [(technique, title), ...]) — a sequence on ONE process.
+    # These pin the correlation win: the base same-category correlator would
+    # leave these as scattered single-tactic incidents; the chain correlator
+    # escalates them to one multi-stage attack. Tactic = the chain's endpoint.
+    Case("chain-full-intrusion", "killchain", True, "T1071.004", "command-and-control",
+         ("powershell.exe", [
+             ("T1059.001", "encoded PowerShell"),      # execution
+             ("T1105", "download cradle"),             # C2 (ingress tool transfer)
+             ("T1071.004", "DNS beacon"),              # C2
+             ("T1547.001", "registry Run key"),        # persistence
+             ("T1003.001", "LSASS access")]),          # credential-access
+         "execution → C2 → persistence → cred-access on one process"),
+    Case("chain-ransomware-run", "killchain", True, "T1486", "impact",
+         ("wscript.exe", [
+             ("T1059", "script exec"),                 # execution
+             ("T1562.001", "disable defenses"),        # defense-evasion
+             ("T1486", "mass file encryption")]),      # impact
+         "execution → defense-evasion → impact (ransomware chain)"),
+
     # ── ETW Sysmon sensor classification (etw/sysmon.classify_sysmon) ───────
     # Each case is (Sysmon EventID, EventData dict) — the same shape the real
     # sensor parses from Microsoft-Windows-Sysmon/Operational XML.
@@ -248,6 +268,16 @@ BENIGN: list[Case] = [
     Case("b-tunnel-nipio-dev", "tunnel", False,
          inp=("myapp.127.0.0.1.nip.io", "myapp.127.0.0.1.nip.io"),
          note="legit local dev over nip.io — flagged at most, never blocked"),
+
+    # Kill-chain FALSE-POSITIVE controls — must NOT raise a multi-stage chain.
+    Case("b-chain-single-tactic", "killchain", False,
+         inp=("chrome.exe", [
+             ("T1071", "https"), ("T1071.004", "dns"), ("T1105", "update download")]),
+         note="one actor, all Command-and-Control — a single tactic is not a chain"),
+    Case("b-chain-admin-ps", "killchain", False,
+         inp=("powershell.exe", [
+             ("T1059.001", "admin script"), ("T1059", "another cmd")]),
+         note="ordinary admin PowerShell — repeated Execution only, no second tactic"),
 
     # Sysmon benign controls — ordinary endpoint activity must not fire.
     Case("b-sysmon-signed-proc", "sysmon", False, inp=(

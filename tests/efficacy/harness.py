@@ -118,6 +118,20 @@ def _fires(case: Case, ctx: dict) -> bool:
         return any(scanner.analyze(dm, "powershell.exe").decision == "block"
                    for dm in case.inp)
 
+    if d == "killchain":
+        # inp = (actor, [(technique, title), ...]) — a sequence of detections
+        # on ONE actor. "Fires" = the correlator raised a multi-stage chain,
+        # which is exactly the escalation the base same-category correlator
+        # could not produce. Deterministic ts, fresh correlator per case.
+        from valkyrie.edr.killchain import KillChainCorrelator
+        kc = KillChainCorrelator()
+        actor, steps = case.inp
+        fired = False
+        for i, (tech, title) in enumerate(steps):
+            if kc.observe(actor, tech, title, ts=1000.0 + i) is not None:
+                fired = True
+        return fired
+
     raise ValueError(f"unknown detector: {case.detector}")
 
 
