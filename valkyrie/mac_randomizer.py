@@ -1,8 +1,29 @@
-"""MAC address randomizer.
+"""MAC address randomizer — privacy-grade address randomisation.
 
-Generates realistic-looking random MAC addresses using known OUI prefixes,
-applies them via OS-specific commands, and monitors for network reconnect
-events to trigger auto-randomisation.
+Generates unlinkable MAC addresses and applies them via OS-specific commands,
+monitoring for network reconnect events to trigger auto-randomisation.
+
+Two things make this privacy-grade rather than a toy:
+
+  * **CSPRNG, not a PRNG.** Every random byte comes from ``secrets`` (the OS
+    cryptographic RNG), never ``random`` (a Mersenne Twister whose output
+    stream is reconstructable from a few samples). For an *unlinkability*
+    primitive a predictable generator is a real weakness, so it is not used.
+
+  * **Per-network stable addresses** (the iOS "Private Wi-Fi Address" /
+    Android persistent-randomised-MAC model). The address for a given network
+    is derived deterministically from a per-install secret key + a stable
+    network id via HMAC-SHA256: the SAME every time you rejoin that network
+    (captive portals, DHCP leases and NAC keep working, and you don't stand out
+    by changing address every reconnect) but UNLINKABLE across networks and
+    unpredictable to anyone without the key. Falls back to a fresh CSPRNG random
+    address when the network can't be identified.
+
+Address style is spec-compliant locally-administered by default (LA bit set,
+matching iOS/Android); an opt-in vendor-blend mode hides behind a real vendor
+OUI. The old behaviour — a real vendor OUI *with* the LA bit set — is a
+combination real hardware never has and is therefore itself a fingerprint; it
+is not produced any more.
 
 Platform support:
   Linux   — ip link set {iface} address {mac}
@@ -12,11 +33,13 @@ Platform support:
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import platform
-import random
 import re
+import secrets
 import subprocess
 import threading
 import time
@@ -26,33 +49,99 @@ from typing import Optional
 from .config import (
     MAC_AUTO_RANDOMIZE,
     MAC_BACKUP_PATH,
+    MAC_KEY_PATH,
     MAC_NEVER_RANDOMIZE,
+    MAC_PER_NETWORK,
+    MAC_VENDOR_BLEND,
     REALISTIC_OUIS,
 )
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Pure address construction (CSPRNG / HMAC) — unit-tested without any hardware
 # ---------------------------------------------------------------------------
 
 _MAC_RE = re.compile(r'^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$')
+_IPV4_RE = re.compile(r'^\d{1,3}(?:\.\d{1,3}){3}$')
 
 
 def _is_valid_mac(mac: str) -> bool:
     return bool(_MAC_RE.match(mac))
 
 
+def _RE_IPV4(s: str) -> bool:
+    return bool(_IPV4_RE.match(s.strip()))
+
+
+def is_unicast(mac: str) -> bool:
+    """True if the address is unicast (bit 0 of the first octet is clear).
+    A multicast source address is invalid on the wire — every address we emit
+    must be unicast."""
+    return (int(mac.split(":")[0], 16) & 0x01) == 0
+
+
+def is_locally_administered(mac: str) -> bool:
+    """True if the locally-administered bit (bit 1 of the first octet) is set."""
+    return (int(mac.split(":")[0], 16) & 0x02) == 0x02
+
+
+def _mac_from_bytes(b: bytes, vendor_oui: Optional[str]) -> str:
+    """Assemble a valid unicast MAC string from 6+ bytes.
+
+    vendor_oui set  → blend behind that real vendor prefix, universally
+                      administered (LA bit CLEAR), just the multicast bit forced
+                      clear so it is a legal unicast source address.
+    vendor_oui None → spec-compliant locally-administered random (LA bit SET,
+                      multicast bit clear) — the iOS/Android style.
+    """
+    if vendor_oui:
+        oui_parts = [int(x, 16) for x in vendor_oui.split(":")]
+        first = oui_parts[0] & 0xFE            # unicast; keep vendor's U/L bit
+        octets = [first, oui_parts[1], oui_parts[2], b[0], b[1], b[2]]
+    else:
+        first = (b[0] | 0x02) & 0xFE           # LA set, multicast clear
+        octets = [first, b[1], b[2], b[3], b[4], b[5]]
+    return ":".join(f"{o:02X}" for o in octets)
+
+
+def generate_mac(vendor_blend: bool = False) -> str:
+    """A fresh random MAC drawn from the OS CSPRNG (``secrets``).
+
+    Default is a spec-compliant locally-administered address; ``vendor_blend``
+    hides behind a randomly-chosen realistic vendor OUI instead.
+    """
+    rnd = secrets.token_bytes(6)
+    oui = secrets.choice(REALISTIC_OUIS) if vendor_blend else None
+    return _mac_from_bytes(rnd, oui)
+
+
+def mac_for_network(install_key: bytes, network_id: str,
+                    vendor_blend: bool = False) -> str:
+    """Deterministic per-network MAC — stable for a network, unlinkable across
+    networks, unpredictable without ``install_key``.
+
+    HMAC-SHA256(install_key, network_id) yields the address bytes, so the same
+    (key, network) always maps to the same address (the iOS/Android private-
+    address model) while different networks map to independent addresses no
+    observer can correlate or precompute without the secret key.
+    """
+    digest = hmac.new(install_key, network_id.encode("utf-8", "replace"),
+                      hashlib.sha256).digest()
+    if vendor_blend:
+        # Choose the vendor OUI deterministically from the digest too, so the
+        # whole address is a stable function of (key, network).
+        oui = REALISTIC_OUIS[digest[6] % len(REALISTIC_OUIS)]
+        return _mac_from_bytes(digest[:6], oui)
+    return _mac_from_bytes(digest[:6], None)
+
+
 def _generate_mac() -> str:
-    """Generate a locally-administered MAC from a realistic OUI."""
-    oui    = random.choice(REALISTIC_OUIS)
-    suffix = ":".join(f"{random.randint(0, 255):02X}" for _ in range(3))
-    mac    = f"{oui}:{suffix}"
-    # Set locally administered bit (bit 1 of first byte)
-    parts        = mac.split(":")
-    first        = int(parts[0], 16)
-    first        = (first | 0x02) & 0xFE   # set LA bit, clear multicast bit
-    parts[0]     = f"{first:02X}"
-    return ":".join(parts)
+    """Backward-compatible fresh-random generator (honours config style).
+
+    Retained so existing callers keep working; new code should call
+    ``generate_mac`` / ``mac_for_network`` directly.
+    """
+    return generate_mac(vendor_blend=MAC_VENDOR_BLEND)
 
 
 def _platform() -> str:
@@ -83,6 +172,7 @@ class MacRandomizer:
         self._lock        = threading.Lock()
         self.last_error   = ""
         self._backup: dict[str, str] = self._load_backup()
+        self._key         = self._load_or_create_key()
         self._monitor_thread: Optional[threading.Thread] = None
         self._monitor_stop  = threading.Event()
         self._last_stats: dict[str, bool] = {}   # iface → was_up
@@ -109,14 +199,28 @@ class MacRandomizer:
         ifaces = self._resolve_interfaces(interface)
         last   = ""
         for iface in ifaces:
-            new_mac = _generate_mac()
+            new_mac, mode = self._next_mac(iface)
             ok      = self._apply_mac(iface, new_mac)
             if ok:
                 last = new_mac
-                self._log(f"MAC randomised: {iface} → {new_mac}")
+                self._log(f"MAC randomised ({mode}): {iface} → {new_mac}")
         if not last and ifaces and not self.last_error:
             self.last_error = "No interface could be changed (adapter not found or write failed)."
         return last
+
+    def _next_mac(self, iface: str) -> tuple[str, str]:
+        """Pick the address for *iface*: a per-network stable one when enabled
+        and the network is identifiable, otherwise a fresh CSPRNG-random one.
+
+        Returns (mac, mode) where mode is "per-network" or "random" for logging.
+        """
+        if MAC_PER_NETWORK:
+            net_id = self.current_network_id(iface)
+            if net_id:
+                return (mac_for_network(self._key, f"{iface}\x1f{net_id}",
+                                        vendor_blend=MAC_VENDOR_BLEND),
+                        "per-network")
+        return (generate_mac(vendor_blend=MAC_VENDOR_BLEND), "random")
 
     def restore(self, interface: Optional[str] = None) -> str:
         """Restore the original MAC for *interface* from backup.
@@ -437,6 +541,128 @@ class MacRandomizer:
             except Exception:
                 pass
             self._monitor_stop.wait(5)
+
+    def _load_or_create_key(self) -> bytes:
+        """Load the per-install HMAC key, creating it once on first use.
+
+        The key is what makes per-network addresses both stable and
+        unpredictable, so it is generated from the OS CSPRNG and stored with
+        owner-only permissions where the platform supports it. If it cannot be
+        persisted (read-only volume, permission error) we still return a live
+        key so randomisation works this session — only cross-session stability
+        is lost, never security.
+        """
+        try:
+            if MAC_KEY_PATH.exists():
+                data = MAC_KEY_PATH.read_bytes()
+                if len(data) >= 32:
+                    return data
+        except Exception:
+            pass
+        key = secrets.token_bytes(32)
+        try:
+            MAC_KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
+            MAC_KEY_PATH.write_bytes(key)
+            if os.name == "posix":
+                try:
+                    os.chmod(MAC_KEY_PATH, 0o600)
+                except OSError:
+                    pass
+        except Exception:
+            pass
+        return key
+
+    def current_network_id(self, iface: str) -> str:
+        """Best-effort stable identifier for the network *iface* is joined to.
+
+        Prefers the Wi-Fi SSID (stable across reconnects to the same network);
+        falls back to the default-gateway MAC (stable per LAN). Returns "" when
+        the network can't be identified — the caller then uses a fresh random
+        address instead of a per-network one, so an unknown network never
+        produces a predictable address.
+        """
+        try:
+            ssid = self._wifi_ssid(iface)
+            if ssid:
+                return f"ssid:{ssid}"
+            gw = self._gateway_id()
+            if gw:
+                return f"gw:{gw}"
+        except Exception:
+            pass
+        return ""
+
+    def _wifi_ssid(self, iface: str) -> str:
+        sys = _platform()
+        try:
+            if sys == "windows":
+                out = subprocess.run(["netsh", "wlan", "show", "interfaces"],
+                                     capture_output=True, text=True, timeout=8).stdout
+                # Parse the block for this interface; SSID line (not BSSID).
+                cur_iface, ssid = "", ""
+                for line in out.splitlines():
+                    s = line.strip()
+                    low = s.lower()
+                    if low.startswith("name") and ":" in s:
+                        cur_iface = s.split(":", 1)[1].strip()
+                    elif low.startswith("ssid") and not low.startswith("bssid") and ":" in s:
+                        val = s.split(":", 1)[1].strip()
+                        if not iface or cur_iface.lower() == iface.lower():
+                            ssid = val
+                            if cur_iface.lower() == iface.lower():
+                                break
+                return ssid
+            if sys == "linux":
+                out = subprocess.run(["iwgetid", iface, "-r"],
+                                     capture_output=True, text=True, timeout=8).stdout.strip()
+                return out
+            if sys == "darwin":
+                out = subprocess.run(
+                    ["/System/Library/PrivateFrameworks/Apple80211.framework/"
+                     "Versions/Current/Resources/airport", "-I"],
+                    capture_output=True, text=True, timeout=8).stdout
+                for line in out.splitlines():
+                    if " SSID:" in line:
+                        return line.split(":", 1)[1].strip()
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+        return ""
+
+    def _gateway_id(self) -> str:
+        """Default-gateway MAC as a per-LAN identifier (best effort)."""
+        sys = _platform()
+        try:
+            if sys == "windows":
+                # Default gateway IP → its ARP entry (MAC).
+                route = subprocess.run(["ipconfig"], capture_output=True,
+                                       text=True, timeout=8).stdout
+                gw_ip = ""
+                for line in route.splitlines():
+                    if "Default Gateway" in line and ":" in line:
+                        cand = line.split(":", 1)[1].strip()
+                        if _RE_IPV4(cand):
+                            gw_ip = cand
+                if not gw_ip:
+                    return ""
+                arp = subprocess.run(["arp", "-a", gw_ip], capture_output=True,
+                                     text=True, timeout=8).stdout
+                m = re.search(r"([0-9A-Fa-f]{2}[-:]){5}[0-9A-Fa-f]{2}", arp)
+                return m.group(0).replace("-", ":").upper() if m else ""
+            if sys in ("linux", "darwin"):
+                route = subprocess.run(["ip", "route"] if sys == "linux"
+                                       else ["route", "-n", "get", "default"],
+                                       capture_output=True, text=True, timeout=8).stdout
+                m = re.search(r"(?:via|gateway:)\s+(\d{1,3}(?:\.\d{1,3}){3})", route)
+                if not m:
+                    return ""
+                gw_ip = m.group(1)
+                arp = subprocess.run(["arp", "-n", gw_ip], capture_output=True,
+                                     text=True, timeout=8).stdout
+                mm = re.search(r"([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", arp)
+                return mm.group(0).upper() if mm else ""
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+        return ""
 
     def _load_backup(self) -> dict[str, str]:
         try:

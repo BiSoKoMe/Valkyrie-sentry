@@ -159,7 +159,16 @@ DGAs need an internet-scale model — not faked.*
 
 - **Windows telemetry killer** (`telemetry_killer.py`) — reversible registry +
   service edits that cut OS-level tracking at the source.
-- **MAC randomization** (`mac_randomizer.py`) — randomizes adapter MAC identity.
+- **MAC randomization** (`mac_randomizer.py`, ADR 0029) — privacy-grade adapter
+  identity randomisation. Addresses are drawn from the OS **CSPRNG** (`secrets`,
+  never a reconstructable PRNG) and default to **per-network stable** derivation
+  (HMAC of a per-install secret key + a stable network id — the iOS "Private
+  Wi-Fi Address" / Android persistent-randomised-MAC model): the same address
+  each time you rejoin a network (captive portals / DHCP / NAC keep working) but
+  unlinkable across networks. Spec-compliant locally-administered by default,
+  with an opt-in real-vendor-OUI blend; the old vendor-OUI-with-LA-bit
+  combination (itself a fingerprint) is no longer produced. Applies with live
+  read-back verification — a write that doesn't take is reported, not assumed.
 - **Zero-log mode** (`zero_log.py`) — RAM-only operation with log-integrity
   verification for privacy-critical sessions.
 - **Meeting Mode** (`meeting_mode.py`) — one-command network kill switch for

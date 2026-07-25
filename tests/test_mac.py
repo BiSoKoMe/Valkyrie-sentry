@@ -10,7 +10,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from valkyrie.mac_randomizer import _generate_mac, _is_valid_mac, MacRandomizer
+from valkyrie.mac_randomizer import (
+    _generate_mac, _is_valid_mac, MacRandomizer,
+    generate_mac, mac_for_network, is_unicast, is_locally_administered,
+)
 from valkyrie.config import REALISTIC_OUIS, MAC_NEVER_RANDOMIZE
 
 PASS = 0
@@ -38,41 +41,75 @@ for _ in range(20):
 else:
     check("20 generated MACs all pass format check (XX:XX:XX:XX:XX:XX)", True)
 
-# ── Test 2: OUI from known list ───────────────────────────────────────────────
-print("\n-- OUI source ----------------------------------------")
+# ── Test 2: Default style is spec-compliant locally-administered ──────────────
+# The default (no vendor blend) must be a proper LA random address: LA bit SET,
+# multicast bit CLEAR, on the FIRST octet — the iOS/Android style. It must NOT
+# carry a real vendor OUI (a vendor OUI + LA bit is a combination real hardware
+# never has, so it would itself be a fingerprint).
+print("\n-- Default style: locally-administered random --------")
 oui_set = set(o.upper() for o in REALISTIC_OUIS)
-oui_errors = []
-for _ in range(50):
-    mac = _generate_mac()
-    oui = ":".join(mac.split(":")[:3]).upper()
-    # The OUI first byte may differ due to LA-bit manipulation; check original OUI list
-    # Re-derive: the first byte is modified, so check only bytes 1-2 match any known OUI bytes 1-2
-    found = False
-    mac_parts = mac.upper().split(":")
-    for known_oui in oui_set:
-        known_parts = known_oui.split(":")
-        if mac_parts[1] == known_parts[1] and mac_parts[2] == known_parts[2]:
-            found = True
-            break
-    if not found:
-        oui_errors.append(mac)
-
-check(f"50 MACs have OUI bytes 1-2 matching known vendors", len(oui_errors) == 0,
-      f"mismatches: {oui_errors[:3]}")
-
-# ── Test 3: Locally administered bit ─────────────────────────────────────────
-print("\n-- Locally administered bit --------------------------")
+oui_prefixes = set((o.split(":")[1], o.split(":")[2]) for o in oui_set)
 la_errors = []
+vendor_leak = 0
 for _ in range(50):
-    mac  = _generate_mac()
-    byte = int(mac.split(":")[0], 16)
-    la   = (byte >> 1) & 1         # bit 1 = locally administered
-    mc   = byte & 1                # bit 0 = multicast
-    if la != 1 or mc != 0:
-        la_errors.append((mac, f"byte0=0x{byte:02X} la={la} mc={mc}"))
+    mac  = generate_mac()          # default: vendor_blend=False
+    if not (is_locally_administered(mac) and is_unicast(mac)):
+        la_errors.append(mac)
+    p = mac.upper().split(":")
+    if (p[1], p[2]) in oui_prefixes:
+        vendor_leak += 1           # coincidental collisions possible but rare
+check("50 default MACs are locally-administered + unicast",
+      len(la_errors) == 0, str(la_errors[:2]))
+check("default MACs do not systematically wear a real vendor OUI",
+      vendor_leak <= 2, f"vendor-looking: {vendor_leak}/50")
 
-check("50 MACs have locally administered bit set, multicast bit clear",
-      len(la_errors) == 0, str(la_errors[:2]) if la_errors else "")
+# ── Test 3: Vendor-blend mode — real OUI, LA bit CLEAR ────────────────────────
+print("\n-- Vendor-blend style: real OUI, universally-admin ---")
+blend_bad = []
+for _ in range(50):
+    mac = generate_mac(vendor_blend=True)
+    p = mac.upper().split(":")
+    oui_match = (p[1], p[2]) in oui_prefixes
+    # Blend mode impersonates a real vendor → LA bit must be CLEAR (UAA),
+    # multicast clear (unicast).
+    if not (oui_match and (not is_locally_administered(mac)) and is_unicast(mac)):
+        blend_bad.append(mac)
+check("50 vendor-blend MACs use a real OUI with LA bit clear + unicast",
+      len(blend_bad) == 0, str(blend_bad[:2]))
+
+# ── Test 2b: CSPRNG — no repeats, high entropy across many draws ──────────────
+print("\n-- CSPRNG uniqueness ---------------------------------")
+draws = [generate_mac() for _ in range(2000)]
+check("2000 CSPRNG MACs are (essentially) all unique",
+      len(set(draws)) >= 1999, f"unique={len(set(draws))}/2000")
+check("all generated MACs pass strict format validation",
+      all(_is_valid_mac(m) for m in draws))
+
+# ── Test 2c: Per-network derivation — stable, unlinkable, key-dependent ───────
+print("\n-- Per-network stable address (iOS/Android model) ----")
+key_a = b"\x11" * 32
+key_b = b"\x22" * 32
+mac_home_1 = mac_for_network(key_a, "ssid:HomeWiFi")
+mac_home_2 = mac_for_network(key_a, "ssid:HomeWiFi")
+mac_cafe   = mac_for_network(key_a, "ssid:CoffeeShop")
+mac_home_kb = mac_for_network(key_b, "ssid:HomeWiFi")
+check("same key + same network → identical address (stable)",
+      mac_home_1 == mac_home_2, f"{mac_home_1} vs {mac_home_2}")
+check("same key + different network → different address (unlinkable)",
+      mac_home_1 != mac_cafe, f"{mac_home_1} == {mac_cafe}")
+check("different key + same network → different address (needs the secret)",
+      mac_home_1 != mac_home_kb, f"{mac_home_1} == {mac_home_kb}")
+check("derived address is valid + locally-administered + unicast",
+      _is_valid_mac(mac_home_1) and is_locally_administered(mac_home_1)
+      and is_unicast(mac_home_1), mac_home_1)
+# Derivation must not be a trivial function of the network id an observer sees.
+check("derived address is not a visible slice of the network id",
+      "484f6d65" not in mac_home_1.replace(":", "").lower())
+
+# ── Test 2d: Backward-compat _generate_mac still returns a valid address ──────
+print("\n-- Backward-compat _generate_mac ---------------------")
+check("_generate_mac() still yields a valid unicast MAC",
+      _is_valid_mac(_generate_mac()) and is_unicast(_generate_mac()))
 
 # ── Test 4: Backup/restore roundtrip ─────────────────────────────────────────
 print("\n-- Backup / restore ----------------------------------")

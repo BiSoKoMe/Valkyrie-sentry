@@ -523,6 +523,27 @@ MAC_NEVER_RANDOMIZE: frozenset[str] = frozenset({
     "lo", "localhost", "docker0", "vmnet0",
 })
 
+# Per-install secret key (32 CSPRNG bytes) used to derive per-network MAC
+# addresses via HMAC. Created on first use with restrictive permissions; it is
+# what makes per-network addresses stable-yet-unpredictable — see mac_randomizer.
+MAC_KEY_PATH: Path = DATA_DIR / "mac_key.bin"
+
+# Per-network stable randomisation (the iOS "Private Wi-Fi Address" / Android
+# persistent-randomised-MAC model): the address for a given network is derived
+# deterministically from the install key + a stable network id, so it is the
+# SAME every time you rejoin that network (captive portals, DHCP leases and NAC
+# keep working) but UNLINKABLE across networks. Falls back to a fresh CSPRNG
+# random address when the network can't be identified. Top-tier default.
+MAC_PER_NETWORK: bool = True
+
+# Address style. Default False = spec-compliant locally-administered random
+# (LA bit set, matching iOS/Android — honest, standards-clean randomisation).
+# True = blend in behind a real vendor OUI with the LA bit CLEAR (stealthier,
+# but impersonates a vendor's universally-administered space); opt-in because a
+# vendor OUI with the LA bit set — the old behaviour — is a combination real
+# hardware never has, and thus itself a fingerprint.
+MAC_VENDOR_BLEND: bool = False
+
 # ---------------------------------------------------------------------------
 # Multi-hop VPN
 # ---------------------------------------------------------------------------
