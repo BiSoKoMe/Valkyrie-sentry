@@ -158,11 +158,15 @@ class EdrEngine:
             return None
 
         labels = list(d.get("labels") or [])
-        technique = ""
-        for lab in labels:
-            if lab in _TELEMETRY_TECHNIQUE:
-                technique = _TELEMETRY_TECHNIQUE[lab]
-                break
+        # A behavioral rule (behavioral_rules.py) carries its exact ATT&CK id on
+        # the event; prefer it over inferring one from a label. Falls back to the
+        # label→technique map for events from other collectors.
+        technique = str((d.get("fields") or {}).get("technique") or "")
+        if not technique:
+            for lab in labels:
+                if lab in _TELEMETRY_TECHNIQUE:
+                    technique = _TELEMETRY_TECHNIQUE[lab]
+                    break
         entity = str(d.get("actor_path") or d.get("actor_name") or "")
         title = str(d.get("reason") or
                     f"{d.get('activity','')} {d.get('actor_name','')}".strip())

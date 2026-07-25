@@ -28,6 +28,7 @@ import time
 from dataclasses import dataclass, replace
 from typing import Callable, Optional
 
+from .behavioral_rules import classify_behavior
 from .telemetry import (
     ACT_FLAGGED, ACT_OBSERVED, CAT_PROCESS,
     SEV_HIGH, SEV_INFO, SEV_LOW, SEV_MEDIUM, severity_rank, TelemetryEvent,
@@ -186,6 +187,23 @@ class ProcInfo:
             severity = csev
         labels = labels + clabels
         reason = "; ".join(r for r in (reason, creason) if r)
+
+        # Behavioral IOA rule engine — the broad, MITRE-mapped content layer.
+        # Its top hit's technique is carried explicitly so the EDR attaches the
+        # exact ATT&CK id (and the kill-chain gets the exact tactic) rather than
+        # inferring one from labels.
+        technique = ""
+        behavior = classify_behavior(self.name, self.parent_name,
+                                     self.cmdline, self.path)
+        if behavior is not None:
+            if severity_rank(behavior["severity"]) > severity_rank(severity):
+                severity = behavior["severity"]
+            for lab in behavior["labels"]:
+                if lab not in labels:
+                    labels.append(lab)
+            reason = "; ".join(r for r in (reason, behavior["reason"]) if r)
+            technique = behavior["technique"]
+
         action = ACT_FLAGGED if severity_rank(severity) >= severity_rank(SEV_MEDIUM) \
             else ACT_OBSERVED
         return TelemetryEvent(
@@ -196,7 +214,7 @@ class ProcInfo:
             severity=severity, reason=reason, source="process_collector",
             labels=labels,
             fields={"ppid": self.ppid, "parent_name": self.parent_name,
-                    "cmdline": self.cmdline,
+                    "cmdline": self.cmdline, "technique": technique,
                     "parent_chain": list(self.parent_chain)},
         )
 

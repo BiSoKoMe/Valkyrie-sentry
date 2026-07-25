@@ -64,14 +64,33 @@ TECHNIQUE_TACTIC: dict[str, str] = {
     "T1547":     "persistence",          # Boot/Logon Autostart
     "T1547.001": "persistence",          # Registry Run Keys / Startup
     "T1574":     "persistence",          # Hijack Execution Flow
+    "T1136":     "persistence",          # Create Account
+    "T1136.001": "persistence",          # Create Local Account
+    "T1490":     "impact",               # Inhibit System Recovery
     "T1055":     "defense-evasion",      # Process Injection
     "T1055.012": "defense-evasion",      # Process Hollowing
     "T1027":     "defense-evasion",      # Obfuscated Files or Information
     "T1140":     "defense-evasion",      # Deobfuscate/Decode
+    "T1562":     "defense-evasion",      # Impair Defenses
     "T1562.001": "defense-evasion",      # Impair Defenses: Disable Tools
+    "T1562.004": "defense-evasion",      # Impair Defenses: Disable/Modify Firewall
     "T1564":     "defense-evasion",      # Hide Artifacts
+    "T1070":     "defense-evasion",      # Indicator Removal
+    "T1070.001": "defense-evasion",      # Clear Windows Event Logs
+    "T1218":     "defense-evasion",      # System Binary Proxy Execution
+    "T1218.005": "defense-evasion",      # Mshta
+    "T1218.010": "defense-evasion",      # Regsvr32
+    "T1218.011": "defense-evasion",      # Rundll32
+    "T1197":     "defense-evasion",      # BITS Jobs
     "T1003":     "credential-access",    # OS Credential Dumping
     "T1003.001": "credential-access",    # LSASS Memory
+    "T1003.002": "credential-access",    # Security Account Manager
+    "T1003.003": "credential-access",    # NTDS
+    "T1555":     "credential-access",    # Credentials from Password Stores
+    "T1033":     "discovery",            # System Owner/User Discovery
+    "T1482":     "discovery",            # Domain Trust Discovery
+    "T1021":     "lateral-movement",     # Remote Services
+    "T1021.002": "lateral-movement",     # SMB/Windows Admin Shares
     "T1105":     "command-and-control",  # Ingress Tool Transfer
     "T1071":     "command-and-control",  # Application Layer Protocol
     "T1071.004": "command-and-control",  # DNS

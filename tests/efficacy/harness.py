@@ -118,6 +118,13 @@ def _fires(case: Case, ctx: dict) -> bool:
         return any(scanner.analyze(dm, "powershell.exe").decision == "block"
                    for dm in case.inp)
 
+    if d == "behavior":
+        # inp = (image, parent, cmdline, path). "Fires" = a behavioral IOA rule
+        # matched. Pure content check against the real rule engine.
+        from valkyrie.behavioral_rules import match_process
+        image, parent, cmd, path = case.inp
+        return len(match_process(image, parent, cmd, path)) > 0
+
     if d == "killchain":
         # inp = (actor, [(technique, title), ...]) — a sequence of detections
         # on ONE actor. "Fires" = the correlator raised a multi-stage chain,

