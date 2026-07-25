@@ -29,6 +29,7 @@ from dataclasses import dataclass, replace
 from typing import Callable, Optional
 
 from .behavioral_rules import classify_behavior
+from .behavior_score import classify_anomaly
 from .telemetry import (
     ACT_FLAGGED, ACT_OBSERVED, CAT_PROCESS,
     SEV_HIGH, SEV_INFO, SEV_LOW, SEV_MEDIUM, severity_rank, TelemetryEvent,
@@ -203,6 +204,23 @@ class ProcInfo:
                     labels.append(lab)
             reason = "; ".join(r for r in (reason, behavior["reason"]) if r)
             technique = behavior["technique"]
+
+        # Behavioral anomaly scorer — the *generalizing* layer. Where the rule
+        # engine and classifiers key on known shapes, the nose scores intrinsic
+        # wrongness (masquerade, obfuscation, impossible ancestry) and so catches
+        # shapes no rule was written for. It only surfaces when it FIRES (crossed
+        # its threshold), and defers to a rule's exact technique when one exists.
+        anomaly = classify_anomaly(self.name, self.parent_name,
+                                   self.cmdline, self.path)
+        if anomaly is not None:
+            if severity_rank(anomaly["severity"]) > severity_rank(severity):
+                severity = anomaly["severity"]
+            for lab in anomaly["labels"]:
+                if lab not in labels:
+                    labels.append(lab)
+            reason = "; ".join(r for r in (reason, anomaly["reason"]) if r)
+            if not technique:
+                technique = anomaly["technique"]
 
         action = ACT_FLAGGED if severity_rank(severity) >= severity_rank(SEV_MEDIUM) \
             else ACT_OBSERVED

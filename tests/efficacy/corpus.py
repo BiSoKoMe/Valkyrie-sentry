@@ -23,7 +23,8 @@ from dataclasses import dataclass, field
 class Case:
     id: str
     detector: str          # cmdline | powershell | persistence | entropy | intel_domain |
-                           # intel_ip | scanner | sysmon | wmi | process | network | dga
+                           # intel_ip | scanner | sysmon | wmi | process | network | dga |
+                           # tunnel | behavior | anomaly | killchain
     malicious: bool        # True = should fire; False = benign control (must not fire)
     technique: str = ""    # MITRE ATT&CK id (malicious cases)
     tactic: str = ""
@@ -133,6 +134,35 @@ MALICIOUS: list[Case] = [
     Case("beh-office-shell", "behavior", True, "T1059", "execution",
          ("powershell.exe", "winword.exe", "powershell -nop -w hidden", ""),
          "Office spawned a hidden PowerShell"),
+
+    # ── Behavioral anomaly scorer (behavior_score.py) ─ the GENERALIZING nose.
+    #    inp = (image, parent, cmdline, path). Every case here is a shape the
+    #    behavioral_rules.py rule list does NOT match — they prove the nose
+    #    catches intrinsic malicious scent no rule was written for. Paths are
+    #    kept outside the rules' generic suspicious-path fragments on purpose.
+    Case("anom-svchost-masquerade", "anomaly", True, "T1036.005", "defense-evasion",
+         ("svchost.exe", "explorer.exe", "svchost.exe", r"C:\ProgramData\svchost.exe"),
+         "system-process name running from a non-system path (masquerade)"),
+    Case("anom-double-extension", "anomaly", True, "T1036.007", "defense-evasion",
+         ("invoice.pdf.exe", "outlook.exe", "invoice.pdf.exe",
+          r"C:\Users\v\Documents\invoice.pdf.exe"),
+         "executable disguised as a PDF via double extension"),
+    Case("anom-webshell", "anomaly", True, "T1505.003", "persistence",
+         ("cmd.exe", "w3wp.exe", "cmd /c whoami", ""),
+         "internet-facing service (IIS w3wp) spawned a shell — web-shell"),
+    Case("anom-browser-spawns-ps", "anomaly", True, "T1059", "execution",
+         ("powershell.exe", "chrome.exe", "powershell -nop -w hidden", ""),
+         "browser spawned a hidden PowerShell (exploit foothold)"),
+    Case("anom-obfuscated-charcode", "anomaly", True, "T1027", "defense-evasion",
+         ("powershell.exe", "explorer.exe",
+          "powershell -nop -w hidden \"$x=[char]105+[char]101+[char]120;"
+          "[System.Text.Encoding]::ASCII.GetString([Convert]::FromBase64String("
+          "'aWV4KG5ldy1vYmplY3QgbmV0LndlYmNsaWVudCk9'))\"", ""),
+         "char-code reassembly + encoded blob (novel obfuscation, no rule)"),
+    Case("anom-typosquat", "anomaly", True, "T1036.005", "defense-evasion",
+         ("svch0st.exe", "explorer.exe", "svch0st.exe",
+          r"C:\Users\v\AppData\Local\Temp\svch0st.exe"),
+         "typosquat of a system process name from a low-trust dir"),
 
     # ── Multi-stage kill-chain correlation (edr/killchain.py) ───────────────
     # inp = (actor, [(technique, title), ...]) — a sequence on ONE process.
@@ -304,6 +334,26 @@ BENIGN: list[Case] = [
     Case("b-beh-net-view", "behavior", False,
          inp=("net.exe", "cmd.exe", "net view", ""),
          note="network view — not user /add"),
+
+    # Behavioral-anomaly FALSE-POSITIVE controls — the benign look-alikes a
+    # naive "temp=bad / lolbin=bad / weird-name=bad" scorer wrongly flags. These
+    # are the whole point of the nose's precision discipline.
+    Case("b-anom-real-svchost", "anomaly", False,
+         inp=("svchost.exe", "services.exe", "svchost.exe -k netsvcs",
+              r"C:\Windows\System32\svchost.exe"),
+         note="genuine svchost from System32 — the masquerade signal must not fire"),
+    Case("b-anom-installer", "anomaly", False,
+         inp=("AppSetup.exe", "explorer.exe", "AppSetup.exe /S",
+              r"C:\Users\v\Downloads\AppSetup.exe"),
+         note="ordinary installer double-clicked from Downloads (one weak signal)"),
+    Case("b-anom-updater-appdata", "anomaly", False,
+         inp=("Update.exe", "services.exe", "Update.exe --check",
+              r"C:\Users\v\AppData\Local\Slack\Update.exe"),
+         note="legit app updater under AppData\\Local\\<app> — not a temp root"),
+    Case("b-anom-msbuild-devenv", "anomaly", False,
+         inp=("msbuild.exe", "devenv.exe", "msbuild app.sln /p:Configuration=Release",
+              r"C:\Program Files\Microsoft Visual Studio\MSBuild\Current\Bin\msbuild.exe"),
+         note="LOLBin (msbuild) run legitimately by Visual Studio"),
 
     # Kill-chain FALSE-POSITIVE controls — must NOT raise a multi-stage chain.
     Case("b-chain-single-tactic", "killchain", False,

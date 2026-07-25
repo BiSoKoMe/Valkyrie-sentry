@@ -125,6 +125,15 @@ def _fires(case: Case, ctx: dict) -> bool:
         image, parent, cmd, path = case.inp
         return len(match_process(image, parent, cmd, path)) > 0
 
+    if d == "anomaly":
+        # inp = (image, parent, cmdline, path). "Fires" = the behavioral anomaly
+        # scorer (the generalizing nose) crossed its firing threshold. This is
+        # the layer that catches intrinsic malicious scent no rule was written
+        # for, so the malicious cases here are deliberately NOT rule-matched.
+        from valkyrie.behavior_score import score_process
+        image, parent, cmd, path = case.inp
+        return score_process(image, parent, cmd, path).fired()
+
     if d == "killchain":
         # inp = (actor, [(technique, title), ...]) — a sequence of detections
         # on ONE actor. "Fires" = the correlator raised a multi-stage chain,

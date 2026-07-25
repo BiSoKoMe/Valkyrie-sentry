@@ -66,6 +66,8 @@ TECHNIQUE_TACTIC: dict[str, str] = {
     "T1574":     "persistence",          # Hijack Execution Flow
     "T1136":     "persistence",          # Create Account
     "T1136.001": "persistence",          # Create Local Account
+    "T1505":     "persistence",          # Server Software Component
+    "T1505.003": "persistence",          # Web Shell
     "T1490":     "impact",               # Inhibit System Recovery
     "T1055":     "defense-evasion",      # Process Injection
     "T1055.012": "defense-evasion",      # Process Hollowing
@@ -82,6 +84,10 @@ TECHNIQUE_TACTIC: dict[str, str] = {
     "T1218.010": "defense-evasion",      # Regsvr32
     "T1218.011": "defense-evasion",      # Rundll32
     "T1197":     "defense-evasion",      # BITS Jobs
+    "T1036":     "defense-evasion",      # Masquerading
+    "T1036.002": "defense-evasion",      # Right-to-Left Override
+    "T1036.005": "defense-evasion",      # Match Legitimate Name or Location
+    "T1036.007": "defense-evasion",      # Double File Extension
     "T1003":     "credential-access",    # OS Credential Dumping
     "T1003.001": "credential-access",    # LSASS Memory
     "T1003.002": "credential-access",    # Security Account Manager

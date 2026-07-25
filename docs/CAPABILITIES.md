@@ -62,6 +62,20 @@ The behavioral heart of the platform (`valkyrie/edr/`), fed by these sensors:
   full command line + parent-process chain; heuristics for LOLBins,
   Office-spawns-shell, temp/download execution, encoded PowerShell, download
   cradles, hidden-window / silent-batch flags.
+- **Behavioral IOA rules** (`behavioral_rules.py`, ADR 0027) — a CrowdStrike-
+  style content engine: 32 declarative, ATT&CK-mapped rules over process
+  image/parent/command line (LOLBin proxy exec, credential access, defense
+  evasion, recovery inhibition, persistence, discovery, lateral movement).
+  Detection is *content* — coverage grows by adding data, each with a benign
+  control that pins the false-positive boundary.
+- **Behavioral anomaly scorer** (`behavior_score.py`, ADR 0028) — the
+  *generalizing* half: a pure weak-signal ensemble that scores a process's
+  intrinsic wrongness (system-name masquerade, double-extension / bidi lures,
+  measured command-line obfuscation, impossible parent→child lineage, LOLBin
+  network fetch, interpreter-from-low-trust) and fires only when a strong tell
+  or a compounding combination crosses threshold. Catches shapes no rule was
+  written for; an opt-in per-host ancestry baseline lets it learn what is normal
+  *for this machine*. Honest limit: a score is suspicion, not proof.
 - **Persistence (ASEP) telemetry** (`persistence_telemetry.py`) — detects new
   Run/RunOnce/Winlogon keys, services, Scheduled Tasks, and Startup-folder
   entries (T1547/T1543/T1053), escalating on suspicious commands.
