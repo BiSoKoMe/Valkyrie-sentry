@@ -41,6 +41,7 @@ from typing import Optional
 
 from .behavioral import BehavioralEngine
 from .blocklist import BlocklistManager
+from .cname_uncloak import matches_cname_tracker, same_registrable
 from .site_scanner import SiteScanner
 from .config import (
     DNS_LISTEN_HOST,
@@ -269,6 +270,29 @@ class DNSInterceptor:
 
         response = self._build_response(request, qname, qtype, decision)
 
+        # CNAME uncloaking — the step that catches trackers hiding behind a
+        # first-party subdomain. _decide() judged the QUERIED name, which looks
+        # first-party and is on no list; the tracker is in the answer's CNAME
+        # chain (metrics.brand.com -> brand.eulerian.net). If any CNAME target is
+        # a known cloaked tracker (or trips the normal checks), sinkhole the
+        # reply. This is what defeats Criteo/Adobe/AT-Internet-style cloaking.
+        if decision not in ("blocked", "behavioral") and response:
+            cloaked = self._uncloak_block(response, qname, proc)
+            if cloaked is not None:
+                target, why = cloaked
+                decision  = "blocked"
+                reason    = f"CNAME-cloaked tracker: {target} — {why}"
+                category  = "cname_cloak"
+                suspicion = 1.0
+                if self._intelligence is not None:
+                    try:
+                        self._intelligence.remember_block(qname, reason)
+                    except Exception:
+                        pass
+                if self._debug:
+                    print(f"  [uncloak] {qname} -> {target} blocked ({why})")
+                response = self._sinkhole_response(request, qname, qtype)
+
         # Answer-IP screening — the step that makes the firewall's threat-intel
         # CIDR ranges enforce on every platform. _decide() works on the DOMAIN;
         # a domain can be unknown/clean yet still resolve to an IP inside a
@@ -359,6 +383,66 @@ class DNSInterceptor:
                         return ip
                 except Exception:
                     return None
+        return None
+
+    def _cname_targets(self, response_wire: bytes) -> list[str]:
+        """Parse the CNAME target chain out of a DNS answer. Pure of policy;
+        parse failures return [] (fail-open — can only ever add blocks)."""
+        try:
+            msg = dns.message.from_wire(response_wire)
+        except Exception:
+            return []
+        out: list[str] = []
+        for rrset in msg.answer:
+            if rrset.rdtype == dns.rdatatype.CNAME:
+                for rdata in rrset:
+                    out.append(str(rdata.target).rstrip("."))
+        return out
+
+    def _uncloak_block(
+        self, response_wire: bytes, qname: str, proc: ProcessInfo
+    ) -> Optional[tuple[str, str]]:
+        """If the answer's CNAME chain leads to a tracker, return (target,
+        reason) to block on; else None.
+
+        Each CNAME target is judged by the SAME criteria a queried name would
+        be — a curated known-cloaking-tracker set first, then threat-intel,
+        scanner and blocklist — so uncloaking adds no false-positive surface
+        beyond what those already decide. A CNAME that stays within the queried
+        site's own registrable domain is skipped unless the target is itself a
+        known tracker apex.
+        """
+        for target in self._cname_targets(response_wire):
+            # First-party internal CNAME (a.brand.com -> b.brand.com) is not
+            # cloaking — skip, unless the target is a known tracker apex anyway.
+            if same_registrable(qname, target) and matches_cname_tracker(target) is None:
+                continue
+
+            apex = matches_cname_tracker(target)
+            if apex is not None:
+                return target, f"known cloaked tracker ({apex})"
+
+            if self._threat_intel is not None:
+                try:
+                    hit = self._threat_intel.match_domain(target)
+                    if hit is not None:
+                        return target, hit.reason
+                except Exception:
+                    pass
+
+            if self._scanner is not None:
+                try:
+                    res = self._scanner.analyze(target, proc.name)
+                    if res.decision == "block":
+                        return target, "; ".join(res.reasons)
+                except Exception:
+                    pass
+
+            try:
+                if self._blocklist.is_blocked(target):
+                    return target, "blocklist"
+            except Exception:
+                pass
         return None
 
     # ------------------------------------------------------------------

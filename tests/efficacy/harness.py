@@ -125,6 +125,13 @@ def _fires(case: Case, ctx: dict) -> bool:
         image, parent, cmd, path = case.inp
         return len(match_process(image, parent, cmd, path)) > 0
 
+    if d == "cname":
+        # inp = a CNAME target hostname. "Fires" = uncloaking recognises it as a
+        # known cloaked-tracker apex — the part that catches trackers general
+        # blocklists miss because they only ever appear as a CNAME target.
+        from valkyrie.cname_uncloak import matches_cname_tracker
+        return matches_cname_tracker(case.inp) is not None
+
     if d == "anomaly":
         # inp = (image, parent, cmdline, path). "Fires" = the behavioral anomaly
         # scorer (the generalizing nose) crossed its firing threshold. This is

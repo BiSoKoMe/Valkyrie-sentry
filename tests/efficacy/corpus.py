@@ -94,6 +94,16 @@ MALICIOUS: list[Case] = [
     Case("tracker-doubleclick", "scanner", True, "T1071", "command-and-control",
          "doubleclick.net", "known ad-tech tracker"),
 
+    # CNAME-cloaked trackers (cname_uncloak) — first-party-disguised trackers a
+    # DNS blocklist can't see because they only appear as a CNAME target. inp =
+    # the CNAME target host the uncloaker inspects.
+    Case("cname-eulerian", "cname", True, "T1071", "command-and-control",
+         "brand.eulerian.net", "Eulerian tracker cloaked behind a first-party CNAME"),
+    Case("cname-adobe-demdex", "cname", True, "T1071", "command-and-control",
+         "sync.brand.demdex.net", "Adobe Audience Manager CNAME cloak"),
+    Case("cname-atinternet", "cname", True, "T1071", "command-and-control",
+         "collect.ati-host.net", "AT Internet / Piano Analytics CNAME cloak"),
+
     # ── DNS tunnelling / exfil (site_scanner S8/S9 + dns_tunnel.py) ──────────
     # inp = a STREAM of hostnames (tunnelling is an aggregate shape). These
     # pin the exact miss that let an Atomic Red Team DNS burst through as
@@ -303,6 +313,15 @@ BENIGN: list[Case] = [
          note="bank site, must never be blocked"),
     Case("b-scanner-unknown", "scanner", False, inp="some-small-blog-42.dev",
          note="unknown site — default allow"),
+
+    # CNAME uncloak FALSE-POSITIVE controls — legitimate CDN CNAME targets that
+    # must NEVER be mistaken for cloaked trackers (blocking these breaks the web).
+    Case("b-cname-akamai", "cname", False, inp="brand.com.edgekey.net",
+         note="Akamai CDN CNAME target — legitimate"),
+    Case("b-cname-cloudfront", "cname", False, inp="d111abcxyz.cloudfront.net",
+         note="CloudFront CDN CNAME target — legitimate"),
+    Case("b-cname-fastly", "cname", False, inp="brand.map.fastly.net",
+         note="Fastly CDN CNAME target — legitimate"),
 
     # DNS-tunnel FALSE-POSITIVE controls — legitimate high-fan-out subdomain
     # traffic that must NOT be flagged as a tunnel. The cost of a miss here is

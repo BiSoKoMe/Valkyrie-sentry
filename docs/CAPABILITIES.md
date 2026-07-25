@@ -24,6 +24,15 @@ one event bus, one store, one correlation engine, one API. See
   classifier → baseline anomaly. Blocked names are sinkholed; the answer IP is
   also screened against the firewall/intel CIDR sets (catches hard-coded-IP and
   fast-flux cases DNS alone would miss).
+- **CNAME-cloak uncloaking** (`cname_uncloak.py`, ADR 0030) — defeats the #1
+  modern blocklist-evasion: a first-party-looking subdomain
+  (`metrics.brand.com`) published as a CNAME to the tracker
+  (`brand.eulerian.net`). The interceptor parses the answer's CNAME chain and
+  re-applies the block decision to the *targets* — a curated set of known
+  cloaking providers (Adobe/Criteo/AT-Internet/Keyade/…) plus the normal
+  scanner/blocklist/intel checks — so the disguised tracker is sinkholed while
+  legitimate CDN CNAMEs (Akamai/CloudFront/Fastly/Azure) pass untouched.
+  Protects apps and websites alike (anything using system DNS), over any link.
 - **Blocklists** (`blocklist.py`, `seed_blocklist.py`) — a curated built-in
   **seed blocklist** gives day-one protection with no download; external list
   downloads are strictly opt-in.
