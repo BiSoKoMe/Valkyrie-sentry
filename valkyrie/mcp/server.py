@@ -151,6 +151,17 @@ def run_stdio(allow_response: bool = False) -> int:
     from ..store import Store
     from ..edr import EdrEngine
 
+    # The shipped engine is a GUI-subsystem (windowless) binary, so when it is
+    # started WITHOUT redirected stdio — double-clicked, say — sys.stdout/stdin
+    # can be None. An MCP client always pipes both, so this only catches the
+    # wrong-way-to-run case; fail with a readable reason, not an AttributeError.
+    if sys.stdin is None or sys.stdout is None:
+        print("[valkyrie-mcp] no stdio available. This is an MCP stdio server: "
+              "it must be launched by an MCP client (e.g. Claude Desktop) or with "
+              "its input/output piped, not run interactively.",
+              file=sys.stderr, flush=True)
+        return 2
+
     store = Store()
     store.start()
     engine = EdrEngine(store)
