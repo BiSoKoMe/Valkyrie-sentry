@@ -288,6 +288,14 @@ def main() -> None:
     parser.add_argument("--hunt", type=str, default="", metavar="HUNT",
                         help="Run a saved threat hunt by id and exit "
                              "(use --hunt list to see available hunts)")
+    parser.add_argument("--mcp", action="store_true",
+                        help="Run as an MCP (Model Context Protocol) server on stdio so an "
+                             "AI agent can search/investigate incidents, run threat hunts and "
+                             "query telemetry. Read-only unless --allow-response is given.")
+    parser.add_argument("--allow-response", action="store_true",
+                        help="With --mcp: expose the guarded response tool (block_domain / "
+                             "kill_process / isolate_host). Still dry-run unless the caller "
+                             "explicitly passes dry_run=false.")
     parser.add_argument("--download-lists", action="store_true",
                         help="Opt in to downloading external blocklist/IP feeds "
                              "(default: built-in seed list + learned intelligence, no downloads)")
@@ -405,6 +413,16 @@ def main() -> None:
             intel.stop()
             store.stop()
         return
+
+    # ------------------------------------------------------------------
+    # Early-exit: MCP server on stdio (AI-agent interface).
+    # Must come before any console output — stdout carries JSON-RPC only.
+    # ------------------------------------------------------------------
+    if args.mcp:
+        from .mcp import run_stdio
+        # SystemExit (not `return`) so the stdio server's code becomes the
+        # process exit code — main() itself is typed `-> None`.
+        raise SystemExit(run_stdio(allow_response=bool(args.allow_response)))
 
     # ------------------------------------------------------------------
     # Early-exit: EDR incidents / threat hunt (read-only, then exit)

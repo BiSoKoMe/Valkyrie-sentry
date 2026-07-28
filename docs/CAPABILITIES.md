@@ -222,6 +222,16 @@ DGAs need an internet-scale model — not faked.*
   metrics, arm-then-confirm restart).
 - **Signed auto-update** (`updater.py`) — signature-verified update
   verification (the security-critical half of the local update path).
+- **MCP server / AI-agent interface** (`valkyrie/mcp/`, ADR 0033, `docs/MCP.md`) —
+  `valkyrie.exe --mcp` runs a **Model Context Protocol** server over stdio so an
+  AI agent (Claude Desktop/Code, any MCP client) can search and investigate
+  incidents, run threat hunts and query telemetry in natural language against
+  **this machine's own** data. 9 tools, stdlib-only JSON-RPC (no new deps).
+  **Read-only by default** — the response tool is not even advertised without
+  `--allow-response`, and is dry-run unless `dry_run:false` is explicit; stdio
+  only, so nothing is network-reachable. Includes
+  `valkyrie_get_detection_coverage`, which reports Valkyrie's real limits so an
+  agent describing the product can't oversell it.
 
 ## 11. Platform & reliability
 
