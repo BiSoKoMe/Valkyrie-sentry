@@ -125,6 +125,21 @@ def _fires(case: Case, ctx: dict) -> bool:
         image, parent, cmd, path = case.inp
         return len(match_process(image, parent, cmd, path)) > 0
 
+    if d == "sequence":
+        # inp = (actor, [(technique, [labels]), ...]) — a behaviour STREAM on one
+        # actor. "Fires" = the ESP engine completed a NAMED sequence (a specific
+        # ordered attack pattern), which the generic tactic-count correlator does
+        # not name. Fresh engine per case; deterministic ts.
+        from valkyrie.behavioral_sequences import SequenceEngine
+        se = SequenceEngine()
+        actor, steps = case.inp
+        fired = False
+        for i, (tech, labels) in enumerate(steps):
+            if se.observe(actor, tech, labels, "", ts=1000.0 + i,
+                          pid=777, ppid=1) is not None:
+                fired = True
+        return fired
+
     if d == "cname":
         # inp = a CNAME target hostname. "Fires" = uncloaking recognises it as a
         # known cloaked-tracker apex — the part that catches trackers general

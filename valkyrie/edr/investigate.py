@@ -81,6 +81,12 @@ _MEANING = {
                     "incident is more than the sum of its parts: confidence is high "
                     "precisely because several independent detectors agree on the "
                     "same process.",
+    "attack_sequence": "One lineage completed a SPECIFIC, named attack pattern in "
+                    "order (e.g. process injection → credential access, or recovery "
+                    "inhibition → mass encryption) within a short window — a stateful "
+                    "event-stream IOA. Unlike the generic multi-tactic chain, this "
+                    "names the exact tradecraft observed, tool-agnostically, so "
+                    "confidence is high and the response is specific.",
 }
 
 # Category -> which response actions the analyst recommends, in priority order.
@@ -105,6 +111,9 @@ _RECOMMEND = {
     # A confirmed multi-stage chain is the strongest reason to contain the
     # host outright, then stop the offending process.
     "attack_chain": ["isolate_host", "kill_process", "block_domain"],
+    # A named behavioural sequence is a specific, high-confidence attack —
+    # contain the host and kill the offending process.
+    "attack_sequence": ["isolate_host", "kill_process", "block_domain"],
 }
 
 # The canonical set of categories an incident can carry — the single source of
@@ -116,7 +125,7 @@ _RECOMMEND = {
 KNOWN_INCIDENT_CATEGORIES = frozenset({
     "firewall_ip", "intelligence", "behavioral", "dga", "doh_bypass",
     "anomaly", "tracker", "process", "persistence", "network",
-    "tunnel", "dyndns", "attack_chain",
+    "tunnel", "dyndns", "attack_chain", "attack_sequence",
 })
 
 

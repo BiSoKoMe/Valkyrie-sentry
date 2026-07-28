@@ -194,6 +194,24 @@ MALICIOUS: list[Case] = [
              ("T1486", "mass file encryption")]),      # impact
          "execution → defense-evasion → impact (ransomware chain)"),
 
+    # ── Named behavioural sequences / ESP IOAs (behavioral_sequences.py) ────
+    # inp = (actor, [(technique, [labels]), ...]) — an ORDERED behaviour stream
+    # on ONE actor that completes a specific named attack pattern. This is the
+    # CrowdStrike-style Event Stream Processing IOA the generic kill-chain
+    # (which only counts distinct tactics) cannot name.
+    Case("seq-inject-creds", "sequence", True, "T1003.001", "credential-access",
+         ("powershell.exe", [("T1055 — Process Injection", ["remote_thread"]),
+                             ("T1003.001 — LSASS Memory", ["lsass_access"])]),
+         "process injection → credential access (reflective-injection cred theft)"),
+    Case("seq-ransomware", "sequence", True, "T1486", "impact",
+         ("wscript.exe", [("T1490 — Inhibit System Recovery", ["shadow_delete"]),
+                          ("T1486 — Data Encrypted for Impact", ["mass_encryption"])]),
+         "shadow-copy deletion → mass encryption (ransomware detonation)"),
+    Case("seq-macro-c2", "sequence", True, "T1105", "command-and-control",
+         ("powershell.exe", [("T1059 — Command & Scripting Interpreter", ["office_child_shell"]),
+                             ("T1105 — Ingress Tool Transfer", ["download_cradle"])]),
+         "document-spawned shell → remote payload fetch (macro dropper)"),
+
     # ── ETW Sysmon sensor classification (etw/sysmon.classify_sysmon) ───────
     # Each case is (Sysmon EventID, EventData dict) — the same shape the real
     # sensor parses from Microsoft-Windows-Sysmon/Operational XML.
@@ -383,6 +401,17 @@ BENIGN: list[Case] = [
          inp=("powershell.exe", [
              ("T1059.001", "admin script"), ("T1059", "another cmd")]),
          note="ordinary admin PowerShell — repeated Execution only, no second tactic"),
+
+    # Behavioural-sequence FALSE-POSITIVE controls — the pieces present but NOT
+    # as a completed named pattern (wrong order / incomplete). Must NOT fire.
+    Case("b-seq-reversed", "sequence", False,
+         inp=("a.exe", [("T1003.001 — LSASS Memory", ["lsass_access"]),
+                        ("T1055 — Process Injection", ["remote_thread"])]),
+         note="credential-access BEFORE injection — wrong order, not the pattern"),
+    Case("b-seq-incomplete", "sequence", False,
+         inp=("a.exe", [("T1055 — Process Injection", ["remote_thread"]),
+                        ("T1082 — System Information Discovery", ["system_info"])]),
+         note="injection then benign discovery — sequence never completes"),
 
     # Sysmon benign controls — ordinary endpoint activity must not fire.
     Case("b-sysmon-signed-proc", "sysmon", False, inp=(

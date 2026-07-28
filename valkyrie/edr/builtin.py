@@ -41,6 +41,7 @@ _TECHNIQUE = {
     "tunnel":       "T1048.003 — Exfiltration Over Alternative Protocol (DNS tunnelling)",
     "dyndns":       "T1568 — Dynamic Resolution (wildcard DNS)",
     "attack_chain": "Multi-stage attack (correlated ATT&CK tactics)",
+    "attack_sequence": "Named behavioural attack sequence (ESP-style IOA)",
     "anomaly":      "T1071.004 — Anomalous DNS",
     "doh_bypass":   "T1572 — Protocol Tunnelling (DoH bypass)",
     "tracker":      "T1041 — Exfiltration / tracking",

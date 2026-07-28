@@ -85,6 +85,18 @@ The behavioral heart of the platform (`valkyrie/edr/`), fed by these sensors:
   or a compounding combination crosses threshold. Catches shapes no rule was
   written for; an opt-in per-host ancestry baseline lets it learn what is normal
   *for this machine*. Honest limit: a score is suspicion, not proof.
+- **Behavioural sequence IOAs** (`behavioral_sequences.py`, ADR 0032) — a
+  CrowdStrike-style **Event Stream Processing** engine: it statefully holds prior
+  behaviours per process lineage and fires ONE named, high-confidence indicator
+  when an *ordered* attack pattern completes within a window —
+  injection→credential-access, recovery-inhibition→mass-encryption,
+  document-shell→remote-payload. Tool-agnostic (matches behaviour shape, never a
+  tool name) and lineage-aware (a child's behaviour advances its parent's
+  sequence); it *names the exact tradecraft* where the kill-chain only counts
+  distinct tactics.
+- **Multi-stage kill-chain correlation** (`edr/killchain.py`, ADR 0025) — links
+  detections on one actor/lineage and escalates to a single `attack_chain`
+  incident when they span several independent ATT&CK tactics.
 - **Persistence (ASEP) telemetry** (`persistence_telemetry.py`) — detects new
   Run/RunOnce/Winlogon keys, services, Scheduled Tasks, and Startup-folder
   entries (T1547/T1543/T1053), escalating on suspicious commands.

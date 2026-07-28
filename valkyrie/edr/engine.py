@@ -29,6 +29,7 @@ from .builtin import register_builtin
 from .investigate import Investigator
 from .hunt import ThreatHunter
 from .killchain import KillChainCorrelator
+from ..behavioral_sequences import SequenceEngine
 from .plugins import PluginContext, PluginRegistry
 from .response import ResponseManager, register_responders
 from .schema import Detection, Incident, TimelineEntry, max_severity, severity_rank
@@ -103,6 +104,8 @@ class EdrEngine:
         self._corr_lock = threading.Lock()   # serialise correlation writes
         # Multi-stage kill-chain correlator (same window as base correlation).
         self._killchain = KillChainCorrelator(window_seconds=correlation_window_seconds)
+        # ESP-style named behavioural-sequence IOAs (specific attack patterns).
+        self._sequences = SequenceEngine()
         self._running = False
 
     # ------------------------------------------------------------------
@@ -241,13 +244,14 @@ class EdrEngine:
                 self._notify({"type": "incident", "incident": _inc_wire(existing),
                               "new": False})
 
-        # Kill-chain correlation runs AFTER the correlation lock is released —
-        # it may re-enter _ingest_detection to raise the chain incident, and
-        # _corr_lock is a plain Lock (re-acquiring would deadlock). A raised
-        # chain detection carries category "attack_chain" and is never fed back
-        # into the correlator, so there is no unbounded recursion.
-        if det.category != "attack_chain":
+        # Correlation runs AFTER the correlation lock is released — it may
+        # re-enter _ingest_detection to raise a derived incident, and _corr_lock
+        # is a plain Lock (re-acquiring would deadlock). Derived detections carry
+        # category "attack_chain"/"attack_sequence" and are never fed back into a
+        # correlator, so there is no unbounded recursion.
+        if det.category not in ("attack_chain", "attack_sequence"):
             self._correlate_chain(det)
+            self._correlate_sequence(det)
 
     def _correlate_chain(self, det: Detection) -> None:
         """Feed a real detection to the kill-chain correlator; if the same
@@ -284,6 +288,39 @@ class EdrEngine:
                      "confidence": chain["score"]},
         )
         self._ingest_detection(chain_det)
+
+    def _correlate_sequence(self, det: Detection) -> None:
+        """Feed a detection to the ESP sequence engine; if it completes a named
+        behavioural sequence (e.g. injection→credential-access) on one lineage,
+        raise ONE high-confidence 'attack_sequence' incident naming the pattern.
+        This is the specific-pattern complement to the generic kill-chain."""
+        try:
+            details = det.details or {}
+            seq = self._sequences.observe(
+                actor=det.process_name, technique=det.technique,
+                labels=details.get("labels") or [],
+                activity=details.get("activity") or "",
+                ts=time.monotonic(),
+                pid=det.process_pid,
+                ppid=int(details.get("ppid") or 0))
+        except Exception:
+            return
+        if not seq:
+            return
+        origin = seq.get("actor") or det.process_name
+        seq_det = Detection(
+            source="edr.sequence",
+            severity=seq["severity"],
+            category="attack_sequence",
+            title=f"{seq['name']} on {origin}",
+            entity=origin,
+            process_name=origin,
+            process_pid=det.process_pid,
+            technique=seq["technique"],
+            details={"sequence": seq, "reason": seq["explanation"],
+                     "confidence": seq["score"], "labels": ["attack_sequence"]},
+        )
+        self._ingest_detection(seq_det)
 
     # ------------------------------------------------------------------
     # Subscriptions (for the web WebSocket)
