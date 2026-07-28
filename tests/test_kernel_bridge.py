@@ -13,6 +13,10 @@ contract. Synthesised records use the exact shared layout
   [3] Graceful absence: the sensor self-disables with no driver loaded
   [4] Pipeline: an LSASS-block event raises a real high credential-access
       detection through the unchanged EDR ingest path
+  [5] v2 prevention/telemetry: thread-injection, autostart-registry,
+      process-BLOCKED (prevention) and self-protect (tamper) events
+  [6] Policy: FNV-1a hash matches the kernel; build_policy round-trips + is
+      safe (detection-only default, block list capped, hashes deduped)
 """
 
 from __future__ import annotations
@@ -130,6 +134,80 @@ def main() -> int:
                    "T1003.001" in (det.get("technique") or ""))
             _check("incident is high severity", inc["severity"] == "high")
         engine.stop(); store.stop()
+
+    print("\n[5] v2 prevention + telemetry events")
+    # Thread injection: pid = target, ppid = creator (the injector/actor).
+    tinj = kb.record_to_event(_pack(kb.VLK_PROTO_VERSION, kb.VLK_EVT_THREAD_CREATE,
+                ft, 900, 4321, kb.VLK_FLAG_REMOTE_THREAD, 0,
+                image=r"C:\tools\injector.exe"))
+    _check("thread-inject parses high + flagged", tinj and tinj["severity"] == "high"
+           and tinj["action"] == "flagged")
+    _check("thread-inject actor is the injector (creator/ppid)",
+           tinj and tinj["actor_pid"] == 4321 and tinj["actor_name"] == "injector.exe")
+    _check("thread-inject carries T1055 + target pid",
+           tinj and "T1055" in tinj["fields"]["technique"] and tinj["fields"]["target_pid"] == 900)
+
+    # Autostart registry write → persistence T1547.
+    reg = kb.record_to_event(_pack(kb.VLK_PROTO_VERSION, kb.VLK_EVT_REGISTRY_SET,
+                ft, 700, 0, kb.VLK_FLAG_AUTOSTART, 0, image=r"C:\evil.exe",
+                extra=r"\REGISTRY\MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"))
+    _check("registry-set parses high + flagged", reg and reg["severity"] == "high"
+           and reg["action"] == "flagged")
+    _check("registry-set is persistence T1547", reg and "T1547" in reg["fields"]["technique"])
+    _check("registry-set carries the key path", reg and "CurrentVersion\\Run" in reg["fields"]["key"])
+
+    # Process BLOCKED = prevention. This is action=blocked, the detect->prevent leap.
+    blk = kb.record_to_event(_pack(kb.VLK_PROTO_VERSION, kb.VLK_EVT_PROCESS_BLOCKED,
+                ft, 808, 100, kb.VLK_FLAG_BLOCKED, 0, image=r"C:\Users\v\Downloads\malware.exe"))
+    _check("process-blocked is action=blocked (prevention)", blk and blk["action"] == "blocked")
+    _check("process-blocked is critical + labelled prevented",
+           blk and blk["severity"] == "critical" and "prevented" in blk["labels"])
+    _check("process-blocked names the image", blk and blk["actor_name"] == "malware.exe")
+
+    # Self-protect = tamper attempt against the agent, stripped in kernel.
+    sp = kb.record_to_event(_pack(kb.VLK_PROTO_VERSION, kb.VLK_EVT_SELF_PROTECT,
+                ft, 666, 4242, kb.VLK_FLAG_TAMPER, 0, extra=r"C:\bad\killer.exe"))
+    _check("self-protect is action=blocked critical", sp and sp["action"] == "blocked"
+           and sp["severity"] == "critical")
+    _check("self-protect actor is the tamperer", sp and sp["actor_name"] == "killer.exe")
+    _check("self-protect is T1562.001 + records agent pid",
+           sp and "T1562.001" in sp["fields"]["technique"] and sp["fields"]["agent_pid"] == 4242)
+
+    print("\n[6] Enforcement policy — hash parity + safe serialisation")
+    # FNV-1a must equal a hand-computed reference so the kernel + bridge agree.
+    def _fnv_ref(name: str) -> int:
+        h = 2166136261
+        for ch in name.lower():
+            h ^= (ord(ch) & 0xFF)
+            h = (h * 16777619) & 0xFFFFFFFF
+        return h
+    _check("fnv1a_32 matches reference for 'mimikatz.exe'",
+           kb.fnv1a_32("mimikatz.exe") == _fnv_ref("mimikatz.exe"))
+    _check("fnv1a_32 is basename-only + case-insensitive",
+           kb.fnv1a_32(r"C:\X\Mimikatz.EXE") == kb.fnv1a_32("mimikatz.exe"))
+    # build_policy: default is detection-only (no enable bits).
+    pol = kb.build_policy()
+    ver, flags, agent, count = struct.unpack_from("<IIII", pol, 0)
+    _check("policy version stamped", ver == kb.VLK_PROTO_VERSION)
+    _check("default policy is detection-only (no enable flags)", flags == 0)
+    _check("policy struct is exactly the shared size",
+           len(pol) == kb._POLICY.size)
+    # Prevention + self-protect enabled, with a deduped block list.
+    pol2 = kb.build_policy(agent_pid=1234, block_names=["evil.exe", "EVIL.EXE", "x.exe"],
+                           prevention=True, self_protect=True)
+    ver, flags, agent, count = struct.unpack_from("<IIII", pol2, 0)
+    _check("prevention + self-protect bits set",
+           flags == (kb.VLK_POLICY_ENABLE_PREVENTION | kb.VLK_POLICY_ENABLE_SELFPROTECT))
+    _check("agent pid carried", agent == 1234)
+    _check("block list deduped (evil.exe==EVIL.EXE) → 2 entries", count == 2)
+    hashes = struct.unpack_from("<%dI" % kb.VLK_MAX_BLOCK_HASHES, pol2, 16)
+    _check("first block hash matches fnv1a_32('evil.exe')",
+           hashes[0] == kb.fnv1a_32("evil.exe"))
+    # Overflow safety: more than the cap → clamped, never overflows the array.
+    big = kb.build_policy(block_names=[f"m{i}.exe" for i in range(kb.VLK_MAX_BLOCK_HASHES + 50)])
+    _, _, _, bigcount = struct.unpack_from("<IIII", big, 0)
+    _check("block list capped at VLK_MAX_BLOCK_HASHES",
+           bigcount == kb.VLK_MAX_BLOCK_HASHES and len(big) == kb._POLICY.size)
 
     print("\n" + "=" * 50)
     if _FAILURES:

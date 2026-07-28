@@ -259,13 +259,18 @@ labeled — never faked:
 
 - **Kernel driver: source component, not a shipped binary.** `driver/valkyrie_km`
   is a *real, buildable* WDM driver — authoritative process lineage
-  (`PsSetCreateProcessNotifyRoutineEx`), module-load visibility, and LSASS
-  credential-theft protection (`ObRegisterCallbacks` handle-strip) — with a
+  (`PsSetCreateProcessNotifyRoutineEx`), module-load + remote-thread-injection
+  visibility, autostart-registry detection, LSASS credential-theft protection,
+  **process-launch prevention** (deny-on-create), and **agent self-protection**
+  (tamper resistance) — all pushed a fixed, validated policy by a
   fully-integrated, unit-tested user-mode bridge (`valkyrie/kernel_bridge.py`)
-  that self-disables when the driver isn't loaded. **It is NOT built, signed,
-  loaded, or detonation-tested in this repo** (no WDK/signing/VM here); loading
-  needs an EV cert + attestation (Ob callbacks need the ELAM-class entitlement),
-  and the LSASS protection is *unproven until VM detonation*. See ADR 0026 and
+  that self-disables when the driver isn't loaded. Prevention + self-protection
+  **default OFF**, never block anything under `\Windows\`, and fail open — the
+  safety rails (ADR 0031, the CrowdStrike-2024 lesson) that keep an unvalidated
+  driver from bricking a machine. **It is NOT built, signed, loaded, or
+  detonation-tested in this repo** (no WDK/signing/VM here); loading needs an EV
+  cert + attestation (Ob callbacks need the ELAM-class entitlement), and every
+  protection is *unproven until VM detonation*. See ADR 0026 + ADR 0031 and
   `driver/README.md` — status table, build/sign/load, and the validation gate.
   Firewall remains userland `netsh`; the remaining userland sensors are pollers
   + ETW event-log readers. Deterministic pre-write ransomware blocking (a
