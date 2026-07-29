@@ -68,13 +68,51 @@ NAT is fine and safer.
 
 # 3. Take a VM snapshot now (so the destructive atomics are one-click revert).
 
-# 4. Run the scored red-team pass (auto-cleans each atomic):
+# 4. Confirm the AMSI path (see "Confirming AMSI" below — do this in the VM,
+#    it cannot be confirmed on a host where Defender has stood down):
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8090/api/amsi/self-test `
+  -Headers @{ "X-Valkyrie-Token" = $env:VALKYRIE_TOKEN }
+
+# 5. Run the scored red-team pass (auto-cleans each atomic):
 .\redteam\run-redteam.ps1 -ApiBase http://127.0.0.1:8090
 
 # → prints a per-atomic DETECTED/MISSED table + the honest total.
 
-# 5. Revert the snapshot.
+# 6. Revert the snapshot.
 ```
+
+## Confirming AMSI (the VM is the only place this can be proven)
+
+AMSI content scanning (ADR 0035, `valkyrie/amsi.py`) is the one detection layer
+whose verification **could not be completed on the development host**, and the
+reason is worth understanding before you read its output.
+
+AMSI providers are in-process COM servers. On the dev machine two are registered
+and resident — Avast and McAfee — but Microsoft Defender has stood down entirely
+(`Get-MpComputerStatus` → `AMServiceEnabled: False`) because a third-party AV is
+installed. Neither third-party provider convicts Microsoft's AMSI test marker
+*or* EICAR through AMSI, so the self-test there returns **`inconclusive`**: a
+provider is demonstrably answering, but the only marker we can safely probe with
+is a Defender signature it has never heard of.
+
+A clean Windows VM has Defender **active**, which makes it the one environment
+where the path can actually be proven end to end. Expect:
+
+| Environment | `provider_state` | `self_test` conclusion |
+|---|---|---|
+| Clean VM (Defender active) | `resident` | **`confirmed`** ← the proof |
+| Dev host (Avast/McAfee) | `resident` | `inconclusive` |
+| No AV installed at all | `none` | `no_provider` |
+
+If the VM returns anything other than `confirmed`, the AMSI integration has a
+real bug — that is the assertion to hold it to. A `confirmed` result also means
+atomic #6 (T1562.001, Defender tampering) and any script-based atomic should now
+be able to produce a `malware`-category incident, not just a heuristic one.
+
+Note the interaction with provisioning: several atomics **disable Defender** by
+design (#6 explicitly). Once that runs, AMSI convictions stop for the rest of the
+pass. Confirm AMSI *before* the red-team run, not after — and treat a post-#6
+absence of convictions as expected, not as a regression.
 
 ## How scoring works (no faking)
 
