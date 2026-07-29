@@ -288,6 +288,10 @@ def main() -> None:
     parser.add_argument("--hunt", type=str, default="", metavar="HUNT",
                         help="Run a saved threat hunt by id and exit "
                              "(use --hunt list to see available hunts)")
+    parser.add_argument("--analyze", type=str, default="", metavar="URL",
+                        help="Genuinely analyze a site's CONTENT and exit: fetch the page and "
+                             "score fingerprinting, cryptomining, obfuscated JS, phishing and "
+                             "tracker density. List-free — it judges what the site actually does.")
     parser.add_argument("--mcp", action="store_true",
                         help="Run as an MCP (Model Context Protocol) server on stdio so an "
                              "AI agent can search/investigate incidents, run threat hunts and "
@@ -423,6 +427,29 @@ def main() -> None:
         # SystemExit (not `return`) so the stdio server's code becomes the
         # process exit code — main() itself is typed `-> None`.
         raise SystemExit(run_stdio(allow_response=bool(args.allow_response)))
+
+    # ------------------------------------------------------------------
+    # Early-exit: genuine site content analysis (fetch + score, then exit)
+    # ------------------------------------------------------------------
+    if args.analyze:
+        from .site_analyzer import SiteAnalyzer
+        console.print(f"[bold]Analyzing site content:[/bold] {args.analyze}")
+        v = SiteAnalyzer().analyze_url(args.analyze)
+        if not v.fetched:
+            console.print(f"[yellow]Could not fetch the page[/yellow] "
+                          f"({'; '.join(v.reasons) or 'unreachable'})")
+            return
+        colour = {"block": "red", "flag": "yellow", "allow": "green"}.get(v.decision, "white")
+        console.print(f"  Verdict  : [{colour}]{v.decision.upper()}[/{colour}]  "
+                      f"(score {v.score}; category: {v.category})")
+        if v.reasons:
+            console.print("  Evidence :")
+            for r in v.reasons:
+                console.print(f"    - {r}")
+        else:
+            console.print("  Evidence : none — the page content looks clean")
+        console.print(f"  Signals  : {v.signals}")
+        return
 
     # ------------------------------------------------------------------
     # Early-exit: EDR incidents / threat hunt (read-only, then exit)
