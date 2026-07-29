@@ -60,6 +60,10 @@ _TELEMETRY_TECHNIQUE = {
     "injection_primitive": "T1055 — Process Injection",
     "stealth_flags":       "T1059.001 — PowerShell",
     "obfuscation":         "T1027 — Obfuscated/Encoded Command",
+    # AMSI conviction (valkyrie/amsi.py) — an external engine's verdict, not a
+    # Valkyrie heuristic. The sensor sets an exact technique when it knows one;
+    # this is the fallback for content convicted with no other tell.
+    "amsi_detected":       "T1059 — Command & Scripting Interpreter (malicious content)",
     # WMI-Activity sensor (etw.wmi)
     "persistence_wmi":      "T1546.003 — WMI Event Subscription",
     "wmi_script_consumer":  "T1546.003 — WMI Event Subscription",

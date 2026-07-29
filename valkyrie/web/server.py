@@ -560,6 +560,28 @@ def create_app(ctx: Optional[AppContext] = None):
         with tempfile.TemporaryDirectory() as td:
             return rs.simulate(Path(td))
 
+    # ── AMSI content scanning ────────────────────────────────────────────
+    @app.get("/api/amsi/status")
+    async def amsi_status():
+        sc = getattr(state, "amsi", None)
+        if sc is None:
+            return {"enabled": False}
+        return sc.status()
+
+    @app.post("/api/amsi/self-test")
+    async def amsi_self_test(request: Request):
+        # Token-gated: a working provider records a detection in its own
+        # history when it convicts the marker, so this must not be triggerable
+        # by a remote page. Returns a tri-state conclusion — a non-conviction
+        # is reported as inconclusive, never as a pass or a failure.
+        guard = _control_guard(request)
+        if guard is not None:
+            return guard
+        sc = getattr(state, "amsi", None)
+        if sc is None:
+            return JSONResponse({"error": "AMSI scanning not active"}, status_code=503)
+        return sc.self_test()
+
     @app.post("/api/edr/incidents/{incident_id}/triage")
     async def collect_triage(incident_id: str, request: Request):
         # Collects live host state into a local evidence bundle — state-

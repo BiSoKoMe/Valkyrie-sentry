@@ -51,6 +51,19 @@ RANSOMWARE_RESPONSE_MODE   = "suspend"
 RANSOMWARE_POLL_INTERVAL   = 2.0          # seconds between canary checks
 RANSOMWARE_MANIFEST_PATH   = DATA_DIR / "ransomware_canaries.json"
 
+# ---------------------------------------------------------------------------
+# AMSI content scanning (see valkyrie/amsi.py)
+# ---------------------------------------------------------------------------
+# Asks the OS antimalware provider (Defender, or a third-party AV) for a real
+# verdict on script content and files. Valkyrie ships no signature engine and
+# does not fake one; this is the documented local path to content conviction.
+# Scanning is local to the machine — content is handed to a provider already
+# installed on this host and nothing leaves the box.
+AMSI_ENABLED        = True
+AMSI_SCAN_SCRIPTS   = True                # scan PowerShell script blocks (4104)
+AMSI_MAX_BYTES      = 8 * 1024 * 1024     # skip (never truncate) content above this
+AMSI_CACHE_SIZE     = 512                 # content-hash → verdict LRU entries
+
 # User-editable rules live in the writable data dir. The read-only factory
 # default is bundled with the app; on first launch (no rules file yet) it is
 # copied out so the user always starts from a clean, generic rule set and their

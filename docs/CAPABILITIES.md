@@ -110,6 +110,19 @@ The behavioral heart of the platform (`valkyrie/edr/`), fed by these sensors:
     network-with-process, unsigned module loads, CreateRemoteThread injection
     (T1055), LSASS access (T1003.001), registry/startup persistence, process
     tampering (`classify_sysmon`).
+- **AMSI content scanning** (`amsi.py`, ADR 0035) — the one **non-heuristic**
+  verdict Valkyrie can produce. Submits script content and files to the OS
+  antimalware provider (Defender, or a third-party AV) through the documented
+  Antimalware Scan Interface and gets back a real conviction, which enters the
+  normal detection pipeline as category `malware` — so an AV conviction and a
+  later LSASS touch on the same lineage correlate into **one** incident.
+  Valkyrie ships no signature engine and does not fake one; this borrows a
+  verdict from an engine that has one. *Boundaries: `not detected` is not proof
+  of clean; where Defender is the provider, script content was likely already
+  scanned by its own hook (the added value is file scanning + correlation, not a
+  second scanner); and provider presence is read from the registry + loader
+  rather than inferred from a scan result, because a non-conviction cannot tell
+  "no provider" apart from "no opinion".*
 - **Detections → incidents** (`edr/engine.py`, `edr/schema.py`) — cheap
   detections are correlated into a small set of triable incidents with
   severity, MITRE ATT&CK technique (per detection), a timeline and an
@@ -297,9 +310,11 @@ labeled — never faked:
   Firewall remains userland `netsh`; the remaining userland sensors are pollers
   + ETW event-log readers. Deterministic pre-write ransomware blocking (a
   minifilter) and network callouts (WFP) are deliberately still out of scope.
-- **No signature-based file AV.** Valkyrie does not ship a malware signature
-  engine; the intended path is integrating the OS's AMSI/Defender rather than
-  faking an internet-scale signature cloud.
+- **No signature-based file AV of its own.** Valkyrie still ships no malware
+  signature engine. As of ADR 0035 it *integrates* the OS's AMSI provider for
+  content verdicts (see §3) — which is the documented honest path, not parity:
+  Valkyrie cannot detect what the installed provider cannot, and on a host with
+  no antimalware provider registered, AMSI contributes nothing at all.
 - **No global/cloud ML.** The intelligence layer is local and list-free; a
   cloud model trained on millions of endpoints (incl. short-label DGA) is
   architecture-only, marked "needs infra."

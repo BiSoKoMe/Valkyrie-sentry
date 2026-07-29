@@ -42,6 +42,7 @@ _TECHNIQUE = {
     "dyndns":       "T1568 — Dynamic Resolution (wildcard DNS)",
     "attack_chain": "Multi-stage attack (correlated ATT&CK tactics)",
     "attack_sequence": "Named behavioural attack sequence (ESP-style IOA)",
+    "malware":      "T1059 — Malicious content convicted by the OS antimalware provider (AMSI)",
     "anomaly":      "T1071.004 — Anomalous DNS",
     "doh_bypass":   "T1572 — Protocol Tunnelling (DoH bypass)",
     "tracker":      "T1041 — Exfiltration / tracking",

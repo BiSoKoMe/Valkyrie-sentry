@@ -26,7 +26,7 @@ needing global scale (signature clouds, ML from millions of endpoints) are marke
 | 3 | Behavioral detection depth | High | Med | Med (ETW process/file/registry sensors) | Iterative |
 | 4 | SIEM integration (CEF/syslog export) | Med | Med (enterprise) | High | Cheap win later |
 | 5 | Digital forensics / triage collection | Med | Med | High | Later |
-| 6 | Malware detection (files) | Critical | High | **Needs infra** | Integrate OS AMSI/Defender; don't build a signature engine |
+| 6 | Malware detection (files) | Critical | High | **Needs infra** | **✅ PARTIAL** 2026-07-28 (ADR 0035, `valkyrie/amsi.py`): the OS AMSI provider is integrated for content verdicts. Still no Valkyrie signature engine — we borrow a verdict, we do not have parity |
 | 7 | Exploit / memory-attack detection | Critical | High | Low–Med (ETW/AMSI, no kernel driver) | Partial only; honest boundary |
 | 8 | Kernel protection (minifilter/ELAM) | Critical | High | **Needs signed driver** | Document as extension point |
 | 9 | Cloud analytics / global ML | High | Med | **Needs infra** | Architecture only, privacy-preserving |
@@ -140,3 +140,38 @@ corpus, queued as the next dedicated cycle (corroborated DGA detector).
 in-repo harness structurally cannot measure; (c) vulnerability visibility
 (installed software vs local CVE feed); (d) browser protection via
 TLS-inspector + URLhaus full URLs.
+
+## Cycle 2026-07-28: AMSI content scanning — SHIPPED (rank-6 gap, partially)
+ADR 0035, `valkyrie/amsi.py`. Every endpoint verdict Valkyrie could previously
+produce was a **heuristic**; it had zero content conviction. This integrates the
+OS **Antimalware Scan Interface** — the documented path this document has
+recommended since the first review — so script blocks and files get a real
+verdict from the installed antimalware provider. Wired into the PowerShell
+script-block sensor (which already holds the *deobfuscated* text), producing a
+new `malware` incident category that correlates with everything else on the same
+lineage. Strictly additive: an absent, stopped, silent, or raising scanner leaves
+the heuristic output unchanged (pinned by four tests). ~1–6 ms per scan.
+
+**Live testing corrected a wrong assumption, which is why it was run.** The first
+implementation inferred "no provider" from a non-conviction on Microsoft's AMSI
+test marker. On the dev host that inference was false: `AMServiceEnabled: False`
+(Defender stands down because Avast + McAfee are installed) and neither
+third-party provider recognises the marker *or* EICAR through AMSI — yet both
+provider DLLs are demonstrably resident and answering. Provider presence is now
+read from `HKLM\SOFTWARE\Microsoft\AMSI\Providers` plus `GetModuleHandleW`, and
+the self-test reports a **tri-state** conclusion (`confirmed` / `inconclusive` /
+`no_provider`) instead of a false negative.
+
+**This does not close rank 6.** Valkyrie still has no signature engine, cannot
+detect what the installed provider cannot, and contributes nothing on a host with
+no provider. It borrows a verdict — that is the honest description, and the
+efficacy harness deliberately does not score it, because measuring someone else's
+engine as Valkyrie's recall is exactly the fake parity this document forbids.
+
+**Next candidates (re-ranked)**: (a) **VM detonation lab** — build/test-sign the
+kernel driver (ADR 0026/0031) and run the Atomic Red Team harness in `redteam/`
+against a live agent; this is now the top gap, because the driver has never been
+compiled and the sensor-capture dimension has never been measured; (b) AMSI file
+scanning wired to process images the behavioural layers already flagged
+(conviction as corroborator); (c) vulnerability visibility (installed software vs
+local CVE feed); (d) browser protection via TLS-inspector + URLhaus full URLs.

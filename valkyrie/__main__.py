@@ -276,6 +276,9 @@ def main() -> None:
                         help="Disable the EDR layer (incidents, hunting, response)")
     parser.add_argument("--no-ransomware-shield", action="store_true",
                         help="Disable the behavioral ransomware shield (canary tripwires)")
+    parser.add_argument("--no-amsi", action="store_true",
+                        help="Disable AMSI content scanning (OS antimalware verdicts "
+                             "on script blocks and files)")
     parser.add_argument("--edr-plugin-dir", type=str, default="",
                         help="Directory to load third-party EDR plugins from "
                              "(detection/responder/enrichment). Opt-in; trusted code only")
@@ -1002,6 +1005,7 @@ def main() -> None:
     process_collector = None
     network_collector = None
     persistence_collector = None
+    amsi_scanner = None
     from .config import EDR_MODE, EDR_CORRELATION_WINDOW, EDR_PLUGIN_DIR
     if EDR_MODE and not args.no_edr:
         _t = time.monotonic()
@@ -1100,11 +1104,38 @@ def main() -> None:
             # Real-time ETW-backed sensors (PowerShell script-block today; more
             # channels next) hosted by the resilient SensorManager — watchdog,
             # de-dup, and bounded backpressure. Emits into the SAME EDR pipeline.
+            # AMSI content scanning — a real verdict from the OS antimalware
+            # provider for the script text the PowerShell sensor captures.
+            # Valkyrie ships no signature engine; this asks the engine that
+            # already has one. Self-disables when no provider is present, so a
+            # failure here costs the corroborator, never the sensor.
+            from .config import (AMSI_ENABLED, AMSI_SCAN_SCRIPTS,
+                                 AMSI_MAX_BYTES, AMSI_CACHE_SIZE)
+            if AMSI_ENABLED and not getattr(args, "no_amsi", False):
+                _ta = time.monotonic()
+                from .amsi import AmsiScanner
+                _a = AmsiScanner(enabled=True, max_bytes=AMSI_MAX_BYTES,
+                                 cache_size=AMSI_CACHE_SIZE)
+                try:
+                    if _a.start():
+                        amsi_scanner = _a
+                        _state = _a.provider_state()
+                        _tick(f"AMSI content scanning active (provider: {_state})", _ta)
+                        if _state != "resident":
+                            console.print(
+                                "[yellow]AMSI: no antimalware provider is resident — "
+                                "scans will return 'not detected' regardless of "
+                                "content until one is installed.[/yellow]")
+                except Exception as _e:      # never block startup
+                    console.print(f"[yellow]AMSI unavailable: {_e}[/yellow]")
+                    amsi_scanner = None
+
             _ts = time.monotonic()
             from .etw import (SensorManager, PowerShellSensor, WmiActivitySensor,
                               SysmonSensor)
             sensor_manager = SensorManager(sink=lambda ev: edr_engine.ingest_telemetry(ev))
-            sensor_manager.register(PowerShellSensor())
+            sensor_manager.register(PowerShellSensor(
+                scanner=amsi_scanner if AMSI_SCAN_SCRIPTS else None))
             sensor_manager.register(WmiActivitySensor())
             sensor_manager.register(SysmonSensor())   # optional; skipped if absent
             # Kernel driver bridge — authoritative process lineage + LSASS
@@ -1170,6 +1201,7 @@ def main() -> None:
         ("process_collector", process_collector, "sensor"),
         ("network_collector", network_collector, "sensor"),
         ("persistence_collector", persistence_collector, "sensor"),
+        ("amsi", amsi_scanner, "detection"),
         ("ransomware_shield", ransomware_shield, "response"),
         ("siem", siem_exporter, "integration"),
         ("playbooks", playbook_engine, "response"),
@@ -1213,6 +1245,7 @@ def main() -> None:
             siem           = siem_exporter,
             playbooks      = playbook_engine,
             registry       = registry,
+            amsi           = amsi_scanner,
         )
         if args.web_host not in ("127.0.0.1", "::1", "localhost"):
             console.print(
@@ -1474,6 +1507,9 @@ def main() -> None:
             persistence_collector.stop()
         if sensor_manager is not None:
             sensor_manager.stop()
+        # After the sensors that use it, so no scan is in flight at teardown.
+        if amsi_scanner is not None:
+            amsi_scanner.stop()
         if ransomware_shield is not None:
             ransomware_shield.stop()
         if playbook_engine is not None:

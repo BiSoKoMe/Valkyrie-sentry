@@ -81,6 +81,13 @@ _MEANING = {
                     "incident is more than the sum of its parts: confidence is high "
                     "precisely because several independent detectors agree on the "
                     "same process.",
+    "malware":      "The operating system's antimalware provider CONVICTED this "
+                    "content through AMSI — this is not a Valkyrie heuristic but "
+                    "an external engine's verdict on the actual bytes, carrying a "
+                    "signature corpus Valkyrie does not have. Treat it as the "
+                    "strongest single-event evidence available on this endpoint. "
+                    "Note the converse does not hold: content the provider did "
+                    "not convict is not thereby clean.",
     "attack_sequence": "One lineage completed a SPECIFIC, named attack pattern in "
                     "order (e.g. process injection → credential access, or recovery "
                     "inhibition → mass encryption) within a short window — a stateful "
@@ -108,6 +115,9 @@ _RECOMMEND = {
     "network":      ["isolate_host", "kill_process"],
     "tunnel":       ["block_domain", "isolate_host"],
     "dyndns":       ["block_domain"],
+    # A provider conviction is the highest-confidence endpoint evidence there
+    # is: stop the process running the content, then contain the host.
+    "malware":      ["kill_process", "isolate_host"],
     # A confirmed multi-stage chain is the strongest reason to contain the
     # host outright, then stop the offending process.
     "attack_chain": ["isolate_host", "kill_process", "block_domain"],
@@ -125,7 +135,7 @@ _RECOMMEND = {
 KNOWN_INCIDENT_CATEGORIES = frozenset({
     "firewall_ip", "intelligence", "behavioral", "dga", "doh_bypass",
     "anomaly", "tracker", "process", "persistence", "network",
-    "tunnel", "dyndns", "attack_chain", "attack_sequence",
+    "tunnel", "dyndns", "attack_chain", "attack_sequence", "malware",
 })
 
 
