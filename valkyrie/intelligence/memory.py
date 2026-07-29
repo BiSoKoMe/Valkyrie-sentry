@@ -19,6 +19,8 @@ import threading
 from datetime import datetime
 from typing import Optional
 
+from ..popular_domains import is_popular
+
 
 class IntelligenceMemory:
     """Persistent, fast-lookup memory of past threat decisions."""
@@ -52,11 +54,24 @@ class IntelligenceMemory:
             rows = conn.execute(
                 "SELECT domain, verdict, reason FROM intel_memory"
             ).fetchall()
+            # SELF-HEAL: a popular legitimate domain must never carry a learned
+            # 'bad' verdict. Older builds' behavioural heuristics (query burst,
+            # never-seen-from-process) wrongly learned domains like microsoft.com
+            # / paypal.com as bad and persisted them, sinkholing real sites on
+            # every launch. Purge them from the DB at startup so the fix takes
+            # effect the moment this build runs — no manual cleanup needed.
+            stale = [d for (d, v, _r) in rows if v == "bad" and is_popular(d)]
+            if stale:
+                conn.executemany("DELETE FROM intel_memory WHERE domain=?",
+                                 [(d,) for d in stale])
+                conn.commit()
         finally:
             conn.close()
         with self._lock:
             for domain, verdict, reason in rows:
                 if verdict == "bad":
+                    if is_popular(domain):
+                        continue          # never load a popular domain as bad
                     self._bad[domain] = reason
                 else:
                     self._good.add(domain)
@@ -68,6 +83,12 @@ class IntelligenceMemory:
     def remember_bad(self, domain: str, ip: str = "", reason: str = "") -> None:
         domain = domain.lower().rstrip(".")
         if not domain:
+            return
+        # Never learn a popular legitimate domain as bad — the weak behavioural
+        # signals that reach here (query burst, never-seen) false-positive on
+        # exactly these high-traffic domains. Explicit user/threat-intel blocks
+        # and the tracker blocklist are separate paths and are unaffected.
+        if is_popular(domain):
             return
         with self._lock:
             self._good.discard(domain)
@@ -90,6 +111,11 @@ class IntelligenceMemory:
     def check(self, domain: str, ip: str = "") -> Optional[str]:
         """Fast path: 'bad' / 'good' if already decided, else None."""
         domain = domain.lower().rstrip(".")
+        # Defense in depth: a popular legitimate domain is never served 'bad'
+        # from memory, even if an older verdict lingers (the tracker blocklist
+        # still blocks its tracker subdomains via a separate path).
+        if is_popular(domain):
+            return None
         with self._lock:
             if domain in self._bad:
                 return "bad"

@@ -30,6 +30,7 @@ from ..config import (
     ANOMALY_FLAG_THRESHOLD,
     INTEL_GOOD_AFTER_ALLOWS,
 )
+from ..popular_domains import is_popular
 from .anomaly import AnomalyDetector
 from .baseline import BaselineLearner
 from .memory import IntelligenceMemory
@@ -106,6 +107,17 @@ class ThreatClassifier:
             decision = "flag"
         else:
             decision = "allow"
+
+        # Popular-legitimate-domain floor: behavioural/anomaly/rate heuristics
+        # are too weak to sinkhole a top domain (they false-positive on exactly
+        # the high-traffic legit domains Windows/apps hammer). A popular domain
+        # can still be FLAGGED for visibility, but never BLOCKED here — explicit
+        # user rules, threat-intel feeds and the tracker blocklist are separate
+        # paths and are unaffected. This is the fix for the microsoft.com /
+        # paypal.com / bing.com false positives found in live testing.
+        if decision == "block" and is_popular(domain):
+            decision = "flag"
+            reason = f"[popular-domain floor: not blocked on behaviour] {reason}"
 
         # Learning-period damping — anomaly-only blocks become flags
         if (decision == "block"
