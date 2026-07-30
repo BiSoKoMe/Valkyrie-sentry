@@ -177,6 +177,29 @@ def preflight(
             critical=False,
         ))
 
+        # 6b. The CA PRIVATE KEY must not be readable by other local accounts.
+        #     This is critical=True on purpose: an exposed CA key lets any local
+        #     account mint a trusted certificate for any domain and impersonate
+        #     it to this machine with a valid padlock. Unlike a missing cert
+        #     (which regenerates harmlessly), this one is a live compromise of
+        #     every HTTPS connection the machine makes, so it must fail the
+        #     self-test loudly rather than appear as an advisory note.
+        try:
+            from . import secure_file
+            from .config import TLS_CA_KEY_PATH
+            if TLS_CA_KEY_PATH.exists():
+                key_ok, key_detail = secure_file.verify(TLS_CA_KEY_PATH)
+                checks.append(Check(
+                    "TLS CA private key protected", key_ok,
+                    key_detail if key_ok
+                    else f"EXPOSED — {key_detail}; other local accounts could "
+                         f"impersonate any HTTPS site to this machine",
+                    critical=True,
+                ))
+        except Exception as exc:      # noqa: BLE001 — never break the self-test
+            checks.append(Check("TLS CA private key protected", False,
+                                f"could not verify: {exc}", critical=False))
+
     return checks
 
 

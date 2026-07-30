@@ -15,11 +15,16 @@ Behavioral/Rules instances instead of re-creating them in a subprocess.
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 import threading
 from pathlib import Path
 from typing import Optional
 
+from . import secure_file
 from .config import TLS_CA_CERT_PATH, TLS_MITMPROXY_CONF_DIR, TLS_PROXY_PORT
+
+log = logging.getLogger("valkyrie.tls")
 
 
 CA_INSTALL_INSTRUCTIONS = """\
@@ -71,15 +76,37 @@ class TLSInspector:
         happens inside start() when DumpMaster initializes.
         """
         TLS_MITMPROXY_CONF_DIR.mkdir(parents=True, exist_ok=True)
+        secure_file.harden(TLS_MITMPROXY_CONF_DIR, is_dir=True)
         generated = TLS_MITMPROXY_CONF_DIR / "mitmproxy-ca-cert.pem"
         if generated.exists() and not TLS_CA_CERT_PATH.exists():
+            # The .pem here is the CERTIFICATE only — public by design. It must
+            # stay readable: the user has to be able to open it to install it
+            # into the trust store, and it grants nothing on its own.
             TLS_CA_CERT_PATH.write_bytes(generated.read_bytes())
             key_src = TLS_MITMPROXY_CONF_DIR / "mitmproxy-ca.pem"
             if key_src.exists():
                 from .config import TLS_CA_KEY_PATH
+                # This one contains the PRIVATE KEY. Restrict it the moment it
+                # is written — a copy of a protected key into an unprotected
+                # location would silently undo the directory hardening above.
                 TLS_CA_KEY_PATH.write_bytes(key_src.read_bytes())
+                ok, detail = secure_file.harden(TLS_CA_KEY_PATH)
+                if not ok:
+                    log.error("CA private key at %s could not be protected: %s",
+                              TLS_CA_KEY_PATH, detail)
         print(CA_INSTALL_INSTRUCTIONS.format(cert=TLS_CA_CERT_PATH))
         return TLS_CA_CERT_PATH
+
+    def ca_key_status(self) -> tuple[bool, str]:
+        """Is the CA private key protected from other local accounts?
+
+        Exposed here so the dashboard/self-test can report the answer rather
+        than the question only being asked at start().
+        """
+        from .config import TLS_CA_KEY_PATH
+        if not TLS_CA_KEY_PATH.exists():
+            return True, "no CA key on disk yet"
+        return secure_file.verify(TLS_CA_KEY_PATH)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -115,7 +142,40 @@ class TLSInspector:
 
         from .tls_addon import ValkyrieAddon
 
+        # ------------------------------------------------------------------
+        # Protect the CA private key BEFORE mitmproxy generates it.
+        #
+        # mitmproxy creates its CA (mitmproxy-ca.pem, which CONTAINS the
+        # private key) inside confdir on first start. On Windows the engine's
+        # data dir lives under %ProgramData%, whose default ACL grants
+        # BUILTIN\Users read — so without this the CA key would be readable by
+        # every local account on the machine. Whoever has that key can mint a
+        # trusted certificate for any domain and impersonate it to this host
+        # with a valid padlock, which turns the security product into the
+        # attack. Hardening the directory FIRST means the key is restricted the
+        # instant it is written, rather than existing world-readable for the
+        # window between generation and a later fix-up.
+        #
+        # Fail CLOSED: if the directory cannot be protected, do not create a CA
+        # key there at all. A deliberate escape hatch exists for anyone who
+        # genuinely accepts the risk, but it must be set explicitly.
         TLS_MITMPROXY_CONF_DIR.mkdir(parents=True, exist_ok=True)
+        ok, detail = secure_file.harden(TLS_MITMPROXY_CONF_DIR, is_dir=True)
+        if not ok and os.environ.get("VALKYRIE_ALLOW_EXPOSED_CA_KEY") != "1":
+            log.error(
+                "TLS inspection refused to start: the CA key directory cannot "
+                "be protected (%s). The CA private key would be readable by "
+                "other local accounts, which would let them impersonate any "
+                "HTTPS site to this machine. Fix the directory permissions, or "
+                "set VALKYRIE_ALLOW_EXPOSED_CA_KEY=1 to accept that risk.",
+                detail)
+            return False
+        if not ok:
+            log.warning("TLS inspection starting with an EXPOSED CA key "
+                        "directory (%s) — VALKYRIE_ALLOW_EXPOSED_CA_KEY=1 was "
+                        "set. Any local account can impersonate any HTTPS "
+                        "site to this machine.", detail)
+
         ready = threading.Event()
         error: list[Exception] = []
         bound: list[bool] = []
