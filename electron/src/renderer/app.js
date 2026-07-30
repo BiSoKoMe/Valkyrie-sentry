@@ -1453,10 +1453,25 @@ const Replay = {
         'Could not reach the engine for an analysis of this incident.');
       return;
     }
-    const actions = (r.recommended_actions || []).map((a) => `
+    // Found during a wiring audit (2026-07-30): this panel already computes
+    // and DISPLAYS the recommended response (edr/investigate.py), but nothing
+    // here ever called POST /api/edr/respond — the one endpoint that actually
+    // isolates a host, kills a process, or blocks a domain. An analyst could
+    // read "isolate_host recommended" and had no button to do it; the only
+    // action reachable from the UI was relabeling the incident's status.
+    // Wired to the real, existing action vocabulary (edr/response.py:
+    // block_domain / unblock_domain / kill_process / isolate_host /
+    // release_isolation) via the same dry-run-first, explicit-second-click
+    // pattern this file already uses for the AI narrative just above.
+    const actions = (r.recommended_actions || []).map((a, i) => `
       <div class="rp-rec">
         <div class="rp-rec-head"><span class="mono-tag">${escapeHtml(a.action || '')}</span>${a.target ? `<span class="rp-rec-t">${escapeHtml(a.target)}</span>` : ''}</div>
         <div class="rp-desc">${escapeHtml(a.rationale || '')}</div>
+        ${a.action ? `
+        <div class="rp-respond" data-idx="${i}">
+          <button class="btn" data-respond-preview="${i}">${ICON.activity}<span>Preview what this would do</span></button>
+          <div class="rp-respond-result" hidden></div>
+        </div>` : ''}
       </div>`).join('')
       || '<div class="rp-desc" style="opacity:.6">No specific response action recommended.</div>';
 
@@ -1496,6 +1511,58 @@ const Replay = {
     if (askBtn) askBtn.onclick = () => this.loadInvestigation(true);
     const saveBtn = box.querySelector('#rpSaveTriage');
     if (saveBtn) saveBtn.onclick = () => this.saveTriage();
+
+    const recs = r.recommended_actions || [];
+    box.querySelectorAll('[data-respond-preview]').forEach((btn) => {
+      const idx = Number(btn.dataset.respondPreview);
+      const rec = recs[idx];
+      if (!rec || !rec.action) return;
+      btn.onclick = () => this.respondPreview(rec, btn);
+    });
+  },
+
+  // Step 1: dry_run — shows exactly what would happen, commits nothing. This
+  // mirrors edr/response.py's own stated contract ("dry-run by default, a
+  // real action must be explicitly requested") one level up into the UI,
+  // rather than only trusting the backend default silently.
+  async respondPreview(rec, btn) {
+    const wrap = btn.closest('.rp-respond');
+    const out = wrap.querySelector('.rp-respond-result');
+    btn.disabled = true;
+    const res = await safe(() => V.api.post('/api/edr/respond', {
+      action: rec.action, target: rec.target || '', incident_id: this.inc.id, dry_run: true,
+    }), null);
+    btn.disabled = false;
+    if (!res) {
+      out.hidden = false;
+      out.innerHTML = `<div class="rp-desc" style="opacity:.75">Could not reach the engine to preview this action.</div>`;
+      return;
+    }
+    out.hidden = false;
+    out.innerHTML = `
+      <div class="rp-desc">${escapeHtml(res.result || res.status || 'Previewed.')}</div>
+      <button class="btn primary" data-respond-confirm>${ICON.check}<span>Confirm — apply for real</span></button>`;
+    btn.remove();
+    const confirmBtn = out.querySelector('[data-respond-confirm]');
+    confirmBtn.onclick = () => this.respondExecute(rec, confirmBtn, out);
+  },
+
+  // Step 2: the real thing. Only reachable after a preview has already run
+  // for this exact card, and the button that triggers it is removed the
+  // moment it is clicked once, so a double-click cannot double-fire a real
+  // isolate/kill action.
+  async respondExecute(rec, btn, out) {
+    btn.disabled = true; btn.remove();
+    const res = await safe(() => V.api.post('/api/edr/respond', {
+      action: rec.action, target: rec.target || '', incident_id: this.inc.id, dry_run: false,
+    }), null);
+    if (res && res.status && res.status !== 'failed') {
+      out.innerHTML += `<div class="rp-desc" style="margin-top:6px">${escapeHtml(res.result || res.status)}</div>`;
+      toast(`${rec.action} applied.`, 'ok');
+    } else {
+      out.innerHTML += `<div class="rp-desc" style="margin-top:6px;opacity:.85">${escapeHtml((res && res.result) || 'The action did not complete — check logs.')}</div>`;
+      toast(`${rec.action} failed — see incident log.`, 'error');
+    }
   },
 
   async saveTriage() {

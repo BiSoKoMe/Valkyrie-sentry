@@ -64,3 +64,20 @@ uniform health/metrics/config/restart/events over in-process services. It
 is not yet dynamic module loading, hot-swap of running code, or an
 out-of-process plugin ABI (the Rust-owned engine seam the language strategy
 describes). Those are future increments that plug into this same contract.
+
+## Cross-process note (added 2026-07-30, architecture audit)
+
+A restart that takes down the whole engine process — `POST
+/api/system/restart` (not a per-component restart, which stays in-process)
+— has a consequence outside this file's scope: `web/server.py` mints a
+fresh `_CONTROL_TOKEN` on every process start (`secrets.token_urlsafe(24)`
+at module load). The Electron shell (`electron/src/main/engine.js`) caches
+that token for its own process lifetime, which used to mean every POST
+control action silently 403'd after any full-engine restart until the
+whole desktop app was relaunched — the restart control itself was the one
+action that broke every other control afterward. Fixed in `engine.js`'s
+`apiPost` (retry-once-on-401/403 with a freshly fetched token, regression
+test in `engine.test.js`), not in this file, since the registry's own
+per-component `restart()` never touches the process-wide token at all.
+Noted here anyway because the failure mode only makes sense read against
+both halves at once.

@@ -142,7 +142,17 @@ function apiRequest(method, pathname, { token, body, timeoutMs = 4000 } = {}) {
           let parsed = null;
           try { parsed = b ? JSON.parse(b) : null; } catch {}
           if (ok) resolve(parsed);
-          else reject(new Error((parsed && parsed.error) || `HTTP ${res.statusCode}`));
+          else {
+            // .status is set explicitly (not left to string-matching the
+            // message) so callers — apiPost's retry below in particular —
+            // can tell "the token is stale" apart from every other failure
+            // mode without depending on the exact wording the backend chose
+            // for that error, which is exactly the kind of fragile parsing
+            // this audit pass was looking for.
+            const err = new Error((parsed && parsed.error) || `HTTP ${res.statusCode}`);
+            err.status = res.statusCode;
+            reject(err);
+          }
         });
       }
     );
@@ -153,16 +163,34 @@ function apiRequest(method, pathname, { token, body, timeoutMs = 4000 } = {}) {
   });
 }
 
+// Cached per Electron-process-lifetime, but the Python engine mints a FRESH
+// token on every launch (secrets.token_urlsafe(24) at module load — see
+// valkyrie/web/server.py). The engine can restart underneath a still-running
+// Electron shell — e.g. POST /api/system/restart, a component restart, or the
+// self-healing watchdog recovering a crash — at which point every cached
+// token silently stops matching. Found during an architecture audit: the
+// restart control itself would have been the one action that broke every
+// OTHER control afterward, with no visible error beyond an opaque 403 on the
+// next click, until the user relaunched the whole app. `force` lets a caller
+// that already knows the token is stale skip the (harmless but pointless)
+// reuse of a value it just learned is wrong.
 let _tokenCache = null;
-async function controlToken() {
-  if (_tokenCache) return _tokenCache;
+async function controlToken(force = false) {
+  if (_tokenCache && !force) return _tokenCache;
   const r = await apiGet('/api/system/token', 2000);
   _tokenCache = r && r.token;
   return _tokenCache;
 }
 async function apiPost(pathname, body) {
   const token = await controlToken().catch(() => null);
-  return apiRequest('POST', pathname, { token, body });
+  try {
+    return await apiRequest('POST', pathname, { token, body });
+  } catch (err) {
+    if (err.status !== 401 && err.status !== 403) throw err;
+    const fresh = await controlToken(true).catch(() => null);
+    if (!fresh || fresh === token) throw err;   // genuinely forbidden, not stale
+    return apiRequest('POST', pathname, { token: fresh, body });
+  }
 }
 
 // True when the engine's web API answers on loopback.
