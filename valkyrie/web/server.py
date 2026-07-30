@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import secrets
 import subprocess
@@ -219,10 +220,24 @@ def _build_stats() -> dict:
 #      same-origin Origin check as defence in depth.
 # ---------------------------------------------------------------------------
 
+log = logging.getLogger("valkyrie.web")
+
 _CONTROL_TOKEN = secrets.token_urlsafe(24)
 _CONTROL_TOKEN_FILE = DATA_DIR / "control_token.txt"
 try:
     _CONTROL_TOKEN_FILE.write_text(_CONTROL_TOKEN, encoding="utf-8")
+    # This file IS the credential for every state-changing route — isolate the
+    # host, kill a process, disable telemetry protection, shut the engine down.
+    # Written under DATA_DIR, which on Windows inherits a BUILTIN\Users:read ACE
+    # from %ProgramData%, so without this any local account could read the token
+    # and drive those routes. The routes' auth was correct; the key to it was
+    # lying in the open, which makes the whole gate decorative.
+    from ..secure_file import harden as _harden_secret
+    _ok, _detail = _harden_secret(_CONTROL_TOKEN_FILE)
+    if not _ok:
+        log.error("control token file could not be protected (%s) — any local "
+                  "account may be able to read it and drive control routes",
+                  _detail)
 except OSError:
     pass
 

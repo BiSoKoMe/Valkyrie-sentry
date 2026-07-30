@@ -218,3 +218,74 @@ def describe(path: Path) -> str:
     """One-line human summary, for logs and the refuse-to-start message."""
     ok, detail = verify(path)
     return f"{'OK' if ok else 'EXPOSED'}: {path} — {detail}"
+
+
+# ---------------------------------------------------------------------------
+# The secret registry.
+#
+# Four separate secrets were found unprotected on Windows in a single audit —
+# the TLS CA private key, the MAC install key, the API control token, and the
+# fleet enrolment token — each for the same reason: DATA_DIR inherits a
+# BUILTIN\Users:read ACE from %ProgramData%, so anything written there is
+# world-readable unless something actively prevents it. Two of them even
+# carried code that protected them on POSIX and explicitly skipped Windows.
+#
+# Fixing each write site is necessary but not sufficient: the next secret
+# added will have the same default. This registry plus harden_known_secrets()
+# is the systemic backstop — every launch re-asserts the invariant, so a
+# missed write site is corrected rather than shipped.
+# ---------------------------------------------------------------------------
+
+def known_secrets() -> list[tuple[str, Path]]:
+    """(label, path) for every file Valkyrie writes that must stay private.
+
+    Imported lazily so this module stays usable without pulling in config.
+    """
+    from . import config as C
+    return [
+        ("TLS CA private key", C.TLS_CA_KEY_PATH),
+        ("mitmproxy CA directory", C.TLS_MITMPROXY_CONF_DIR),
+        ("MAC install key", C.MAC_KEY_PATH),
+        ("API control token", C.DATA_DIR / "control_token.txt"),
+        ("fleet enrolment token", C.FLEET_AGENT_IDENTITY_PATH),
+        ("WireGuard server config", C.WIREGUARD_CONF_PATH),
+        ("WireGuard client config", C.WIREGUARD_CLIENT_PATH),
+        ("WireGuard hop-1 config", C.WIREGUARD_HOP1_CONF),
+        ("WireGuard hop-2 config", C.WIREGUARD_HOP2_CONF),
+    ]
+
+
+def audit_secrets() -> list[tuple[str, Path, bool, str]]:
+    """Report protection state for every known secret that exists on disk."""
+    out = []
+    for label, path in known_secrets():
+        try:
+            if not Path(path).exists():
+                continue
+            ok, detail = verify(path)
+        except Exception as exc:                  # noqa: BLE001
+            ok, detail = False, f"{type(exc).__name__}: {exc}"
+        out.append((label, Path(path), ok, detail))
+    return out
+
+
+def harden_known_secrets() -> list[tuple[str, Path, bool, str]]:
+    """Re-assert the invariant on every known secret. Returns what was fixed.
+
+    Safe to call on every launch: hardening is idempotent, and a secret that
+    is already restricted is left untouched.
+    """
+    fixed = []
+    for label, path in known_secrets():
+        p = Path(path)
+        try:
+            if not p.exists():
+                continue
+            ok, _ = verify(p)
+            if ok:
+                continue
+            ok2, detail2 = harden(p, is_dir=p.is_dir())
+            fixed.append((label, p, ok2, detail2))
+        except Exception as exc:                  # noqa: BLE001
+            fixed.append((label, p, False, f"{type(exc).__name__}: {exc}"))
+    return fixed

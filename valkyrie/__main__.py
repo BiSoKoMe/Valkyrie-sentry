@@ -777,6 +777,31 @@ def main() -> None:
                           "(would leave a domain trace on the terminal).[/dim]")
 
     # ------------------------------------------------------------------
+    # 0. Secret hygiene — re-assert file permissions before anything runs.
+    #
+    #    A single audit found FOUR secrets written world-readable on Windows
+    #    (TLS CA private key, MAC install key, API control token, fleet
+    #    enrolment token), all for the same reason: DATA_DIR inherits a
+    #    BUILTIN\Users:read ACE from %ProgramData%, so anything written there
+    #    is readable by every local account unless something prevents it.
+    #    Each write site is now fixed, but this sweep is the backstop — it
+    #    heals a secret left exposed by an older build, and catches a future
+    #    write site that forgets. Idempotent and cheap; already-restricted
+    #    files are skipped.
+    # ------------------------------------------------------------------
+    try:
+        from .secure_file import harden_known_secrets
+        _healed = harden_known_secrets()
+        for _label, _p, _ok, _detail in _healed:
+            if _ok:
+                console.print(f"[dim]  Secured {_label} ({_p.name})[/dim]")
+            else:
+                console.print(f"[yellow]  ! {_label} ({_p.name}) is readable by "
+                              f"other local accounts: {_detail}[/yellow]")
+    except Exception as _exc:      # noqa: BLE001 — never block startup
+        console.print(f"[yellow]  ! secret permission sweep failed: {_exc}[/yellow]")
+
+    # ------------------------------------------------------------------
     # 1. Store
     # ------------------------------------------------------------------
     _t = time.monotonic()

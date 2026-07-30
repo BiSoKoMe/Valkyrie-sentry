@@ -239,6 +239,17 @@ class WireGuardConfig:
 
         WIREGUARD_CONF_PATH.write_text(server_text,  encoding="utf-8")
         WIREGUARD_CLIENT_PATH.write_text(client_text, encoding="utf-8")
+        # Both files contain a `PrivateKey =` line — the VPN identity itself.
+        # Anyone who reads one can impersonate this peer and decrypt its
+        # traffic, so they get the same treatment as the TLS CA key. DATA_DIR
+        # inherits a BUILTIN\Users:read ACE from %ProgramData% on Windows, so
+        # without this they would be readable by every local account.
+        from .secure_file import harden as _harden_secret
+        for _p in (WIREGUARD_CONF_PATH, WIREGUARD_CLIENT_PATH):
+            _ok, _detail = _harden_secret(_p)
+            if not _ok:
+                self._print(f"[yellow]! Could not restrict {_p.name}: "
+                            f"{_detail}[/yellow]")
 
         self._print(f"[green]✓[/green] Server config  : {WIREGUARD_CONF_PATH}")
         self._print(f"[green]✓[/green] Client config  : {WIREGUARD_CLIENT_PATH}")

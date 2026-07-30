@@ -139,6 +139,15 @@ class MultiHopVPN:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         WIREGUARD_HOP1_CONF.write_text(hop1_text)
         WIREGUARD_HOP2_CONF.write_text(hop2_text)
+        # Each hop config carries its own `PrivateKey =`. Reading either one
+        # breaks that hop's confidentiality, and reading both collapses the
+        # entire multi-hop chain back to a single observable path — which is
+        # the one property multi-hop exists to provide. Restrict them the
+        # moment they are written (the server setup SCRIPTS below carry only
+        # public keys, so they are deliberately left readable).
+        from .secure_file import harden as _harden_secret
+        for _p in (WIREGUARD_HOP1_CONF, WIREGUARD_HOP2_CONF):
+            _harden_secret(_p)
 
         # Server setup scripts
         s1_path = DATA_DIR / "server_setup_hop1.sh"

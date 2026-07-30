@@ -267,12 +267,20 @@ class FleetAgent:
                             "applied_policy_version": self._applied_policy_version}),
                 encoding="utf-8",
             )
-            # Best-effort tighten perms (POSIX only; no-op on Windows).
-            try:
-                import os
-                os.chmod(self._identity_path, 0o600)
-            except OSError:
-                pass
+            # This file holds the device's fleet ENROLMENT TOKEN — the
+            # credential that authenticates this endpoint to the fleet server
+            # and lets it fetch policy and report status. Reading it is enough
+            # to impersonate the endpoint to the server.
+            #
+            # This used to be `os.chmod(..., 0o600)` guarded by a comment
+            # saying "POSIX only; no-op on Windows" — i.e. the token was
+            # knowingly left readable by every local account on the platform
+            # the product actually ships on. secure_file.harden() covers both.
+            from ..secure_file import harden as _harden_secret
+            _ok, _detail = _harden_secret(self._identity_path)
+            if not _ok:
+                self._print(f"[yellow]Fleet: identity token could not be "
+                            f"restricted: {_detail}[/yellow]")
         except OSError as exc:
             self._print(f"[yellow]Fleet: could not persist identity: {exc}[/yellow]")
 
