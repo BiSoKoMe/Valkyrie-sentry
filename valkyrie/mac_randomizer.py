@@ -73,16 +73,28 @@ def _RE_IPV4(s: str) -> bool:
     return bool(_IPV4_RE.match(s.strip()))
 
 
+def _first_octet(mac: str) -> int:
+    """First octet of *mac*, accepting either separator.
+
+    `_MAC_RE` accepts BOTH ``:`` and ``-`` (Windows reports dashes — `ipconfig`,
+    `getmac` and the registry all use them), so splitting on ``:`` alone raised
+    ValueError on a MAC this module considers valid. Normalising here keeps the
+    accepted-input set and the parsed-input set identical, which is the actual
+    defect: a validator that accepts a format the parser cannot read.
+    """
+    return int(mac.replace("-", ":").split(":")[0], 16)
+
+
 def is_unicast(mac: str) -> bool:
     """True if the address is unicast (bit 0 of the first octet is clear).
     A multicast source address is invalid on the wire — every address we emit
     must be unicast."""
-    return (int(mac.split(":")[0], 16) & 0x01) == 0
+    return (_first_octet(mac) & 0x01) == 0
 
 
 def is_locally_administered(mac: str) -> bool:
     """True if the locally-administered bit (bit 1 of the first octet) is set."""
-    return (int(mac.split(":")[0], 16) & 0x02) == 0x02
+    return (_first_octet(mac) & 0x02) == 0x02
 
 
 def _mac_from_bytes(b: bytes, vendor_oui: Optional[str]) -> str:
@@ -546,16 +558,31 @@ class MacRandomizer:
         """Load the per-install HMAC key, creating it once on first use.
 
         The key is what makes per-network addresses both stable and
-        unpredictable, so it is generated from the OS CSPRNG and stored with
-        owner-only permissions where the platform supports it. If it cannot be
-        persisted (read-only volume, permission error) we still return a live
-        key so randomisation works this session — only cross-session stability
-        is lost, never security.
+        unpredictable, so it is generated from the OS CSPRNG and restricted to
+        privileged principals on every platform. If it cannot be persisted
+        (read-only volume, permission error) we still return a live key so
+        randomisation works this session — only cross-session stability is
+        lost, never security.
+
+        THIS KEY IS A SECRET, and it used to be protected only on POSIX
+        (`if os.name == "posix": chmod 0600`), while the docstring claimed
+        "where the platform supports it" — implying Windows could not. Windows
+        supports ACLs perfectly well; the guard simply left the key readable
+        by BUILTIN\\Users under %ProgramData%. That is a real privacy defeat
+        rather than a permissions nit: every per-network address is
+        HMAC(key, network_id), so anyone who reads this file can compute the
+        address for EVERY network the machine joins — predicting them ahead of
+        time and linking them all back to one person. That is precisely the
+        cross-network unlinkability the feature exists to provide.
         """
         try:
             if MAC_KEY_PATH.exists():
                 data = MAC_KEY_PATH.read_bytes()
                 if len(data) >= 32:
+                    # Heal an already-exposed key from an older build. The key
+                    # stays valid (rotating it would change every per-network
+                    # address); only its permissions are corrected.
+                    self._protect_key()
                     return data
         except Exception:
             pass
@@ -563,14 +590,20 @@ class MacRandomizer:
         try:
             MAC_KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
             MAC_KEY_PATH.write_bytes(key)
-            if os.name == "posix":
-                try:
-                    os.chmod(MAC_KEY_PATH, 0o600)
-                except OSError:
-                    pass
+            self._protect_key()
         except Exception:
             pass
         return key
+
+    def _protect_key(self) -> None:
+        """Restrict the install key to privileged principals, on any platform."""
+        try:
+            from . import secure_file
+            ok, detail = secure_file.harden(MAC_KEY_PATH)
+            if not ok:
+                self._log(f"MAC install key could not be protected: {detail}")
+        except Exception as exc:      # noqa: BLE001 — never break randomisation
+            self._log(f"MAC install key protection error: {exc}")
 
     def current_network_id(self, iface: str) -> str:
         """Best-effort stable identifier for the network *iface* is joined to.
