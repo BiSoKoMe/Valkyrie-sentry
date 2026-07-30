@@ -189,21 +189,44 @@ class TelemetryKiller:
         if not _WINREG_OK or not _is_admin():
             return {}
 
-        backup: dict[str, Any] = {"registry": {}, "services": {}}
+        # NEVER overwrite an existing backup.
+        #
+        # kill() used to rebuild the backup from whatever the registry held at
+        # the time and write it unconditionally. Running it a SECOND time
+        # therefore read back the values kill() had already written and recorded
+        # those as the "originals" — permanently destroying the user's real
+        # Windows settings. restore() would then report success while handing
+        # back the killed values, and the true originals were unrecoverable.
+        #
+        # This was trivially reachable: the Privacy page has a "Kill Telemetry"
+        # button and POST /api/telemetry/kill is a plain endpoint. Nothing
+        # stopped a second click, or a second launch calling it again.
+        #
+        # The FIRST backup is the only truthful one, so existing entries are
+        # preserved and only settings not already recorded are added (which
+        # also handles a build that adds new settings to _spec() later).
+        existing = self._load_backup() or {}
+        backup: dict[str, Any] = {
+            "registry": dict(existing.get("registry", {})),
+            "services": dict(existing.get("services", {})),
+        }
         results: dict[str, bool] = {}
 
         for name, (hive, subkey, value_name, vtype, killed_value) in _spec().items():
-            original = _read_value(hive, subkey, value_name)
-            backup["registry"][name] = {
-                "hive": hive, "subkey": subkey, "value_name": value_name,
-                "vtype": vtype, "original": original,
-            }
+            if name not in backup["registry"]:
+                backup["registry"][name] = {
+                    "hive": hive, "subkey": subkey, "value_name": value_name,
+                    "vtype": vtype, "original": _read_value(hive, subkey, value_name),
+                }
             results[name] = _write_value(hive, subkey, value_name, vtype, killed_value)
 
         for service in TELEMETRY_SERVICES_TO_DISABLE:
-            backup["services"][service] = _service_start_mode(service)
+            if service not in backup["services"]:
+                backup["services"][service] = _service_start_mode(service)
             results[f"service_{service}"] = _set_service_start(service, disabled=True)
 
+        # Written BEFORE nothing else depends on it, but after the reads above so
+        # a partially-failed kill still records what it saw.
         self._save_backup(backup)
         return results
 
@@ -237,6 +260,18 @@ class TelemetryKiller:
         for service, original_mode in backup.get("services", {}).items():
             was_disabled = original_mode is not None and "DISABLED" in original_mode.upper()
             results[f"service_{service}"] = _set_service_start(service, disabled=was_disabled)
+
+        # Clear the backup once everything has been put back. kill() now refuses
+        # to overwrite an existing backup (so a second kill cannot destroy the
+        # originals), which means a stale backup left here would make every
+        # FUTURE kill/restore cycle restore to these same now-outdated values.
+        # Only discard it if the restore actually succeeded everywhere —
+        # a partial restore must keep the backup so the user can retry.
+        if results and all(results.values()):
+            try:
+                self._backup_path.unlink()
+            except OSError:
+                pass
 
         return results
 
