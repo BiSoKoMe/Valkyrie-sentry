@@ -122,12 +122,22 @@ def elevate_and_exit() -> None:
 # ---------------------------------------------------------------------------
 def payload_source(name: str) -> Path:
     if getattr(sys, "frozen", False):
+        # "valkyrie_rules.yaml" is special: the bundled datas entry is the
+        # factory default (valkyrie/defaults/rules.default.yaml), NOT a file
+        # literally named valkyrie_rules.yaml -- PyInstaller's `datas` keeps
+        # the source basename, so it lands in _MEIPASS as rules.default.yaml.
+        # Read from there; still WRITTEN to the target as valkyrie_rules.yaml
+        # (copy_payload controls the destination name, unchanged).
+        if name == "valkyrie_rules.yaml":
+            return Path(getattr(sys, "_MEIPASS")) / "rules.default.yaml"
         return Path(getattr(sys, "_MEIPASS")) / name
     # Running installer.py directly from a source checkout, for testing.
     repo = Path(__file__).resolve().parent.parent
     dev_map = {
         "valkyrie.exe": repo / "dist" / "valkyrie.exe",
-        "valkyrie_rules.yaml": repo / "valkyrie_rules.yaml",
+        # Factory default, never the repo-root working file -- see the datas
+        # comment in installer/valkyrie_setup.spec for why.
+        "valkyrie_rules.yaml": repo / "valkyrie" / "defaults" / "rules.default.yaml",
         "start_all.ps1": repo / "start_all.ps1",
         "stop_all.ps1": repo / "stop_all.ps1",
         "register-tasks.ps1": repo / "installer" / "payload" / "register-tasks.ps1",

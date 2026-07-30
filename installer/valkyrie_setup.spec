@@ -28,7 +28,18 @@ if not os.path.exists(ENGINE):
 # which is exactly where installer.py's payload_source() looks (sys._MEIPASS).
 datas = [
     (ENGINE, "."),
-    (os.path.join(ROOT, "valkyrie_rules.yaml"), "."),
+    # The FACTORY DEFAULT, never the repo-root working valkyrie_rules.yaml.
+    # That file is the developer's own actively-edited rules (it has
+    # referenced personal ISP/DoH and editor-telemetry entries at various
+    # points) and was being bundled into every installer verbatim -- the
+    # exact thing valkyrie.spec's own datas comment says must never happen.
+    # It turned out to be harmless functionally (the engine's RULES_PATH is
+    # DATA_DIR-based, per config.py, and never reads this install-directory
+    # copy) but it shipped a leak of the developer's personal config into
+    # every user's Program Files for no purpose at all. Found while building
+    # a fresh installer for VM/red-team testing (2026-07-30).
+    (os.path.join(ROOT, "valkyrie", "defaults", "rules.default.yaml"),
+     "."),
     (os.path.join(ROOT, "start_all.ps1"), "."),
     (os.path.join(ROOT, "stop_all.ps1"), "."),
     (os.path.join(HERE, "payload", "register-tasks.ps1"), "."),
