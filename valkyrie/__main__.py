@@ -1346,6 +1346,7 @@ def main() -> None:
         ("mac_randomizer", mac_randomizer, "privacy"),
         ("zero_log", zero_log, "privacy"),
         ("content_watch", content_watch, "detection"),
+        ("process_watcher", proc_watcher, "sensor"),
     ]
     for _cname, _csvc, _ckind in _reg_specs:
         if _csvc is not None:
@@ -1487,6 +1488,17 @@ def main() -> None:
             healer.register("content_watch",
                             content_watch.is_running,
                             content_watch.start)
+
+        # Process attribution. Its refresh thread used to die on any single
+        # psutil/OS exception, freezing the port->process table and making every
+        # subsequent DNS event attribute to whatever process held that port at
+        # the moment of death — wrong attribution, reported as fact, forever.
+        # is_running() now covers both "thread alive" and "table not stale", so
+        # the watchdog can catch either failure.
+        if proc_watcher is not None:
+            healer.register("process_watcher",
+                            proc_watcher.is_running,
+                            proc_watcher.start)
 
         healer.start()
         if args.web:
