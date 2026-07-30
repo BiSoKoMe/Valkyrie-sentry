@@ -159,9 +159,28 @@ _LURE_STEMS = ("pdf", "doc", "docx", "xls", "xlsx", "ppt", "txt", "jpg", "jpeg",
 _EXE_TAILS = ("exe", "scr", "com", "pif", "bat", "cmd", "js", "jse", "vbs",
               "vbe", "wsf", "hta", "lnk", "ps1")
 
-# Bidirectional / control unicode used to disguise a file's real extension.
-_BIDI = ("‪", "‫", "‬", "‭", "‮",
-         "‎", "‏", "⁦", "⁧", "⁨", "⁩")
+# Bidirectional / control unicode used to disguise a file's real extension
+# (the "Trojan Source" trick: a RIGHT-TO-LEFT OVERRIDE before `gpj.exe`
+# makes it render as `invoice.exe.jpg` while still executing as .exe).
+#
+# Written as escapes, never as the literal characters. These are exactly the
+# codepoints that make source unreadable, so embedding them raw would make
+# this file's own diff untrustworthy and trips Trojan-Source scanners
+# (bandit B613) on our own detector. A detector for a trick must not
+# perform the trick.
+_BIDI = (
+    "\u202a",  # LEFT-TO-RIGHT EMBEDDING
+    "\u202b",  # RIGHT-TO-LEFT EMBEDDING
+    "\u202c",  # POP DIRECTIONAL FORMATTING
+    "\u202d",  # LEFT-TO-RIGHT OVERRIDE
+    "\u202e",  # RIGHT-TO-LEFT OVERRIDE
+    "\u200e",  # LEFT-TO-RIGHT MARK
+    "\u200f",  # RIGHT-TO-LEFT MARK
+    "\u2066",  # LEFT-TO-RIGHT ISOLATE
+    "\u2067",  # RIGHT-TO-LEFT ISOLATE
+    "\u2068",  # FIRST STRONG ISOLATE
+    "\u2069",  # POP DIRECTIONAL ISOLATE
+)
 
 
 # ── Small pure helpers ──────────────────────────────────────────────────────

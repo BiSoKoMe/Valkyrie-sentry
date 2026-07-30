@@ -102,10 +102,9 @@ jobs:
         # change that quietly degrades detection a red build, not a silent ship.
         run: PYTHONUTF8=1 python tests/efficacy/harness.py
 
-  lint:
-    name: Lint (advisory)
+  coverage:
+    name: Coverage floor
     runs-on: ubuntu-latest
-    continue-on-error: true   # advisory for now; not a merge gate yet
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -113,7 +112,44 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install ruff
-        run: python -m pip install ruff
-      - name: Ruff (syntax-level checks only)
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements_modular.txt
+          python -m pip install cryptography httpx coverage
+      - name: Measure coverage and enforce the floor
+        # Measured baseline was 59% when this gate was introduced. The floor is
+        # a RATCHET: raise it as coverage improves, never lower it to make a
+        # build pass. A change that drops coverage below the floor is a change
+        # that removed tested behaviour, and it should be red.
+        run: |
+          COVERAGE_FLOOR=55
+          for t in tests/test_*.py; do
+            PYTHONUTF8=1 python -m coverage run --append --source=valkyrie "$t" \
+              >/dev/null 2>&1 || true
+          done
+          python -m coverage report --fail-under=$COVERAGE_FLOOR
+
+  lint:
+    name: Lint + security (gating)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install ruff + bandit
+        run: python -m pip install ruff bandit
+      # Promoted from advisory to gating. It was `continue-on-error: true`,
+      # which meant a red lint never blocked anything — a gate that cannot fail
+      # is decoration.
+      - name: Ruff (real-error rules)
         run: ruff check --select E9,F63,F7,F82 valkyrie
+      - name: Bandit (HIGH severity, HIGH confidence)
+        # Deliberately narrow so it can actually gate today. The remaining
+        # medium findings (B104 bind-all, B310 urlopen, B314 XML parsing) are
+        # real review items tracked in docs/TEST_PLAN.md tier 2 — widen this to
+        # -ll once they are triaged, rather than starting non-gating.
+        run: bandit -r valkyrie -q -lll -iii

@@ -114,16 +114,23 @@ class IntelligenceMemory:
         # Defense in depth: a popular legitimate domain is never served 'bad'
         # from memory, even if an older verdict lingers (the tracker blocklist
         # still blocks its tracker subdomains via a separate path).
-        if is_popular(domain):
-            return None
+        #
+        # The guard covers the 'bad' answers ONLY. It previously returned None
+        # for popular domains outright, which also threw away a legitimate
+        # 'good' verdict and left the fast path permanently dead for exactly the
+        # highest-traffic domains — every lookup re-ran the full pipeline. Not a
+        # safety hole (the failure was toward more analysis, never less), but it
+        # silently negated the cache where it mattered most.
+        popular = is_popular(domain)
         with self._lock:
-            if domain in self._bad:
-                return "bad"
-            # Parent-domain match: bad example.com covers sub.example.com
-            parts = domain.split(".")
-            for i in range(1, len(parts) - 1):
-                if ".".join(parts[i:]) in self._bad:
+            if not popular:
+                if domain in self._bad:
                     return "bad"
+                # Parent-domain match: bad example.com covers sub.example.com
+                parts = domain.split(".")
+                for i in range(1, len(parts) - 1):
+                    if ".".join(parts[i:]) in self._bad:
+                        return "bad"
             if domain in self._good:
                 return "good"
         return None

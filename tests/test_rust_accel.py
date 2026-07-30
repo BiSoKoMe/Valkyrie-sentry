@@ -18,6 +18,9 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from harness import skip_file
 
 _FAILURES: list[str] = []
 
@@ -32,10 +35,9 @@ def main() -> int:
     try:
         import valkyrie_accel
     except Exception as exc:   # noqa: BLE001
-        print(f"\n  [-] SKIP — native accelerator not built ({exc}).")
         print("      Build it with: cd rust/valkyrie_accel && maturin build --release")
         print("      The pure-Python fallback is exercised by test_ipset_lookup.py.")
-        return 0
+        return skip_file("native accelerator (Rust)", f"not built ({exc})")
 
     from valkyrie.firewall import _PyIPSet
     from valkyrie import firewall

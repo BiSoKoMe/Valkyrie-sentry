@@ -37,30 +37,77 @@ Substantial code under 50%: `tls_inspector` 16%, `telemetry_killer` 21%,
 
 ---
 
-## Tier 0 — Make the results mean something
+## Tier 0 — Make the results mean something ✅ DONE (2026-07-29)
 
-**Nothing below this line counts until this is done.** Today a test that executes
-zero assertions prints `ALL PASSED`, exits 0, and the runner counts it as a pass
-([run_tests.py:72](../tests/run_tests.py#L72) judges on exit code alone; 34 files
-use the "no failures recorded → ALL PASSED" pattern; **no file asserts that a
-minimum number of checks actually ran**). Three tests do this right now:
-`test_telemetry`, `test_tls`, `test_rust_accel` — covering the telemetry-killer
-pillar, the TLS path, and the Rust accelerator with literally no assertions.
+**Nothing below this line counted until this was done.** A test that executed
+zero assertions printed `ALL PASSED`, exited 0, and the runner counted it as a
+pass ([run_tests.py](../tests/run_tests.py) judged on exit code alone; 34 files
+used the "no failures recorded → ALL PASSED" pattern; **no file asserted that a
+minimum number of checks actually ran**).
 
-1. **Count executed checks.** `_check` increments a counter; a file finishing
-   with zero checks **fails**. Kills the vacuous pass outright.
-2. **Real skip semantics.** A skipped test exits **77**, and the runner reports
-   `passed · failed · skipped · partial` in its own columns instead of folding
-   skips into "passed."
-3. **Declared minimums.** Each file states the number of checks it expects; a
-   check that silently disappears is a failure, not a quieter pass.
-4. **Coverage in CI with a floor.** Start the gate at the measured 59% and
-   ratchet up. A PR that drops coverage fails.
-5. **Promote the linters.** CI runs `ruff --select E9,F63,F7,F82` and is marked
-   *advisory*. Make it enforcing, widen the rule set, and add **bandit** — a
-   security product with no security linter is indefensible.
+Shipped:
 
-*Done when:* deleting the body of any single test causes a visible CI failure.
+1. **[tests/harness.py](../tests/harness.py)** — `Checks` counts executed
+   assertions. Zero checks ⇒ **fail**, not pass. Declared `expect_min` ⇒ a check
+   that silently disappears fails. The harness self-tests these properties.
+2. **Real skip semantics.** Skips exit **77**; the runner reports four outcomes —
+   `passed · failed · skipped · vacuous` — and never folds a skip into "passed."
+3. **Vacuous detection for all 58 files without rewriting them.** Harness-based
+   files report counts directly; legacy files are judged on whether their output
+   shows any evidence a check ran. Proven: a probe test that exits 0 having
+   asserted nothing is reported `VOID` and returns exit **1**.
+4. **Coverage floor in CI** at 55% against the measured 59%, as a ratchet.
+5. **Linters promoted from advisory to gating** — the lint job was
+   `continue-on-error: true`, so a red lint blocked nothing. Added **bandit** at
+   HIGH/HIGH, which gates today rather than starting non-gating.
+
+*Done when: deleting the body of any single test causes a visible CI failure.* —
+verified.
+
+### What Tier 0 uncovered on the way
+
+Making results honest immediately surfaced four defects that a green suite had
+been hiding. This is the argument for the tier, in miniature:
+
+- **A real product bug.** [`IntelligenceMemory.check()`](../valkyrie/intelligence/memory.py)
+  returned `None` for *every* verdict on a popular domain, though its own comment
+  said the guard was for `bad` only. The ADR 0033 FP fix had killed the `good`
+  fast path for exactly the highest-traffic domains, so every lookup re-ran the
+  full pipeline. Not a safety hole — it failed toward more analysis, never less —
+  but it silently negated the cache where it mattered most. **Fixed**; the two
+  failing checks in `test_intelligence` now pass (32/32), and the popular-domain
+  FP protection still holds.
+- **The documented invocation did not work.** `python tests/run_tests.py` killed
+  **7 suites** with `UnicodeEncodeError` — Windows consoles default to cp1252 and
+  the tests print arrows and box-drawing characters. `PYTHONUTF8=1` had been
+  applied by hand as a workaround instead of fixed. The runner now forces UTF-8
+  in the child process.
+- **A report wearing a test's filename.** `test_scanner_accuracy.py` computed
+  precision/recall and then `return 0` unconditionally — it could measure 0%
+  recall and still pass. Now gated: FP == 0, recall ≥ 0.85, precision ≥ 0.95
+  (measured 1.000 / 0.933 / 0 FP).
+- **Our own detector tripped a Trojan-Source scanner.** `behavior_score._BIDI`
+  held the bidi control characters *literally* — the same codepoints it exists to
+  detect, embedded raw in source, making its own diff untrustworthy. Rewritten as
+  `\uXXXX` escapes; codepoints byte-identical.
+
+- **A nondeterministic test — still open.** `test_playbooks.py` failed **8 runs
+  in a row**, then passed **18 in a row**, on the same commit, and it fails at
+  `HEAD` too, so it predates this work. Section [4]'s response was verified to
+  land in 0.00s when probed directly, so the 3s polling deadlines were not the
+  cause — they are now `_WAIT = 10.0`, which removes a false-failure class but
+  is **not a fix**, because the root cause is unidentified. A test that answers
+  differently on identical input is as useless as one that asserts nothing.
+  Treat this as open until the mechanism is found.
+
+Remaining known gaps, deliberately not closed here: `shell=True` in
+[`edr/response.py`](../valkyrie/edr/response.py) is safe by construction (fixed
+literals, no interpolation) and is annotated `# nosec B602` rather than
+refactored, because that path installs live firewall rules and cannot be
+exercised safely outside a VM — see tier 4. The medium bandit findings (B104
+bind-all, B310 `urlopen`, B314 XML parsing) are triage items for tier 2; the
+XML one is the most interesting, since `etw/wineventlog.py` parses
+attacker-influenced event XML with stdlib ElementTree.
 
 ## Tier 1 — Test what actually breaks users
 

@@ -2,8 +2,9 @@
 
 Checks CA generation, that mitmproxy starts on TLS_PROXY_PORT, and sends
 a test HTTPS request through the proxy to confirm interception works.
-Skips gracefully (exit 0) if mitmproxy is not installed, matching the
-graceful-degradation contract of TLSInspector itself.
+Without mitmproxy it exits EXIT_SKIP, so the runner records the TLS path as
+**untested here** instead of counting it as a pass — it previously exited 0,
+which is how tls_addon.py sat at 0% coverage behind a green badge.
 
 Usage:
     python test_tls.py
@@ -14,7 +15,9 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from harness import skip_file
 from valkyrie.config import TLS_CA_CERT_PATH, TLS_PROXY_PORT
 from valkyrie.store import Store
 from valkyrie.tls_inspector import TLSInspector
@@ -26,8 +29,8 @@ def main() -> None:
     try:
         import mitmproxy  # noqa: F401
     except ImportError:
-        print("  SKIP — mitmproxy not installed (pip install mitmproxy)")
-        sys.exit(0)
+        sys.exit(skip_file("TLS inspection",
+                           "mitmproxy not installed (pip install mitmproxy)"))
 
     store = Store()
     store.start()

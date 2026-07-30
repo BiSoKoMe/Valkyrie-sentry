@@ -1,9 +1,10 @@
 """Standalone test for the Windows telemetry killer.
 
 Checks scan() works, kill() creates a backup and applies changes, and
-restore() reverts them. Requires Administrator — exits 0 with a SKIP
-message if not elevated, since that's the documented graceful-degradation
-path rather than a failure.
+restore() reverts them. Requires Administrator — without elevation it exits
+EXIT_SKIP so the runner records the telemetry killer as **untested here**
+rather than counting it as a passing test (it previously exited 0, which is
+how a whole pillar sat at 21% coverage behind a green badge).
 
 Usage:
     python test_telemetry.py
@@ -13,7 +14,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from harness import skip_file
 from valkyrie.config import TELEMETRY_BACKUP_PATH
 from valkyrie.telemetry_killer import TelemetryKiller, is_admin
 
@@ -22,8 +25,8 @@ def main() -> None:
     print("Testing telemetry killer ...")
 
     if not is_admin():
-        print("  SKIP — not running as Administrator (required for registry edits)")
-        sys.exit(0)
+        sys.exit(skip_file("telemetry killer",
+                           "not running as Administrator (required for registry edits)"))
 
     tk = TelemetryKiller()
 

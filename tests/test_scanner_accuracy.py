@@ -38,7 +38,9 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from harness import Checks
 import valkyrie.config as config
 
 config.USE_EXTERNAL_LISTS = False   # intelligence-only posture
@@ -188,7 +190,17 @@ def main() -> int:
             if t == "clean" and positive(dec):
                 print(f"    - {d}  ({dec}: {r})")
 
-    return 0
+    # Gate. Until now this file computed the numbers above and then returned 0
+    # unconditionally — it could report 0% recall and still pass, which made it
+    # a report wearing a test's filename. Thresholds sit just below the measured
+    # values so ordinary noise doesn't flap, and FP is held at zero because a
+    # false positive sinkholes a real site, which is this product's cardinal sin.
+    print("\n" + "=" * 60)
+    c = Checks("scanner accuracy", expect_min=3)
+    c.check(f"no false positives on benign sites (FP={FP})", FP == 0)
+    c.check(f"recall >= 0.85 (measured {recall:.3f})", recall >= 0.85)
+    c.check(f"precision >= 0.95 (measured {precision:.3f})", precision >= 0.95)
+    return c.finish()
 
 
 if __name__ == "__main__":

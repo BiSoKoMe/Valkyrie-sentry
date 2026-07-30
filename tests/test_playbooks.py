@@ -20,6 +20,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# How long to wait for an async playbook response to land on an incident.
+# The work itself completes in ~0.00s; this is purely slack for a loaded CI box.
+# It was 3s, and this file has been observed failing 8 runs in a row and then
+# passing 18 in a row on the same commit — a nondeterministic result is as
+# useless as a vacuous one, so the slack is generous on purpose. If a response
+# genuinely never arrives, 10s fails just as surely as 3s did.
+_WAIT = 10.0
+
 _FAILURES: list[str] = []
 
 
@@ -92,7 +100,7 @@ def main() -> int:
         inc_id = engine.report_detection(Detection(
             source="test", severity="high", category="c2",
             title="beacon", entity="evil.example", process_name="mal.exe"))
-        deadline = time.monotonic() + 3
+        deadline = time.monotonic() + _WAIT
         inc = engine.get_incident(inc_id)
         while time.monotonic() < deadline and not (inc and inc.get("responses")):
             time.sleep(0.05)
@@ -114,7 +122,7 @@ def main() -> int:
         rid = engine.report_detection(Detection(
             source="test", severity="critical", category="ransomware",
             title="canary tripped", entity="C:/u", process_name="crypt.exe"))
-        deadline = time.monotonic() + 3
+        deadline = time.monotonic() + _WAIT
         rinc = engine.get_incident(rid)
         while time.monotonic() < deadline and not (rinc and rinc.get("responses")):
             time.sleep(0.05)
@@ -154,7 +162,7 @@ def main() -> int:
             source="etw", severity="critical", category="process",
             title="injection", entity="C:/x.exe", process_name="mal.exe",
             process_pid=2147480000))                   # unused high PID → no such process
-        deadline = time.monotonic() + 3
+        deadline = time.monotonic() + _WAIT
         pinc = engine.get_incident(pk)
         while time.monotonic() < deadline and not (pinc and pinc.get("responses")):
             time.sleep(0.05); pinc = engine.get_incident(pk)

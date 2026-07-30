@@ -213,7 +213,16 @@ class IsolateHostResponder(ResponderPlugin):
         errors = []
         for c in cmds:
             try:
-                subprocess.run(c, shell=True, check=True, capture_output=True)
+                # Shell use is safe here by construction: every string comes
+                # from _commands() above, which returns fixed literals chosen by
+                # an internal `action` enum. No caller input, incident field, or
+                # hostname is ever interpolated, so there is no injection
+                # surface. Kept as-is rather than refactored to argv because
+                # this path installs live firewall rules and cannot be exercised
+                # safely outside a VM, so changing it blind is the greater risk.
+                # Revisit during VM validation (docs/TEST_PLAN.md tier 4).
+                subprocess.run(c, shell=True, check=True,  # nosec B602
+                               capture_output=True)
             except subprocess.CalledProcessError as exc:
                 errors.append(f"{c!r}: {exc.stderr.decode(errors='replace').strip()}")
         if errors:
