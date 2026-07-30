@@ -30,7 +30,9 @@ from typing import Optional
 
 from .framework import Sensor
 from .wineventlog import ChannelReader, parse_event_xml
-from ..process_telemetry import classify_process
+from ..behavior_score import classify_anomaly
+from ..behavioral_rules import classify_behavior
+from ..process_telemetry import classify_cmdline, classify_process
 from ..telemetry import (
     ACT_FLAGGED, ACT_OBSERVED, CAT_NETWORK, CAT_PERSISTENCE, CAT_PROCESS,
     PERSIST_RUN_KEY, SEV_HIGH, SEV_INFO, SEV_LOW, SEV_MEDIUM, severity_rank,
@@ -95,18 +97,79 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
 
     # EID 1 — process creation. Emit ONLY when suspicious (the poller covers the
     # rest), but enrich heavily so correlation has full context.
+    #
+    # This runs the SAME four-classifier stack as the polling collector
+    # (process_telemetry.ProcessRecord.to_event). It previously ran only
+    # classify_process(), which judges image name / path / parent and never
+    # sees the command line — so `powershell.exe -enc <base64>` launched from
+    # explorer.exe scored as ordinary PowerShell, fell under the SEV_LOW gate
+    # below, and was discarded before the 32 MITRE-mapped IOA rules ever ran.
+    #
+    # That was the more damaging half of the bug: Sysmon is the *higher*
+    # fidelity source (it sees short-lived processes the ~2s poller misses
+    # entirely, and it carries the full command line), yet it was running a
+    # strictly weaker pipeline than the poller. Execution, Defense Evasion and
+    # Discovery are almost entirely command-line-shaped techniques, which is
+    # why those three tactics measured 0% while persistence and C2 — which key
+    # off registry and network artefacts — did not.
+    #
+    # The severity gate is unchanged and still applies; it is simply evaluated
+    # AFTER every classifier has had the command line, so an escalation can
+    # actually happen before the event is dropped.
     if eid == 1:
         image = d.get("Image", "")
         parent = _name(d.get("ParentImage", ""))
-        sev, labels, reason = classify_process(_name(image), image, parent)
+        name = _name(image)
+        cmdline = d.get("CommandLine", "") or ""
+
+        sev, labels, reason = classify_process(name, image, parent)
+        labels = list(labels)
+        technique = ""
+
+        # Command-line heuristics (encoded/hidden PowerShell, download cradles).
+        csev, clabels, creason = classify_cmdline(name, cmdline)
+        if severity_rank(csev) > severity_rank(sev):
+            sev = csev
+        for lab in clabels:
+            if lab not in labels:
+                labels.append(lab)
+        reason = "; ".join(r for r in (reason, creason) if r)
+
+        # The MITRE-mapped IOA rule content layer (32 rules). Its top hit
+        # carries the exact ATT&CK technique so the kill-chain gets a real
+        # tactic instead of one inferred from labels.
+        behavior = classify_behavior(name, parent, cmdline, image)
+        if behavior is not None:
+            if severity_rank(behavior["severity"]) > severity_rank(sev):
+                sev = behavior["severity"]
+            for lab in behavior["labels"]:
+                if lab not in labels:
+                    labels.append(lab)
+            reason = "; ".join(r for r in (reason, behavior["reason"]) if r)
+            technique = behavior["technique"]
+
+        # The generalizing anomaly scorer — catches shapes no rule was written
+        # for (masquerade, obfuscation, impossible ancestry). Defers to a
+        # rule's exact technique when one already fired.
+        anomaly = classify_anomaly(name, parent, cmdline, image)
+        if anomaly is not None:
+            if severity_rank(anomaly["severity"]) > severity_rank(sev):
+                sev = anomaly["severity"]
+            for lab in anomaly["labels"]:
+                if lab not in labels:
+                    labels.append(lab)
+            reason = "; ".join(r for r in (reason, anomaly["reason"]) if r)
+            if not technique:
+                technique = anomaly["technique"]
+
         if severity_rank(sev) < severity_rank(SEV_LOW):
             return None
         return {
             "category": CAT_PROCESS, "activity": "exec",
-            "actor_pid": int(d.get("ProcessId", 0) or 0), "actor_name": _name(image),
+            "actor_pid": int(d.get("ProcessId", 0) or 0), "actor_name": name,
             "actor_path": image, "target": {"path": image},
             "severity": sev, "labels": labels, "reason": reason or "process creation",
-            "technique": "", "context": _context(d),
+            "technique": technique, "context": _context(d),
         }
 
     # EID 3 — network connection (process context DNS/firewall lacks).
