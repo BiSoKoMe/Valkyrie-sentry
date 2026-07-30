@@ -271,6 +271,10 @@ html, body {
 .card .label svg { width: 15px; height: 15px; opacity: 0.6; }
 .card .value { font-size: 30px; font-weight: 650; margin-top: 12px; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; color: var(--text-0); }
 .card .value .unit { font-size: 14px; color: var(--text-2); font-weight: 500; margin-left: 4px; }
+/* "Off" — the producing subsystem isn't running. Deliberately muted and
+   smaller than a real figure so it reads as an absence of coverage rather
+   than as a measured value of zero. */
+.card .value .num.stat-off { font-size: 20px; color: var(--text-2, #7c828b); font-weight: 550; }
 .card .foot { margin-top: 8px; font-size: 11.5px; color: var(--text-2); }
 .card .spark { position: absolute; right: 0; bottom: 0; left: 0; height: 40px; opacity: 0.5; }
 /* Emphasis cards keep a subtly brighter number + a top hairline — no hue */

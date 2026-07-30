@@ -100,6 +100,7 @@ class DNSInterceptor:
         intelligence=None,          # valkyrie.intelligence.Intelligence (optional)
         firewall=None,              # valkyrie.firewall.FirewallManager (optional)
         threat_intel=None,          # valkyrie.threat_intel.ThreatIntelManager (optional)
+        content_watch=None,         # valkyrie.content_watch.ContentWatcher (optional)
         strict: bool = False,
         host: str          = DNS_LISTEN_HOST,
         port: int          = DNS_LISTEN_PORT,
@@ -115,6 +116,9 @@ class DNSInterceptor:
         self._watcher       = process_watcher
         self._scanner       = scanner
         self._intelligence  = intelligence
+        # Background page-content analysis. Optional and fail-open: when None,
+        # _decide behaves exactly as it did before this was added.
+        self._content_watch = content_watch
         # Firewall's in-process CIDR set (12k+ threat-intel ranges). Consulted
         # AFTER an allowed query is resolved: if the upstream answer points at
         # an IP inside a blocked range we sinkhole the reply instead of handing
@@ -455,6 +459,17 @@ class DNSInterceptor:
         """Return (decision, reason, suspicion_score, category)."""
         rules = self._rules.get()
         intel = self._intelligence
+
+        # Queue the domain for background page-content analysis. This is O(1)
+        # and cannot raise — the fetch happens on a worker thread, never here,
+        # because this function is synchronous with a live DNS query waiting on
+        # it. A verdict therefore informs LATER lookups, not this one.
+        #
+        # No new decision stage is needed: an auto-blocked page writes itself
+        # into intelligence memory via remember_bad(), so the next lookup picks
+        # it up at stage 2b below through the path that already exists.
+        if self._content_watch is not None:
+            self._content_watch.observe(domain)
 
         # 1. User always_allow
         if rules.is_always_allowed(domain, proc.name):

@@ -186,7 +186,19 @@ def _build_stats() -> dict:
         "meeting_minutes":    meeting.get("duration_minutes", 0),
         "running_as_service": is_running_as_service(),
         "scanner_decisions":  state.store.scanner_decision_count(),
-        "elements_cleaned":   state.store.cleaned_count(),
+        # `elements_cleaned` counts page_clean rows, which ONLY the TLS
+        # inspection addon ever writes. TLS inspection is off by default, so
+        # this reported a hard 0 forever on a default install while the UI
+        # rendered it as a live counter — a number that cannot move reads as
+        # "nothing is happening", not as "this layer isn't running". Report
+        # None when the producing layer is absent so the UI can say so
+        # honestly; the count itself is unchanged when it IS running.
+        "elements_cleaned":   (state.store.cleaned_count()
+                               if state.tls_inspector is not None else None),
+        "tls_inspection_active": state.tls_inspector is not None,
+        # Background page-content analysis (content_watch.py).
+        "content_analysis":   (state.content_watch.stats()
+                               if state.content_watch is not None else None),
         "zero_log_active":    zero_active,
         "multihop_hop1_ready": mh_status["hop1_conf_exists"],
         "multihop_hop2_ready": mh_status["hop2_conf_exists"],

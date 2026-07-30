@@ -51,6 +51,8 @@ class AppContext:
     playbooks:      Optional[object] = None   # valkyrie.edr.playbooks.PlaybookEngine
     registry:       Optional[object] = None   # valkyrie.components.ComponentRegistry
     amsi:           Optional[object] = None   # valkyrie.amsi.AmsiScanner
+    content_watch:  Optional[object] = None   # valkyrie.content_watch.ContentWatcher
+    tls_inspector:  Optional[object] = None   # valkyrie.tls_inspector.TLSInspector
 
     start_time: float = 0.0
     dns_port:   int   = 0     # actual DNS listen port (for dashboard display)
@@ -62,7 +64,7 @@ class AppContext:
         "mac_randomizer", "zero_log", "self_heal", "process_collector",
         "network_collector", "persistence_collector", "sensor_manager",
         "heartbeat", "ransomware_shield", "threat_intel", "siem", "playbooks",
-        "amsi",
+        "amsi", "content_watch", "tls_inspector",
     )
 
     def components(self) -> dict[str, bool]:

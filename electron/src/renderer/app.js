@@ -69,6 +69,19 @@ function privacyScore(stats, up) {
 }
 function animateNumber(node, to) {
   if (!node) return;
+  // null/undefined means "the subsystem that produces this number is not
+  // running" — distinct from a real zero. Rendering it as 0 reads as
+  // "running, nothing found", which is false reassurance about a layer that
+  // is switched off entirely. The API sends null deliberately for this.
+  if (to == null) {
+    node.dataset.v = 0;
+    node.textContent = 'Off';
+    node.classList.add('stat-off');
+    node.title = 'This protection layer is not currently running';
+    return;
+  }
+  node.classList.remove('stat-off');
+  node.removeAttribute('title');
   const from = Number(node.dataset.v || 0);
   if (from === to) { node.textContent = fmt(to); return; }
   node.dataset.v = to;
@@ -337,7 +350,10 @@ PAGES.dashboard = {
     const vals = {
       dns_blocked: stats.dns_blocked || 0, fw_blocked: stats.fw_blocked || 0,
       flagged: stats.flagged || 0, total_24h: stats.total_24h || 0, allowed: stats.allowed || 0,
-      elements_cleaned: stats.elements_cleaned || 0, scanner_decisions: stats.scanner_decisions || 0, privacy: ps,
+      // elements_cleaned is intentionally NOT `|| 0`: the API sends null when
+      // TLS inspection isn't running, and that must render as "Off", not 0.
+      elements_cleaned: stats.elements_cleaned ?? null,
+      scanner_decisions: stats.scanner_decisions || 0, privacy: ps,
     };
     for (const [k, v] of Object.entries(vals)) animateNumber($('card-' + k), v);
     renderFeed((data && data.events) || [], up);
@@ -411,7 +427,7 @@ PAGES.privacy = {
   },
   onTele(data) {
     const s = (data && data.stats) || {};
-    animateNumber($('card-cleaned'), s.elements_cleaned || 0);
+    animateNumber($('card-cleaned'), s.elements_cleaned ?? null);
     animateNumber($('card-pblocked'), (s.dns_blocked || 0) + (s.fw_blocked || 0));
   },
   async poll() {

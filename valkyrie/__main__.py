@@ -970,6 +970,26 @@ def main() -> None:
     _tick("DoH detector started", _t)
 
     # ------------------------------------------------------------------
+    # 9f. Background page-content analysis.
+    #     site_analyzer.py has always been able to judge a page by what it
+    #     actually loads and runs — cryptominers, fingerprinting, packed JS,
+    #     phishing — which is how an unknown domain gets a real verdict rather
+    #     than a blocklist lookup. Until now its ONLY caller was the manual
+    #     `--analyze <url>` command, so the capability shipped switched off.
+    #     ContentWatcher runs it continuously off the DNS path (never inline:
+    #     _decide is synchronous with a live query waiting). Auto-blocking is
+    #     deliberately limited to near-certain categories — see the FP policy
+    #     in content_watch.py.
+    # ------------------------------------------------------------------
+    _t = time.monotonic()
+    content_watch = None
+    if not args.no_dns:
+        from .content_watch import ContentWatcher
+        content_watch = ContentWatcher(store=store, intelligence=intelligence)
+        content_watch.start()
+        _tick("Page-content analysis started", _t)
+
+    # ------------------------------------------------------------------
     # 10. DNS interceptor
     # ------------------------------------------------------------------
     _t = time.monotonic()
@@ -992,6 +1012,7 @@ def main() -> None:
             intelligence    = intelligence,
             firewall        = (firewall if not args.no_firewall else None),
             threat_intel    = threat_intel,
+            content_watch   = content_watch,
             strict          = args.strict,
             host            = args.host,
             port            = args.port,
@@ -1299,6 +1320,7 @@ def main() -> None:
         ("playbooks", playbook_engine, "response"),
         ("mac_randomizer", mac_randomizer, "privacy"),
         ("zero_log", zero_log, "privacy"),
+        ("content_watch", content_watch, "detection"),
     ]
     for _cname, _csvc, _ckind in _reg_specs:
         if _csvc is not None:
@@ -1338,6 +1360,10 @@ def main() -> None:
             playbooks      = playbook_engine,
             registry       = registry,
             amsi           = amsi_scanner,
+            content_watch  = content_watch,
+            # tls_inspector is created further down (it needs the store and a
+            # started engine), so it is attached to the context after start()
+            # rather than here — see the assignment below.
         )
         if args.web_host not in ("127.0.0.1", "::1", "localhost"):
             console.print(
@@ -1429,6 +1455,14 @@ def main() -> None:
                             sensor_manager.is_healthy,
                             sensor_manager.start)
 
+        # Page-content analysis: a dead worker would leave the feature looking
+        # enabled while analysing nothing, which is precisely the silent-failure
+        # class this project keeps finding. Watch it like everything else.
+        if content_watch is not None:
+            healer.register("content_watch",
+                            content_watch.is_running,
+                            content_watch.start)
+
         healer.start()
         if args.web:
             web_state.self_heal = healer
@@ -1497,6 +1531,13 @@ def main() -> None:
             )
             tls_inspector = None
 
+    # Attach to the dashboard context only if it actually started. /api/stats
+    # keys the "Trackers Cleaned" counter off this: when TLS inspection is not
+    # running, nothing can ever write a page_clean row, so the API reports null
+    # (rendered as "off") instead of a 0 that looks like a live-but-idle count.
+    if web_state is not None:
+        web_state.tls_inspector = tls_inspector
+
     # ------------------------------------------------------------------
     # 12. Startup status box (real values) + auto-open dashboard
     # ------------------------------------------------------------------
@@ -1558,6 +1599,10 @@ def main() -> None:
             mac_randomizer.stop()
         if healer:
             healer.stop()
+        # Stopped after the healer, so its recovery hook cannot restart the
+        # worker we are in the middle of shutting down.
+        if content_watch is not None:
+            content_watch.stop()
         if fleet_agent is not None:
             fleet_agent.stop()
         if persistence_collector is not None:

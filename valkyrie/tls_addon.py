@@ -37,6 +37,7 @@ from .config import (
     TRACKING_QUERY_PARAMS,
     TRACKING_SCRIPT_DOMAINS,
 )
+from . import farble
 from .store import DnsEvent, Store
 
 # 1x1 transparent PNG — returned for suppressed tracking pixels
@@ -47,22 +48,13 @@ _TRANSPARENT_PNG = (
     b"\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
 )
 
-# Fingerprint-protection snippet injected at the start of every <head>
-_FP_PROTECTION_SCRIPT = b"""<script>
-(function(){
-  var _c=HTMLCanvasElement.prototype.toDataURL;
-  HTMLCanvasElement.prototype.toDataURL=function(t){
-    if(t==='image/png') return 'data:image/png,v';
-    return _c.apply(this,arguments);
-  };
-  Object.defineProperty(navigator,'plugins',{get:()=>[]});
-  Object.defineProperty(navigator,'languages',{get:()=>['en-US','en']});
-  Object.defineProperty(screen,'colorDepth',{get:()=>24});
-  window.fbq=function(){};
-  window.gtag=function(){};
-  window.ga=function(){};
-})();
-</script>"""
+# Fingerprint protection now comes from farble.py, which generates a DIFFERENT
+# script per origin per session. The constant-valued snippet that used to live
+# here was actively counterproductive: every user returned the same fake canvas
+# hash, the same empty plugin list, the same colour depth — values no real
+# browser reports, identical across every site and session, which is precisely
+# the durable cross-site identifier the feature exists to prevent. See the
+# module docstring in farble.py for the full reasoning.
 
 # Inline analytics keywords that trigger neutralisation
 _INLINE_TRACKERS = [
@@ -278,16 +270,21 @@ class ValkyrieAddon:
         domain  = flow.request.pretty_host
         content = flow.response.content
         removed = 0
+        # The farbling script is derived per-ORIGIN, so the page's own origin
+        # has to reach the injectors. Two different sites must receive two
+        # different scripts — that difference is the entire mechanism that
+        # stops them correlating the same user (see farble.py).
+        origin = farble.origin_of(flow.request.pretty_url)
 
         try:
-            cleaned = self._clean_html_lxml(content)
+            cleaned = self._clean_html_lxml(content, origin)
             if cleaned is not None:
                 removed_count = cleaned[1]
                 body = cleaned[0]
             else:
-                body, removed_count = self._clean_html_regex(content, domain)
+                body, removed_count = self._clean_html_regex(content, domain, origin)
         except Exception:
-            body, removed_count = self._clean_html_regex(content, domain)
+            body, removed_count = self._clean_html_regex(content, domain, origin)
 
         removed = removed_count
 
@@ -298,7 +295,7 @@ class ValkyrieAddon:
                       "page_clean")
         return body
 
-    def _clean_html_lxml(self, content: bytes) -> tuple[bytes, int] | None:
+    def _clean_html_lxml(self, content: bytes, origin: str = "") -> tuple[bytes, int] | None:
         """Parse with lxml for precise element removal. Returns (body, count) or None."""
         try:
             from lxml import html as lhtml
@@ -351,12 +348,14 @@ class ValkyrieAddon:
                     if cleaned_url != val:
                         el.set(attr, cleaned_url)
 
-        # Inject fingerprint protection at start of <head>
+        # Inject fingerprint protection at start of <head>. Must be FIRST so
+        # it patches the surfaces before any page script can read them.
         if FINGERPRINT_PROTECTION:
             heads = tree.xpath('//head')
             if heads:
                 try:
-                    fp_el = lhtml.fragment_fromstring(_FP_PROTECTION_SCRIPT.decode())
+                    fp_el = lhtml.fragment_fromstring(
+                        farble.script_for(origin).decode())
                     heads[0].insert(0, fp_el)
                 except Exception:
                     pass
@@ -374,7 +373,8 @@ class ValkyrieAddon:
 
         return result, removed
 
-    def _clean_html_regex(self, content: bytes, domain: str) -> tuple[bytes, int]:
+    def _clean_html_regex(self, content: bytes, domain: str,
+                          origin: str = "") -> tuple[bytes, int]:
         """Regex fallback when lxml is unavailable."""
         body   = content
         removed = 0
@@ -430,9 +430,8 @@ class ValkyrieAddon:
 
         # Inject fingerprint protection after <head>
         if FINGERPRINT_PROTECTION:
-            body = _RE_HEAD_OPEN.sub(
-                lambda m: m.group(0) + _FP_PROTECTION_SCRIPT, body, count=1
-            )
+            fp = farble.script_for(origin)
+            body = _RE_HEAD_OPEN.sub(lambda m: m.group(0) + fp, body, count=1)
 
         # Add removal comment before </body>
         if removed > 0:
