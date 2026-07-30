@@ -9,6 +9,38 @@ replaces the in-repo corpus number with ground truth.
 > volume shadow copies, disables Defender, dumps LSASS, writes persistence). The
 > VM is the whole point. See "Set up the VM" below.
 
+## Two evaluations live here now — [`evaluation/`](evaluation/)
+
+The original 10-atomic plan below still stands. [`evaluation/`](evaluation/)
+is a larger, two-tier evaluation covering all 8 ATT&CK tactics (40 techniques)
+with a full evidence/scoring schema (per-technique confidence, latency,
+detection category, root cause and a concrete code fix for every miss):
+
+- **Tier A — [`evaluation/replay_harness.py`](evaluation/replay_harness.py).**
+  Runs TODAY, on any host, no VM needed. Drives Valkyrie's real classifier
+  functions with synthetic inputs matching what each technique would produce.
+  Cannot execute an attack, measure real latency, or produce a real
+  false-positive rate — and says so in its own output rather than faking any
+  of them. Its value is different: it already found and this evaluation
+  already FIXED one live false-positive bug
+  (`valkyrie/behavioral_rules.py`'s `net-user-add` rule matched on bare
+  `net user`, no `/add` required — see `evaluation/root_cause.py`
+  `OVERBROAD_RULE_FINDINGS`), and it traced a real architectural gap: Sysmon's
+  process-creation event carries a command line that Valkyrie's ETW handler
+  currently discards before it reaches the 32 named IOA rules (see
+  `evaluation/root_cause.py` `ARCHITECTURAL_FIX`).
+- **Tier B — [`evaluation/run_live_evaluation.ps1`](evaluation/run_live_evaluation.ps1).**
+  The real thing. VM required, same rules as this file's original plan.
+  Authored, reviewed against Valkyrie's actual API, **not executed** — same
+  status as the kernel driver and as this original kit before someone runs it.
+- **[`evaluation/score.py`](evaluation/score.py)** turns either tier's JSON
+  output into `evaluation/LATEST_REPORT.md` (overall %, %-by-tactic, missed
+  list with root cause + code fix) and appends one row to
+  `evaluation/HISTORY.md` so runs are comparable over time.
+
+Read `evaluation/LATEST_REPORT.md` for the current (Tier A) result. Run
+`evaluation/run_live_evaluation.ps1` inside a VM for ground truth.
+
 ## Why a VM (and why this isn't already run for you)
 
 The dev machine this was built on is **Windows 11 Home** with no hypervisor

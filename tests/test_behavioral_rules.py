@@ -55,6 +55,8 @@ MALICIOUS = [
     ("schtasks-create", "schtasks.exe", "cmd.exe", "schtasks /create /tn x /tr evil.exe /sc onlogon", ""),
     ("sc-create-service", "sc.exe", "cmd.exe", "sc create evil binpath= c:\\evil.exe", ""),
     ("net-user-add", "net.exe", "cmd.exe", "net user backdoor P@ss /add", ""),
+    ("net-localgroup-admin-add", "net.exe", "cmd.exe",
+     "net localgroup administrators evilcorp /add", ""),
     ("wmi-event-consumer", "powershell.exe", "cmd.exe", "Set-WmiInstance -Class CommandLineEventConsumer", ""),
     ("vssadmin-delete", "vssadmin.exe", "cmd.exe", "vssadmin delete shadows /all /quiet", ""),
     ("wbadmin-delete", "wbadmin.exe", "cmd.exe", "wbadmin delete catalog -quiet", ""),
@@ -72,6 +74,13 @@ BENIGN = [
     ("cmd.exe", "explorer.exe", "cmd /c dir", ""),
     ("reg.exe", "cmd.exe", "reg query hklm\\software\\microsoft\\windows", ""),   # query, not add/save
     ("net.exe", "cmd.exe", "net view", ""),                                       # not user/add
+    # Regression control for the redteam-evaluation finding (2026-07-30):
+    # net-user-add used to match on the bare substring "net user" with no
+    # mutating verb required, so listing accounts fired the identical
+    # T1136.001 "account created" incident as actually creating one.
+    ("net.exe", "cmd.exe", "net user", ""),                                       # list accounts, not /add
+    ("net.exe", "cmd.exe", "net user backdoor", ""),                              # query one account, not /add
+    ("net.exe", "cmd.exe", "net localgroup administrators", ""),                  # list membership, not /add
     ("certutil.exe", "cmd.exe", "certutil -hashfile a.exe sha256", ""),           # hash, not download/decode
     ("sc.exe", "cmd.exe", "sc query windefend", ""),                              # query, not create
     ("schtasks.exe", "cmd.exe", "schtasks /query", ""),                           # query, not create

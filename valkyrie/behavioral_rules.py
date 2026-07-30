@@ -161,9 +161,23 @@ RULES: tuple = (
     Rule("sc-create-service", "T1543.003 — Windows Service", SEV_MEDIUM,
          "persistence_service", "New Windows service created",
          images=("sc.exe",), cmd_any=("create",)),
+    # Two rules, not one, and cmd_all (ALL required) rather than cmd_any (ANY
+    # of these). The single previous rule matched on the bare substring
+    # "net user" / "net localgroup administrators" with no mutating verb
+    # required, so `net user` alone -- listing accounts, completely routine
+    # admin activity -- fired the identical MEDIUM "account created" incident
+    # as `net user backdoor P@ss /add`. Found by the red-team evaluation
+    # (redteam/evaluation/root_cause.py: net-user-add-overbroad) replaying
+    # T1087.001 (Account Discovery) and getting a T1136.001 hit instead: the
+    # rule couldn't tell "list" from "create". Requiring /add removes the
+    # false positive without losing recall -- every genuine T1136.001 atomic
+    # includes /add.
     Rule("net-user-add", "T1136.001 — Create Local Account", SEV_MEDIUM,
-         "account_created", "Local account created / added to admins",
-         cmd_any=("net user", "net.exe user", "net localgroup administrators")),
+         "account_created", "Local account created via net user /add",
+         cmd_all=("net user", "/add")),
+    Rule("net-localgroup-admin-add", "T1136.001 — Create Local Account", SEV_MEDIUM,
+         "account_created", "Account added to local Administrators group",
+         cmd_all=("net localgroup administrators", "/add")),
     Rule("wmi-event-consumer", "T1546.003 — WMI Event Subscription", SEV_HIGH,
          "persistence_wmi", "WMI permanent event subscription (persistence)",
          cmd_any=("__eventfilter", "commandlineeventconsumer", "__filtertoconsumerbinding")),
