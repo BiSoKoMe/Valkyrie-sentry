@@ -1,4 +1,4 @@
-# ADR 0001 — A real test pipeline: categorized runner + CI gate
+# ADR 0037 — A real test pipeline: categorized runner + CI gate
 
 - **Status:** Accepted
 - **Phase:** 0 (foundation)

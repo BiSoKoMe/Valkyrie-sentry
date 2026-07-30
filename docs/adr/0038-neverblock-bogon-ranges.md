@@ -1,4 +1,4 @@
-# ADR 0002 — Never firewall reserved / bogon IP ranges
+# ADR 0038 — Never firewall reserved / bogon IP ranges
 
 - **Status:** Accepted
 - **Phase:** 0 (security correctness)

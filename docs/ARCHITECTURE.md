@@ -69,7 +69,7 @@ Rules that keep it one platform:
 | Privacy engine | Telemetry killer, MAC randomizer, TCP/IP fingerprint normalization, DoH-bypass detection, zero-log RAM mode, Meeting Mode kill switch |
 | Fleet management | Self-hosted control plane; metadata-only heartbeats (never domains), token-hash auth, signed policy push, multi-tenant isolation |
 | Secure updates | Ed25519 manifest verification (verify-only by design; apply is deliberately human-gated) |
-| Application firewall | netsh + in-process CIDR sets (Rust-accelerated lookup, ADR 0010), bogon never-block guard (ADR 0002) |
+| Application firewall | netsh + in-process CIDR sets (Rust-accelerated lookup, ADR 0010), bogon never-block guard (ADR 0038) |
 | Platform engineering | Event bus, DI context, normalized schema, preflight + heartbeat self-tests, self-healing watchdogs, windowless service, audit-gated installer |
 
 ### Buildable next — locally honest, on existing seams

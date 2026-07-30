@@ -13,7 +13,7 @@ and are completely different in practice:
     future feature) and the false positive is live again.
   * *purged* — the row is gone. There is nothing left to leak.
 
-ADR 0033 promises the second. These checks hold it to that, by reading the table
+ADR 0040 promises the second. These checks hold it to that, by reading the table
 directly rather than trusting the accessor that is supposed to protect it.
 
 The asymmetry is deliberate throughout: a wrongly-remembered benign domain must

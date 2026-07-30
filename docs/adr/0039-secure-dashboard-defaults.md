@@ -1,4 +1,4 @@
-# ADR 0003 — Secure dashboard defaults + off-loopback API/WS auth
+# ADR 0039 — Secure dashboard defaults + off-loopback API/WS auth
 
 - **Status:** Accepted
 - **Phase:** 0 (security / secure defaults)

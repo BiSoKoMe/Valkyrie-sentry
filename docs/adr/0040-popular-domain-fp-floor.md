@@ -1,4 +1,4 @@
-# ADR 0033 — Popular-domain false-positive floor
+# ADR 0040 — Popular-domain false-positive floor
 
 Date: 2026-07-28 · Status: accepted
 

@@ -71,7 +71,7 @@ been hiding. This is the argument for the tier, in miniature:
 
 - **A real product bug.** [`IntelligenceMemory.check()`](../valkyrie/intelligence/memory.py)
   returned `None` for *every* verdict on a popular domain, though its own comment
-  said the guard was for `bad` only. The ADR 0033 FP fix had killed the `good`
+  said the guard was for `bad` only. The ADR 0040 FP fix had killed the `good`
   fast path for exactly the highest-traffic domains, so every lookup re-ran the
   full pipeline. Not a safety hole — it failed toward more analysis, never less —
   but it silently negated the cache where it mattered most. **Fixed**; the two
