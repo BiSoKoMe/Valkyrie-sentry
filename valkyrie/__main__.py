@@ -200,6 +200,98 @@ def _print_status_box(console, rows) -> None:
     ))
 
 
+def build_status_rows(
+    *, args, dns_server=None, firewall=None, edr_engine=None, intelligence=None,
+    unbound_ok=False, dns_upstream_host="", dns_upstream_port=0,
+    allow_external_fallback=True, zero_log=None, mac_randomizer=None,
+    tls_inspector=None, heartbeat=None,
+) -> list[tuple[str, bool, str]]:
+    """Build the (label, ok, detail) rows for the startup status box.
+
+    Extracted from ``main()`` so it can be tested. This is the surface that
+    tells a user whether they are protected, which puts it in the same category
+    as ``self_test.HeartbeatMonitor``: a bug that renders a component green
+    while it is down is worse than a crash, because the user acts on it.
+
+    Pure — reads only its arguments and returns rows. Kept as a free function
+    rather than a method precisely so a test can hand it a dead DNS server and
+    assert the row goes red, without starting anything.
+
+    TEST_PLAN tier 3.16 calls for the rest of ``main()``'s wiring to be
+    extracted the same way. That work is deliberately NOT done blind: the
+    startup path binds DNS ports and edits firewall rules, so it cannot be
+    executed on a developer host to prove an extraction preserved behaviour.
+    See the tier 3.16 note in docs/TEST_PLAN.md.
+    """
+    rows: list[tuple[str, bool, str]] = []
+
+    if not args.no_dns:
+        if dns_server is not None:
+            rows.append(("DNS Sinkhole", True, f"port {args.port}"))
+        else:
+            rows.append(("DNS Sinkhole", False,
+                         f"could not bind port {args.port}"))
+    if not args.no_firewall:
+        # The firewall is optional/non-fatal at startup, so it can legitimately
+        # be None here. The inline version called firewall.count() regardless,
+        # which raised AttributeError and took the whole status box down. It
+        # renders RED instead: the user asked for a firewall and has not got
+        # one, and silently omitting the row would be the same lie the DNS row
+        # is careful not to tell.
+        if firewall is not None:
+            rows.append(("Firewall", True, f"{firewall.count():,} IP ranges"))
+        else:
+            rows.append(("Firewall", False, "failed to initialise"))
+    rows.append(("Behavioral AI", True, "active"))
+    if edr_engine is not None:
+        _es = edr_engine.stats()
+        rows.append(("EDR", True,
+                     f"{_es['plugins']} plugins, "
+                     f"{_es['incidents_open']} open incidents"))
+    if intelligence is not None:
+        _ist = intelligence.status()
+        if _ist["learning"]:
+            rows.append(("Intelligence", True,
+                         f"learning (day {_ist['learning_day']} of "
+                         f"{_ist['learning_days_total']})"))
+        else:
+            rows.append(("Intelligence", True,
+                         f"active — {_ist['threats_learned']:,} threats learned"))
+    if unbound_ok:
+        rows.append(("Recursive DNS", True,
+                     f"Unbound {dns_upstream_host}:{dns_upstream_port}"))
+    else:
+        rows.append(("Upstream DNS", True,
+                     f"{dns_upstream_host}:{dns_upstream_port}"))
+    if not allow_external_fallback:
+        rows.append(("DNS Leak Guard", True, "local resolver only (fail-closed)"))
+    else:
+        rows.append(("DNS Leak Guard", False,
+                     "public-DNS fallback ENABLED (install Unbound)"))
+    if zero_log is not None and zero_log.is_active():
+        rows.append(("Zero Log", True, "RAM only (no disk)"))
+    else:
+        rows.append(("Logging", True, "disk (persistent)"))
+    if mac_randomizer is not None:
+        rows.append(("MAC Random", True, "auto on reconnect"))
+    if tls_inspector is not None:
+        rows.append(("TLS Inspect", True, f"port {tls_inspector.port}"))
+    if heartbeat is not None:
+        rows.append(("Heartbeat", True, "self-check every 15s"))
+    if args.web:
+        rows.append(("Dashboard", True, f"localhost:{args.web_port}"))
+    return rows
+
+
+def protection_state(rows) -> str:
+    """'ACTIVE' only if every row is ok, else 'DEGRADED'.
+
+    Separated from rendering so the rule cannot drift from what is displayed:
+    a single red row must never still read ACTIVE.
+    """
+    return "ACTIVE" if all(ok for _, ok, _ in rows) else "DEGRADED"
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -1408,56 +1500,21 @@ def main() -> None:
     # ------------------------------------------------------------------
     # 12. Startup status box (real values) + auto-open dashboard
     # ------------------------------------------------------------------
-    status_rows: list[tuple[str, bool, str]] = []
-
-    if not args.no_dns:
-        if dns_server is not None:
-            status_rows.append(("DNS Sinkhole", True, f"port {args.port}"))
-        else:
-            status_rows.append(("DNS Sinkhole", False, f"could not bind port {args.port}"))
-    if not args.no_firewall:
-        status_rows.append(("Firewall", True, f"{firewall.count():,} IP ranges"))
-    status_rows.append(("Behavioral AI", True, "active"))
-    if edr_engine is not None:
-        _es = edr_engine.stats()
-        status_rows.append(("EDR", True,
-                            f"{_es['plugins']} plugins, {_es['incidents_open']} open incidents"))
-    if intelligence is not None:
-        _ist = intelligence.status()
-        if _ist["learning"]:
-            status_rows.append(("Intelligence", True,
-                                f"learning (day {_ist['learning_day']} of "
-                                f"{_ist['learning_days_total']})"))
-        else:
-            status_rows.append(("Intelligence", True,
-                                f"active — {_ist['threats_learned']:,} threats learned"))
-    if unbound_ok:
-        status_rows.append(("Recursive DNS", True, f"Unbound {dns_upstream_host}:{dns_upstream_port}"))
-    else:
-        status_rows.append(("Upstream DNS", True, f"{dns_upstream_host}:{dns_upstream_port}"))
-    if not allow_external_fallback:
-        status_rows.append(("DNS Leak Guard", True, "local resolver only (fail-closed)"))
-    else:
-        status_rows.append(("DNS Leak Guard", False, "public-DNS fallback ENABLED (install Unbound)"))
-    if zero_log is not None and zero_log.is_active():
-        status_rows.append(("Zero Log", True, "RAM only (no disk)"))
-    else:
-        status_rows.append(("Logging", True, "disk (persistent)"))
-    if mac_randomizer is not None:
-        status_rows.append(("MAC Random", True, "auto on reconnect"))
-    if tls_inspector is not None:
-        status_rows.append(("TLS Inspect", True, f"port {tls_inspector.port}"))
-    if heartbeat is not None:
-        status_rows.append(("Heartbeat", True, "self-check every 15s"))
+    status_rows = build_status_rows(
+        args=args, dns_server=dns_server, firewall=firewall,
+        edr_engine=edr_engine, intelligence=intelligence,
+        unbound_ok=unbound_ok, dns_upstream_host=dns_upstream_host,
+        dns_upstream_port=dns_upstream_port,
+        allow_external_fallback=allow_external_fallback, zero_log=zero_log,
+        mac_randomizer=mac_randomizer, tls_inspector=tls_inspector,
+        heartbeat=heartbeat,
+    )
     web_url = f"http://localhost:{args.web_port}"
-    if args.web:
-        status_rows.append(("Dashboard", True, f"localhost:{args.web_port}"))
 
     _print_status_box(console, status_rows)
 
-    all_ok = all(ok for _, ok, _ in status_rows)
     console.print()
-    if all_ok:
+    if protection_state(status_rows) == "ACTIVE":
         console.print("  [bold]Protection:[/bold] [bold green]ACTIVE[/bold green]")
     else:
         console.print("  [bold]Protection:[/bold] [bold yellow]DEGRADED[/bold yellow] — see ✗ above")

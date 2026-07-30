@@ -49,16 +49,29 @@ def _probe_dns(host: str, port: int, timeout: float = 1.0) -> bool:
     """
     wire = (b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
             b"\x06google\x03com\x00\x00\x01\x00\x01")
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(timeout)
+    # Socket creation is inside the guard on purpose. It was outside, where an
+    # OSError from fd exhaustion escaped this function, propagated through
+    # check_once() and killed the heartbeat thread — after which is_healthy()
+    # kept returning the last state (typically True) forever while nothing was
+    # being probed at all. That is the failure this module's own docstring
+    # calls the worst one: silently not protecting while the UI says ACTIVE.
+    sock = None
     try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
         sock.sendto(wire, (host, port))
         data, _ = sock.recvfrom(4096)
         return len(data) >= 12
-    except OSError:
+    except Exception:
+        # Any failure to probe is a failure to confirm protection. Fail toward
+        # "cannot confirm", never toward "fine".
         return False
     finally:
-        sock.close()
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
 
 
 def _port_bindable(host: str, port: int) -> tuple[bool, str]:
@@ -225,8 +238,16 @@ class HeartbeatMonitor:
             self._thread.join(timeout=3)
 
     def check_once(self) -> bool:
-        """Run a single probe now and update state. Returns current health."""
-        healthy = _probe_dns(self._host, self._port, timeout=1.0)
+        """Run a single probe now and update state. Returns current health.
+
+        Never raises: a probe that blows up is treated as a failed probe, not
+        as an error for the caller to handle. The caller is a daemon thread
+        whose death would freeze the health signal at its last value.
+        """
+        try:
+            healthy = _probe_dns(self._host, self._port, timeout=1.0)
+        except Exception:
+            healthy = False
         now = time.time()
         changed = False
         with self._lock:
@@ -246,29 +267,59 @@ class HeartbeatMonitor:
             self._emit(new_state)
         return self._healthy
 
+    # How far past the probe interval a check may be before the health signal
+    # is considered stale rather than good. Generous, so a slow probe or a
+    # loaded box does not flap the dashboard; the point is to catch a monitor
+    # that has stopped entirely, not one that is merely late.
+    _STALE_INTERVALS = 4
+
+    def _is_stale(self, now: float) -> bool:
+        """True if no probe has landed recently enough to trust the answer.
+
+        Without this, a heartbeat thread that dies for any reason freezes the
+        signal at its last value — and 'healthy' is the value it is most likely
+        to be frozen at, since that is the starting state. The user would see
+        ACTIVE indefinitely while nothing was being checked. Absence of a
+        recent check is not evidence of health.
+        """
+        if not self._last_check:
+            return False          # never probed yet — start() has not run
+        return (now - self._last_check) > (self._interval * self._STALE_INTERVALS)
+
     def status(self) -> dict:
         with self._lock:
+            stale = self._is_stale(time.time())
             return {
-                "healthy":      self._healthy,
+                "healthy":      self._healthy and not stale,
                 "last_ok":      self._last_ok,
                 "last_check":   self._last_check,
                 "fail_count":   self._fail_count,
                 "dns_port":     self._port,
+                "stale":        stale,
             }
 
     def is_healthy(self) -> bool:
         with self._lock:
-            return self._healthy
+            return self._healthy and not self._is_stale(time.time())
 
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 
     def _loop(self) -> None:
-        # First probe immediately so status is meaningful right away.
-        self.check_once()
+        # Defense in depth over check_once()'s own guard: this thread must
+        # outlive ANY failure, because a dead heartbeat does not report itself
+        # as dead — is_healthy() simply keeps returning whatever it last saw.
+        # A monitor that stops monitoring must never look like a healthy one.
+        try:
+            self.check_once()      # probe immediately so status is meaningful
+        except Exception:
+            pass
         while not self._stop.wait(self._interval):
-            self.check_once()
+            try:
+                self.check_once()
+            except Exception:
+                pass
 
     def _emit(self, healthy: bool) -> None:
         if self._on_change:
