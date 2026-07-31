@@ -168,11 +168,17 @@ jobs:
           python -m pip install cryptography httpx coverage
       - name: Measure coverage and enforce the floor
         # Measured 59% when this gate was introduced, 64% after TEST_PLAN
-        # tiers 1-3. The floor is a RATCHET: raise it as coverage improves,
-        # never lower it to make a build pass. A change that drops coverage
-        # below the floor is a change that removed tested behaviour.
+        # tiers 1-3, 65% after the security/lifecycle audit. The floor is a
+        # RATCHET: raise it as coverage improves, never lower it to make a
+        # build pass. A change that drops coverage below the floor is a change
+        # that removed tested behaviour.
+        #
+        # Kept a few points under the measured figure on purpose: CI installs a
+        # different optional-dependency set than a dev box (lxml, mitmproxy),
+        # which legitimately moves the number by a point or two, and a gate
+        # that flaps gets disabled by whoever it annoys first.
         run: |
-          COVERAGE_FLOOR=60
+          COVERAGE_FLOOR=62
           for t in tests/test_*.py; do
             PYTHONUTF8=1 python -m coverage run --append --source=valkyrie "$t" \
               >/dev/null 2>&1 || true

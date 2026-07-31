@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
-from ..config import DATA_DIR
+from ..config import DATA_DIR, WEB_HOST, WEB_PORT
 from ..context import AppContext
 
 _WEB_DIR = Path(__file__).parent
@@ -864,9 +864,18 @@ def create_app(ctx: Optional[AppContext] = None):
 # Runner (called from __main__.py in a daemon thread)
 # ---------------------------------------------------------------------------
 
-def run_server(host: str = "0.0.0.0", port: int = 8080,
+def run_server(host: str = WEB_HOST, port: int = WEB_PORT,
                ctx: Optional[AppContext] = None) -> None:
     """Block the calling thread running the uvicorn server.
+
+    The host default is LOOPBACK, not 0.0.0.0. Every real caller passes an
+    explicit host (``__main__`` uses ``--web-host``, defaulting to WEB_HOST and
+    warning loudly when it is off-loopback), so the old ``0.0.0.0`` default was
+    never actually reached — but it was a live footgun: this app exposes the
+    control routes (isolate host, kill process, disable telemetry), and any
+    future caller that omitted ``host`` would have published them to every
+    interface. A dangerous default that happens to be unused is still a
+    dangerous default; secure-by-default costs nothing here.
 
     ``ctx`` is the injected AppContext; when omitted the module-global ``state``
     is used (preserving the standalone/test entry point).

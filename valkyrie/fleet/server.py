@@ -12,7 +12,13 @@ Endpoints:
 
 Run:
   from valkyrie.fleet.server import run_fleet_server
-  run_fleet_server(host="0.0.0.0", port=8091, enroll_token="...")
+  run_fleet_server(port=8091, enroll_token="...")            # loopback only
+
+A fleet server genuinely does need to be reachable by the endpoints it manages,
+so binding off-loopback is a legitimate deployment choice — but it must be an
+explicit one. The default is 127.0.0.1 so that publishing the enrolment and
+policy API to every interface is something an operator opts into deliberately,
+rather than the thing that happens when the host argument is forgotten.
 """
 
 from __future__ import annotations
@@ -184,7 +190,7 @@ def _is_loopback(host: str) -> bool:
     return host in ("127.0.0.1", "::1", "localhost")
 
 
-def run_fleet_server(host: str = "0.0.0.0",
+def run_fleet_server(host: str = "127.0.0.1",
                      port: int = FLEET_SERVER_PORT,
                      enroll_token: Optional[str] = None,
                      db_path: Path = FLEET_DB_PATH,
