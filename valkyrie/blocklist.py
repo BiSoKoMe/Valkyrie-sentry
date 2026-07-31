@@ -191,7 +191,17 @@ class BlocklistManager:
     # ------------------------------------------------------------------
 
     def is_blocked(self, domain: str) -> bool:
-        """Return True if domain matches any blocklist entry."""
+        """Return True if domain matches any blocklist entry.
+
+        Tolerates a non-string argument rather than raising. This runs on the
+        synchronous DNS path inside `_decide`, where an exception does not
+        merely skip a blocklist check — it breaks name resolution for the whole
+        machine. Defensive rather than a known-reachable bug: every current
+        caller passes a parsed string. The cost of being wrong about that is
+        far higher than the cost of two lines.
+        """
+        if not isinstance(domain, str):
+            return False
         d = domain.rstrip(".").lower()
         with self._lock:
             if d in self._exact:
