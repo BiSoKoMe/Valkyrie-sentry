@@ -354,6 +354,10 @@ def main() -> None:
                         help="Also export blocked/flagged DNS events to the SIEM "
                              "(includes domains — explicit opt-in)")
     parser.add_argument("--skip-selftest", action="store_true", help="Skip the startup self-test (not recommended)")
+    parser.add_argument("--enable-native-audit", action="store_true",
+                        help="Turn on Windows process-creation auditing (Security 4688 + "
+                             "command line) so command-line detection works WITHOUT Sysmon, "
+                             "then exit. Needs admin.")
     parser.add_argument("--debug", action="store_true",
                         help="Verbose DNS forwarding logs — prints every query, upstream tried, and result")
     parser.add_argument("--intelligence-status", action="store_true",
@@ -511,6 +515,21 @@ def main() -> None:
         finally:
             intel.stop()
             store.stop()
+        return
+
+    # ------------------------------------------------------------------
+    # Early-exit: enable native process-creation auditing, then exit.
+    # ------------------------------------------------------------------
+    if args.enable_native_audit:
+        from . import native_audit
+        ok, detail = native_audit.enable_process_auditing()
+        colour = "green" if ok else "yellow"
+        console.print(f"[{colour}]Native process auditing: {detail}[/{colour}]")
+        if ok:
+            console.print("[dim]Command-line detection now works without Sysmon "
+                          "(Valkyrie reads Security event 4688).[/dim]")
+        else:
+            console.print("[dim]Run this from an elevated (Administrator) prompt.[/dim]")
         return
 
     # ------------------------------------------------------------------
@@ -1279,12 +1298,28 @@ def main() -> None:
 
             _ts = time.monotonic()
             from .etw import (SensorManager, PowerShellSensor, WmiActivitySensor,
-                              SysmonSensor)
+                              SysmonSensor, NativeProcessSensor)
             sensor_manager = SensorManager(sink=lambda ev: edr_engine.ingest_telemetry(ev))
             sensor_manager.register(PowerShellSensor(
                 scanner=amsi_scanner if AMSI_SCAN_SCRIPTS else None))
             sensor_manager.register(WmiActivitySensor())
-            sensor_manager.register(SysmonSensor())   # optional; skipped if absent
+            _sysmon = SysmonSensor()
+            sensor_manager.register(_sysmon)          # optional; skipped if absent
+            # Native process-creation sensor: gives command-line detection from
+            # Windows' own Security/4688 events, so a normal user gets the good
+            # detection path with NOTHING to install. Stands down when Sysmon is
+            # present (Sysmon is the richer source), so the two never double-
+            # report. Best-effort enables 4688+cmdline auditing when we have the
+            # privilege; if it can't, the sensor simply reports unavailable and
+            # the engine falls back to the poller exactly as before.
+            try:
+                from . import native_audit
+                _en_ok, _en_detail = native_audit.enable_process_auditing()
+                console.print(f"[dim]  Native process auditing: {_en_detail}[/dim]")
+            except Exception as _exc:      # noqa: BLE001
+                console.print(f"[dim]  Native process auditing: unavailable ({_exc})[/dim]")
+            sensor_manager.register(
+                NativeProcessSensor(suppress_when=_sysmon.available))
             # Kernel driver bridge — authoritative process lineage + LSASS
             # credential-theft protection when the signed driver is loaded;
             # self-disables (available()==False) otherwise, so this is safe to

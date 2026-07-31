@@ -9,6 +9,7 @@ from .framework import Sensor, SensorManager
 from .powershell import PowerShellSensor, classify_powershell
 from .wmi import WmiActivitySensor, classify_wmi
 from .sysmon import SysmonSensor, classify_sysmon
+from .native_process import NativeProcessSensor, map_4688
 from .wineventlog import ChannelReader, parse_event_xml
 
 __all__ = [
@@ -16,5 +17,6 @@ __all__ = [
     "PowerShellSensor", "classify_powershell",
     "WmiActivitySensor", "classify_wmi",
     "SysmonSensor", "classify_sysmon",
+    "NativeProcessSensor", "map_4688",
     "ChannelReader", "parse_event_xml",
 ]
