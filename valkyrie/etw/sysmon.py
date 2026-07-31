@@ -33,6 +33,7 @@ from .wineventlog import ChannelReader, parse_event_xml
 from ..behavior_score import classify_anomaly
 from ..behavioral_rules import classify_behavior
 from ..process_telemetry import classify_cmdline, classify_process
+from ..trust import is_trusted_os_command, is_trusted_os_path
 from ..telemetry import (
     ACT_FLAGGED, ACT_OBSERVED, CAT_NETWORK, CAT_PERSISTENCE, CAT_PROCESS,
     PERSIST_RUN_KEY, SEV_HIGH, SEV_INFO, SEV_LOW, SEV_MEDIUM, severity_rank,
@@ -253,13 +254,21 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
         low = fn.lower().replace("/", "\\")
         if "\\startup\\" not in low and "\\start menu\\programs\\startup" not in low:
             return None
+        writer = d.get("Image", "")
+        # Windows Update / signed OS components legitimately place items in the
+        # startup path. If a trusted OS binary is the writer, observe rather than
+        # alert (see valkyrie/trust.py). A user/attacker binary still flags.
+        trusted = is_trusted_os_path(writer)
         return {
             "category": CAT_PERSISTENCE, "activity": PERSIST_RUN_KEY,
-            "actor_pid": int(d.get("ProcessId", 0) or 0), "actor_name": _name(d.get("Image", "")),
-            "actor_path": d.get("Image", ""),
-            "target": {"location": fn, "command": d.get("Image", "")},
-            "severity": SEV_MEDIUM, "labels": ["persistence_startup_folder"],
-            "reason": "file dropped in Startup folder",
+            "actor_pid": int(d.get("ProcessId", 0) or 0), "actor_name": _name(writer),
+            "actor_path": writer,
+            "target": {"location": fn, "command": writer},
+            "severity": SEV_INFO if trusted else SEV_MEDIUM,
+            "labels": (["persistence_startup_folder", "trusted_os"] if trusted
+                       else ["persistence_startup_folder"]),
+            "reason": ("OS component wrote to Startup (trusted)" if trusted
+                       else "file dropped in Startup folder"),
             "technique": "T1547.001 — Registry Run Keys / Startup Folder",
             "context": {},
         }
@@ -271,13 +280,23 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
         if not any(k in low for k in ("\\run\\", "\\runonce\\", "currentversion\\run",
                                       "\\services\\", "userinit", "\\winlogon\\")):
             return None
+        writer = d.get("Image", "")
+        target = d.get("Details", "")
+        # OS self-maintenance (TrustedInstaller, Defender, Edge) writes autorun
+        # keys constantly. Trust only when BOTH the writer and the value it points
+        # at are OS-owned — a trusted process writing an autorun to a user/temp
+        # path is exactly the abuse case and must still flag.
+        trusted = is_trusted_os_path(writer) and is_trusted_os_command(target)
         return {
             "category": CAT_PERSISTENCE, "activity": PERSIST_RUN_KEY,
-            "actor_pid": int(d.get("ProcessId", 0) or 0), "actor_name": _name(d.get("Image", "")),
-            "actor_path": d.get("Image", ""),
-            "target": {"location": obj, "command": d.get("Details", "")},
-            "severity": SEV_MEDIUM, "labels": ["persistence_run_key"],
-            "reason": "autorun registry modification",
+            "actor_pid": int(d.get("ProcessId", 0) or 0), "actor_name": _name(writer),
+            "actor_path": writer,
+            "target": {"location": obj, "command": target},
+            "severity": SEV_INFO if trusted else SEV_MEDIUM,
+            "labels": (["persistence_run_key", "trusted_os"] if trusted
+                       else ["persistence_run_key"]),
+            "reason": ("OS component autorun write (trusted)" if trusted
+                       else "autorun registry modification"),
             "technique": "T1547.001 — Registry Run Keys / Startup Folder",
             "context": {},
         }

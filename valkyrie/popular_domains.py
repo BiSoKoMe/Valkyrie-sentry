@@ -109,3 +109,31 @@ def is_popular(host: str) -> bool:
         if h.endswith("." + p):
             return True
     return False
+
+
+# Non-navigable infrastructure names. A process does not "reach" these the way
+# it reaches a website — they are reverse-DNS (PTR) lookups the OS performs
+# constantly, and local-network resolution. Treating them as "a domain outside
+# the baseline" is what produced a wall of `Baseline anomaly for <legit proc>`
+# and `Beacon-like callbacks` false positives on real hardware (every Windows
+# process does different PTR lookups all the time, and repeated ones look
+# periodic without being C2).
+#
+# NOTE: this exempts only the *anomaly / beacon* heuristics. The DNS-tunnelling
+# and DGA detectors are NOT gated on this, because tunnelling can abuse PTR
+# queries and those detectors carry their own corroboration (unique-label
+# flood, entropy+bigram agreement) rather than "unseen == suspicious".
+_INFRA_SUFFIXES = (".in-addr.arpa", ".ip6.arpa", ".arpa", ".local",
+                   ".home.arpa", ".localdomain")
+
+
+def is_infrastructure_domain(host: str) -> bool:
+    """True for reverse-DNS / local-resolution names that are not a threat
+    signal on their own (so the baseline-anomaly and beacon heuristics skip
+    them)."""
+    h = _norm(host)
+    if not h:
+        return False
+    if h in ("localhost", "wpad", "isatap"):
+        return True
+    return h.endswith(_INFRA_SUFFIXES)

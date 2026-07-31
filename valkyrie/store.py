@@ -305,6 +305,13 @@ class Store:
 
     def is_anomaly(self, process_name: str, domain: str) -> bool:
         """Return True if domain is not in process baseline."""
+        # Reverse-DNS / local-resolution names are not domains a process
+        # "reached" — they are PTR lookups the OS does constantly, and treating
+        # an unseen one as anomalous produced a wall of false positives on real
+        # hardware. They can never be a baseline anomaly.
+        from .popular_domains import is_infrastructure_domain
+        if is_infrastructure_domain(domain):
+            return False
         baseline = self.get_baseline(process_name)
         if baseline is None:
             return False    # no baseline yet — can't flag

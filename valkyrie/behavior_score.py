@@ -45,6 +45,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from .telemetry import (SEV_CRITICAL, SEV_HIGH, SEV_INFO, SEV_LOW, SEV_MEDIUM)
+from .trust import is_trusted_os_path
 
 
 # ── Output types ────────────────────────────────────────────────────────────
@@ -391,7 +392,26 @@ def _sig_bidi_trick(c: _Ctx) -> Optional[Signal]:
     return None
 
 
+def _is_os_noninterpreter(c: _Ctx) -> bool:
+    """A signed OS component that is NOT a script host.
+
+    Windows ships many binaries with GUID-ish / high-entropy names and args that
+    carry serialized IPC tokens (SmartScreen's CHXSmartScreen.exe is the one that
+    false-positived on real hardware). Those are not masquerade and not attacker
+    obfuscation. INTERPRETERS are deliberately excluded — powershell/cmd/regsvr32
+    all live in trusted System32, and a LOLBin with an obfuscated command line is
+    exactly what must still fire, so this guard never touches them."""
+    return (is_trusted_os_path(c.path)
+            and c.image not in _INTERPRETERS
+            and c.image not in _SHELLS
+            and c.image not in _SCRIPT_PROXY)
+
+
 def _sig_random_name(c: _Ctx) -> Optional[Signal]:
+    # A machine-generated-looking name at a trusted OS location is a legit OS
+    # component (Windows has many), not name masquerade.
+    if _is_os_noninterpreter(c):
+        return None
     stem = c.image.rsplit(".", 1)[0]
     if looks_machine_generated(stem):
         return Signal("machine_generated_name", 0.35,
@@ -434,6 +454,11 @@ def _sig_impossible_ancestry(c: _Ctx) -> Optional[Signal]:
 
 
 def _sig_obfuscated_cmd(c: _Ctx) -> Optional[Signal]:
+    # A signed OS component carrying a serialized/token-like argument is not
+    # attacker obfuscation. Interpreters are NOT exempt (see _is_os_noninterpreter),
+    # so `powershell.exe -enc <blob>` from System32 still fires.
+    if _is_os_noninterpreter(c):
+        return None
     strength, tells = obfuscation_strength(c.raw_cmd)
     if strength >= 0.25:
         # Weight tracks the measured strength: mild obfuscation only compounds,

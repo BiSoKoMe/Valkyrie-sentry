@@ -105,12 +105,18 @@ def classify_process(name: str, path: str = "",
         _raise(SEV_MEDIUM)
 
     if any(frag in p for frag in _SUSPICIOUS_PATHS):
+        # Temp/download execution ALONE is a weak signal: installers, updaters
+        # and uninstallers run from there constantly. On real hardware this
+        # false-positived on Valkyrie's OWN installer and on NSIS uninstallers
+        # (Un_A.exe in ~nsu.tmp). So it only ESCALATES to medium when it
+        # corroborates another signal (a LOLBin, an Office-spawned shell); on
+        # its own it stays LOW — logged/observed, not an alerting incident. A
+        # truly malicious binary from temp is virtually always accompanied by
+        # one of those other tells or by the command-line/anomaly scorers.
+        corroborated = bool(labels)      # office_child_shell or lolbin already set
         labels.append("suspicious_path")
         reasons.append("executable runs from a temp/download directory")
-        _raise(SEV_MEDIUM if severity_rank(severity) < severity_rank(SEV_MEDIUM)
-               else severity)
-        if severity == SEV_INFO:
-            _raise(SEV_LOW)
+        _raise(SEV_MEDIUM if corroborated else SEV_LOW)
 
     return severity, labels, "; ".join(reasons)
 

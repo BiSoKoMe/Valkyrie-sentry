@@ -95,7 +95,13 @@ RULES: tuple = (
          "rundll32_proxy", "rundll32 proxied script/remote execution",
          images=("rundll32.exe",),
          cmd_any=("javascript:", "http://", "https://", "mshtml", "url.dll,openurl")),
-    Rule("suspicious-path-exec", "T1204 — User Execution", SEV_MEDIUM,
+    # LOW, not MEDIUM: "an executable ran from temp/downloads" is not by itself
+    # an attack — installers, updaters and uninstallers do it constantly, and as
+    # a standalone MEDIUM this false-positived on Valkyrie's own installer and on
+    # NSIS uninstallers. At LOW it is observed and still contributes its label +
+    # T1204 mapping when it CO-OCCURS with a real signal (a LOLBin, a download
+    # cradle, an obfuscated command), but it no longer raises an incident alone.
+    Rule("suspicious-path-exec", "T1204 — User Execution", SEV_LOW,
          "suspicious_path", "Executable ran from a temp/download directory",
          path_any=("\\temp\\", "\\downloads\\", "\\appdata\\local\\temp",
                    "\\windows\\temp")),

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from .plugins import DetectionPlugin, EnrichmentPlugin, PluginContext
 from .schema import Detection
+from ..popular_domains import is_infrastructure_domain
 
 
 def _ev(event: dict) -> tuple:
@@ -90,6 +91,11 @@ class BeaconDetection(DetectionPlugin):
     def analyze(self, event, ctx):
         domain, decision, pname, pid, cat, susp, reason = _ev(event)
         rl = reason.lower()
+        # Repeated reverse-DNS / local lookups look periodic but are not C2 —
+        # they are routine OS resolution. Exempt them here so a real beacon to
+        # an actual domain still fires (see is_infrastructure_domain).
+        if is_infrastructure_domain(domain):
+            return []
         if cat == "intelligence" and any(m in rl for m in self._MARKERS):
             return [Detection(
                 source=self.name, severity="high", category="intelligence",
@@ -206,6 +212,11 @@ class AnomalyDetection(DetectionPlugin):
 
     def analyze(self, event, ctx):
         domain, decision, pname, pid, cat, susp, reason = _ev(event)
+        # A reverse-DNS / local name outside a process baseline is meaningless —
+        # every process does different PTR lookups constantly. This is the single
+        # highest-volume false positive on real hardware; drop it here.
+        if is_infrastructure_domain(domain):
+            return []
         if decision == "flagged" and cat in ("anomaly", "intelligence"):
             return [Detection(
                 source=self.name, severity="low", category="anomaly",

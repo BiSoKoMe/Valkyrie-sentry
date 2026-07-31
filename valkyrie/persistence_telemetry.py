@@ -34,9 +34,10 @@ from typing import Callable, Optional
 from .telemetry import (
     ACT_FLAGGED, ACT_OBSERVED, CAT_PERSISTENCE,
     PERSIST_RUN_KEY, PERSIST_SCHEDULED_TASK, PERSIST_SERVICE, PERSIST_STARTUP_FOLDER,
-    SEV_HIGH, SEV_MEDIUM, severity_rank, TelemetryEvent,
+    SEV_HIGH, SEV_INFO, SEV_MEDIUM, severity_rank, TelemetryEvent,
 )
 from .process_telemetry import classify_cmdline, _SUSPICIOUS_PATHS
+from .trust import is_trusted_os_command
 
 try:
     import winreg
@@ -142,11 +143,23 @@ def _startup_dirs() -> list[str]:
 
 def _persistence_severity(activity: str, command: str) -> tuple[str, list[str], str]:
     """New persistence is inherently notable (medium); a suspicious command line
-    or temp-dir target escalates to high."""
+    or temp-dir target escalates to high.
+
+    OS self-maintenance — Windows Update (TrustedInstaller), Defender, Edge's
+    updater, signed drivers — legitimately creates autostart entries constantly,
+    and on real hardware that was the largest single source of persistence false
+    positives. When the entry's target is a trusted OS binary, start at INFO so
+    it is OBSERVED (logged, no alert) rather than flagged. Escalation below still
+    applies, so a trusted binary abused into a genuinely suspicious command line
+    or temp-dir target is NOT a blind spot."""
     label = _ACTIVITY_LABEL.get(activity, "persistence")
     labels = [label]
-    severity = SEV_MEDIUM
-    reasons = ["new auto-start entry created"]
+    trusted = is_trusted_os_command(command)
+    severity = SEV_INFO if trusted else SEV_MEDIUM
+    reasons = (["OS component autostart (trusted path)"] if trusted
+               else ["new auto-start entry created"])
+    if trusted:
+        labels.append("trusted_os")
     csev, clabels, creason = classify_cmdline("", command)
     if severity_rank(csev) > severity_rank(severity):
         severity = csev
