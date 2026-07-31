@@ -467,6 +467,38 @@ html, body {
 .hunt-table tbody tr:last-child td { border-bottom: none; }
 .hunt-count { color: var(--text-2); font-size: 11.5px; }
 
+/* ======================================================================
+   Red Team Tests — copy-paste MITRE ATT&CK techniques, one command per
+   row, so a locked-down VM with nothing installed can test detection
+   without a script file or a download.
+   ====================================================================== */
+.rt-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.rt-item {
+  border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--card);
+  padding: 12px 14px; animation: rowIn 0.4s var(--ease);
+}
+.rt-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.rt-name { color: var(--text-0); font-weight: 600; font-size: 13.5px; flex: 1; min-width: 0; }
+.rt-note { color: var(--text-2); font-size: 11.5px; margin-bottom: 8px; line-height: 1.45; }
+.rt-cmd { display: flex; align-items: center; gap: 10px; }
+.rt-cmd code {
+  flex: 1; min-width: 0; overflow-x: auto; white-space: pre;
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  font-size: 12px; color: var(--text-1); background: rgba(255,255,255,0.04);
+  border-radius: 6px; padding: 8px 10px;
+}
+.rt-cmd .btn { flex: 0 0 auto; padding: 7px 12px; font-size: 12px; }
+.rt-cleanup { margin-top: 8px; }
+.rt-cleanup-label { color: var(--text-2); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; flex: 0 0 auto; }
+.rt-group-actions { margin: 4px 0 8px; }
+.rt-group-actions .btn { padding: 6px 12px; font-size: 12px; }
+.rt-destructive-toggle {
+  margin: 20px 0 4px; padding: 12px 14px; border: 1px solid var(--line);
+  border-radius: var(--radius-sm); background: var(--card);
+}
+.rt-check { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--text-1); cursor: pointer; }
+.rt-check input { width: 16px; height: 16px; accent-color: #fff; }
+
 /* Compliance — the "evidence, not certification" disclaimer ships from the
    API and must stay visually prominent, never buried below the fold. */
 .comp-disclaimer {
