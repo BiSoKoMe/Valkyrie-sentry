@@ -39,6 +39,9 @@ class DoHDetector:
         self._store    = store
         self._on_alert = on_alert
         self._seen: set[tuple[int, str, int]] = set()   # (pid, remote_ip, remote_port) already alerted
+        self._running = False
+        self._scan_errors = 0
+        self._last_error = ""
         self._thread = threading.Thread(
             target=self._scan_loop, daemon=True, name="doh-detector"
         )
@@ -46,15 +49,49 @@ class DoHDetector:
     def start(self) -> None:
         if not _PSUTIL:
             return
+        self._running = True
+        # A fresh Thread when the previous has finished: a Thread object cannot
+        # be started twice, so without this a restart (including a watchdog
+        # recovery) would raise instead of reviving the detector.
+        if self._thread.is_alive():
+            return
+        self._thread = threading.Thread(
+            target=self._scan_loop, daemon=True, name="doh-detector"
+        )
         self._thread.start()
+
+    def stop(self) -> None:
+        self._running = False
+
+    def is_running(self) -> bool:
+        return bool(self._running and self._thread.is_alive())
+
+    def status(self) -> dict:
+        return {
+            "running": self.is_running(),
+            "available": _PSUTIL,
+            "alerts_seen": len(self._seen),
+            "scan_errors": self._scan_errors,
+            "last_error": self._last_error,
+        }
 
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 
     def _scan_loop(self) -> None:
-        while True:
-            self._scan()
+        # _scan() only caught psutil.AccessDenied around net_connections(), but
+        # that call also raises OSError/psutil.Error transiently, and the rest of
+        # the scan body was unguarded entirely. One raise killed this thread and
+        # DoH-bypass detection stopped silently for the life of the run — the
+        # detector that exists to notice DNS being routed around Valkyrie would
+        # itself be gone, with nothing reporting it.
+        while self._running:
+            try:
+                self._scan()
+            except BaseException as exc:      # noqa: BLE001
+                self._scan_errors += 1
+                self._last_error = f"{type(exc).__name__}: {exc}"
             time.sleep(DOH_SCAN_INTERVAL)
 
     def _scan(self) -> None:

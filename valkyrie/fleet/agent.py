@@ -65,6 +65,10 @@ class FleetAgent:
         self._device_token: Optional[str] = None
         self._applied_policy_version: int = -1
         self._running  = False
+        # Cycle health, so a repeatedly-failing agent is visible rather than
+        # looking identical to a healthy-but-quiet one.
+        self._cycle_errors = 0
+        self._last_error = ""
         self._thread: Optional[threading.Thread] = None
         self._load_identity()
 
@@ -206,10 +210,21 @@ class FleetAgent:
     # ------------------------------------------------------------------
 
     def _loop(self) -> None:
+        # All three calls below do network I/O to the fleet server, which fails
+        # routinely — server restart, DNS blip, expired token, TLS error. None
+        # of it was guarded, so the FIRST such failure killed this thread and
+        # the endpoint silently dropped off fleet management for the rest of the
+        # run: no heartbeats, no policy updates, no commands. On the server side
+        # it would simply look like a machine that went quiet, which is
+        # indistinguishable from one that was switched off.
         while self._running:
-            self.send_heartbeat()
-            self.fetch_and_apply_policy()
-            self.fetch_and_run_commands()
+            try:
+                self.send_heartbeat()
+                self.fetch_and_apply_policy()
+                self.fetch_and_run_commands()
+            except BaseException as exc:      # noqa: BLE001
+                self._cycle_errors += 1
+                self._last_error = f"{type(exc).__name__}: {exc}"
             # Sleep in short slices so stop() is responsive.
             slept = 0.0
             while self._running and slept < self._interval:

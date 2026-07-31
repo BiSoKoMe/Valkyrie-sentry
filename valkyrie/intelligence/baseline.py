@@ -289,6 +289,15 @@ class BaselineLearner:
         return len(dirty)
 
     def _flush_loop(self) -> None:
+        # flush() guards its own DB work, but the snapshot it takes before that
+        # (iterating _profiles under the lock) is outside that guard, so this
+        # loop is not provably safe on its own. Guarded defensively: if this
+        # thread dies, learned per-process baselines stop being persisted and
+        # every restart silently begins from an empty baseline — the anomaly
+        # layer would appear to work while never accumulating any history.
         while self._running:
             time.sleep(INTEL_FLUSH_INTERVAL)
-            self.flush()
+            try:
+                self.flush()
+            except BaseException:             # noqa: BLE001
+                pass    # a flush failure must never take down the DNS path

@@ -1095,10 +1095,19 @@ def main() -> None:
     # 9. Baseline builder (background)
     # ------------------------------------------------------------------
     def _baseline_loop() -> None:
+        # store.build_baselines() does substantial SQLite work and can raise
+        # (locked database, disk full, a schema surprise). Unguarded, the first
+        # such failure killed this thread and baselines were never rebuilt again
+        # for the life of the process — the anomaly detector would keep scoring
+        # against an ageing baseline while everything looked normal.
         while True:
             time.sleep(3600)    # check every hour
-            if store.should_build_baseline():
-                store.build_baselines()
+            try:
+                if store.should_build_baseline():
+                    store.build_baselines()
+            except BaseException as exc:      # noqa: BLE001
+                console.print(f"[yellow]Baseline rebuild failed ({exc}); "
+                              f"will retry next hour.[/yellow]")
 
     if args.build_baseline:
         if store.should_build_baseline():

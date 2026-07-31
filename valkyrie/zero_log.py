@@ -56,6 +56,13 @@ class ZeroLogMode:
         self._check_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._alert_callbacks: list = []
+        # Integrity-checker health. status() must be able to tell "checked, and
+        # nothing was tampered with" apart from "nothing has been checked" —
+        # reporting the second as the first is exactly the false reassurance a
+        # log-integrity feature exists to prevent.
+        self._last_check: float = 0.0
+        self._integrity_errors: int = 0
+        self._last_integrity_error: str = ""
 
     # ------------------------------------------------------------------
     # Public API
@@ -142,13 +149,33 @@ class ZeroLogMode:
             except Exception:
                 pass
 
+        # "verified" is a CLAIM, and it may only be made when a check actually
+        # ran. Previously this returned "verified" whenever _tampered was empty
+        # — which is also true when the checker thread never started, or died,
+        # or has not completed its first pass. Reporting "no tampering found"
+        # when nothing looked is the worst answer this function can give.
+        checker_alive = bool(self._check_thread and self._check_thread.is_alive())
+        if self._tampered:
+            integrity = "TAMPERED"
+        elif self._last_check <= 0.0:
+            integrity = "unknown (no check has completed yet)"
+        elif not checker_alive:
+            integrity = "unknown (integrity checker is not running)"
+        else:
+            integrity = "verified"
+
         return {
             "active":          self._active,
             "mode":            "zero_log_ram" if self._active else "disk",
             "session_events":  session_events,
             "disk_writes":     "none" if self._active else "enabled",
-            "integrity":       "TAMPERED" if self._tampered else "verified",
+            "integrity":       integrity,
             "tampered_files":  self._tampered,
+            "checker_running": checker_alive,
+            "last_check_age":  (round(time.time() - self._last_check, 1)
+                                if self._last_check else None),
+            "integrity_errors": self._integrity_errors,
+            "last_integrity_error": self._last_integrity_error,
         }
 
     def on_tamper(self, callback) -> None:
@@ -180,8 +207,19 @@ class ZeroLogMode:
         self._check_thread.start()
 
     def _integrity_loop(self) -> None:
+        # _check_integrity() hashes files on disk, and file I/O raises for
+        # ordinary reasons (a file locked, rotated or deleted between ticks).
+        # Unguarded, one such raise killed this thread permanently and integrity
+        # checking simply stopped — while status() went on reporting the LAST
+        # verdict, so the UI would keep showing "verified" forever with nothing
+        # actually verifying. That is the frozen-heartbeat failure again, in the
+        # subsystem whose entire job is proving the logs were not tampered with.
         while not self._stop_event.wait(INTEGRITY_CHECK_INTERVAL):
-            self._check_integrity()
+            try:
+                self._check_integrity()
+            except BaseException as exc:      # noqa: BLE001
+                self._integrity_errors += 1
+                self._last_integrity_error = f"{type(exc).__name__}: {exc}"
 
     def _check_integrity(self) -> None:
         current = self._hash_sources()
@@ -189,6 +227,9 @@ class ZeroLogMode:
             path for path, digest in current.items()
             if self._hashes.get(path) != digest
         ]
+        # Recorded only on a completed pass, so status() can distinguish
+        # "checked and clean" from "never checked".
+        self._last_check = time.time()
         if changed:
             self._tampered = changed
             for cb in self._alert_callbacks:

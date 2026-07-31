@@ -71,6 +71,7 @@ class Dashboard:
         self._doh_alerts: list[dict] = []
         self._doh_lock  = threading.Lock()
         self._running   = False
+        self._render_errors = 0
 
     # ------------------------------------------------------------------
     # Public API
@@ -94,8 +95,17 @@ class Dashboard:
             refresh_per_second = UI_REFRESH_RATE,
             screen     = True,
         ) as live:
+            # _build_layout() reads live state from the store and every
+            # subsystem, so a transient error there (a closed DB handle during
+            # shutdown, a subsystem mid-restart) could raise. Unguarded, that
+            # killed the render thread and the terminal dashboard froze on its
+            # last frame — still showing numbers, no longer updating, with no
+            # indication the display had stopped.
             while self._running:
-                live.update(self._build_layout())
+                try:
+                    live.update(self._build_layout())
+                except BaseException:         # noqa: BLE001
+                    self._render_errors += 1
                 time.sleep(1.0 / UI_REFRESH_RATE)
 
     def push_doh_alert(self, process_name: str, remote_ip: str, pid: int) -> None:
