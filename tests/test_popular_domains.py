@@ -12,6 +12,15 @@ behavioural heuristics (query burst, never-seen-from-process) learned them
   [3] Memory: SELF-HEAL — purge pre-existing popular 'bad' verdicts on start()
   [4] Classifier: a behavioural block on a popular domain downgrades to flag,
       while a non-popular domain still blocks
+
+Sections [5]-[7] are the mirror-image bug: a live VM run had Valkyrie learn
+"malware-c2-test.example.com" — a stock red-team test lookup — as known-good
+after enough clean-looking queries, then permanently allow it. RFC 2606
+reserved test/documentation domains (example.com/.net/.org/.edu, .test,
+.invalid, .example) must never be eligible for that "N clean queries ->
+known-good" promotion, since "queried repeatedly without another signal
+firing" is not evidence of legitimacy — it is exactly what a red-team script
+(or a patient real C2 domain) also looks like.
 """
 
 from __future__ import annotations
@@ -132,6 +141,76 @@ def main() -> int:
         eco = clf.classify("chrome.exe", "evil-random-c2.example", 1000.0)
         _check("non-popular domain with same score STILL blocks",
                eco["decision"] == "block")
+        store.stop()
+
+    print("\n[5] is_reserved_test_domain — matching + boundary safety")
+    from valkyrie.popular_domains import is_reserved_test_domain
+    _check("malware-c2-test.example.com is reserved",
+           is_reserved_test_domain("malware-c2-test.example.com"))
+    _check("example.com itself is reserved", is_reserved_test_domain("example.com"))
+    _check("sub.example.net is reserved", is_reserved_test_domain("sub.example.net"))
+    _check("foo.test is reserved", is_reserved_test_domain("foo.test"))
+    _check("foo.invalid is reserved", is_reserved_test_domain("foo.invalid"))
+    _check("look-alike example.com.evil.com is NOT reserved (suffix, not prefix)",
+           not is_reserved_test_domain("example.com.evil.com"))
+    _check("google.com is NOT reserved", not is_reserved_test_domain("google.com"))
+    _check("empty is safe", not is_reserved_test_domain(""))
+
+    print("\n[6] Memory never promotes a reserved test domain to known-good")
+    with tempfile.TemporaryDirectory() as td:
+        store = Store(db_path=Path(td) / "r.db"); store.start()
+        mem = IntelligenceMemory(store); mem.start()
+        for _ in range(10):
+            mem.remember_good("malware-c2-test.example.com", process="nslookup.exe")
+        _check("STILL NEVER 'good' after repeated remember_good calls",
+               mem.check("malware-c2-test.example.com") != "good")
+        # A genuine site must still be promotable — this must not become a
+        # blanket "nothing ever gets promoted" regression.
+        mem.remember_good("some-real-clean-site.dev")
+        _check("STILL FIRES: an ordinary domain IS promoted to good",
+               mem.check("some-real-clean-site.dev") == "good")
+        store.stop()
+
+    print("\n[7] Self-heal: purge a pre-existing reserved-domain 'good' verdict on start()")
+    with tempfile.TemporaryDirectory() as td:
+        dbp = Path(td) / "s.db"
+        store = Store(db_path=dbp); store.start()
+        # Seed the DB the way the live VM run left it: the test domain
+        # already promoted to good by an older build.
+        mem0 = IntelligenceMemory(store); mem0.start()
+        conn = store.connection()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO intel_memory"
+                "(domain,verdict,ip,process,reason,first_seen,last_seen,hits)"
+                " VALUES (?,?,?,?,?,?,?,1)",
+                ("malware-c2-test.example.com", "good", "", "nslookup.exe",
+                 "consistently clean behaviour", "2026-07-31", "2026-07-31"))
+            # a real known-good domain that must SURVIVE the purge
+            conn.execute(
+                "INSERT OR REPLACE INTO intel_memory"
+                "(domain,verdict,ip,process,reason,first_seen,last_seen,hits)"
+                " VALUES (?,?,?,?,?,?,?,1)",
+                ("some-real-clean-site.dev", "good", "", "chrome.exe",
+                 "consistently clean behaviour", "2026-07-31", "2026-07-31"))
+            conn.commit()
+        finally:
+            conn.close()
+        # Fresh memory instance simulates the next launch → start() self-heals.
+        mem = IntelligenceMemory(store); mem.start()
+        _check("malware-c2-test.example.com no longer good after start()",
+               mem.check("malware-c2-test.example.com") != "good")
+        _check("real known-good domain SURVIVED the purge",
+               mem.check("some-real-clean-site.dev") == "good")
+        conn = store.connection()
+        try:
+            left = [r[0] for r in conn.execute(
+                "SELECT domain FROM intel_memory WHERE verdict='good'").fetchall()]
+        finally:
+            conn.close()
+        _check("reserved test domain physically purged from DB",
+               "malware-c2-test.example.com" not in left)
+        _check("real good domain kept in DB", "some-real-clean-site.dev" in left)
         store.stop()
 
     print("\n" + "=" * 54)

@@ -137,3 +137,31 @@ def is_infrastructure_domain(host: str) -> bool:
     if h in ("localhost", "wpad", "isatap"):
         return True
     return h.endswith(_INFRA_SUFFIXES)
+
+
+# RFC 2606 reserved documentation/test domains — guaranteed non-real, never
+# an actual site. A name under these can look exactly as suspicious as real
+# attacker infrastructure by string alone (e.g. "malware-c2-test.example.com"
+# is a stock red-team test lookup), so it must never be eligible for the
+# "N consistently clean queries -> known-good" promotion in
+# intelligence/classifier.py. That heuristic rewards patience, not
+# legitimacy — a domain (red-team test or a genuinely patient C2) that is
+# simply queried enough times without another signal firing would otherwise
+# earn a durable whitelist entry that bypasses all future scanning.
+_RESERVED_TEST_DOMAINS = frozenset({
+    "example.com", "example.net", "example.org", "example.edu",
+})
+_RESERVED_TEST_SUFFIXES = (".example", ".test", ".invalid")
+
+
+def is_reserved_test_domain(host: str) -> bool:
+    """True for RFC 2606 reserved documentation/test domains."""
+    h = _norm(host)
+    if not h:
+        return False
+    if h in _RESERVED_TEST_DOMAINS:
+        return True
+    for d in _RESERVED_TEST_DOMAINS:
+        if h.endswith("." + d):
+            return True
+    return h.endswith(_RESERVED_TEST_SUFFIXES)

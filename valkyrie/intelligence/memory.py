@@ -11,6 +11,9 @@ Verdict rules:
   - ``remember_good`` never overwrites a "bad" verdict.
   - a domain is also considered bad when a parent domain was remembered
     bad (bad "example.com" covers "cdn.example.com").
+  - a reserved RFC 2606 test/documentation domain (example.com/.net/.org,
+    .test, .invalid, .example) can never be learned "good" — see
+    popular_domains.is_reserved_test_domain.
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ import threading
 from datetime import datetime
 from typing import Optional
 
-from ..popular_domains import is_popular
+from ..popular_domains import is_popular, is_reserved_test_domain
 
 
 class IntelligenceMemory:
@@ -60,7 +63,16 @@ class IntelligenceMemory:
             # / paypal.com as bad and persisted them, sinkholing real sites on
             # every launch. Purge them from the DB at startup so the fix takes
             # effect the moment this build runs — no manual cleanup needed.
-            stale = [d for (d, v, _r) in rows if v == "bad" and is_popular(d)]
+            stale_bad = [d for (d, v, _r) in rows if v == "bad" and is_popular(d)]
+            # SELF-HEAL: a reserved RFC 2606 test/documentation domain
+            # (example.com, .test, .invalid, ...) must never carry a learned
+            # 'good' verdict either. An earlier build could durably whitelist
+            # one of these purely from N clean-looking queries in a row (see
+            # is_reserved_test_domain) — exactly the shape of a red-team test
+            # lookup like "malware-c2-test.example.com". Purge at startup so
+            # the fix takes effect immediately, no manual cleanup needed.
+            stale_good = [d for (d, v, _r) in rows if v == "good" and is_reserved_test_domain(d)]
+            stale = stale_bad + stale_good
             if stale:
                 conn.executemany("DELETE FROM intel_memory WHERE domain=?",
                                  [(d,) for d in stale])
@@ -74,6 +86,8 @@ class IntelligenceMemory:
                         continue          # never load a popular domain as bad
                     self._bad[domain] = reason
                 else:
+                    if is_reserved_test_domain(domain):
+                        continue          # never load a reserved test domain as good
                     self._good.add(domain)
 
     # ------------------------------------------------------------------
@@ -98,6 +112,13 @@ class IntelligenceMemory:
     def remember_good(self, domain: str, process: str = "") -> None:
         domain = domain.lower().rstrip(".")
         if not domain:
+            return
+        # Never learn a reserved RFC 2606 test/documentation domain as good —
+        # see is_reserved_test_domain. These are guaranteed non-real, so "N
+        # clean queries in a row" is not evidence of legitimacy the way it is
+        # for an actual site; it is exactly what a red-team test lookup or a
+        # patient C2 domain would also produce.
+        if is_reserved_test_domain(domain):
             return
         with self._lock:
             if domain in self._bad:
@@ -131,7 +152,11 @@ class IntelligenceMemory:
                 for i in range(1, len(parts) - 1):
                     if ".".join(parts[i:]) in self._bad:
                         return "bad"
-            if domain in self._good:
+            # Defense in depth, mirroring the 'bad' guard above: a reserved
+            # test domain is never served 'good' from memory even if a stale
+            # verdict somehow lingers (remember_good and the start() self-heal
+            # already refuse to write one, this is belt-and-suspenders).
+            if domain in self._good and not is_reserved_test_domain(domain):
                 return "good"
         return None
 

@@ -30,7 +30,7 @@ from ..config import (
     ANOMALY_FLAG_THRESHOLD,
     INTEL_GOOD_AFTER_ALLOWS,
 )
-from ..popular_domains import is_popular
+from ..popular_domains import is_popular, is_reserved_test_domain
 from .anomaly import AnomalyDetector
 from .baseline import BaselineLearner
 from .memory import IntelligenceMemory
@@ -154,6 +154,12 @@ class ThreatClassifier:
     def _track_clean_streak(self, domain: str, process: str,
                             decision: str, score: float) -> None:
         """Promote consistently clean domains into known-good memory."""
+        # RFC 2606 reserved/test domains are never eligible for promotion —
+        # see popular_domains.is_reserved_test_domain. A red-team test lookup
+        # (or a patient real C2 domain) that simply never trips another
+        # signal must not be able to earn a durable whitelist entry this way.
+        if is_reserved_test_domain(domain):
+            return
         with self._lock:
             if decision != "allow" or score >= self._flag:
                 self._clean_streak.pop(domain, None)
