@@ -1440,7 +1440,10 @@ def main() -> None:
                 dns_server.start()
             healer.register("dns_interceptor", dns_server.is_listening, _recover_dns)
 
-        healer.register("store_writer", store.is_writing)
+        # store.restart_writer is the RECOVERY action. Without it the watchdog
+        # could detect a dead event writer and do nothing — which is what it
+        # did, while every DNS decision, detection and response went unrecorded.
+        healer.register("store_writer", store.is_writing, store.restart_writer)
 
         if args.web:
             def _check_web() -> bool:

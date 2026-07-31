@@ -96,6 +96,9 @@ class Store:
             if ram_uri else None
         )
         self._queue: queue.Queue = queue.Queue(maxsize=STORE_QUEUE_SIZE)
+        # Rows the writer could not persist. A gap in the audit trail must be
+        # countable, not invisible.
+        self._write_errors = 0
         self._writer_thread = threading.Thread(
             target=self._writer_loop, daemon=True, name="store-writer"
         )
@@ -325,6 +328,31 @@ class Store:
         """True while the background event writer thread is alive."""
         return self._writer_thread.is_alive()
 
+    def write_errors(self) -> int:
+        """Rows the writer could not persist (malformed data, SQLite errors).
+
+        Non-zero means the audit trail has gaps. Surfaced rather than hidden:
+        silently dropping events is exactly what this counter exists to make
+        impossible to do unnoticed.
+        """
+        return self._write_errors
+
+    def restart_writer(self) -> bool:
+        """Bring the writer thread back after it has died.
+
+        The self-healing watchdog registered `store_writer` with a health check
+        and NO recovery action, so it could detect a dead writer and do nothing
+        about it. This is that missing action. A Thread cannot be restarted, so
+        a fresh one is created; the queue is untouched, so anything still
+        pending is written by the new thread.
+        """
+        if self._writer_thread.is_alive():
+            return False
+        self._writer_thread = threading.Thread(
+            target=self._writer_loop, daemon=True, name="store-writer")
+        self._writer_thread.start()
+        return True
+
     def db_size_bytes(self) -> int:
         """Size of the on-disk database in bytes (0 in RAM mode)."""
         if self._ram_uri:
@@ -427,13 +455,38 @@ class Store:
         def flush():
             if not pending:
                 return
-            conn.executemany(INSERT, [
+            rows = [
                 (e.timestamp, e.domain, e.decision, e.process_name,
                  e.process_pid, e.process_path, e.reason, e.suspicion, e.raw_category, e.url)
                 for e in pending
-            ])
-            conn.commit()
+            ]
             evts = list(pending)
+            try:
+                conn.executemany(INSERT, rows)
+                conn.commit()
+            except Exception:
+                # ONE malformed row must not cost the whole batch, and must not
+                # kill this thread. executemany is all-or-nothing, so fall back
+                # to row-at-a-time and drop only what genuinely cannot be
+                # written. Verified failure mode: a single event carrying an
+                # unbindable value (sqlite3.ProgrammingError) previously killed
+                # the writer outright, and EVERY subsequent event — every DNS
+                # decision, detection and response — was silently never
+                # recorded for the rest of the run, while the product carried
+                # on looking healthy.
+                written = []
+                for row, evt in zip(rows, evts):
+                    try:
+                        conn.execute(INSERT, row)
+                        written.append(evt)
+                    except Exception:
+                        self._write_errors += 1
+                try:
+                    conn.commit()
+                except Exception:
+                    self._write_errors += 1
+                    written = []
+                evts = written
             pending.clear()
 
             # Fan out committed events to live subscribers over the bus. Skip the
@@ -497,5 +550,16 @@ class Store:
                         flush()
             except queue.Empty:
                 flush()
+            except BaseException:
+                # The writer must never die. Only queue.Empty was caught here,
+                # so any SQLite error (locked database, disk full, a scan-cache
+                # write that fails) escaped the loop, killed this thread AND
+                # skipped conn.close() below. Every event after that point --
+                # every DNS decision, detection and response -- was silently
+                # never recorded, while the rest of the product carried on
+                # looking perfectly healthy. For a security product, losing the
+                # audit trail without saying so is close to the worst quiet
+                # failure available.
+                self._write_errors += 1
 
         conn.close()
