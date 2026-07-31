@@ -47,7 +47,7 @@ def _dns_event(domain, cat, reason, decision="flagged"):
 
 
 def main() -> int:
-    c = Checks("false positives", expect_min=22)
+    c = Checks("false positives", expect_min=25)
 
     # ── The trust primitive it all rests on ─────────────────────────────
     print("\n[0] trusted-path judgement (by path, never by name)")
@@ -78,6 +78,22 @@ def main() -> int:
             b.analyze(_dns_event("77.44.207.4.in-addr.arpa", "intelligence", "beacon regular interval"), None) == [])
     c.check("STILL FIRES: beacon incident for a real domain",
             len(b.analyze(_dns_event("bad.example.com", "intelligence", "beacon regular interval"), None)) == 1)
+
+    # threat-graph "shares infrastructure" — a reverse-DNS name must not inherit
+    # the whole PTR namespace as shared infra (found live: 0.65 on every
+    # x.in-addr.arpa). A real sibling of a recorded threat must still relate.
+    import threading as _th
+    from valkyrie.intelligence.threat_graph import ThreatGraph
+    g = ThreatGraph.__new__(ThreatGraph)
+    g._domains, g._bases, g._subnets, g._prefixes, g._lock = set(), {}, set(), set(), _th.RLock()
+    g._index("7.7.7.7.in-addr.arpa", "", "in-addr.arpa", "")   # poison attempt
+    g._index("evil.example.com", "1.2.3.4", "example.com", "")
+    c.check("SUPPRESSED: reverse-DNS is not 'related' via a shared PTR base",
+            g.is_related("168.56.49.23.in-addr.arpa") == 0.0)
+    c.check("  ...and a reverse-DNS name never poisons the base bucket",
+            g._bases.get("in-addr.arpa", 0) == 0)
+    c.check("STILL FIRES: a real sibling of a recorded threat still relates",
+            g.is_related("login.example.com") > 0.0)
 
     # ── Class 2: OS-maintenance persistence ─────────────────────────────
     print("\n[2] OS self-maintenance does not raise persistence incidents")

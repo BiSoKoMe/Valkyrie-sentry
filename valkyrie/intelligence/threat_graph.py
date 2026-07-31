@@ -25,6 +25,7 @@ import threading
 from datetime import datetime
 
 from ..config import TRACKER_PREFIXES
+from ..popular_domains import is_infrastructure_domain
 
 R_EXACT  = 1.0
 R_BASE   = 0.65
@@ -87,7 +88,14 @@ class ThreatGraph:
 
     def _index(self, domain: str, ip: str, base: str, prefix: str) -> None:
         self._domains.add(domain)
-        self._bases[base] = self._bases.get(base, 0) + 1
+        # NEVER index a reverse-DNS / local name's "base" (in-addr.arpa,
+        # ip6.arpa). Their registrable base is the whole PTR namespace, so one
+        # bad reverse lookup would make EVERY reverse lookup on the machine
+        # "share infrastructure" with it — which is exactly the false positive
+        # seen on real hardware (0.65 suspicion on every x.in-addr.arpa). The
+        # exact domain is still recorded; only the poisonous base bucket is not.
+        if not is_infrastructure_domain(domain):
+            self._bases[base] = self._bases.get(base, 0) + 1
         if ip:
             subnet = _subnet24(ip)
             if subnet:
@@ -130,12 +138,17 @@ class ThreatGraph:
     def is_related(self, domain: str, ip: str = "") -> float:
         """0.0–1.0 relatedness of a NEW domain/IP to known threats."""
         domain = domain.lower().rstrip(".")
+        # Reverse-DNS / local names have no meaningful "shared infrastructure":
+        # their base is the whole PTR namespace. The IP-subnet relation below is
+        # still meaningful for a real IP, so only the base/prefix name-relations
+        # are skipped here, not the whole function.
+        infra = is_infrastructure_domain(domain)
         base   = _base_domain(domain)
         with self._lock:
             if domain in self._domains:
                 return R_EXACT
             score = 0.0
-            if self._bases.get(base, 0) > 0:
+            if not infra and self._bases.get(base, 0) > 0:
                 score = max(score, R_BASE)
             if ip:
                 subnet = _subnet24(ip)
@@ -152,11 +165,12 @@ class ThreatGraph:
 
     def explain(self, domain: str, ip: str = "") -> str:
         domain = domain.lower().rstrip(".")
+        infra  = is_infrastructure_domain(domain)
         base   = _base_domain(domain)
         with self._lock:
             if domain in self._domains:
                 return f"{domain} is a recorded threat"
-            if self._bases.get(base, 0) > 0:
+            if not infra and self._bases.get(base, 0) > 0:
                 return (f"{domain} shares infrastructure ({base}) with "
                         f"{self._bases[base]} known threat(s)")
             if ip and _subnet24(ip) in self._subnets:
