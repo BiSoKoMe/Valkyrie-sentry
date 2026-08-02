@@ -169,6 +169,14 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 
     # ── Response actions: dry-run, audit, protected PIDs ──────────────
     print("\n-- Response actions --------------------------------")
+    # block_domain / unblock_domain route through the ANALYSIS memory now (no
+    # manual rules file). Give the responder a recording intelligence stub.
+    class _Intel:
+        def __init__(self): self.blocked = set(); self.good = set()
+        def remember_block(self, d, r=""): self.blocked.add(d)
+        def remember_good(self, d, r=""): self.good.add(d)
+    _intel = _Intel()
+    engine._ctx.intelligence = _intel
     r1 = engine.respond("block_domain", "c2.evil", dry_run=True, incident_id=inc_id)
     check("block_domain dry-run reports dry_run", r1["status"] == "dry_run")
     r2 = engine.respond("kill_process", "4", dry_run=False, incident_id=inc_id)
@@ -186,20 +194,14 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     check("response recorded in timeline",
           any(t["kind"] == "response" for t in detail["timeline"]))
 
-    # Real block_domain against a temp rules file (no repo mutation).
-    import valkyrie.edr.response as _resp
-    _orig = _resp.RULES_PATH
-    try:
-        _resp.RULES_PATH = Path(tmp) / "rules.yaml"
-        got = engine.respond("block_domain", "tracker.test", dry_run=False)
-        check("real block_domain succeeds", got["status"] == "succeeded")
-        text = _resp.RULES_PATH.read_text(encoding="utf-8")
-        check("blocked domain written to rules", "tracker.test" in text)
-        engine.respond("unblock_domain", "tracker.test", dry_run=False)
-        text2 = _resp.RULES_PATH.read_text(encoding="utf-8")
-        check("unblock removes the domain", "tracker.test" not in text2)
-    finally:
-        _resp.RULES_PATH = _orig
+    # Real block_domain records the domain in analysis memory — NO file written,
+    # no manual list. The DNS engine enforces it via that same memory next lookup.
+    got = engine.respond("block_domain", "tracker.test", dry_run=False)
+    check("real block_domain succeeds", got["status"] == "succeeded")
+    check("blocked domain remembered in analysis memory",
+          "tracker.test" in _intel.blocked)
+    engine.respond("unblock_domain", "tracker.test", dry_run=False)
+    check("unblock marks the domain known-good", "tracker.test" in _intel.good)
 
     # ── Incident lifecycle ────────────────────────────────────────────
     print("\n-- Incident lifecycle ------------------------------")

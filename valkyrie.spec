@@ -15,7 +15,13 @@ NOTE: PyInstaller does not cross-compile. Run this ON WINDOWS to get a Windows
 """
 
 import os
+import datetime as _dt
 from PyInstaller.utils.hooks import collect_submodules, collect_all
+
+# Stamp this build so `valkyrie.exe --version` reports exactly when it was frozen.
+# Written before Analysis so the generated module is collected into the package.
+with open(os.path.join("valkyrie", "_build.py"), "w", encoding="utf-8") as _bf:
+    _bf.write('BUILD_STAMP = "%s"\n' % _dt.datetime.now().strftime("%Y-%m-%d %H:%M"))
 
 # Output name is overridable so the same recipe can build valkyrie.exe or, e.g.,
 # valkyrie_test.exe:  set VALKYRIE_EXE_NAME before running PyInstaller.

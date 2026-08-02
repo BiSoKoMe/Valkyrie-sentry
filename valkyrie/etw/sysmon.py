@@ -33,7 +33,7 @@ from .wineventlog import ChannelReader, parse_event_xml
 from ..behavior_score import classify_anomaly
 from ..behavioral_rules import classify_behavior
 from ..process_telemetry import classify_cmdline, classify_process
-from ..trust import is_trusted_os_command, is_trusted_os_path
+from ..trust import is_benign_os_autorun, is_trusted_os_path
 from ..telemetry import (
     ACT_FLAGGED, ACT_OBSERVED, CAT_NETWORK, CAT_PERSISTENCE, CAT_PROCESS,
     PERSIST_RUN_KEY, SEV_HIGH, SEV_INFO, SEV_LOW, SEV_MEDIUM, severity_rank,
@@ -258,7 +258,7 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
         # Windows Update / signed OS components legitimately place items in the
         # startup path. If a trusted OS binary is the writer, observe rather than
         # alert (see valkyrie/trust.py). A user/attacker binary still flags.
-        trusted = is_trusted_os_path(writer)
+        trusted = is_benign_os_autorun(writer, fn)
         return {
             "category": CAT_PERSISTENCE, "activity": PERSIST_RUN_KEY,
             "actor_pid": int(d.get("ProcessId", 0) or 0), "actor_name": _name(writer),
@@ -282,11 +282,13 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
             return None
         writer = d.get("Image", "")
         target = d.get("Details", "")
-        # OS self-maintenance (TrustedInstaller, Defender, Edge) writes autorun
-        # keys constantly. Trust only when BOTH the writer and the value it points
-        # at are OS-owned — a trusted process writing an autorun to a user/temp
-        # path is exactly the abuse case and must still flag.
-        trusted = is_trusted_os_path(writer) and is_trusted_os_command(target)
+        # OS self-maintenance (services.exe, sihost, TrustedInstaller, Defender,
+        # Edge, dismhost, WMIADAP) writes autorun keys constantly — the single
+        # largest source of persistence false positives on a live box. Trust the
+        # write when a trusted OS binary makes it and the target is not in a
+        # world-writable scratch dir; a trusted process dropping an autorun into
+        # %TEMP% is the abuse case and still flags.
+        trusted = is_benign_os_autorun(writer, target)
         return {
             "category": CAT_PERSISTENCE, "activity": PERSIST_RUN_KEY,
             "actor_pid": int(d.get("ProcessId", 0) or 0), "actor_name": _name(writer),

@@ -207,7 +207,8 @@ def _default_playbooks_checks() -> None:
 
     _check("default set parses without error", len(books) >= 3)
     # Domain blocks are reversible → ship enforce; process kill is destructive
-    # → must ship dry_run so it only simulates until consciously armed.
+    # → the BROAD stream must ship dry_run, while narrowly-scoped, high-confidence
+    # kills (critical-only, named sequences) MAY ship enforce.
     domain_blockers = [b for b in books
                        if any(a.action == "block_domain" for a in b.actions)]
     _check("domain-block playbooks present", len(domain_blockers) >= 1)
@@ -218,10 +219,35 @@ def _default_playbooks_checks() -> None:
     _check("dns tunnelling is auto-blocked",
            "tunnel" in by_id.get("block-dns-tunnel").categories
            if "block-dns-tunnel" in by_id else False)
+
+    # Persistence removal is low-risk (removes the NEW artefact) → ships enforce.
+    _check("remove-persistence ships in ENFORCE",
+           by_id.get("remove-persistence").mode == "enforce"
+           if "remove-persistence" in by_id else False)
+
+    # The safety contract for auto-kill: any ENFORCE kill must be narrowly
+    # scoped so the everyday LOLBin stream can never trip it. Concretely, an
+    # enforce kill either fires only at CRITICAL severity (reserved for
+    # malicious-by-construction tradecraft), or is limited to the high-confidence
+    # named-sequence/chain categories — never the bare 'process' stream at
+    # medium/high.
     killers = [b for b in books
                if any(a.action == "kill_process" for a in b.actions)]
-    _check("any process-kill playbook ships DRY_RUN (never auto-kills by default)",
-           all(b.mode == "dry_run" for b in killers))
+    _broad_process = {"process"}
+    for b in killers:
+        if b.mode != "enforce":
+            continue
+        scoped_by_severity = b.min_severity == "critical"
+        scoped_by_category = set(b.categories).issubset(
+            {"attack_sequence", "attack_chain"}) and bool(b.categories)
+        _check(f"enforce kill '{b.id}' is narrowly scoped (critical-only or named sequence)",
+               scoped_by_severity or scoped_by_category)
+        if set(b.categories) & _broad_process:
+            _check(f"enforce kill '{b.id}' on 'process' fires only at CRITICAL",
+                   b.min_severity == "critical")
+    _check("the BROAD process-kill stream still ships DRY_RUN",
+           any(b.mode == "dry_run" and "process" in b.categories
+               and b.min_severity != "critical" for b in killers))
     _check("no domain-block targets a bare TLD or wildcard root (would over-block)",
            all(a.target_from == "entity" for b in domain_blockers for a in b.actions))
 

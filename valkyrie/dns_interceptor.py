@@ -5,10 +5,11 @@ pipeline, and either:
   - Returns a NXDOMAIN / sinkhole response (blocked)
   - Forwards the query to the upstream resolver and relays the real answer
 
-Decision pipeline (in order):
-  1. User rules — always_allow / always_block take priority
-  2. Intelligence memory — verdicts Valkyrie already learned (fast path)
-  3. Blocklist / scanner — known-bad domains + positive tracker signals
+Decision pipeline (in order) — PURE ANALYSIS, no human-authored lists:
+  1. Threat-intel IOC feeds — highest-confidence known-bad signal
+  2. Intelligence memory — verdicts Valkyrie already learned (fast path); the
+     engine's own analysis-driven auto-blocks are enforced here, not via a list
+  3. Scanner — page-content analysis + positive tracker signals
   4. Threat classifier — behavioural intelligence (anomaly + threat graph)
   5. Baseline anomaly check — post-profiling phase
 
@@ -457,7 +458,6 @@ class DNSInterceptor:
         self, domain: str, qtype: int, proc: ProcessInfo, payload_size: int = 0
     ) -> tuple[str, str, float, str]:
         """Return (decision, reason, suspicion_score, category)."""
-        rules = self._rules.get()
         intel = self._intelligence
 
         # Queue the domain for background page-content analysis. This is O(1)
@@ -471,18 +471,16 @@ class DNSInterceptor:
         if self._content_watch is not None:
             self._content_watch.observe(domain)
 
-        # 1. User always_allow
-        if rules.is_always_allowed(domain, proc.name):
-            return "allowed", "user:always_allow", 0.0, "user_rule"
+        # NO human-authored allow/block list is ever consulted. There is no
+        # "user:always_allow" / "user:always_block" verdict — Valkyrie ANALYSES
+        # every domain and decides for itself. What follows is pure analysis:
+        # threat-intel IOC feeds, the learned intelligence layer, then the site
+        # scanner. (The engine's own analysis-driven auto-blocks are enforced
+        # through the intelligence memory at stage 2 below, not through a list.)
 
-        # 2. User always_block
-        if rules.is_always_blocked(domain, proc.name):
-            return "blocked", "user:always_block", 1.0, "user_rule"
-
-        # 2a. Threat-intel IOC feeds — highest-confidence non-user signal.
-        #     Checked before the intelligence fast path so a learned
-        #     known-good domain that appears in a C2/malware feed still
-        #     blocks (compromised-infrastructure case).
+        # 1. Threat-intel IOC feeds — highest-confidence signal. Checked before
+        #    the intelligence fast path so a learned known-good domain that
+        #    appears in a C2/malware feed still blocks (compromised-infra case).
         ti = self._threat_intel
         if ti is not None:
             hit = ti.match_domain(domain)

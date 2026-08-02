@@ -142,36 +142,48 @@ class AnomalyDetector:
         """
         process = (process or "unknown").lower()
         domain  = domain.lower().rstrip(".")
-        score = 0.0
-        reasons: list[str] = []
-
-        if self._is_background(process):
-            score += W_BACKGROUND
-            reasons.append("background process")
-
-        if self.is_heartbeat(process, domain):
-            score += W_HEARTBEAT
-            reasons.append("regular-interval heartbeat")
-
-        alive = self._is_running(process)
-        if alive is False:
-            score += W_APP_CLOSED
-            reasons.append("process not running but still connecting")
-
         learning = self._baseline.is_learning()
-        if not learning and not self._baseline.is_normal(process, domain, timestamp):
-            score += W_NEVER_SEEN
-            reasons.append("domain never seen from this process")
 
-        if not learning and self._timing_deviates(process, domain):
-            score += W_TIMING_DEV
-            reasons.append("deviates from learned timing")
-
+        # --- STRONG C2 tells: each is a real beaconing signature that stands on
+        # its own (metronome heartbeat, an app that closed but keeps connecting,
+        # repeated tiny same-size payloads). These drive the score. ---
+        strong = 0.0
+        strong_reasons: list[str] = []
+        if self.is_heartbeat(process, domain):
+            strong += W_HEARTBEAT
+            strong_reasons.append("regular-interval heartbeat")
+        if self._is_running(process) is False:
+            strong += W_APP_CLOSED
+            strong_reasons.append("process not running but still connecting")
         if self._asymmetric_small_out(process, domain, payload):
-            score += W_ASYMMETRIC
-            reasons.append("repeated small same-size payloads (beacon-like)")
+            strong += W_ASYMMETRIC
+            strong_reasons.append("repeated small same-size payloads (beacon-like)")
 
-        score = min(1.0, score)
+        # --- WEAK CONTEXT tells: "background process", "domain never seen from
+        # this process", "timing deviation". Each describes perfectly NORMAL OS
+        # behaviour on its own — every Windows service is a background process
+        # and queries new domains (updates, telemetry, CDNs) constantly. On their
+        # own they were summing to 0.6 and FLAGGING thousands of legit domains
+        # (the "baseline:anomaly" flood). They now only SHARPEN a score once a
+        # strong beacon tell is already present, and never flag a domain alone. ---
+        weak = 0.0
+        weak_reasons: list[str] = []
+        if self._is_background(process):
+            weak += W_BACKGROUND
+            weak_reasons.append("background process")
+        if not learning and not self._baseline.is_normal(process, domain, timestamp):
+            weak += W_NEVER_SEEN
+            weak_reasons.append("domain never seen from this process")
+        if not learning and self._timing_deviates(process, domain):
+            weak += W_TIMING_DEV
+            weak_reasons.append("deviates from learned timing")
+
+        if strong > 0:
+            score = min(1.0, strong + weak)
+            reasons = strong_reasons + weak_reasons
+        else:
+            score = 0.0            # weak signals alone are normal OS behaviour
+            reasons = []
         with self._lock:
             self._explanations[(process, domain)] = reasons
         return score

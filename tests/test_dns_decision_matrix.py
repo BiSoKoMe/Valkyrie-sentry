@@ -172,33 +172,32 @@ def main() -> int:
 
     D = "example.test"
 
-    # ── 1. user always_allow is the top of the chain ────────────────────────
-    print("\n[1] user always_allow outranks every automated signal")
+    # ── 1. NO human-authored allow/block list is ever consulted ─────────────
+    # Valkyrie analyses every domain and decides for itself. Even if a rules
+    # object still carries allow/block entries, the decision IGNORES them and
+    # comes from analysis. There is no "user:always_*" verdict any more.
+    print("\n[1] manual allow/block lists are IGNORED — analysis decides")
     di, _ = _build(
-        rules=_Rules(allow={D}, block={D}),
+        rules=_Rules(allow={D}, block={D}),          # both set; must be ignored
         threat_intel=_ThreatIntel(hits={D}),
-        blocklist=_Blocklist(blocked={D}),
-        scanner=_Scanner({D: _ScanResult("block")}),
-        intelligence=_Intelligence(memory={D: "bad"}),
     )
     dec, reason, _, cat = _decide(di, D)
-    c.check("always_allow beats always_block", dec == "allowed")
-    c.check("always_allow beats threat-intel, scanner, blocklist and memory",
-            dec == "allowed" and reason == "user:always_allow")
-    c.check("an always_allow decision is categorised user_rule", cat == "user_rule")
+    c.check("a domain a list would 'allow' still blocks on a C2 feed",
+            dec == "blocked")
+    c.check("the verdict is analysis (threat_intel), never a user rule",
+            cat == "threat_intel" and "user:" not in reason)
 
-    # ── 2. user always_block outranks every automated signal ────────────────
-    print("\n[2] user always_block outranks every automated signal")
+    # ── 2. a domain a list would 'block' is decided by analysis, not the list ─
+    print("\n[2] a would-be blocked domain is decided by analysis, not a list")
     di, _ = _build(
-        rules=_Rules(block={D}),
+        rules=_Rules(block={D}),                     # list says block; ignored
         scanner=_Scanner({D: _ScanResult("allow", (), 0.0, "")}),
         intelligence=_Intelligence(memory={D: "good"}),
     )
     dec, reason, score, cat = _decide(di, D)
-    c.check("always_block beats a scanner 'allow'", dec == "blocked")
-    c.check("always_block beats a learned known-good verdict",
-            reason == "user:always_block")
-    c.check("a user block carries full confidence", score == 1.0)
+    c.check("analysis known-good wins over a would-be block list",
+            dec == "allowed")
+    c.check("no user:always_block verdict exists", "user:always_block" not in reason)
 
     # ── 2a. threat intel beats the known-good fast path ─────────────────────
     # The compromised-infrastructure case, and it is explicitly commented in

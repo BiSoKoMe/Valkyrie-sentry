@@ -329,7 +329,14 @@ def main() -> None:
                          help="Enable strict mode: apply blocklist on top of scanner decisions")
     parser.add_argument("--mac-rand",    action="store_true", help="Enable auto MAC randomisation on reconnect")
     parser.add_argument("--mac-restore", action="store_true", help="Restore original MACs from backup and exit")
+    parser.add_argument("--version", action="store_true",
+                        help="Print the Valkyrie version + build stamp and exit "
+                             "(so 'which build is installed?' is never ambiguous).")
     parser.add_argument("--mac-status",  action="store_true", help="Print current vs original MACs and exit")
+    parser.add_argument("--privacy",     action="store_true",
+                        help="Privacy pillar ON at startup: randomise the MAC and "
+                             "spoof the TCP/IP fingerprint every boot (the installed "
+                             "service runs with this).")
     parser.add_argument("--setup-multihop", action="store_true",
                         help="Generate multi-hop WireGuard configs and exit")
     parser.add_argument("--hop1", type=str, default="", help="Hop-1 server IP for --setup-multihop")
@@ -379,9 +386,14 @@ def main() -> None:
                         help="Directory to load third-party EDR plugins from "
                              "(detection/responder/enrichment). Opt-in; trusted code only")
     parser.add_argument("--endpoint", action="store_true",
-                        help="Enable endpoint process telemetry: observe process "
-                             "starts and feed behavioral detections (LOLBins, "
-                             "Office-spawns-shell, temp-dir execution) into the EDR layer")
+                        help="(Default; kept for compatibility.) Enable endpoint "
+                             "process/persistence/network telemetry and real-time "
+                             "sensors feeding the EDR layer")
+    parser.add_argument("--no-endpoint", action="store_true",
+                        help="DNS-only mode: disable endpoint telemetry and real-time "
+                             "sensors. Endpoint detection is ON BY DEFAULT so a shipped "
+                             "install is fully armed however it is launched — this flag "
+                             "opts out")
     parser.add_argument("--incidents", action="store_true",
                         help="Print current EDR incidents and exit")
     parser.add_argument("--hunt", type=str, default="", metavar="HUNT",
@@ -647,6 +659,18 @@ def main() -> None:
         results = tk.restore()
         for name, ok in results.items():
             console.print(f"  {name:30s} {'[green]restored[/green]' if ok else '[red]FAILED[/red]'}")
+        return
+
+    # ------------------------------------------------------------------
+    # Early-exit: version + build stamp
+    # ------------------------------------------------------------------
+    if args.version:
+        from . import __version__
+        try:
+            from ._build import BUILD_STAMP
+        except Exception:
+            BUILD_STAMP = "dev (unstamped source run)"
+        print(f"Valkyrie {__version__}  ·  build {BUILD_STAMP}")
         return
 
     # ------------------------------------------------------------------
@@ -966,10 +990,12 @@ def main() -> None:
     # 7c. MAC randomizer (optional)
     # ------------------------------------------------------------------
     mac_randomizer = None
-    if args.mac_rand:
+    if args.mac_rand or args.privacy:
         _t = time.monotonic()
         from .mac_randomizer import MacRandomizer
         mac_randomizer = MacRandomizer(store=store)
+        # Randomise NOW (every boot) so each start presents a fresh hardware
+        # identity; the original is backed up so the UI can show original → new.
         new_mac = mac_randomizer.randomize()
         if new_mac:
             console.print(f"[green]✓[/green] MAC randomised: [cyan]{new_mac}[/cyan]")
@@ -978,7 +1004,24 @@ def main() -> None:
         mac_randomizer.auto_randomize_on_connect()
         _tick("MAC randomizer: active (auto-randomise on reconnect)", _t)
     elif args.debug:
-        console.print("[dim]MAC randomizer: disabled (use --mac-rand to enable)[/dim]")
+        console.print("[dim]MAC randomizer: disabled (use --mac-rand / --privacy to enable)[/dim]")
+
+    # 7c-2. TCP/IP fingerprint spoofing (privacy pillar) — runs on start, not
+    # only via the --fingerprint early-exit. Makes the box present a generic
+    # (TTL 64, no TCP timestamps) stack instead of an identifiable Windows one,
+    # so MAC randomisation isn't undone by an obvious OS fingerprint. Fully
+    # reversible (backup); needs admin (the SYSTEM service has it).
+    if args.privacy:
+        _t = time.monotonic()
+        try:
+            from .fingerprint import NetworkFingerprint
+            _fp = NetworkFingerprint()
+            if _fp.normalize():
+                _tick("TCP/IP fingerprint spoofed (generic stack: TTL 64, no timestamps)", _t)
+            elif getattr(_fp, "last_error", ""):
+                console.print(f"[dim]TCP/IP fingerprint spoof skipped: {_fp.last_error}[/dim]")
+        except Exception as _exc:      # noqa: BLE001 — privacy is best-effort
+            console.print(f"[dim]TCP/IP fingerprint spoof unavailable ({_exc})[/dim]")
 
     # ------------------------------------------------------------------
     # 7d. Multi-hop VPN (status only — configs generated via --setup-multihop)
@@ -1219,9 +1262,15 @@ def main() -> None:
             playbook_engine.start()
             _tick(f"SOAR playbooks active ({n_pb})", _t)
 
-        # Endpoint process telemetry (opt-in via --endpoint): observe process
-        # starts and feed behavioral detections into the same correlation engine.
-        if args.endpoint:
+        # Endpoint telemetry + real-time sensors are ON BY DEFAULT so a shipped
+        # install actually protects the endpoint however it was launched — a
+        # launch script that forgets to pass --endpoint must NOT silently drop
+        # the client to DNS-only (no process/persistence detection, no
+        # command-line sensor). Pass --no-endpoint for explicit DNS-only. (This
+        # whole block is already inside the EDR-enabled path, so --no-edr still
+        # disables it.)
+        endpoint_enabled = not getattr(args, "no_endpoint", False)
+        if endpoint_enabled:
             _tp = time.monotonic()
             from .process_telemetry import ProcessCollector
             process_collector = ProcessCollector(
@@ -1362,6 +1411,27 @@ def main() -> None:
         except Exception as _e:   # never let it block startup
             console.print(f"[yellow]Ransomware shield unavailable: {_e}[/yellow]")
             ransomware_shield = None
+
+    # ------------------------------------------------------------------
+    # 9e. Decoy honeytokens — fake passwords / keys / "confidential" files an
+    #     intruder browsing the box will trip. Detection reuses the command-line
+    #     eye: any process referencing a decoy is, by construction, recon — the
+    #     engine forces it CRITICAL + labels it 'decoy' (see edr/engine.py) and
+    #     the decision policy routes it to CONTAIN. Only when endpoint sensors
+    #     are active (nothing sees the command line otherwise).
+    # ------------------------------------------------------------------
+    if edr_engine is not None:
+        _t = time.monotonic()
+        try:
+            from .decoys import DecoyManager, set_active
+            from .config import DATA_DIR
+            _decoys = DecoyManager(manifest_path=DATA_DIR / "decoys.json")
+            _decoys.load()
+            _n = _decoys.deploy()
+            set_active(_decoys)
+            _tick(f"Decoy honeytokens planted ({len(_decoys.tokens())} tripwires)", _t)
+        except Exception as _e:   # never block startup
+            console.print(f"[dim]Decoys unavailable ({_e})[/dim]")
 
     # ------------------------------------------------------------------
     # 9e. Component registry — the uniform plugin contract over every

@@ -77,19 +77,65 @@ if not RULES_PATH.exists():
     except OSError:
         pass   # first-run seeding is best-effort; RulesEngine tolerates absence
 
-# Response playbooks (SOAR) follow the same seed-on-first-launch pattern as
-# rules: a curated, conservative default ships ENABLED so confirmed-malicious
-# incidents are auto-blocked and audited out of the box (before this the engine
-# started with zero playbooks and every incident was observe-only). The user's
-# later edits to the copied-out file are never clobbered by an update.
+# Response playbooks (SOAR) ship ENABLED so confirmed-malicious incidents are
+# auto-blocked/remediated and audited out of the box (before this the engine
+# started with zero playbooks and every incident was observe-only).
+#
+# Seeding is VERSION-AWARE so a client is fully armed with NO manual step in
+# every case — fresh install *and* upgrade:
+#   * Fresh install (no file): copy the bundled armed default verbatim.
+#   * Upgrade (installed `version` < bundled `version`): refresh the built-in
+#     playbooks to the new armed set — backing up the old file — while
+#     preserving any playbooks the user added under their own ids.
+#   * Current or user-ahead: left untouched, so deliberate edits persist.
+# Without this, an existing install (a beta tester, a re-install over an older
+# build) would silently keep an old dry-run config and never actually protect.
 PLAYBOOKS_PATH         = DATA_DIR / "playbooks.yaml"
 DEFAULT_PLAYBOOKS_PATH = BUNDLE_DIR / "valkyrie" / "defaults" / "playbooks.default.yaml"
-if not PLAYBOOKS_PATH.exists():
+
+
+def _playbook_doc_version(data: dict) -> int:
     try:
-        if DEFAULT_PLAYBOOKS_PATH.exists():
-            shutil.copyfile(DEFAULT_PLAYBOOKS_PATH, PLAYBOOKS_PATH)
-    except OSError:
-        pass   # best-effort; PlaybookEngine falls back to the bundled default
+        return int((data or {}).get("version", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _seed_or_migrate_playbooks(path=None, default_path=None) -> None:
+    """Ensure the shipped built-in playbooks are present and current without
+    clobbering user-added playbooks. Best-effort; never raises.
+
+    Paths default to the module-level PLAYBOOKS_PATH / DEFAULT_PLAYBOOKS_PATH but
+    are injectable so the migration can be unit-tested against temp files."""
+    path = path or PLAYBOOKS_PATH
+    default_path = default_path or DEFAULT_PLAYBOOKS_PATH
+    try:
+        if not default_path.exists():
+            return
+        if not path.exists():
+            shutil.copyfile(default_path, path)
+            return
+        import yaml
+        default = yaml.safe_load(default_path.read_text(encoding="utf-8")) or {}
+        current = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if _playbook_doc_version(current) >= _playbook_doc_version(default):
+            return   # user is current or ahead — never clobber deliberate edits
+        builtin_ids = {str(p.get("id")) for p in (default.get("playbooks") or [])}
+        user_added = [p for p in (current.get("playbooks") or [])
+                      if str(p.get("id")) not in builtin_ids]
+        merged = dict(default)
+        merged["playbooks"] = list(default.get("playbooks") or []) + user_added
+        try:      # keep the superseded file so a migration is never lossy
+            shutil.copyfile(
+                path, path.with_suffix(f".v{_playbook_doc_version(current)}.bak"))
+        except OSError:
+            pass
+        path.write_text(yaml.safe_dump(merged, sort_keys=False), encoding="utf-8")
+    except Exception:
+        pass       # PlaybookEngine falls back to the bundled default if needed
+
+
+_seed_or_migrate_playbooks()
 
 # ---------------------------------------------------------------------------
 # Fleet control plane (multi-device management)

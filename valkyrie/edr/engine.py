@@ -36,6 +36,7 @@ from .schema import Detection, Incident, TimelineEntry, max_severity, severity_r
 
 # Map process-telemetry labels onto rough MITRE ATT&CK techniques for display.
 _TELEMETRY_TECHNIQUE = {
+    "decoy":              "T1550 — Decoy / Honeytoken Access (intruder recon)",
     "lolbin":             "T1059 — Command & Scripting Interpreter",
     "office_child_shell": "T1566 — Phishing (macro) → shell",
     "suspicious_path":    "T1204 — User Execution",
@@ -159,12 +160,44 @@ class EdrEngine:
         if not self._running:
             return None
         d = event.to_dict() if hasattr(event, "to_dict") else dict(event)
+        # Never report Valkyrie's own components as the threat. One chokepoint
+        # here covers every non-DNS source (process, network, persistence,
+        # sysmon): its resolver forwards to upstream DNS, its service writes an
+        # autostart entry, its engine is a native LOLBin-shaped exe. Suppressing
+        # at ingest also stops these from feeding the kill-chain correlator, so
+        # no "multi-stage attack on valkyrie.exe" can form either.
+        from ..trust import is_self
+        if is_self(str(d.get("actor_name", "")), str(d.get("actor_path", ""))):
+            return None
         severity = str(d.get("severity", "info"))
         action = str(d.get("action", ""))
+
+        labels = list(d.get("labels") or [])
+        # Decoy tripwire (honeytokens): if this event references a planted decoy
+        # file/credential — in its command line, target path, or entity — an
+        # intruder is browsing the box for confidential data. Near-zero FP, so
+        # force it CRITICAL and tag it 'decoy'; the decision policy routes that
+        # straight to CONTAIN. Checked BEFORE the medium-severity gate so a decoy
+        # read that a collector rated 'low' is never dropped.
+        try:
+            from ..decoys import decoy_hit
+            _fields0 = d.get("fields") or {}
+            _tgt = d.get("target") or {}
+            hit = decoy_hit(str(_fields0.get("cmdline", "")),
+                            str(d.get("actor_path", "")),
+                            str(_tgt.get("path", "")) if isinstance(_tgt, dict) else "",
+                            str(_tgt.get("location", "")) if isinstance(_tgt, dict) else "")
+            if hit:
+                severity = "critical"
+                action = "flagged"
+                if "decoy" not in labels:
+                    labels.append("decoy")
+        except Exception:
+            pass
+
         if severity_rank(severity) < severity_rank("medium") and action != "flagged":
             return None
 
-        labels = list(d.get("labels") or [])
         # A behavioral rule (behavioral_rules.py) carries its exact ATT&CK id on
         # the event; prefer it over inferring one from a label. Falls back to the
         # label→technique map for events from other collectors.
@@ -175,6 +208,19 @@ class EdrEngine:
                     technique = _TELEMETRY_TECHNIQUE[lab]
                     break
         entity = str(d.get("actor_path") or d.get("actor_name") or "")
+        category = str(d.get("category", "") or "process")
+        # Persistence detections carry a structured, *actionable* entity —
+        # "<asep_type>::<identity>" — so the remove_persistence responder can be
+        # driven straight from a playbook with `target_from: entity` and knows
+        # exactly which task/service/run-key/startup file to rip out. Each ASEP
+        # is thereby its own incident (distinct entity), which is also the right
+        # correlation granularity: two different persistence artefacts should not
+        # fold into one incident just because they launch the same binary.
+        if category == "persistence":
+            activity = str(d.get("activity", ""))
+            identity = str((d.get("fields") or {}).get("identity", ""))
+            if activity and identity:
+                entity = f"{activity}::{identity}"
         title = str(d.get("reason") or
                     f"{d.get('activity','')} {d.get('actor_name','')}".strip())
         # Process lineage, when the collector captured it (process_telemetry
@@ -187,7 +233,7 @@ class EdrEngine:
         det = Detection(
             source=str(d.get("source", "collector")),
             severity=severity,
-            category=str(d.get("category", "") or "process"),
+            category=category,
             title=title,
             entity=entity,
             process_name=str(d.get("actor_name", "")),
@@ -227,6 +273,21 @@ class EdrEngine:
                     kind="detection", summary=det.title,
                     data={"severity": det.severity, "entity": det.entity,
                           "source": det.source}).to_dict())
+                # Record the graded, profile-aware decision (allow / alert /
+                # deceive / block / contain) with a plain-language reason and user
+                # message on the incident at birth — the explainable "why" behind
+                # any response. Enforcement itself stays with the audited
+                # playbooks; this never enforces and never breaks correlation.
+                try:
+                    from ..decision import decide, signal_from_incident
+                    from ..profiles import get_profile
+                    _dec = decide(signal_from_incident(det.to_dict()), get_profile())
+                    inc.timeline.append(TimelineEntry(
+                        kind="decision",
+                        summary=f"{_dec.action.value}: {_dec.reason}",
+                        data=_dec.to_dict()).to_dict())
+                except Exception:
+                    pass
                 det.incident_id = inc.id
                 self._edr.add_detection(det)
                 self._edr.save_incident(inc)

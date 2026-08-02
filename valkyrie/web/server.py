@@ -552,6 +552,40 @@ def create_app(ctx: Optional[AppContext] = None):
             )
         return {"restored_mac": restored, "status": "restored"}
 
+    @app.get("/api/fingerprint/status")
+    async def fingerprint_status():
+        """TCP/IP fingerprint spoof state (TTL / TCP-timestamps normalisation)."""
+        try:
+            from ..fingerprint import NetworkFingerprint
+            return NetworkFingerprint().status()
+        except Exception as exc:      # noqa: BLE001 — status must never 500
+            return {"supported": False, "normalized": False, "error": str(exc)}
+
+    @app.get("/api/profile")
+    async def profile_get():
+        """Risk profiles + which is active (drives block-vs-deceive)."""
+        from ..profiles import list_profiles, get_profile
+        return {"current": get_profile().value, "profiles": list_profiles()}
+
+    @app.post("/api/profile/set")
+    async def profile_set(request: Request):
+        from ..profiles import set_profile, get_profile
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        set_profile(str((body or {}).get("profile", "")))
+        return {"current": get_profile().value}
+
+    @app.get("/api/decoys/status")
+    async def decoys_status():
+        """How many decoy honeytokens are live (0 = not deployed)."""
+        from .. import decoys as _dm
+        mgr = getattr(_dm, "_ACTIVE", None)
+        return {"active": mgr is not None,
+                "count": len(mgr.tokens()) if mgr else 0,
+                "paths": mgr.paths()[:20] if mgr else []}
+
     @app.get("/api/vpn/status")
     async def vpn_status():
         from ..multihop import MultiHopVPN
@@ -736,6 +770,22 @@ def create_app(ctx: Optional[AppContext] = None):
         if inc is None:
             return JSONResponse({"error": "unknown incident"}, status_code=404)
         return inc
+
+    @app.get("/api/edr/incidents/{incident_id}/decision")
+    async def edr_incident_decision(incident_id: str):
+        """The recommended graded action (allow/alert/deceive/block/contain) for
+        an incident, under the current risk profile, with a plain-language reason
+        and user message. Deterministic — the explainable 'why' behind response."""
+        if state.edr is None:
+            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+        inc = state.edr.get_incident(incident_id)
+        if inc is None:
+            return JSONResponse({"error": "unknown incident"}, status_code=404)
+        from ..decision import decide, signal_from_incident
+        from ..profiles import get_profile
+        dets = inc.get("detections") or [inc]
+        sig = signal_from_incident(dets[0])
+        return decide(sig, get_profile()).to_dict()
 
     @app.post("/api/edr/incidents/{incident_id}/status")
     async def edr_incident_status(incident_id: str, request: Request):

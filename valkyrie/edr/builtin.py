@@ -217,6 +217,16 @@ class AnomalyDetection(DetectionPlugin):
         # highest-volume false positive on real hardware; drop it here.
         if is_infrastructure_domain(domain):
             return []
+        # A SIGNED OS binary (Windows Update, the search stack, WMI, background
+        # tasks, updaters, conhost) legitimately reaches a wide, changing set of
+        # domains — so "reached a domain outside its baseline" is noise on them,
+        # not signal. Suppress the lone low-value anomaly for OS processes; a real
+        # threat from one still surfaces via the intelligence / threat-intel /
+        # beacon paths, which key on BEHAVIOUR, not on baseline novelty. This is a
+        # trust judgment (signed path), not a domain allowlist.
+        from ..trust import is_trusted_os_path
+        if is_trusted_os_path(str(event.get("process_path", ""))):
+            return []
         if decision == "flagged" and cat in ("anomaly", "intelligence"):
             return [Detection(
                 source=self.name, severity="low", category="anomaly",

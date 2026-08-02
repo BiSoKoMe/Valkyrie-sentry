@@ -62,64 +62,39 @@ def _is_admin() -> bool:
 
 class BlockDomainResponder(ResponderPlugin):
     name = "responder.block_domain"
-    description = "Add or remove a domain in the user block rules"
-
-    _lock = threading.Lock()
+    description = "Block or unblock a domain via the analysis memory (no manual list)"
 
     def actions(self) -> list[str]:
         return ["block_domain", "unblock_domain"]
 
     def execute(self, action, target, *, dry_run, ctx):
+        # Valkyrie keeps NO human-authored block/allow list. A block from the EDR
+        # (a confirmed-C2 playbook, or a manual "block this") is recorded in the
+        # ANALYSIS memory — the same learned-intelligence store the DNS engine
+        # consults — so it is enforced on the next lookup without any rules file.
         domain = (target or "").strip().lower()
         if not domain or not all(c.isalnum() or c in ".-_*" for c in domain):
             return ("failed", f"invalid domain: {target!r}")
+        intel = ctx.intelligence
+        if intel is None:
+            return ("skipped", "analysis (intelligence) layer not available")
         if action == "block_domain":
             if dry_run:
-                return ("dry_run", f"would add always_block rule for '{domain}' "
-                                   f"in {RULES_PATH.name}")
-            ok, msg = self._mutate(domain, add=True)
-            if ok and ctx.intelligence is not None:
-                try:
-                    ctx.intelligence.remember_block(domain, "edr:manual_block")
-                except Exception:
-                    pass
-            return ("succeeded" if ok else "failed", msg)
-        else:  # unblock_domain
-            if dry_run:
-                return ("dry_run", f"would remove always_block rule for '{domain}'")
-            ok, msg = self._mutate(domain, add=False)
-            return ("succeeded" if ok else "failed", msg)
-
-    def _mutate(self, domain: str, *, add: bool) -> tuple[bool, str]:
+                return ("dry_run", f"would block '{domain}' via analysis memory")
+            try:
+                intel.remember_block(domain, "edr:auto_block")
+            except Exception as exc:      # noqa: BLE001
+                return ("failed", f"could not block '{domain}': {exc}")
+            return ("succeeded",
+                    f"'{domain}' blocked via analysis (effective next lookup)")
+        # unblock_domain
+        if dry_run:
+            return ("dry_run", f"would mark '{domain}' known-good")
         try:
-            import yaml
-        except ImportError:
-            return (False, "pyyaml not available")
-        with self._lock:
-            try:
-                text = RULES_PATH.read_text(encoding="utf-8") if RULES_PATH.exists() else ""
-                data = yaml.safe_load(text) or {}
-            except Exception as exc:
-                return (False, f"could not read rules: {exc}")
-            block = data.get("always_block") or []
-            existing = {str(r.get("domain", "")).lower() for r in block if isinstance(r, dict)}
-            if add:
-                if domain in existing:
-                    return (True, f"'{domain}' already blocked")
-                block.append({"domain": domain})
-            else:
-                if domain not in existing:
-                    return (True, f"'{domain}' was not in block rules")
-                block = [r for r in block
-                         if str(r.get("domain", "")).lower() != domain]
-            data["always_block"] = block
-            try:
-                RULES_PATH.write_text(yaml.safe_dump(data, sort_keys=False),
-                                      encoding="utf-8")
-            except Exception as exc:
-                return (False, f"could not write rules: {exc}")
-        verb = "blocked" if add else "unblocked"
-        return (True, f"'{domain}' {verb} (takes effect within ~5s via rules reload)")
+            intel.remember_good(domain, "")
+        except Exception as exc:          # noqa: BLE001
+            return ("failed", f"could not unblock '{domain}': {exc}")
+        return ("succeeded", f"'{domain}' marked known-good (unblocked)")
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +206,157 @@ class IsolateHostResponder(ResponderPlugin):
 
 
 # ---------------------------------------------------------------------------
+# remove_persistence  (rip out an attacker-created autostart entry)
+# ---------------------------------------------------------------------------
+
+class RemovePersistenceResponder(ResponderPlugin):
+    """Remove a single attacker-created Auto-Start Extension Point (ASEP).
+
+    The target is a structured descriptor ``"<type>::<identity>"`` that the
+    persistence detection places on its incident entity, so a playbook needs
+    only ``target_from: entity`` to hand us exactly what to remove:
+
+        scheduled_task::<task path>        → schtasks /delete /tn <path> /f
+        service_install::<service name>    → sc stop + sc delete <name>
+        registry_run_key::<loc>::<value>   → winreg DeleteValue
+        startup_folder::<full file path>   → delete the dropped file
+
+    Safety model (removing persistence is *reversible-ish* and far less
+    destructive than killing a process, but still guarded):
+      * A denylist of critical Windows service names is never deleted.
+      * System scheduled-task trees (``Microsoft\\Windows\\``) are never deleted.
+      * Startup-folder deletes are confined to recognised Startup directories.
+      * Registry deletes are confined to the known autorun keys.
+      * Missing privilege reports ``skipped`` with the reason — never a silent
+        no-op — exactly like the other responders.
+    """
+
+    name = "responder.remove_persistence"
+    description = "Remove an attacker-created autostart entry (task/service/run-key/startup file)"
+
+    _PROTECTED_SERVICES = {
+        "windefend", "wdnissvc", "wscsvc", "securityhealthservice", "sense",
+        "wuauserv", "bits", "eventlog", "dnscache", "rpcss", "dcomlaunch",
+        "lsm", "samss", "schedule", "termservice", "winmgmt", "trustedinstaller",
+        "mpssvc", "sysmon", "sysmon64", "lanmanserver", "lanmanworkstation",
+        "netlogon", "profsvc", "gpsvc", "valkyrie", "nssm",
+    }
+
+    def actions(self) -> list[str]:
+        return ["remove_persistence"]
+
+    def execute(self, action, target, *, dry_run, ctx):
+        asep_type, sep, identity = (target or "").partition("::")
+        asep_type = asep_type.strip().lower()
+        identity = identity.strip()
+        if not sep or not identity:
+            return ("failed",
+                    f"target must be '<type>::<identity>', got {target!r}")
+        handler = {
+            "scheduled_task":    self._remove_task,
+            "service_install":   self._remove_service,
+            "registry_run_key":  self._remove_run_key,
+            "startup_folder":    self._remove_startup_file,
+        }.get(asep_type)
+        if handler is None:
+            return ("failed", f"unknown persistence type {asep_type!r}")
+        try:
+            return handler(identity, dry_run)
+        except Exception as exc:                       # noqa: BLE001
+            return ("failed", f"remove_persistence error: {type(exc).__name__}: {exc}")
+
+    # -- scheduled task -----------------------------------------------------
+    def _remove_task(self, identity: str, dry_run: bool) -> tuple[str, str]:
+        name = identity.replace("/", "\\").lstrip("\\")
+        if name.lower().startswith("microsoft\\windows\\"):
+            return ("skipped", f"refusing to delete system scheduled task '{name}'")
+        tn = "\\" + name
+        if dry_run:
+            return ("dry_run", f"would delete scheduled task '{tn}' "
+                               f"(schtasks /delete /tn {tn} /f)")
+        import subprocess
+        r = subprocess.run(["schtasks", "/delete", "/tn", tn, "/f"],
+                           capture_output=True, text=True, timeout=20)
+        if r.returncode == 0:
+            return ("succeeded", f"deleted scheduled task '{tn}'")
+        err = (r.stderr or r.stdout or "").strip()
+        if "access is denied" in err.lower():
+            return ("skipped", f"access denied deleting task '{tn}' (needs admin)")
+        return ("failed", f"schtasks delete '{tn}' failed: {err}")
+
+    # -- service ------------------------------------------------------------
+    def _remove_service(self, identity: str, dry_run: bool) -> tuple[str, str]:
+        svc = identity.strip().strip('"')
+        if svc.lower() in self._PROTECTED_SERVICES:
+            return ("skipped", f"refusing to delete protected service '{svc}'")
+        if dry_run:
+            return ("dry_run", f"would stop and delete service '{svc}' "
+                               f"(sc.exe delete {svc})")
+        import subprocess
+        subprocess.run(["sc.exe", "stop", svc],
+                       capture_output=True, text=True, timeout=20)
+        r = subprocess.run(["sc.exe", "delete", svc],
+                           capture_output=True, text=True, timeout=20)
+        if r.returncode == 0:
+            return ("succeeded", f"deleted service '{svc}'")
+        err = (r.stderr or r.stdout or "").strip()
+        if "access is denied" in err.lower():
+            return ("skipped", f"access denied deleting service '{svc}' (needs admin)")
+        return ("failed", f"sc delete '{svc}' failed: {err}")
+
+    # -- registry run key ---------------------------------------------------
+    def _remove_run_key(self, identity: str, dry_run: bool) -> tuple[str, str]:
+        # identity is "<display loc>::<value name>"; the display loc maps back to
+        # a real (hive, subkey) via the persistence collector's own spec table,
+        # so we never guess a registry path.
+        loc, sep, value = identity.rpartition("::")
+        if not sep:
+            return ("failed", f"malformed run-key identity {identity!r}")
+        try:
+            import winreg
+            from ..persistence_telemetry import _run_key_specs
+        except Exception as exc:                       # noqa: BLE001
+            return ("failed", f"registry access unavailable: {exc}")
+        loc2hive = {display: (hive, subkey)
+                    for hive, subkey, display in _run_key_specs()}
+        coords = loc2hive.get(loc.strip())
+        if coords is None:
+            return ("skipped", f"unrecognised run-key location '{loc}'")
+        hive, subkey = coords
+        if dry_run:
+            return ("dry_run", f"would delete run-key value '{value}' under {loc}")
+        try:
+            with winreg.OpenKey(hive, subkey, 0, winreg.KEY_SET_VALUE) as k:
+                winreg.DeleteValue(k, value)
+        except FileNotFoundError:
+            return ("succeeded", f"run-key value '{value}' already gone")
+        except PermissionError:
+            return ("skipped", f"access denied removing run-key '{value}' (needs admin)")
+        return ("succeeded", f"removed run-key value '{value}' under {loc}")
+
+    # -- startup folder file ------------------------------------------------
+    def _remove_startup_file(self, identity: str, dry_run: bool) -> tuple[str, str]:
+        try:
+            from ..persistence_telemetry import _startup_dirs
+        except Exception as exc:                       # noqa: BLE001
+            return ("failed", f"startup path lookup unavailable: {exc}")
+        path = os.path.normpath(identity)
+        allowed = [os.path.normpath(d).lower() for d in _startup_dirs()]
+        if not any(path.lower().startswith(d) for d in allowed):
+            return ("skipped",
+                    f"refusing to delete '{path}' — outside recognised Startup folders")
+        if dry_run:
+            return ("dry_run", f"would delete startup file '{path}'")
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            return ("succeeded", f"startup file '{path}' already gone")
+        except PermissionError:
+            return ("skipped", f"access denied deleting '{path}' (needs admin)")
+        return ("succeeded", f"deleted startup file '{path}'")
+
+
+# ---------------------------------------------------------------------------
 # ResponseManager — the front door the web API / CLI / fleet call
 # ---------------------------------------------------------------------------
 
@@ -238,6 +364,7 @@ BUILTIN_RESPONDERS = [
     BlockDomainResponder,
     KillProcessResponder,
     IsolateHostResponder,
+    RemovePersistenceResponder,
 ]
 
 

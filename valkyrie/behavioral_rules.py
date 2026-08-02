@@ -39,6 +39,7 @@ class Rule:
     label: str                     # short slug surfaced on the detection
     reason: str                    # human explanation
     images: tuple = ()             # process basenames this applies to (empty = any)
+    images_not: tuple = ()         # process basenames to EXCLUDE (empty = none)
     parents: tuple = ()            # parent basenames (empty = any)
     cmd_all: tuple = ()            # ALL of these substrings must be present
     cmd_any: tuple = ()            # ANY of these substrings present
@@ -46,6 +47,8 @@ class Rule:
 
     def matches(self, image: str, parent: str, cmd: str, path: str) -> bool:
         if self.images and image not in self.images:
+            return False
+        if self.images_not and image in self.images_not:
             return False
         if self.parents and parent not in self.parents:
             return False
@@ -55,7 +58,8 @@ class Rule:
             return False
         if self.path_any and not any(t in path for t in self.path_any):
             return False
-        # A rule with no conditions at all never fires (guards against typos).
+        # A rule with no POSITIVE condition never fires (guards against typos;
+        # images_not alone is not enough — it must pair with a positive match).
         return bool(self.images or self.parents or self.cmd_all
                     or self.cmd_any or self.path_any)
 
@@ -85,6 +89,26 @@ RULES: tuple = (
     Rule("wmic-process-call", "T1047 — Windows Management Instrumentation", SEV_HIGH,
          "wmic_process_call", "wmic used to create a process",
          images=("wmic.exe",), cmd_all=("process", "call", "create")),
+    # Modern WMI process creation: PowerShell Invoke-CimMethod / Invoke-WmiMethod
+    # against Win32_Process Create. wmic.exe is removed from Windows 11, so this
+    # is how T1047 actually executes now — the wmic-only rule above misses it.
+    # Matches the command shape on whatever host runs it (usually powershell.exe).
+    Rule("wmi-cim-process-create", "T1047 — Windows Management Instrumentation", SEV_HIGH,
+         "wmi_process_create", "WMI used to create a process (Win32_Process Create)",
+         cmd_all=("win32_process",),
+         cmd_any=("create", "invoke-cimmethod", "invoke-wmimethod")),
+    # The ROBUST catch — needs no command line at all: WMI creates its child
+    # under WmiPrvSE.exe, so ANY process born from WmiPrvSE (except WMI's own
+    # internal helpers) is WMI-based execution. This fires even when the launch
+    # command is base64-encoded/obfuscated (which hides "win32_process") and
+    # regardless of what the payload is (calc, cmd, a dropped exe) — the cases
+    # that slipped past a wmic-only or command-line-only rule. images_not keeps
+    # WMI's legitimate internal helpers from tripping it.
+    Rule("wmi-spawned-process", "T1047 — Windows Management Instrumentation", SEV_HIGH,
+         "wmi_process_create", "A process was created by WMI (WmiPrvSE parent)",
+         parents=("wmiprvse.exe",),
+         images_not=("wmiprvse.exe", "wmiadap.exe", "scrcons.exe", "mofcomp.exe",
+                     "wmic.exe", "unsecapp.exe")),
     Rule("mshta-remote", "T1218.005 — Mshta", SEV_HIGH,
          "mshta_exec", "mshta executed a remote or inline script",
          images=("mshta.exe",), cmd_any=("http://", "https://", "javascript:", "vbscript:")),

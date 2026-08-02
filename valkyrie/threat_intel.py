@@ -223,6 +223,12 @@ class ThreatIntelManager:
     # ------------------------------------------------------------------
 
     def match_ip(self, ip: str) -> Optional[IntelMatch]:
+        # Never flag a well-known public DNS resolver (Google/Cloudflare/Quad9):
+        # Valkyrie's own upstream forwarders live here, and a stale or over-broad
+        # feed entry must not paint them as C2. See valkyrie/trust.py.
+        from .trust import is_public_resolver_ip
+        if is_public_resolver_ip(ip):
+            return None
         with self._lock:
             if ip in self._ips:
                 feed, cat = self._origin.get(ip, ("unknown", "ioc"))

@@ -96,3 +96,69 @@ def image_from_command(command: str) -> str:
 def is_trusted_os_command(command: str) -> bool:
     """As is_trusted_os_path, but for a full command line (checks its image)."""
     return is_trusted_os_path(image_from_command(command))
+
+
+# ---------------------------------------------------------------------------
+# Valkyrie's own components — the security tool must never report ITSELF as the
+# threat. Its resolver forwards to upstream DNS (so it "connects to 8.8.8.8"),
+# its service writes an autostart entry, and its frozen engine is a native,
+# LOLBin-shaped exe. All legitimate; flagging any of it is a pure false positive
+# that also looks terrible to anyone evaluating the product.
+# ---------------------------------------------------------------------------
+
+_SELF_NAMES = frozenset({"valkyrie.exe", "valkyrie", "nssm.exe"})
+_SELF_PATH_MARKERS = (
+    "/program files/valkyrie/", "/program files (x86)/valkyrie/",
+    "/programdata/valkyrie/", "/valkyrie/resources/engine/",
+    "/appdata/local/programs/valkyrie/",
+)
+
+
+def is_self(name: str = "", path: str = "") -> bool:
+    """True for Valkyrie's own processes / binaries / data directories."""
+    if (name or "").strip().lower() in _SELF_NAMES:
+        return True
+    p = _norm(path)
+    if not p:
+        return False
+    hay = "/" + p + "/"
+    return any(m in hay for m in _SELF_PATH_MARKERS)
+
+
+# Well-known public DNS resolvers / anycast infra. A connection to one of these
+# — Valkyrie's own upstream forwarders, or any app's DNS/DoH — is not C2, so a
+# stale learned-threat or an over-broad range can never paint Google/Cloudflare/
+# Quad9 DNS as malicious.
+_PUBLIC_RESOLVER_IPS = frozenset({
+    "8.8.8.8", "8.8.4.4",                          # Google
+    "1.1.1.1", "1.0.0.1",                          # Cloudflare
+    "9.9.9.9", "149.112.112.112",                  # Quad9
+    "208.67.222.222", "208.67.220.220",            # OpenDNS
+    "2001:4860:4860::8888", "2001:4860:4860::8844",
+    "2606:4700:4700::1111", "2606:4700:4700::1001",
+    "2620:fe::fe", "2620:fe::9",
+})
+
+
+def is_public_resolver_ip(ip: str) -> bool:
+    """True for well-known public DNS resolver IPs (never treat as threat C2)."""
+    return (ip or "").strip().lower() in _PUBLIC_RESOLVER_IPS
+
+
+def is_benign_os_autorun(writer: str, target: str = "") -> bool:
+    """An autostart write is benign OS churn when a trusted OS binary makes it
+    AND what it points at is not in a world-writable scratch dir.
+
+    This silences the constant legitimate autorun writes (services.exe,
+    sihost.exe, TrustedInstaller, dismhost, WMIADAP) that otherwise flood as
+    "autorun registry modification" false positives — while KEEPING the real
+    abuse case, a trusted process dropping an autorun into %TEMP%, alerting.
+    (The persistence collector remains the authoritative persistence detector
+    and still raises a removable incident for genuine new autostart entries.)
+    """
+    if not is_trusted_os_path(writer):
+        return False
+    tgt = _norm(image_from_command(target)) if target else ""
+    if tgt and any(bad in ("/" + tgt + "/") for bad in _UNTRUSTED_WITHIN):
+        return False
+    return True

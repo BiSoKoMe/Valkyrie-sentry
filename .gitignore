@@ -74,3 +74,7 @@ ValkyrieData/
 .coverage
 .coverage.*
 htmlcov/
+
+# Red-team evaluation run outputs (generated; scores should not live in the repo)
+redteam/evaluation/results/*.json
+valkyrie/_build.py

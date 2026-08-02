@@ -29,6 +29,10 @@
       "!src/**/*.test.js",
       "package.json"
     ],
+    "asarUnpack": [
+      "**/tray.ico",
+      "**/tray.png"
+    ],
     "extraResources": [
       {
         "from": "engine_payload",
