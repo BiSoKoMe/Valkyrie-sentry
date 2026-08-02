@@ -25,7 +25,12 @@ drops there too and the OS location must not launder it.
 
 from __future__ import annotations
 
+import functools
 import os
+import platform
+import subprocess
+
+_IS_WINDOWS = platform.system() == "Windows"
 
 _SYS = os.environ.get("SystemRoot", r"C:\Windows")
 _PF = os.environ.get("ProgramFiles", r"C:\Program Files")
@@ -143,6 +148,61 @@ _PUBLIC_RESOLVER_IPS = frozenset({
 def is_public_resolver_ip(ip: str) -> bool:
     """True for well-known public DNS resolver IPs (never treat as threat C2)."""
     return (ip or "").strip().lower() in _PUBLIC_RESOLVER_IPS
+
+
+# LOLBins never get the "reputable app" pass — they are signed by Microsoft yet
+# are exactly what attackers abuse, so a chain through them must always correlate.
+_LOLBIN_NAMES = frozenset({
+    "powershell.exe", "pwsh.exe", "cmd.exe", "wscript.exe", "cscript.exe",
+    "mshta.exe", "rundll32.exe", "regsvr32.exe", "regsvcs.exe", "regasm.exe",
+    "installutil.exe", "msbuild.exe", "certutil.exe", "bitsadmin.exe",
+    "wmic.exe", "schtasks.exe", "sc.exe", "reg.exe", "at.exe", "forfiles.exe",
+    "mavinject.exe", "msdt.exe", "control.exe", "conhost.exe", "explorer.exe",
+})
+
+
+@functools.lru_cache(maxsize=512)
+def is_signed_reputable(path: str) -> bool:
+    """True if *path* is Authenticode-signed with a Valid signature.
+
+    Best-effort, cached per path, never raises, fail-CLOSED (returns False on any
+    error or timeout). Used ONLY to keep a signed third-party app/installer's
+    benign multi-process activity from forming a fake 'multi-stage attack' — it
+    never allows or suppresses a real detection, only downgrades a *correlation*.
+    A short timeout keeps it off the critical path if the shell is slow."""
+    p = (path or "").strip().strip('"')
+    if not p or not _IS_WINDOWS or not os.path.isfile(p):
+        return False
+    try:
+        esc = p.replace("'", "''")
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             f"(Get-AuthenticodeSignature -LiteralPath '{esc}').Status"],
+            capture_output=True, text=True, timeout=6,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return r.returncode == 0 and "Valid" in (r.stdout or "")
+    except Exception:      # noqa: BLE001 — signature check must never raise
+        return False
+
+
+def is_reputable_app_noise(name: str, path: str, severity_rank_value: int,
+                           high_rank: int) -> bool:
+    """Should a low/medium detection be treated as benign app/installer noise
+    and kept OUT of kill-chain correlation?
+
+    True only when ALL hold: the detection is below HIGH severity, the process is
+    NOT a LOLBin, NOT a signed OS binary, AND it IS a signed reputable third
+    party. That is the fingerprint of an installer/app doing its own thing across
+    many child processes — the class that trips 'N-tactic multi-stage attack'
+    false positives. A HIGH/critical step (LSASS, injection) from the SAME signed
+    app still correlates, because this returns False for it."""
+    if severity_rank_value >= high_rank:
+        return False                                   # real high-severity → chain it
+    if (name or "").strip().lower() in _LOLBIN_NAMES:
+        return False                                   # LOLBins always chain
+    if is_trusted_os_path(path):
+        return False                                   # OS binaries handled elsewhere
+    return is_signed_reputable(path)
 
 
 def is_benign_os_autorun(writer: str, target: str = "") -> bool:

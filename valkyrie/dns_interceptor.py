@@ -83,6 +83,25 @@ except ImportError:
     _DNSLIB = False
 
 
+# The user's risk profile decides deceive-vs-block for trackers. Reading it per
+# DNS query would be file I/O on the hot path, so it is cached with a short TTL
+# (the profile changes rarely; a few seconds of staleness is fine).
+_PROFILE_CACHE = {"val": None, "ts": 0.0}
+
+
+def _current_profile():
+    now = time.time()
+    if _PROFILE_CACHE["val"] is None or now - _PROFILE_CACHE["ts"] > 5.0:
+        try:
+            from .profiles import get_profile
+            _PROFILE_CACHE["val"] = get_profile()
+        except Exception:
+            from .decision import Profile
+            _PROFILE_CACHE["val"] = Profile.STANDARD
+        _PROFILE_CACHE["ts"] = now
+    return _PROFILE_CACHE["val"]
+
+
 class DNSInterceptor:
     """UDP DNS sinkhole server.
 
@@ -281,7 +300,7 @@ class DNSInterceptor:
         # chain (metrics.brand.com -> brand.eulerian.net). If any CNAME target is
         # a known cloaked tracker (or trips the normal checks), sinkhole the
         # reply. This is what defeats Criteo/Adobe/AT-Internet-style cloaking.
-        if decision not in ("blocked", "behavioral") and response:
+        if decision not in ("blocked", "behavioral", "deceived") and response:
             cloaked = self._uncloak_block(response, qname, proc)
             if cloaked is not None:
                 target, why = cloaked
@@ -509,6 +528,12 @@ class DNSInterceptor:
                 reason = "; ".join(result.reasons)
                 if intel is not None:
                     intel.remember_block(domain, reason)
+                # Tracker/telemetry in Standard profile → DECEIVE (decoy dead-end
+                # so the app keeps working) instead of a hard block. Stricter
+                # profiles fall through and hard-block.
+                from .decision import should_deceive
+                if should_deceive(result.category, _current_profile()):
+                    return "deceived", reason, result.confidence, result.category
                 return "blocked", reason, result.confidence, result.category
             if result.decision == "flag":
                 return "flagged", "; ".join(result.reasons), result.confidence, result.category
@@ -559,7 +584,11 @@ class DNSInterceptor:
     def _build_response(
         self, request: "dns.message.Message", qname: str, qtype: int, decision: str
     ) -> bytes:
-        if decision in ("blocked", "behavioral"):
+        # "deceived" is a soft block for tracker/telemetry (Standard profile):
+        # the app gets a decoy dead-end answer instead of a hard failure, so it
+        # keeps working while its telemetry goes nowhere. Same wire response as a
+        # sinkhole today; it is the hook a fake-data honeypot plugs into later.
+        if decision in ("blocked", "behavioral", "deceived"):
             return self._sinkhole_response(request, qname, qtype)
         else:
             return self._forward(request)

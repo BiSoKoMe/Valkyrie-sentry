@@ -332,6 +332,25 @@ def _apply_profile(base: Decision, sig: Signal, tc: ThreatClass,
                     forensics=base.forensics)
 
 
+# Categories the analysis engine tags on tracker / telemetry / analytics flows —
+# the class where DECEPTION (feed a dead/decoy answer so the app keeps working)
+# beats a hard block that could break it.
+_DECEIVE_CATEGORIES = frozenset({
+    "tracker", "telemetry", "analytics", "advertising", "beacon_telemetry",
+})
+
+
+def should_deceive(category: str, profile: Profile) -> bool:
+    """True when a would-be-blocked tracker/telemetry flow should instead be
+    DECEIVED — resolved to a decoy dead-end rather than hard-failed.
+
+    Only in Standard (minimal-disruption) profile: a journalist/lawyer on
+    High-Risk, Travel, or Clean-Room wants telemetry HARD-blocked, no decoy.
+    Pure and profile-aware, matching the decision policy above."""
+    return (profile == Profile.STANDARD
+            and str(category).strip().lower() in _DECEIVE_CATEGORIES)
+
+
 def signal_from_incident(inc: dict) -> Signal:
     """Adapt an EDR incident/detection dict onto a Signal."""
     details = inc.get("details") or {}

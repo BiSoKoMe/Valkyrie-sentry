@@ -322,6 +322,19 @@ class EdrEngine:
         """Feed a real detection to the kill-chain correlator; if the same
         actor now spans multiple ATT&CK tactics, raise ONE escalating
         'attack_chain' incident that grows as new stages appear."""
+        # A signed, reputable, non-LOLBin third-party app/installer legitimately
+        # spawns many child processes doing benign install work — do NOT let that
+        # form a fake 'N-tactic multi-stage attack'. Its individual detections are
+        # still recorded; a HIGH/critical step (or any LOLBin) from it still
+        # correlates. This only stops low/medium signed-app noise from chaining.
+        try:
+            from ..trust import is_reputable_app_noise
+            if is_reputable_app_noise(det.process_name, det.entity,
+                                      severity_rank(det.severity),
+                                      severity_rank("high")):
+                return
+        except Exception:
+            pass
         try:
             chain = self._killchain.observe(
                 actor=det.process_name, technique=det.technique,

@@ -232,12 +232,17 @@ def main() -> int:
 
     # ── 3. scanner ──────────────────────────────────────────────────────────
     print("\n[3] scanner verdicts")
-    di, parts = _build(scanner=_Scanner({D: _ScanResult("block")}),
+    di, parts = _build(scanner=_Scanner({D: _ScanResult("block", category="malware")}),
                        blocklist=_Blocklist())
     dec, reason, score, cat = _decide(di, D)
     c.check("a scanner block blocks", dec == "blocked")
     c.check("the scanner's own reasons are surfaced", "scanner-said-so" in reason)
-    c.check("the scanner's category is preserved", cat == "tracker")
+    c.check("the scanner's category is preserved", cat == "malware")
+    # A tracker/telemetry scanner-block is DECEIVED (decoy dead-end) in the
+    # Standard profile, not hard-blocked — full matrix in tests/test_deceive.py.
+    di_t, _ = _build(scanner=_Scanner({D: _ScanResult("block", category="tracker")}))
+    c.check("a tracker scanner-block is deceived, not blocked (Standard)",
+            _decide(di_t, D)[0] == "deceived")
     c.check("a scanner block is remembered",
             any(d == D for d, _ in parts["intelligence"].blocked_calls))
 
