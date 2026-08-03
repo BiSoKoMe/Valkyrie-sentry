@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from harness import Checks
 import valkyrie.self_test as st
+from valkyrie.config import HEALTH_PROBE_DOMAIN
 
 
 def main() -> int:
@@ -45,11 +46,15 @@ def main() -> int:
     original = st._probe_dns
     try:
         probe_result = {"ok": True}
-        st._probe_dns = lambda host, port, timeout=1.0: probe_result["ok"]
+        # Stub must match the real _probe_dns signature, which now takes a qname
+        # (the heartbeat probes a reserved local health name).
+        st._probe_dns = lambda host, port, timeout=1.0, qname="": probe_result["ok"]
 
         transitions: list[bool] = []
+        # startup_grace=0 so these pin the pure failure-counting STATE MACHINE;
+        # the startup-grace behaviour is covered separately in [1c] below.
         hb = st.HeartbeatMonitor("127.0.0.1", 5399, interval=999,
-                                 on_change=transitions.append)
+                                 on_change=transitions.append, startup_grace=0)
 
         c.check("starts optimistic (before any probe)", hb.is_healthy())
 
@@ -104,7 +109,7 @@ def main() -> int:
 
         # A probe that raises must not take the monitor down, and must not be
         # silently treated as success.
-        def _boom(host, port, timeout=1.0):
+        def _boom(host, port, timeout=1.0, qname=""):
             raise OSError("network unreachable")
 
         st._probe_dns = _boom
@@ -126,8 +131,8 @@ def main() -> int:
         # guard the signal freezes at its last value, and 'healthy' is the most
         # likely value to freeze at since it is the initial state.
         print("\n[1b] a stopped monitor must not keep reporting green")
-        st._probe_dns = lambda host, port, timeout=1.0: True
-        hb2 = st.HeartbeatMonitor("127.0.0.1", 5399, interval=1.0)
+        st._probe_dns = lambda host, port, timeout=1.0, qname="": True
+        hb2 = st.HeartbeatMonitor("127.0.0.1", 5399, interval=1.0, startup_grace=0)
         hb2.check_once()
         c.check("healthy right after a good probe", hb2.is_healthy())
         # Simulate the thread having died some time ago.
@@ -147,8 +152,105 @@ def main() -> int:
         hb3 = st.HeartbeatMonitor("127.0.0.1", 5399, interval=1.0)
         c.check("a monitor that has never probed is not called stale",
                 not hb3.status()["stale"])
+
+        # ── [1c] Startup grace: a cold boot must not cry wolf ───────────────
+        # The heartbeat fires seconds after start(), sometimes BEFORE the DNS
+        # listener has finished binding. During the grace window a failing probe
+        # means "still starting," not "protection down" — no false
+        # PROTECTION-FAILED. After the first success, normal rules resume.
+        print("\n[1c] startup grace suppresses the cold-boot false alarm")
+        st._probe_dns = lambda host, port, timeout=1.0, qname="": False   # not up yet
+        transitions_g: list[bool] = []
+        hbg = st.HeartbeatMonitor("127.0.0.1", 5399, interval=999,
+                                  on_change=transitions_g.append, startup_grace=30.0)
+        hbg.start(); hbg.stop()             # sets _started_at; we drive probes below
+        for _ in range(5):
+            hbg.check_once()
+        c.check("failures during startup grace do NOT flip to unhealthy",
+                hbg.is_healthy())
+        c.check("failures during startup grace are NOT counted",
+                hbg.status()["fail_count"] == 0)
+        c.check("no false PROTECTION-FAILED transition during grace",
+                transitions_g == [])
+        st._probe_dns = lambda host, port, timeout=1.0, qname="": True
+        hbg.check_once()
+        c.check("first success within grace keeps it healthy", hbg.is_healthy())
+        st._probe_dns = lambda host, port, timeout=1.0, qname="": False
+        hbg.check_once(); hbg.check_once()
+        c.check("after the first success, real failures DO flip it",
+                not hbg.is_healthy())
     finally:
         st._probe_dns = original
+
+    # ── 1d. Wire-level probe fast path answers WITHOUT a worker thread ──────
+    # Regression for a live bug: the heartbeat still false-failed under a burst
+    # of real DNS queries (not just at cold boot) because each query spawns its
+    # own worker thread, and Python's GIL can delay a freshly-spawned heartbeat-
+    # reply thread past its 1s probe budget purely from scheduling contention.
+    # The fix recognises the reserved health-probe name directly off the wire in
+    # the serve loop and answers INLINE, before any thread is spawned. This pins
+    # two things: the wire-format encoding used by the probe (self_test) and the
+    # one used by the recogniser (dns_interceptor) must agree, and the live
+    # answer must come back correct even while a burst of worker threads runs.
+    print("\n[1d] health-probe answered inline, never queued behind worker threads")
+    import socket as _socket
+    import threading as _threading
+    import valkyrie.dns_interceptor as _di
+
+    probe_wire = st._encode_qname(HEALTH_PROBE_DOMAIN)
+    header = b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+    full_packet = header + probe_wire + b"\x00\x01\x00\x01"
+    c.check("interceptor's wire recogniser agrees with the probe's own encoding",
+            _di._is_health_probe_wire(full_packet))
+    c.check("a normal domain's packet is NOT recognised as the health probe",
+            not _di._is_health_probe_wire(
+                header + st._encode_qname("example.com") + b"\x00\x01\x00\x01"))
+
+    # Drive it through a REAL interceptor instance on a live loopback socket,
+    # with a burst of worker threads (simulating real query load) already
+    # occupying the GIL, and confirm the probe still answers fast.
+    interceptor = _di.DNSInterceptor(
+        store=None, blocklist=None, behavioral=None, rules=None,
+        process_watcher=None, host="127.0.0.1", port=0)
+    interceptor._sock = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+    interceptor._sock.bind(("127.0.0.1", 0))
+    interceptor._sock.settimeout(0.5)
+    bound_port = interceptor._sock.getsockname()[1]
+    interceptor._running = True
+    loop_thread = _threading.Thread(target=interceptor._serve_loop, daemon=True)
+    loop_thread.start()
+
+    # Saturate the GIL with busy worker threads for the probe window, the same
+    # shape as a real query burst (CPU-bound work, no real query dispatch needed
+    # for this check — only the health-probe's OWN latency is under test).
+    stop_noise = _threading.Event()
+    def _spin():
+        while not stop_noise.is_set():
+            sum(i * i for i in range(2000))
+    noise_threads = [_threading.Thread(target=_spin, daemon=True) for _ in range(12)]
+    for t in noise_threads:
+        t.start()
+    try:
+        client = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+        client.settimeout(1.0)
+        import time as _t
+        t0 = _t.monotonic()
+        client.sendto(full_packet, ("127.0.0.1", bound_port))
+        try:
+            reply, _addr = client.recvfrom(4096)
+            elapsed = _t.monotonic() - t0
+            c.check(f"health probe answered under GIL contention ({elapsed*1000:.0f}ms)",
+                    len(reply) > 0)
+        except _socket.timeout:
+            c.check("health probe answered under GIL contention", False)
+        client.close()
+    finally:
+        stop_noise.set()
+        for t in noise_threads:
+            t.join(timeout=2)
+        interceptor._running = False
+        interceptor._sock.close()
+        loop_thread.join(timeout=2)
 
     # ── 2. preflight: critical means critical ───────────────────────────────
     print("\n[2] preflight checks")

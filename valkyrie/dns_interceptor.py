@@ -50,6 +50,7 @@ from .config import (
     DNS_TIMEOUT,
     DNS_UPSTREAM,
     DNS_UPSTREAM_PORT,
+    HEALTH_PROBE_DOMAIN,
     SINKHOLE_IPV4,
     SINKHOLE_IPV6,
     UPSTREAM_SERVERS,
@@ -81,6 +82,18 @@ try:
     _DNSLIB = True
 except ImportError:
     _DNSLIB = False
+
+# Precomputed wire-format QNAME for the health-probe domain (12-byte DNS header
+# + length-prefixed labels + root byte), so the serve loop can recognise a
+# heartbeat probe with a raw byte-slice compare — no dns.message parsing, no
+# worker-thread dispatch. See _serve_loop for why this matters under load.
+_HEALTH_PROBE_WIRE = dns.name.from_text(
+    HEALTH_PROBE_DOMAIN).to_wire() if _DNSLIB else b""
+
+
+def _is_health_probe_wire(data: bytes) -> bool:
+    n = len(_HEALTH_PROBE_WIRE)
+    return n > 0 and len(data) >= 12 + n and data[12:12 + n] == _HEALTH_PROBE_WIRE
 
 
 # The user's risk profile decides deceive-vs-block for trackers. Reading it per
@@ -266,6 +279,28 @@ class DNSInterceptor:
                 continue
             except OSError:
                 break
+            # Liveness-probe fast path: answered INLINE on this loop thread,
+            # never spawning a worker thread. Real queries each get their own
+            # thread below (to avoid head-of-line blocking), but Python's GIL
+            # still serializes CPU time across however many of those are alive
+            # at once — a burst of worker threads can delay a freshly-spawned
+            # heartbeat-reply thread past its 1s probe budget purely from
+            # scheduling contention. Verified live: heartbeat false-failures
+            # correlated with concurrent query bursts, not just cold boot. The
+            # reserved health-probe name is recognised straight off the wire
+            # (byte-slice compare, no dns.message parse, no thread spawn), so
+            # it never competes with worker threads for the GIL.
+            if _is_health_probe_wire(data):
+                try:
+                    request = dns.message.from_wire(data)
+                    if request.question:
+                        qname = str(request.question[0].name).rstrip(".")
+                        qtype = request.question[0].rdtype
+                        self._sock.sendto(
+                            self._sinkhole_response(request, qname, qtype), addr)
+                except Exception:
+                    pass
+                continue
             # Handle each query in its own thread to avoid head-of-line blocking
             threading.Thread(
                 target=self._handle, args=(data, addr), daemon=True
@@ -283,6 +318,20 @@ class DNSInterceptor:
 
         qname    = str(request.question[0].name).rstrip(".")
         qtype    = request.question[0].rdtype
+
+        # Liveness-probe shortcut. The protection heartbeat resolves a reserved
+        # local name to confirm the interceptor is still answering. Serve it
+        # instantly and locally here — never consult _decide or upstream — so a
+        # legitimately OFFLINE machine (no internet → upstream times out) still
+        # reports protection HEALTHY instead of flapping into a false "sinkhole
+        # not answering" alarm. Not logged: it fires every 15s and is internal.
+        if qname.lower() == HEALTH_PROBE_DOMAIN:
+            try:
+                self._sock.sendto(self._sinkhole_response(request, qname, qtype), addr)
+            except OSError:
+                pass
+            return
+
         proc     = self._watcher.lookup(src_ip, src_port)
 
         decision, reason, suspicion, category = self._decide(
@@ -517,6 +566,14 @@ class DNSInterceptor:
             verdict = intel.check_memory(domain)
             if verdict == "bad":
                 reason = intel.memory_reason(domain) or "learned threat"
+                # A tracker/telemetry domain must never be served as a hard THREAT
+                # from memory — in Standard profile it is DECEIVED (decoy dead-end).
+                # Belt-and-suspenders alongside the startup purge: covers a bad
+                # verdict still resident this session or matched via a bad parent.
+                from .decision import reason_denotes_deceivable, should_deceive
+                if (reason_denotes_deceivable(reason)
+                        and should_deceive("tracker", _current_profile())):
+                    return "deceived", f"intelligence:{reason}", 0.7, "tracker"
                 return "blocked", f"intelligence:{reason}", 1.0, "intelligence"
             if verdict == "good":
                 return "allowed", "intelligence:known_good", 0.0, "intelligence"
@@ -526,14 +583,22 @@ class DNSInterceptor:
             result = self._scanner.analyze(domain, proc.name)
             if result.decision == "block":
                 reason = "; ".join(result.reasons)
-                if intel is not None:
-                    intel.remember_block(domain, reason)
                 # Tracker/telemetry in Standard profile → DECEIVE (decoy dead-end
                 # so the app keeps working) instead of a hard block. Stricter
                 # profiles fall through and hard-block.
                 from .decision import should_deceive
                 if should_deceive(result.category, _current_profile()):
+                    # Do NOT remember_block a deceived domain. The intelligence
+                    # fast path (stage 2b) only stores "bad" and would hard-BLOCK
+                    # every subsequent lookup — flipping deception into a block on
+                    # the very next query (the duplicate deceived+blocked pair seen
+                    # in testing, e.g. an A then AAAA for the same tracker). Left
+                    # unremembered, each lookup re-flows through the scanner, which
+                    # is cache-backed (scan_cache), so the deceive verdict is both
+                    # O(1) and durable.
                     return "deceived", reason, result.confidence, result.category
+                if intel is not None:
+                    intel.remember_block(domain, reason)
                 return "blocked", reason, result.confidence, result.category
             if result.decision == "flag":
                 return "flagged", "; ".join(result.reasons), result.confidence, result.category

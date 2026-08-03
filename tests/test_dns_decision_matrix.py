@@ -240,9 +240,12 @@ def main() -> int:
     c.check("the scanner's category is preserved", cat == "malware")
     # A tracker/telemetry scanner-block is DECEIVED (decoy dead-end) in the
     # Standard profile, not hard-blocked — full matrix in tests/test_deceive.py.
-    di_t, _ = _build(scanner=_Scanner({D: _ScanResult("block", category="tracker")}))
+    di_t, parts_t = _build(scanner=_Scanner({D: _ScanResult("block", category="tracker")}))
     c.check("a tracker scanner-block is deceived, not blocked (Standard)",
             _decide(di_t, D)[0] == "deceived")
+    c.check("a deceived tracker is NOT remembered as a block — no deceived→blocked "
+            "flip on the next lookup (the duplicate-pair bug)",
+            parts_t["intelligence"].blocked_calls == [])
     c.check("a scanner block is remembered",
             any(d == D for d, _ in parts["intelligence"].blocked_calls))
 

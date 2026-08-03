@@ -111,8 +111,13 @@ SEQUENCES: tuple = (
     SequenceRule(
         "macro-dropper-c2", "Document-spawned shell fetched a remote payload",
         "high", "T1105 — Ingress Tool Transfer", 180.0,
+        # Step 1 keys ONLY on the document-parent label, never on bare T1059:
+        # T1059 is "any script interpreter ran," which every benign powershell
+        # session satisfies. Requiring the office_child_shell discriminator (emitted
+        # only when a real Office/document process spawns a shell — process_telemetry
+        # `par in _OFFICE and n in _SHELLS`) is what makes this the *dropper* chain
+        # and not "powershell exists, then powershell made a network call."
         (Step("document/browser spawned an interpreter",
-              techniques=("T1059",),
               labels=("office_child_shell", "document_spawned_interpreter")),
          Step("remote payload fetch",
               techniques=("T1105",),

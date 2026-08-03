@@ -24,6 +24,18 @@ from typing import Optional
 
 from ..popular_domains import is_popular, is_reserved_test_domain
 
+# Substrings marking a stored reason as a tracker/telemetry class — a privacy
+# nuisance handled by the scanner + DECEIVE policy, never a hard THREAT. Kept
+# local so this leaf module has no cross-package import (mirrors
+# decision.reason_denotes_deceivable). Deliberately excludes "beacon": a C2
+# beacon is real malware and must stay a learned threat, not be purged as noise.
+_TRACKER_REASON_MARKERS = ("tracker", "analytics", "advertising", "telemetry")
+
+
+def _reason_denotes_tracker(reason: str) -> bool:
+    r = (reason or "").lower()
+    return any(m in r for m in _TRACKER_REASON_MARKERS)
+
 
 class IntelligenceMemory:
     """Persistent, fast-lookup memory of past threat decisions."""
@@ -33,6 +45,10 @@ class IntelligenceMemory:
         self._lock = threading.RLock()
         self._bad:  dict[str, str] = {}     # domain -> reason
         self._good: set[str] = set()
+        # Domains purged at startup because they were a tracker wrongly learned
+        # as a THREAT (the old duplicate-block bug). Exposed so the caller can
+        # also drop them from the threat graph. Populated by start().
+        self.purged_trackers: list[str] = []
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -72,18 +88,30 @@ class IntelligenceMemory:
             # lookup like "malware-c2-test.example.com". Purge at startup so
             # the fix takes effect immediately, no manual cleanup needed.
             stale_good = [d for (d, v, _r) in rows if v == "good" and is_reserved_test_domain(d)]
-            stale = stale_bad + stale_good
+            # SELF-HEAL: a TRACKER/telemetry domain must never carry a learned
+            # 'bad' verdict. A tracker is a privacy nuisance handled by the
+            # scanner + DECEIVE policy — not a THREAT. The old duplicate-block
+            # bug (a tracker logged 'deceived' AND 'blocked' in the same ms)
+            # learned trackers like adnxs.com into this memory at suspicion 1.0,
+            # so the fast path hard-BLOCKED them and deception never ran again.
+            # Purge them at startup so deception is restored with no manual step.
+            stale_tracker = [d for (d, v, r) in rows
+                             if v == "bad" and _reason_denotes_tracker(r)]
+            stale = stale_bad + stale_good + stale_tracker
             if stale:
                 conn.executemany("DELETE FROM intel_memory WHERE domain=?",
                                  [(d,) for d in stale])
                 conn.commit()
         finally:
             conn.close()
+        self.purged_trackers = list(dict.fromkeys(stale_tracker))
         with self._lock:
             for domain, verdict, reason in rows:
                 if verdict == "bad":
                     if is_popular(domain):
                         continue          # never load a popular domain as bad
+                    if _reason_denotes_tracker(reason):
+                        continue          # never load a tracker as a learned threat
                     self._bad[domain] = reason
                 else:
                     if is_reserved_test_domain(domain):

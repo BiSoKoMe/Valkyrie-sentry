@@ -4,10 +4,12 @@ Confirms that with USE_EXTERNAL_LISTS = False the seed list + behavioural
 scanner + intelligence memory alone still catch all three surveillance
 classes, driving the REAL DNS decision pipeline (DNSInterceptor._decide):
 
-  1. a domain in the seed list                       -> block
-  2. a tracker-name-pattern domain in NO list        -> flag/block (scanner)
-  3. a repeat of something already decided bad        -> block via memory
-     (fast path — category "intelligence", set before any scanner re-run)
+  1. a seed-list tracker                              -> sinkholed (DECEIVED in
+     Standard profile — a decoy dead-end, not a hard block)
+  2. a tracker-name-pattern domain in NO list        -> deceived/flagged (scanner)
+  3. a repeat of a real (non-tracker) THREAT          -> block via memory
+     (fast path — category "intelligence", set before any scanner re-run;
+     trackers are handled by DECEIVE and deliberately NOT learned as threats)
 
 Run:  python3 test_intel_only.py
 """
@@ -93,10 +95,13 @@ def main() -> int:
     A = dns.rdatatype.A
     proc = ProcessInfo(name=live_name, pid=psutil.Process().pid, path="")
 
-    # ── Case 1: seed-list domain ──────────────────────────────────────────
-    print("\n[1] Seed-list domain (no external list, no network)")
+    # ── Case 1: seed-list tracker ─────────────────────────────────────────
+    print("\n[1] Seed-list tracker (no external list, no network)")
+    # A tracker is SINKHOLED, but in the Standard profile as a DECEIVE (decoy
+    # dead-end) rather than a hard block — the app keeps working, telemetry dies.
     d1, r1, s1, c1 = interceptor._decide("scorecardresearch.com", A, proc, 80)
-    check("seed domain scorecardresearch.com blocked", d1 == "blocked", f"got {d1} ({r1})")
+    check("seed tracker scorecardresearch.com is sinkholed (deceived in Standard)",
+          d1 in ("deceived", "blocked"), f"got {d1} ({r1})")
 
     # ── Case 2: tracker-name pattern in NO list ───────────────────────────
     print("\n[2] Tracker-pattern domain absent from every list")
@@ -104,17 +109,19 @@ def main() -> int:
     check("novel domain is NOT in the blocklist",
           not blocklist.is_blocked(novel))
     d2, r2, s2, c2 = interceptor._decide(novel, A, proc, 60)
-    check("novel tracker-pattern domain flagged/blocked by scanner",
-          d2 in ("blocked", "flagged"), f"got {d2} ({r2})")
+    check("novel tracker-pattern domain is acted on by the scanner",
+          d2 in ("deceived", "blocked", "flagged"), f"got {d2} ({r2})")
     print(f"       -> decision={d2}  score={s2}  reason={r2}")
 
     # ── Case 3: repeat hit served from intelligence memory ────────────────
     print("\n[3] Repeat query served instantly from intelligence memory")
-    # First hit blocks via scanner AND is remembered; second hit must come
-    # from memory BEFORE the scanner runs (category 'intelligence').
-    seed2 = "quantserve.com"
-    interceptor._decide(seed2, A, proc, 80)              # learn it
-    d3, r3, s3, c3 = interceptor._decide(seed2, A, proc, 80)   # repeat
+    # A REAL (non-tracker) threat is remembered and served from memory before the
+    # scanner re-runs (category 'intelligence'). Trackers are NOT used here: they
+    # go through the DECEIVE policy and are deliberately never learned as threats,
+    # so the intelligence memory fast path is demonstrated with actual malware.
+    threat = "malware-c2-7f3a9k2p.example"
+    intel.remember_block(threat, "known malware C2 infrastructure")   # learn it
+    d3, r3, s3, c3 = interceptor._decide(threat, A, proc, 80)         # repeat
     check("repeat decision comes from intelligence memory",
           c3 == "intelligence" and d3 == "blocked",
           f"got decision={d3} category={c3} reason={r3}")

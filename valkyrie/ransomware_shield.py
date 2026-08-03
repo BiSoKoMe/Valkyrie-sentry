@@ -308,10 +308,13 @@ class RansomwareShield:
         if psutil is None:
             return
         snap: dict[int, int] = {}
-        for p in psutil.process_iter(["pid"]):
+        for p in psutil.process_iter():
+            # p.pid is a plain attribute set at construction — it never raises and
+            # is never absent, unlike p.info["pid"], which KeyError'd here and
+            # crash-looped the whole monitor thread.
             try:
-                snap[p.info["pid"]] = p.io_counters().write_bytes  # type: ignore[attr-defined]
-            except (psutil.Error, AttributeError, OSError):
+                snap[p.pid] = p.io_counters().write_bytes  # type: ignore[attr-defined]
+            except (psutil.Error, AttributeError, OSError, KeyError):
                 continue
         self._io_prev = snap
 
@@ -321,10 +324,11 @@ class RansomwareShield:
         if psutil is None:
             return []
         suspects: list[dict] = []
-        for p in psutil.process_iter(["pid", "name"]):
+        for p in psutil.process_iter(["name"]):
             try:
-                pid = p.info["pid"]
-                name = (p.info["name"] or "").lower()
+                pid = p.pid                       # plain attribute; never KeyErrors
+                pname = p.info.get("name") or ""
+                name = pname.lower()
                 if pid in (0, 4) or name in _PROTECTED_PROCESSES:
                     continue
                 delta = p.io_counters().write_bytes - self._io_prev.get(pid, 0)
@@ -339,8 +343,8 @@ class RansomwareShield:
                                 break
                     except (psutil.Error, OSError):
                         pass
-                suspects.append({"pid": pid, "name": p.info["name"] or "", "write_delta": delta, "score": score})
-            except (psutil.Error, OSError):
+                suspects.append({"pid": pid, "name": pname, "write_delta": delta, "score": score})
+            except (psutil.Error, OSError, KeyError):
                 continue
         suspects.sort(key=lambda s: s["score"], reverse=True)
         return suspects[:5]

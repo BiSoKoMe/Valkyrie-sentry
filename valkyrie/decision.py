@@ -351,6 +351,26 @@ def should_deceive(category: str, profile: Profile) -> bool:
             and str(category).strip().lower() in _DECEIVE_CATEGORIES)
 
 
+# Substrings that mark a stored/derived REASON string as a tracker/telemetry
+# class. Used to recognise deceivable domains when only the reason survives (the
+# intelligence memory stores a reason, not a category) — so a tracker the old
+# duplicate-block bug learned as a "threat" is re-routed to deception and purged
+# from the threat memory/graph instead of hard-blocking forever.
+#
+# Deliberately NOT "beacon": a C2 BEACON is real malware, and matching it here
+# would mis-route a C2 domain to deception instead of a hard block. The scanner's
+# tracker reasons always contain 'tracker'/'analytics'; the beacon_telemetry
+# CATEGORY is still deceived via should_deceive()'s exact category match.
+_DECEIVABLE_REASON_MARKERS = ("tracker", "analytics", "advertising", "telemetry")
+
+
+def reason_denotes_deceivable(reason: str) -> bool:
+    """True when a reason denotes a tracker/telemetry/analytics class — a privacy
+    nuisance to DECEIVE, never a hard THREAT to learn into memory/graph."""
+    r = (reason or "").lower()
+    return any(m in r for m in _DECEIVABLE_REASON_MARKERS)
+
+
 def signal_from_incident(inc: dict) -> Signal:
     """Adapt an EDR incident/detection dict onto a Signal."""
     details = inc.get("details") or {}

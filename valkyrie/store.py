@@ -397,8 +397,23 @@ class Store:
         if self._ram_uri:
             conn = sqlite3.connect(self._ram_uri, uri=True, check_same_thread=False)
         else:
-            conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
+            # timeout: block up to 5s for a competing writer instead of raising
+            # "database is locked" the instant the file is held.
+            conn = sqlite3.connect(str(self._db_path), check_same_thread=False, timeout=5.0)
         conn.row_factory = sqlite3.Row
+        # Concurrency hardening. Several engine threads (DNS interceptor, site
+        # scanner, EDR) each open short-lived connections against the same file.
+        # Without these, a concurrent writer raised sqlite3.OperationalError:
+        # "database is locked" — which surfaced as duplicate/failed DNS decisions.
+        # WAL lets readers run alongside the single writer; busy_timeout makes a
+        # contending writer WAIT for the lock rather than error out immediately.
+        try:
+            conn.execute("PRAGMA busy_timeout=5000")
+            if not self._ram_uri:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+        except sqlite3.Error:
+            pass
         return conn
 
     def _init_schema(self) -> None:
@@ -453,10 +468,9 @@ class Store:
             "(timestamp,domain,decision,process_name,process_pid,process_path,reason,suspicion,raw_category,url)"
             " VALUES (?,?,?,?,?,?,?,?,?,?)"
         )
-        if self._ram_uri:
-            conn = sqlite3.connect(self._ram_uri, uri=True, check_same_thread=False)
-        else:
-            conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
+        # Same pragmas as every other connection (WAL + busy_timeout): the writer
+        # is the one connection that must never lose a race for the lock.
+        conn = self._connect()
         pending: list[DnsEvent] = []
 
         def flush():

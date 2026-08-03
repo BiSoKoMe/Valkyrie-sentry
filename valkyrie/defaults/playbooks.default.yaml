@@ -29,7 +29,7 @@
 # changes so existing installs pick it up with no manual step.
 # ---------------------------------------------------------------------------
 
-version: 2
+version: 3
 
 playbooks:
   # Confirmed algorithmically-generated C2 rendezvous (T1568.002). The DGA
@@ -100,13 +100,18 @@ playbooks:
         target_from: process_pid
 
   # A completed, NAMED multi-stage attack sequence on one process lineage
-  # (e.g. document-spawned shell → remote payload → in-memory execution). The
-  # sequence engine only fires when the full pattern completes, so confidence is
-  # high — enforce a kill of the origin process.
+  # (e.g. document-spawned shell → remote payload → in-memory execution).
+  #
+  # DRY_RUN on purpose: a kill is irreversible, and a sequence FP reached this
+  # exact playbook in testing (a benign powershell matched the "macro-dropper"
+  # chain because Step 1 keyed on bare T1059). That Step now requires the
+  # office-parent discriminator (behavioral_sequences macro-dropper-c2), so the
+  # FP source is fixed — but the rule stays in SIMULATE until a full re-test
+  # shows ZERO false sequences on the fleet. Then arm by setting mode: enforce.
   - id: kill-attack-sequence
     min_severity: high
     categories: [attack_sequence]
-    mode: enforce
+    mode: dry_run
     cooldown_seconds: 30
     actions:
       - action: kill_process

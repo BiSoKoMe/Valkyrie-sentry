@@ -125,6 +125,27 @@ def main() -> int:
     _check("unknown tooling with the right behaviours completes the sequence",
            fired is not None and fired["rule_id"] == "inject-then-creds")
 
+    print("\n[9] Precision — bare powershell (T1059, no Office parent) must NOT")
+    print("    complete the macro-dropper chain; an Office parent still does")
+    # Regression for the live FP that reached the (formerly enforce) kill-attack-
+    # sequence playbook: any powershell exec is T1059, so Step 1 keying on that
+    # technique made every benign "powershell then a network call" look like a
+    # document dropper. Step 1 now requires the office_child_shell discriminator.
+    eng = SequenceEngine()
+    eng.observe("powershell.exe", "T1059 — Command & Scripting Interpreter",
+                [], "", ts=1.0, pid=55, ppid=1)                    # no office label
+    fired = eng.observe("powershell.exe", "T1105 — Ingress Tool Transfer",
+                        ["lolbin_network_fetch"], "", ts=2.0, pid=55, ppid=1)
+    _check("benign powershell + a network fetch does NOT fire macro-dropper-c2",
+           fired is None or fired["rule_id"] != "macro-dropper-c2")
+    eng = SequenceEngine()
+    eng.observe("powershell.exe", "T1059 — Command & Scripting Interpreter",
+                ["office_child_shell"], "", ts=1.0, pid=66, ppid=1)  # real doc parent
+    fired = eng.observe("powershell.exe", "T1105 — Ingress Tool Transfer",
+                        ["lolbin_network_fetch"], "", ts=2.0, pid=66, ppid=1)
+    _check("an Office-spawned shell + fetch DOES fire macro-dropper-c2",
+           fired is not None and fired["rule_id"] == "macro-dropper-c2")
+
     print("\n[8] Pipeline — a completed sequence → one 'attack_sequence' incident")
     import tempfile
     from valkyrie.store import Store

@@ -77,6 +77,38 @@ if not RULES_PATH.exists():
     except OSError:
         pass   # first-run seeding is best-effort; RulesEngine tolerates absence
 
+
+def _strip_dead_manual_lists(path=None) -> None:
+    """Remove the retired ``always_allow`` / ``always_block`` keys from an
+    existing rules file.
+
+    Valkyrie is list-free: every allow/block is analysis-driven, and the decision
+    path no longer reads these keys. But a rules file seeded by an OLDER build
+    still carries the hand-written lists on disk (a re-install over a beta),
+    where they sit as a dead landmine and contaminate testing. Strip them so the
+    file honestly reflects the no-manual-lists model. Best-effort; never blocks
+    startup, and only rewrites when a key is actually present.
+    """
+    p = path or RULES_PATH
+    try:
+        import yaml
+        if not p.exists():
+            return
+        with open(p, "r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+        if not isinstance(data, dict) or (
+                "always_allow" not in data and "always_block" not in data):
+            return
+        data.pop("always_allow", None)
+        data.pop("always_block", None)
+        with open(p, "w", encoding="utf-8") as fh:
+            yaml.safe_dump(data, fh, default_flow_style=False, sort_keys=False)
+    except Exception:
+        pass
+
+
+_strip_dead_manual_lists()
+
 # Response playbooks (SOAR) ship ENABLED so confirmed-malicious incidents are
 # auto-blocked/remediated and audited out of the box (before this the engine
 # started with zero playbooks and every incident was observe-only).
@@ -174,6 +206,14 @@ UPSTREAM_SERVERS: list[str] = [
 
 SINKHOLE_IPV4 = "0.0.0.0"
 SINKHOLE_IPV6 = "::"
+
+# Reserved local name the protection heartbeat resolves to prove the DNS
+# interceptor is still answering. The interceptor serves it INSTANTLY and
+# locally (never upstream), so an offline machine still reports HEALTHY instead
+# of a false "sinkhole not answering" alarm while upstream resolution times out.
+# `.invalid` is the RFC 6761 reserved TLD — it can never be a real domain, so
+# this can never collide with or leak a genuine query.
+HEALTH_PROBE_DOMAIN = "heartbeat.valkyrie.invalid"
 
 # No-leak DNS policy.
 #   When the local recursive resolver (Unbound) is the upstream, allowed
