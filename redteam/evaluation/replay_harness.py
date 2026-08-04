@@ -65,6 +65,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from catalog import (Technique, all_in_scope, CATALOG_VERSION,   # noqa: E402
                      DELIVERY_PROCESS_POLL_RACY, DELIVERY_NONE)
+from environment import check_requirements, probe_sysmon        # noqa: E402
 from valkyrie.telemetry import (SEV_INFO, SEV_LOW, SEV_MEDIUM,   # noqa: E402
                                 SEV_HIGH, SEV_CRITICAL, severity_rank)
 
@@ -100,7 +101,11 @@ def _build_ctx() -> dict:
                IntelFeed("feodo_c2", "ip", "botnet_c2", "https://x.invalid/f")],
         cache_dir=icache)
     intel.load(allow_download=False)
-    return {"intel": intel, "scanner": SiteScanner(store=None), "_tmp": tmp}
+    # Probed ONCE per run, not per technique: it shells out to PowerShell and
+    # the answer cannot change mid-run in any way we'd want to act on. Also
+    # means every record in a run is scored against one consistent snapshot.
+    return {"intel": intel, "scanner": SiteScanner(store=None), "_tmp": tmp,
+            "sysmon_env": probe_sysmon()}
 
 
 # ── Probe functions. One per catalog `probe` key. ───────────────────────────
@@ -267,6 +272,92 @@ def _probe_dns_tunnel(inp: dict, ctx: dict):
          "files": []}
 
 
+def _probe_recon_burst(inp: dict, ctx: dict):
+    """Discovery techniques, scored the ONLY way this project is willing to
+    score them: as a contributor to the reconnaissance-burst sequence IOA.
+
+    A lone discovery command deliberately raises NOTHING (process_telemetry.
+    classify_discovery returns INFO severity, and the engine's severity gate
+    drops it) — firing on a single `whoami` would be a guaranteed
+    false-positive generator, which is the trade this codebase explicitly
+    refuses. So this probe replays what a real recon sweep produces: THIS
+    technique's command plus the co-occurring commands named in
+    ``probe_input['co_occurring']``, through the REAL classify_discovery and
+    the REAL SequenceEngine, and reports whether the named burst IOA fires.
+
+    The honest reading of a DETECT here is therefore precise: "this technique
+    is recognised as part of a recon burst," NOT "running this one command
+    alone raises an alert." Every record's reason says exactly that.
+    """
+    from valkyrie.process_telemetry import classify_discovery
+    from valkyrie.behavioral_sequences import SequenceEngine
+
+    _, labels, _, technique = classify_discovery(inp["image"], inp["cmdline"])
+    if not labels:
+        return False, SEV_INFO, 0.0, "", \
+            "classify_discovery did not label this command at all", \
+            {"processes": [{"image": inp["image"], "cmdline": inp["cmdline"],
+                            "note": "synthetic"}],
+             "registry": [], "network": [], "dns": [], "files": []}
+
+    # Replay the burst on ONE lineage: this technique first, then the
+    # co-occurring recon commands an operator/script runs alongside it.
+    eng = SequenceEngine()
+    fired = None
+    replayed = [{"image": inp["image"], "cmdline": inp["cmdline"],
+                 "technique": technique, "note": "the technique under test"}]
+    fired = eng.observe("cmd.exe", technique, labels, "exec",
+                        ts=100.0, pid=4242, ppid=1) or fired
+    for i, (img, cmd) in enumerate(inp.get("co_occurring", []), start=1):
+        _, co_labels, _, co_tech = classify_discovery(img, cmd)
+        replayed.append({"image": img, "cmdline": cmd, "technique": co_tech,
+                         "note": "co-occurring recon command in the same burst"})
+        fired = eng.observe("cmd.exe", co_tech, co_labels, "exec",
+                            ts=100.0 + i, pid=4242, ppid=1) or fired
+
+    if fired is None:
+        return False, SEV_INFO, 0.0, technique, \
+            "labeled as a discovery command, but the burst sequence did not complete", \
+            {"processes": replayed, "registry": [], "network": [], "dns": [],
+             "files": []}
+    sev = fired["severity"]
+    return True, sev, float(fired.get("score", _confidence_for(sev))), technique, \
+        (f"{fired['name']}: {fired['reason']} "
+         f"(NOTE: this technique ALONE raises nothing by design — it is "
+         f"detected as a contributor to the burst, not standalone)"), \
+        {"processes": replayed, "registry": [], "network": [], "dns": [],
+         "files": [], "sequence": {"rule_id": fired["rule_id"],
+                                   "span_seconds": fired["span_seconds"]}}
+
+
+def _probe_cred_store_watch(inp: dict, ctx: dict):
+    """Browser credential-store access — drives the REAL CredentialStoreWatch
+    emit path with a synthetic open-handle observation (a non-browser process
+    holding a known credential-store file open), which is exactly what its
+    poll would see during a live T1555.003 execution."""
+    from valkyrie.browser_cred_watch import CredentialStoreWatch
+
+    emitted: list = []
+    watch = CredentialStoreWatch(emit=emitted.append, cooldown=0.0)
+    watch._paths_lower = {inp["path"].lower()}
+    watch._scan = lambda: [{"pid": 4242, "name": inp["image"],
+                            "path": inp["path"]}]
+    watch.poll_once()
+    if not emitted:
+        return False, SEV_INFO, 0.0, "", "credential-store watch emitted nothing", \
+            {"processes": [], "registry": [], "network": [], "dns": [], "files": []}
+    ev = emitted[0]
+    fires = severity_rank(ev.severity) >= severity_rank(SEV_MEDIUM)
+    return fires, ev.severity, _confidence_for(ev.severity), \
+        ev.fields.get("technique", ""), ev.reason, \
+        {"processes": [{"name": inp["image"], "pid": 4242,
+                        "note": "synthetic open-handle observation"}],
+         "registry": [], "network": [], "dns": [],
+         "files": [{"path": inp["path"],
+                    "note": "browser credential store held open by a "
+                            "non-browser process"}]}
+
+
 def _probe_ransomware(inp: dict, ctx: dict):
     from valkyrie.ransomware_shield import shannon_entropy, _ENTROPY_ENCRYPTED
     data = os.urandom(4096)
@@ -294,6 +385,8 @@ PROBES = {
     "network": _probe_network,
     "dns_tunnel": _probe_dns_tunnel,
     "ransomware": _probe_ransomware,
+    "recon_burst": _probe_recon_burst,
+    "cred_store_watch": _probe_cred_store_watch,
 }
 
 
@@ -311,6 +404,17 @@ def run_technique(t: Technique, ctx: dict) -> dict:
                                            "network": [], "dns": [], "files": []}
         error = f"{type(exc).__name__}: {exc}"
 
+    # HOST preconditions (Technique.requires) -- checked against the real
+    # machine, never assumed. A technique whose classifier is correct but whose
+    # delivering event source is absent on this host is NOT detected here, and
+    # the reason is recorded rather than the credit being quietly taken. This
+    # is what lets the three Sysmon-dependent techniques carry an honest
+    # predicted_tier_b="DETECT": the label describes Valkyrie's code, and the
+    # precondition describes what the host must supply for that code to ever
+    # see the event.
+    preconditions_met, precondition_reason = check_requirements(
+        tuple(t.requires), ctx["sysmon_env"])
+
     # The scoring gate this whole harness exists to enforce: a miss is a miss,
     # and CONDITIONAL does not get to borrow DETECT's credit. Only a technique
     # BOTH judged reliably-delivered (predicted_tier_b == DETECT) AND whose
@@ -320,7 +424,8 @@ def run_technique(t: Technique, ctx: dict) -> dict:
     # never counts either: an incident under the wrong label is not evidence
     # the system recognised the behaviour actually being tested.
     counted_as_detected = (t.predicted_tier_b == "DETECT" and logic_fires
-                           and not error and not t.known_mismatch)
+                           and not error and not t.known_mismatch
+                           and preconditions_met)
 
     is_user_rule = False   # no probe here ever exercises a user-authored rule;
                            # kept explicit so the field exists uniformly and the
@@ -349,6 +454,11 @@ def run_technique(t: Technique, ctx: dict) -> dict:
         "predicted_tier_b": t.predicted_tier_b,
         "counted_as_detected": counted_as_detected,
         "known_mismatch": t.known_mismatch or None,
+        "host_requirements": list(t.requires),
+        "host_requirements_met": preconditions_met,
+        "host_requirements_note": precondition_reason or (
+            "all host preconditions verified on this machine at run time"
+            if t.requires else "none required"),
         "detection_category": ("blocklist" if t.id == "c2-dns-tracker-domain"
                                else ("behavioral" if counted_as_detected else "none")),
         "is_user_defined_rule": is_user_rule,
@@ -397,13 +507,29 @@ def main() -> int:
     out_dir.mkdir(exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_path = out_dir / f"{ts}__tierA.json"
+    # The host snapshot travels WITH the score. A result file that says
+    # "39/40" without saying which event sources the machine had is not
+    # reproducible and not auditable -- the same catalog legitimately scores
+    # differently on a host without Sysmon, and the file must show that.
+    env = ctx["sysmon_env"]
     out_path.write_text(json.dumps({
         "tier": TIER, "catalog_version": CATALOG_VERSION,
-        "generated_at": ts, "records": records,
+        "generated_at": ts,
+        "host_environment": {"sysmon": env.as_dict()},
+        "records": records,
     }, indent=2), encoding="utf-8")
+
+    gated = [r for r in records if r["host_requirements"]]
+    unmet = [r for r in gated if not r["host_requirements_met"]]
 
     print(f"Tier A replay: {len(records)} techniques run against real "
           f"Valkyrie code.")
+    print(f"Host: Sysmon present={env.present} collection_live="
+          f"{env.collection_live} configured_eids={list(env.configured_eids)}")
+    print(f"Host-gated techniques: {len(gated)} "
+          f"({len(gated) - len(unmet)} preconditions met, {len(unmet)} not)")
+    for r in unmet:
+        print(f"  NOT CREDITED  {r['id']}: {r['host_requirements_note']}")
     print(f"Results written to {out_path}")
     return 0
 

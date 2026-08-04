@@ -166,6 +166,14 @@ def render_markdown(data: dict, records: list[dict], tier: str,
     a("- A miss is a miss. `CONDITIONAL` predictions are **not** credited as "
       "detected in the headline number -- only a confirmed, reliably-"
       "delivered `DETECT` counts.")
+    a("- A `DETECT` whose catalog entry declares **host preconditions** "
+      "(`requires`, e.g. `sysmon_eid8`) is credited only when those "
+      "preconditions are verified **on the machine this run executed on**. "
+      "The classifier firing is necessary but not sufficient: if the host "
+      "cannot deliver the event, the detection cannot happen. Unmet "
+      "preconditions are reported per technique with the reason, and the "
+      "host snapshot is stored in the result file's `host_environment` so a "
+      "score is never separable from the environment that produced it.")
     a("- A detection whose category is a **user-defined DNS block** "
       "(`detection_category == 'user_rule'`) is excluded from the detected "
       "count and reported separately, per the evaluation brief.")
