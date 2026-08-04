@@ -53,11 +53,78 @@
  *     name the driver ALLOWS the operation and drops the event.
  */
 
-#include <ntddk.h>
+/*
+ * ntifs.h, NOT ntddk.h. SeLocateProcessImageName — used on four paths below to
+ * resolve a requestor/target image name — is declared ONLY in ntifs.h. With
+ * ntddk.h the compiler emits C4013 ("undefined; assuming extern returning int"),
+ * which /WX turns into a hard error, so the driver did not build at all. Worse,
+ * had the warning been suppressed rather than fixed, the implicit `int` return
+ * declaration would mean the compiler assumed a 32-bit return in a context where
+ * the caller feeds it to NT_SUCCESS — silently correct on x64 today, but exactly
+ * the kind of implicit-declaration UB that changes behaviour under optimisation.
+ * ntifs.h is a strict superset of ntddk.h; including it is the standard fix.
+ */
+#include <ntifs.h>
+#include <wdmsec.h>                    /* IoCreateDeviceSecure */
 #include "valkyrie_shared.h"
+
+/*
+ * PROCESS_* access-right constants.
+ *
+ * These live in um\winnt.h — USER mode. A kernel driver has no winnt.h, and the
+ * kernel headers define only PROCESS_DUP_HANDLE (km\wdm.h) and PROCESS_ALL_ACCESS.
+ * Every other right this driver's handle-stripping masks are built from
+ * (TERMINATE, CREATE_THREAD, VM_OPERATION, VM_READ, VM_WRITE, SUSPEND_RESUME)
+ * was an undeclared identifier: 10 hard C2065 errors, i.e. both VLK_LSASS_STRIP
+ * and the self-protection tamper mask were made of symbols that do not exist.
+ * Values are the architectural ACCESS_MASK bits and are fixed by the ABI.
+ */
+#ifndef PROCESS_TERMINATE
+#define PROCESS_TERMINATE                  (0x0001)
+#endif
+#ifndef PROCESS_CREATE_THREAD
+#define PROCESS_CREATE_THREAD              (0x0002)
+#endif
+#ifndef PROCESS_VM_OPERATION
+#define PROCESS_VM_OPERATION               (0x0008)
+#endif
+#ifndef PROCESS_VM_READ
+#define PROCESS_VM_READ                    (0x0010)
+#endif
+#ifndef PROCESS_VM_WRITE
+#define PROCESS_VM_WRITE                   (0x0020)
+#endif
+#ifndef PROCESS_DUP_HANDLE
+#define PROCESS_DUP_HANDLE                 (0x0040)
+#endif
+#ifndef PROCESS_SUSPEND_RESUME
+#define PROCESS_SUSPEND_RESUME             (0x0800)
+#endif
 
 #define VLK_TAG            'klaV'      /* pool tag "Valk" */
 #define VLK_RING_CAPACITY  4096        /* events; ~4MB of NonPagedPool */
+
+/*
+ * DEVICE ACL — this closes a real privilege-escalation hole.
+ *
+ * The original code called IoCreateDevice, which leaves the default device
+ * security descriptor in place. That descriptor permits an UNPRIVILEGED user
+ * to open \\.\ValkyrieKm and issue IOCTLs. The comment on SET_POLICY asserted
+ * "only the trusted Valkyrie service can reach this device" — nothing enforced
+ * that, and the consequences of it being false are severe:
+ *
+ *   - push a policy with agent_pid = <malware pid>  -> the DRIVER now protects
+ *     the malware from being terminated, using our own self-protection;
+ *   - push a policy with block_count = 0            -> prevention silently off;
+ *   - push a policy with flags = 0                  -> self-protection off,
+ *     i.e. any user can disable the tamper resistance from user mode.
+ *
+ * SDDL: SYSTEM and Administrators get full access; nobody else gets anything.
+ * FILE_DEVICE_SECURE_OPEN additionally applies this same descriptor to any
+ * attempt to open a *name below* the device (\\.\ValkyrieKm\anything).
+ */
+DECLARE_CONST_UNICODE_STRING(
+    g_DeviceSddl, L"D:P(A;;GA;;;SY)(A;;GA;;;BA)");
 
 /* ------------------------------------------------------------------ globals */
 
@@ -78,6 +145,9 @@ static KSPIN_LOCK       g_RingLock;
 /* Enforcement policy, guarded by its own spinlock. Zeroed = detection-only. */
 static VLK_POLICY       g_Policy;
 static KSPIN_LOCK       g_PolicyLock;
+/* pid of the process that first pushed a policy; only it may push again. See
+ * the SET_POLICY handler. 0 = unclaimed. Reset when that process exits. */
+static ULONG            g_PolicyOwnerPid = 0;
 
 static volatile LONG    g_Produced = 0;
 static volatile LONG    g_Dropped = 0;
@@ -89,8 +159,18 @@ static volatile LONG    g_TamperBlocks = 0;
 
 /* ------------------------------------------------------------- small helpers */
 
-/* Copy a UNICODE_STRING into a fixed WCHAR[VLK_PATH_LEN], always null-terminated. */
-static VOID VlkCopyPath(_Out_ USHORT *dst, _In_opt_ PCUNICODE_STRING src)
+/* Copy a UNICODE_STRING into a fixed WCHAR[VLK_PATH_LEN], always null-terminated.
+ *
+ * PREfast C6386 (buffer overrun, "writable size is 1*2 bytes but 520 might be
+ * written"): the parameter was annotated bare `_Out_`, which tells SAL the
+ * pointer addresses exactly ONE USHORT. Every call here happens to pass a real
+ * USHORT[VLK_PATH_LEN] so there is no live overrun — but the wrong annotation
+ * is worse than no annotation: it makes PREfast and SDV unable to check ANY
+ * call site, so a genuinely undersized buffer passed here in future would be
+ * reported as this same already-known "false" positive and waved through.
+ * _Out_writes_ states the real contract and makes the checker load-bearing. */
+static VOID VlkCopyPath(_Out_writes_(VLK_PATH_LEN) USHORT *dst,
+                        _In_opt_ PCUNICODE_STRING src)
 {
     RtlZeroMemory(dst, VLK_PATH_LEN * sizeof(USHORT));
     if (src == NULL || src->Buffer == NULL || src->Length == 0)
@@ -189,6 +269,130 @@ static BOOLEAN VlkPolicyBlocksHash(_In_ ULONG hash)
     return hit;
 }
 
+/* ------------------------------------------------------ per-process cache */
+/*
+ * A fixed-size, allocation-free pid table. It exists to fix two real defects
+ * that only appear under load:
+ *
+ * 1. PERFORMANCE / RISK — the Ob pre-op callback used to call
+ *    SeLocateProcessImageName on EVERY handle open to ANY process, just to ask
+ *    "is the target lsass?". That callback is one of the hottest paths in the
+ *    kernel (every OpenProcess system-wide), and SeLocateProcessImageName
+ *    allocates paged pool and resolves a file object name. Doing that per
+ *    handle-open is a self-inflicted performance problem measured in thousands
+ *    of pool allocations per second on a busy machine. The answer never
+ *    changes for a given pid, so it is computed once and cached.
+ *
+ * 2. CORRECTNESS — VlkThreadNotify flagged every thread whose creator process
+ *    differs from the target as remote-thread injection. The FIRST thread of
+ *    EVERY newly-created process satisfies that (the parent creates it), so
+ *    the driver emitted a false T1055 injection event for every single process
+ *    start on the system. The table records whether a pid's first thread has
+ *    been seen, so the initial thread is consumed silently and only genuinely
+ *    injected threads are reported.
+ *
+ * No allocation, no paged memory, bounded, spinlock-guarded. On table-full it
+ * fails OPEN (falls back to the slow path / suppresses nothing), consistent
+ * with the driver's overall posture.
+ */
+#define VLK_PIDTAB_SIZE     2048        /* power of two; 16KB total */
+#define VLK_PID_INUSE       0x00000001
+#define VLK_PID_IS_LSASS    0x00000002
+#define VLK_PID_LSASS_KNOWN 0x00000004  /* the lsass question has been answered */
+#define VLK_PID_THREAD_SEEN 0x00000008  /* first (benign) thread already consumed */
+
+typedef struct _VLK_PIDENT {
+    ULONG pid;
+    ULONG flags;
+} VLK_PIDENT;
+
+static VLK_PIDENT  g_PidTab[VLK_PIDTAB_SIZE];
+static KSPIN_LOCK  g_PidLock;
+
+static __forceinline ULONG VlkPidSlot(ULONG pid)
+{
+    /* Knuth multiplicative hash; pids are multiples of 4 so the low bits are
+     * poor and must not be used directly as an index. */
+    return (pid * 2654435761u) & (VLK_PIDTAB_SIZE - 1);
+}
+
+/* Find the slot holding `pid`, or the first free slot, within a bounded probe.
+ * Returns NULL when the table is full and the pid is absent. Caller holds lock. */
+static VLK_PIDENT *VlkPidFind(ULONG pid, BOOLEAN allocate)
+{
+    ULONG slot = VlkPidSlot(pid);
+    VLK_PIDENT *freeSlot = NULL;
+    for (ULONG i = 0; i < 32; i++) {            /* bounded probe */
+        VLK_PIDENT *e = &g_PidTab[(slot + i) & (VLK_PIDTAB_SIZE - 1)];
+        if ((e->flags & VLK_PID_INUSE) && e->pid == pid)
+            return e;
+        if (!(e->flags & VLK_PID_INUSE) && freeSlot == NULL)
+            freeSlot = e;
+    }
+    if (allocate && freeSlot != NULL) {
+        freeSlot->pid = pid;
+        freeSlot->flags = VLK_PID_INUSE;
+        return freeSlot;
+    }
+    return NULL;
+}
+
+static VOID VlkPidInsert(ULONG pid, BOOLEAN isLsass)
+{
+    KIRQL irql;
+    KeAcquireSpinLock(&g_PidLock, &irql);
+    VLK_PIDENT *e = VlkPidFind(pid, TRUE);
+    if (e != NULL) {
+        e->flags = VLK_PID_INUSE | VLK_PID_LSASS_KNOWN |
+                   (isLsass ? VLK_PID_IS_LSASS : 0);
+    }
+    KeReleaseSpinLock(&g_PidLock, irql);
+}
+
+static VOID VlkPidRemove(ULONG pid)
+{
+    KIRQL irql;
+    KeAcquireSpinLock(&g_PidLock, &irql);
+    VLK_PIDENT *e = VlkPidFind(pid, FALSE);
+    if (e != NULL) {
+        e->pid = 0;
+        e->flags = 0;                            /* frees the slot; handles pid reuse */
+    }
+    KeReleaseSpinLock(&g_PidLock, irql);
+}
+
+/* Consume the "first thread of this process" allowance. Returns TRUE when this
+ * thread IS that first thread (i.e. benign, suppress it). */
+static BOOLEAN VlkPidConsumeFirstThread(ULONG pid)
+{
+    BOOLEAN first = FALSE;
+    KIRQL irql;
+    KeAcquireSpinLock(&g_PidLock, &irql);
+    VLK_PIDENT *e = VlkPidFind(pid, FALSE);
+    if (e != NULL && !(e->flags & VLK_PID_THREAD_SEEN)) {
+        e->flags |= VLK_PID_THREAD_SEEN;
+        first = TRUE;
+    }
+    KeReleaseSpinLock(&g_PidLock, irql);
+    return first;
+}
+
+/* Cached "is this pid lsass?". Returns TRUE/FALSE via *isLsass when known;
+ * returns FALSE when the answer is not cached and the caller must resolve it. */
+static BOOLEAN VlkPidQueryLsass(ULONG pid, BOOLEAN *isLsass)
+{
+    BOOLEAN known = FALSE;
+    KIRQL irql;
+    KeAcquireSpinLock(&g_PidLock, &irql);
+    VLK_PIDENT *e = VlkPidFind(pid, FALSE);
+    if (e != NULL && (e->flags & VLK_PID_LSASS_KNOWN)) {
+        *isLsass = (e->flags & VLK_PID_IS_LSASS) ? TRUE : FALSE;
+        known = TRUE;
+    }
+    KeReleaseSpinLock(&g_PidLock, irql);
+    return known;
+}
+
 /* Push one fully-formed event into the ring (drops oldest-not, drops NEW on
  * full — never blocks; callbacks must be quick and non-paged-safe). */
 static VOID VlkRingPush(_In_ const VLK_EVENT *ev)
@@ -206,8 +410,19 @@ static VOID VlkRingPush(_In_ const VLK_EVENT *ev)
     KeReleaseSpinLock(&g_RingLock, irql);
 }
 
-/* Pop up to `max` events into caller buffer; returns count popped. */
-static ULONG VlkRingPop(_Out_writes_(max) VLK_EVENT *out, _In_ ULONG max)
+/* Pop up to `max` events into caller buffer; returns count popped.
+ *
+ * PREfast C6101 (returning uninitialized memory): `_Out_writes_(max)` promises
+ * the callee fills all `max` elements, but the empty-ring path returns 0 having
+ * written none — a promise the function does not keep. _Out_writes_to_(max,
+ * return) is the accurate contract: capacity `max`, initialised up to the
+ * returned count. This matters at the IOCTL: VlkDeviceControl sets
+ * Information = popped * sizeof(VLK_EVENT), so it already only copies out what
+ * was actually written. The bug was the annotation, not the copy-out — but had
+ * it been the other way round the driver would have leaked up to 4 MB of
+ * uninitialised NonPagedPool to user mode, and the wrong annotation is exactly
+ * what would have stopped the analyser from saying so. */
+static ULONG VlkRingPop(_Out_writes_to_(max, return) VLK_EVENT *out, _In_ ULONG max)
 {
     ULONG n = 0;
     KIRQL irql;
@@ -271,8 +486,30 @@ static VOID VlkProcessNotify(_Inout_ PEPROCESS Process,
             ev.flags |= VLK_FLAG_BLOCKED;
             InterlockedIncrement(&g_ProcBlocks);
         }
+
+        /* Cache the identity questions the hot paths would otherwise have to
+         * answer expensively later: is this lsass (for the Ob callback), and
+         * has its first thread been seen (for the thread callback). */
+        VlkPidInsert(HandleToULong(ProcessId),
+                     VlkImageIsLsass(CreateInfo->ImageFileName));
     } else {
-        VlkFillHeader(&ev, VLK_EVT_PROCESS_EXIT, HandleToULong(ProcessId), 0);
+        ULONG dying = HandleToULong(ProcessId);
+        VlkFillHeader(&ev, VLK_EVT_PROCESS_EXIT, dying, 0);
+        VlkPidRemove(dying);                      /* also handles pid reuse */
+
+        /* Release policy ownership when the owning service exits, so a
+         * restarted agent (new pid) can reclaim it. Without this, one crash
+         * would lock policy updates out permanently and the driver would be
+         * stuck on a stale block list forever. The POLICY ITSELF is left in
+         * force — enforcement must survive an agent crash, or killing the
+         * agent would become the bypass that self-protection exists to stop. */
+        {
+            KIRQL pirql;
+            KeAcquireSpinLock(&g_PolicyLock, &pirql);
+            if (g_PolicyOwnerPid == dying)
+                g_PolicyOwnerPid = 0;
+            KeReleaseSpinLock(&g_PolicyLock, pirql);
+        }
     }
     VlkRingPush(&ev);
 }
@@ -291,6 +528,16 @@ static VOID VlkThreadNotify(_In_ HANDLE ProcessId, _In_ HANDLE ThreadId,
     HANDLE creator = PsGetCurrentProcessId();
     if (creator == ProcessId)
         return;                                  /* self-thread: normal, skip */
+
+    /* THE FIRST THREAD OF A NEW PROCESS IS CREATED BY ITS PARENT, so it always
+     * satisfies "creator != target" and used to be reported as remote-thread
+     * injection — a false T1055 on EVERY process start on the machine. Consume
+     * that one allowance silently; only threads injected into an already-
+     * running process reach the ring. If the pid is unknown (process predates
+     * the driver, or the table was full), we fail OPEN and still report — a
+     * noisy true positive beats a silent miss. */
+    if (VlkPidConsumeFirstThread(HandleToULong(ProcessId)))
+        return;
 
     VLK_EVENT ev;
     VlkFillHeader(&ev, VLK_EVT_THREAD_CREATE,
@@ -311,10 +558,16 @@ static VOID VlkImageNotify(_In_opt_ PUNICODE_STRING FullImageName,
                            _In_ HANDLE ProcessId,
                            _In_ PIMAGE_INFO ImageInfo)
 {
-    UNREFERENCED_PARAMETER(ImageInfo);
     VLK_EVENT ev;
     VlkFillHeader(&ev, VLK_EVT_IMAGE_LOAD, HandleToULong(ProcessId), 0);
     VlkCopyPath(ev.extra, FullImageName);
+    /* SystemModeImage means a KERNEL DRIVER was loaded, not a user DLL. That is
+     * the Bring-Your-Own-Vulnerable-Driver signal (the standard EDR-bypass
+     * technique of the last several years) and it was previously discarded —
+     * ImageInfo was UNREFERENCED_PARAMETER. User mode matches the path against
+     * a known-vulnerable-driver list; the driver just reports the fact. */
+    if (ImageInfo != NULL && ImageInfo->SystemModeImage)
+        ev.flags |= VLK_FLAG_KERNEL_MODULE;
     /* UNC/remote backing path is itself a weak signal; flag it, let user mode
      * make the call (Authenticode / reputation). */
     if (FullImageName && FullImageName->Length >= 2 &&
@@ -356,6 +609,7 @@ static BOOLEAN VlkKeyIsAutostart(_In_opt_ PCUNICODE_STRING key)
  * registry operation proceeds untouched. A registry callback is on a very hot
  * path and any misstep hangs the machine, so the fast path bails immediately on
  * anything that is not a pre-set-value op, and it never blocks. */
+_Function_class_(EX_CALLBACK_FUNCTION)
 static NTSTATUS VlkRegistryCallback(_In_ PVOID CallbackContext,
                                     _In_opt_ PVOID Arg1, _In_opt_ PVOID Arg2)
 {
@@ -453,13 +707,29 @@ static OB_PREOP_CALLBACK_STATUS VlkPreOp(_In_ PVOID RegistrationContext,
         return OB_PREOP_SUCCESS;   /* the agent isn't lsass — done */
     }
 
-    /* Only care about handles TO lsass. Resolve the target's image name. */
-    PUNICODE_STRING targetImage = NULL;
-    if (!NT_SUCCESS(SeLocateProcessImageName(target, &targetImage)) || targetImage == NULL)
-        return OB_PREOP_SUCCESS;     /* fail-safe: can't tell → allow */
-
-    BOOLEAN isLsass = VlkImageIsLsass(targetImage);
-    ExFreePool(targetImage);
+    /* Only care about handles TO lsass.
+     *
+     * HOT PATH: this callback runs on EVERY OpenProcess/DuplicateHandle on the
+     * system. The cached answer is used when available; SeLocateProcessImageName
+     * (paged-pool allocation + file-object name resolution) runs at most ONCE
+     * per pid, for processes that predate the driver — lsass itself is started
+     * long before any third-party driver loads, so that fallback is load-bearing
+     * and cannot simply be removed. The result is cached either way, so the
+     * expensive path is taken once per pid for the life of that process.
+     *
+     * Fast reject first: if we already know this pid is NOT lsass, we are done
+     * without touching pool at all — that is the overwhelmingly common case. */
+    ULONG tgt = HandleToULong(tgtPid);
+    BOOLEAN isLsass = FALSE;
+    if (!VlkPidQueryLsass(tgt, &isLsass)) {
+        PUNICODE_STRING targetImage = NULL;
+        if (!NT_SUCCESS(SeLocateProcessImageName(target, &targetImage)) ||
+            targetImage == NULL)
+            return OB_PREOP_SUCCESS;     /* fail-safe: can't tell → allow */
+        isLsass = VlkImageIsLsass(targetImage);
+        ExFreePool(targetImage);
+        VlkPidInsert(tgt, isLsass);      /* answer it once, then never again */
+    }
     if (!isLsass)
         return OB_PREOP_SUCCESS;
 
@@ -484,6 +754,17 @@ static OB_PREOP_CALLBACK_STATUS VlkPreOp(_In_ PVOID RegistrationContext,
 
 /* ------------------------------------------------------------ dispatch/IOCTL */
 
+/*
+ * PREfast C28023 (x5, here and on VlkDeviceControl / VlkUnload / the registry
+ * callback): a function assigned into DriverObject->MajorFunction[] or
+ * DriverUnload must carry the matching _Function_class_. This is not cosmetic —
+ * it is precisely how Static Driver Verifier discovers a driver's entry points.
+ * Without these annotations SDV has no dispatch routines to explore and its
+ * rules pass by examining nothing, which reads as a clean result. The
+ * annotations are what make the DDI-usage rules actually run against this code.
+ */
+_Function_class_(DRIVER_DISPATCH)
+_IRQL_requires_max_(PASSIVE_LEVEL)
 static NTSTATUS VlkCreateClose(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp)
 {
     UNREFERENCED_PARAMETER(DeviceObject);
@@ -493,6 +774,8 @@ static NTSTATUS VlkCreateClose(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp)
     return STATUS_SUCCESS;
 }
 
+_Function_class_(DRIVER_DISPATCH)
+_IRQL_requires_max_(PASSIVE_LEVEL)
 static NTSTATUS VlkDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp)
 {
     UNREFERENCED_PARAMETER(DeviceObject);
@@ -519,7 +802,14 @@ static NTSTATUS VlkDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp
         st->events_dropped = (ULONG)g_Dropped;
         st->lsass_blocks = (ULONG)g_LsassBlocks;
         st->ring_capacity = VLK_RING_CAPACITY;
-        st->ring_pending = g_Count;
+        {   /* g_Count is written under g_RingLock by every callback; reading it
+             * unlocked races with a concurrent push/pop and can report a value
+             * that never existed. Cheap to do correctly. */
+            KIRQL rirql;
+            KeAcquireSpinLock(&g_RingLock, &rirql);
+            st->ring_pending = g_Count;
+            KeReleaseSpinLock(&g_RingLock, rirql);
+        }
         st->thread_events = (ULONG)g_ThreadEvents;
         st->registry_events = (ULONG)g_RegistryEvents;
         st->process_blocks = (ULONG)g_ProcBlocks;
@@ -536,7 +826,27 @@ static NTSTATUS VlkDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp
         ULONG inLen = sp->Parameters.DeviceIoControl.InputBufferLength;
         if (inLen < sizeof(VLK_POLICY)) { status = STATUS_BUFFER_TOO_SMALL; break; }
         VLK_POLICY *in = (VLK_POLICY *)Irp->AssociatedIrp.SystemBuffer;
+        if (in == NULL) { status = STATUS_INVALID_PARAMETER; break; }
         if (in->version != VLK_PROTO_VERSION) { status = STATUS_REVISION_MISMATCH; break; }
+
+        /* DEFENCE IN DEPTH behind the device ACL: pin policy authorship to the
+         * FIRST caller that ever sets one, and require that caller to still be
+         * alive. The ACL already restricts this to SYSTEM/Administrators, but
+         * "an administrator" is a large set on a workstation and this IOCTL can
+         * disable the driver's own tamper protection. Pinning means a second
+         * elevated process cannot re-point agent_pid at malware or clear the
+         * policy — only the service that owns the driver can update it. */
+        {
+            ULONG caller = HandleToULong(PsGetCurrentProcessId());
+            KIRQL pirql;
+            BOOLEAN allowed;
+            KeAcquireSpinLock(&g_PolicyLock, &pirql);
+            if (g_PolicyOwnerPid == 0)
+                g_PolicyOwnerPid = caller;       /* first setter claims ownership */
+            allowed = (g_PolicyOwnerPid == caller);
+            KeReleaseSpinLock(&g_PolicyLock, pirql);
+            if (!allowed) { status = STATUS_ACCESS_DENIED; break; }
+        }
         ULONG count = in->block_count;
         if (count > VLK_MAX_BLOCK_HASHES) count = VLK_MAX_BLOCK_HASHES;
 
@@ -566,6 +876,8 @@ static NTSTATUS VlkDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp
 
 /* ---------------------------------------------------------------- unload */
 
+_Function_class_(DRIVER_UNLOAD)
+_IRQL_requires_max_(PASSIVE_LEVEL)
 static VOID VlkUnload(_In_ PDRIVER_OBJECT DriverObject)
 {
     UNICODE_STRING symlink = RTL_CONSTANT_STRING(VLK_SYMLINK_NAME);
@@ -608,14 +920,19 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
 
     KeInitializeSpinLock(&g_RingLock);
     KeInitializeSpinLock(&g_PolicyLock);
+    KeInitializeSpinLock(&g_PidLock);
+    RtlZeroMemory(&g_PidTab, sizeof(g_PidTab));
     RtlZeroMemory(&g_Policy, sizeof(g_Policy));   /* detection-only until told otherwise */
     g_Ring = (VLK_EVENT *)ExAllocatePoolZero(NonPagedPoolNx,
                  sizeof(VLK_EVENT) * VLK_RING_CAPACITY, VLK_TAG);
     if (g_Ring == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
 
-    status = IoCreateDevice(DriverObject, 0, &devName, FILE_DEVICE_UNKNOWN,
-                            FILE_DEVICE_SECURE_OPEN, FALSE, &g_DeviceObject);
+    /* IoCreateDeviceSecure, NOT IoCreateDevice — see g_DeviceSddl above. The
+     * default descriptor would let any local user push an enforcement policy. */
+    status = IoCreateDeviceSecure(DriverObject, 0, &devName, FILE_DEVICE_UNKNOWN,
+                                  FILE_DEVICE_SECURE_OPEN, FALSE,
+                                  &g_DeviceSddl, NULL, &g_DeviceObject);
     if (!NT_SUCCESS(status)) goto fail;
 
     status = IoCreateSymbolicLink(&symlink, &devName);
@@ -656,9 +973,32 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         UNICODE_STRING altitude = RTL_CONSTANT_STRING(L"321000");
 
         RtlZeroMemory(&op, sizeof(op));
-        /* PsProcessType is POBJECT_TYPE* — dereference to the POBJECT_TYPE the
-         * registration (and the pre-op comparison) expect. */
-        op.ObjectType = *PsProcessType;
+        /*
+         * DEFECT #7 (found by the first real compile — C4047, levels of
+         * indirection).
+         *
+         * OB_OPERATION_REGISTRATION::ObjectType is declared `POBJECT_TYPE *`
+         * (km\wdm.h:43505) — a pointer TO the exported pointer variable, not the
+         * object type itself. The exported symbol PsProcessType is already a
+         * POBJECT_TYPE*, so the correct assignment passes it UNDEREFERENCED.
+         *
+         * The previous line assigned `*PsProcessType`, and a comment asserted
+         * that the dereference was what the registration expected. It is the
+         * exact opposite, and the consequence is not a cosmetic warning:
+         * ObRegisterCallbacks dereferences this field to read the object type,
+         * so it would have loaded the first 8 bytes of the OBJECT_TYPE structure
+         * and used THAT as the object type pointer. The realistic outcomes are
+         * a rejected registration (silent loss of all LSASS protection) or a
+         * bugcheck inside ObRegisterCallbacks at DriverEntry.
+         *
+         * Note the pre-op comparison at VlkPreOp IS correct as written:
+         * OB_PRE_OPERATION_INFORMATION::ObjectType is a plain POBJECT_TYPE, so
+         * `Info->ObjectType != *PsProcessType` compares like with like. The two
+         * structures genuinely differ by one level of indirection — which is
+         * what made this easy to get wrong and easy to "confirm" by looking at
+         * the other use site.
+         */
+        op.ObjectType = PsProcessType;
         op.Operations = OB_OPERATION_HANDLE_CREATE | OB_OPERATION_HANDLE_DUPLICATE;
         op.PreOperation = VlkPreOp;
 

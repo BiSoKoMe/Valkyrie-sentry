@@ -42,6 +42,10 @@
 #define VLK_FLAG_BLOCKED            0x00000008  /* the driver prevented this operation */
 #define VLK_FLAG_TAMPER             0x00000010  /* attempt to tamper with the agent */
 #define VLK_FLAG_AUTOSTART          0x00000020  /* registry write to an autostart key */
+/* A KERNEL driver was loaded (ImageInfo->SystemModeImage), not a user-mode
+ * DLL. User mode matches the path against a known-vulnerable-driver list —
+ * this is the Bring-Your-Own-Vulnerable-Driver (BYOVD) signal. */
+#define VLK_FLAG_KERNEL_MODULE      0x00000040
 
 #pragma pack(push, 1)
 typedef struct _VLK_EVENT {

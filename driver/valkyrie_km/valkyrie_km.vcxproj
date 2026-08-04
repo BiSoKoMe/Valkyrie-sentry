@@ -37,7 +37,29 @@
     </ClCompile>
     <Link>
       <SubSystem>Native</SubSystem>
+      <!--
+        /INTEGRITYCHECK IS MANDATORY, NOT OPTIONAL.
+
+        Both PsSetCreateProcessNotifyRoutineEx and ObRegisterCallbacks require
+        the loaded image to be marked for forced integrity checking. Without
+        this flag the kernel refuses the registration with STATUS_ACCESS_DENIED
+        at DriverEntry — and because process-notify failure is treated as fatal
+        (goto fail), the driver would not load AT ALL. The build succeeds, the
+        signature is valid, `sc start` reports a generic failure, and nothing
+        explains why. This was missing; it is the single most time-wasting bug
+        a first driver bring-up can have.
+      -->
+      <AdditionalOptions>/INTEGRITYCHECK %(AdditionalOptions)</AdditionalOptions>
+      <!-- wdmsec.lib provides IoCreateDeviceSecure (see the device ACL fix). -->
+      <AdditionalDependencies>$(DDK_LIB_PATH)\wdmsec.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <!--
+      Static Driver Verifier + Code Analysis are how kernel bugs are found
+      before a bugcheck finds them. Both are cheap to leave on.
+    -->
+    <DriverSign>
+      <FileDigestAlgorithm>sha256</FileDigestAlgorithm>
+    </DriverSign>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="valkyrie_km.c" />

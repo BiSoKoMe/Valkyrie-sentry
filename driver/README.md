@@ -11,6 +11,8 @@ theft protection, **process-launch prevention**, and **agent self-protection**.
 | Claim | Status |
 |---|---|
 | Real, idiomatic WDK source implementing real kernel primitives | ✅ yes |
+| **Statically reviewed as hostile code** | ✅ 2026-08-04 — 6 defects found + fixed, see [ADR 0043](../docs/adr/0043-driver-hardening.md) |
+| **Staged bring-up runbook** | ✅ [`BRINGUP.md`](BRINGUP.md) |
 | Compiles in this repo / CI | ❌ no — no WDK in the build env |
 | Signed | ❌ no — needs an EV cert + Microsoft attestation (or test-signing) |
 | Loaded / running anywhere | ❌ no |
