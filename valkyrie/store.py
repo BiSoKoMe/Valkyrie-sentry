@@ -40,7 +40,13 @@ class DnsEvent:
     """One DNS resolution decision."""
     timestamp:    str
     domain:       str
-    decision:     str           # "blocked" | "allowed" | "flagged" | "behavioral"
+    # The FULL verdict vocabulary of dns_interceptor._decide. "deceived" was
+    # added later and this comment was not updated — the same staleness that
+    # made test_scanner_accuracy under-report recall by 60 points. Pinned by
+    # tests/test_verdict_vocabulary.py.
+    decision:     str           # "allowed" | "blocked" | "flagged"
+                                # | "deceived" (decoy sinkhole, acted-on)
+                                # | "behavioral" (legacy fallback block)
     process_name: str
     process_pid:  int
     process_path: str

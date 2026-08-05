@@ -451,7 +451,23 @@ ANALYTICS_SLDS: frozenset[str] = frozenset({
 TRACKER_PREFIXES: frozenset[str] = frozenset({
     "tracker", "tracking", "telemetry", "analytics",
     "pixel", "beacon", "collect", "adserver", "adtrack",
+    # Added 2026-08-04 from the scanner-accuracy investigation:
+    # marketing.<company>.com is marketing-automation infrastructure in
+    # essentially every observed case. Zero hits across the 699-domain benign
+    # corpus.
+    "marketing",
 })
+
+# DELIBERATELY NOT a tracker prefix: "events".
+# events.reddit.com IS an event-collection (tracking) endpoint, and the
+# scanner-accuracy measurement flags it as a known miss. But "events" is
+# genuinely ambiguous as a first label — events.linuxfoundation.org,
+# events.microsoft.com and events.google.com are conference WEBSITES, not
+# telemetry. As a +0.7 block-alone signal this would break real browsing,
+# which is the exact false-positive class that has burned this project before
+# (see ADR 0040, the popular-domain floor). Precision over aggression: one
+# documented miss beats a rule that kills conference sites. Revisit only as a
+# weak COMBINING signal that needs corroboration, never block-alone.
 
 # Distinctive tracker/analytics brand names for startswith-matching against
 # an SLD (e.g. "segmentapis" -> "segment", "taboolasyndication" -> "taboola")

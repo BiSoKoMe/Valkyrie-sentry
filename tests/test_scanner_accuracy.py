@@ -149,9 +149,25 @@ def main() -> int:
     for domain, truth, decision, score, reason in rows:
         print(f"{domain:<32} {truth:<8} {decision:<9} {score:<6} {reason[:44]}")
 
-    # ── Confusion matrix (positive = blocked OR flagged) ──────────────
+    # ── Confusion matrix (positive = any acted-on verdict) ────────────
+    # "deceived" IS a positive detection and was missing here, which is what
+    # made this measurement read 0.333 recall while the pipeline was actually
+    # catching 13/15. The DECEIVE mechanism (added later) sinkholes a detected
+    # tracker to a decoy dead-end (0.0.0.0) instead of hard-blocking it, so the
+    # calling app keeps working — for a TRACKER that is the *preferred*
+    # outcome, not a failure. This test predated that verdict and silently
+    # scored every successful deception as a miss.
+    #
+    # The lesson generalises: an enumerated verdict list in a test goes stale
+    # the moment the pipeline gains a verdict. test_verdict_vocabulary below
+    # pins this so it cannot happen again.
+    # "behavioral" is the legacy-fallback blocking verdict (scanner not wired);
+    # dns_interceptor sinkholes it exactly like "blocked". Same trap as
+    # "deceived", found in a second code path by test_verdict_vocabulary.
+    POSITIVE_VERDICTS = ("blocked", "flagged", "deceived", "behavioral")
+
     def positive(dec: str) -> bool:
-        return dec in ("blocked", "flagged")
+        return dec in POSITIVE_VERDICTS
 
     TP = sum(1 for d, t, dec, s, r in rows if t == "tracker" and positive(dec))
     FN = sum(1 for d, t, dec, s, r in rows if t == "tracker" and not positive(dec))
