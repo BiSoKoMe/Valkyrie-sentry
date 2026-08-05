@@ -123,15 +123,23 @@ def build_importer_graph() -> dict[str, set[tuple[str, bool]]]:
 
 # Every entry here MUST carry a reason. No bare names.
 _ALLOWLIST = {
-    # Confirmed zero non-test importers by this exact scan while diagnosing
-    # ADR 0048 Part 2's live-execution work (2026-08-05). Signed-update
-    # verification in a security product with no caller is a real finding,
-    # not nothing -- tracked as its own investigation (see the commit that
-    # adds this entry) rather than silently wired or deleted to satisfy
-    # this test. Remove this entry the moment it gets a real caller or is
-    # deliberately retired.
-    "valkyrie.updater": "zero non-test importers, confirmed; under "
-                        "investigation, not yet wired or removed",
+    # Confirmed zero non-test importers by this exact scan (2026-08-05).
+    # INVESTIGATED, not a gap: docs/PLATFORM_ROADMAP.md and
+    # docs/CAPABILITIES.md both document this module as a DELIBERATE
+    # architecture boundary, not an oversight -- "Signed-update
+    # *verification* (Ed25519) | Built + tested (verify-only)". The
+    # roadmap is explicit about why it has no caller: "Auto-*apply* of
+    # updates... is the single highest-risk action in the product and must
+    # stay a gated, human-initiated step until there's a hardened, tested
+    # apply path (staged rollout, rollback...)". updater.py IS that apply
+    # path's verification half, built and tested ahead of the (deliberately
+    # unbuilt) rest. Zero callers is the documented, intended state, not
+    # "half-finished" or "superseded" -- do not wire or delete it on this
+    # test's account. Remove this entry only if a real apply path gets
+    # built and calls it, or the roadmap itself changes.
+    "valkyrie.updater": "zero non-test importers, confirmed; deliberately "
+                        "unwired per docs/PLATFORM_ROADMAP.md -- the "
+                        "apply path is intentionally not yet built",
 }
 
 
