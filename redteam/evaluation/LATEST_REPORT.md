@@ -1,8 +1,8 @@
 # Valkyrie EDR Evaluation Report
 
 **Tier:** A_replay  
-**Generated:** 20260804T200055Z UTC  
-**Git commit:** c92fe36  
+**Generated:** 20260805T030134Z UTC  
+**Git commit:** 4dbafe5  
 **Catalog version:** 2026-07-30.2  
 **Reproduce:** `PYTHONUTF8=1 python redteam/evaluation/replay_harness.py` (Tier A) or `redteam/evaluation/run_live_evaluation.ps1` (Tier B, VM only)
 
@@ -18,14 +18,14 @@
 
 ## Overall
 
-**39 / 40 techniques detected (97.5%)**
+**36 / 40 techniques detected (90.0%)**
 
 | Tactic | Detected | Total | % |
 |---|---:|---:|---:|
 | Execution | 7 | 7 | 100% |
 | Persistence | 6 | 6 | 100% |
-| Defense Evasion | 6 | 6 | 100% |
-| Credential Access | 4 | 4 | 100% |
+| Defense Evasion | 5 | 6 | 83% |
+| Credential Access | 2 | 4 | 50% |
 | Discovery | 5 | 6 | 83% |
 | Lateral Movement | 3 | 3 | 100% |
 | Command and Control | 5 | 5 | 100% |
@@ -55,9 +55,9 @@
 | T1027 Obfuscated Files or Information: PowerSh | T1027 Test #3 | Defense Evasion | yes | **DETECTED** | high | 0.80 | realtime_etw |
 | T1140 Deobfuscate/Decode Files or Information  | T1140 Test #1 | Defense Evasion | yes | **DETECTED** | high | 0.80 | realtime_etw |
 | T1562.004 Impair Defenses: Disable or Modify Syste | T1562.004 Test #1 (netsh advfirewall set allprofiles state off) | Defense Evasion | yes | **DETECTED** | high | 0.80 | realtime_etw |
-| T1055 Process Injection (CreateRemoteThread) | T1055.002 Test #1 | Defense Evasion | yes | **DETECTED** | high | 0.80 | realtime_etw |
-| T1003.001 OS Credential Dumping: LSASS Memory (com | T1003.001 Test #3 | Credential Access | yes | **DETECTED** | high | 0.80 | realtime_etw |
-| T1003.001 OS Credential Dumping: LSASS Memory (pro | T1003.001 Test #1 | Credential Access | yes | **DETECTED** | high | 0.80 | realtime_etw |
+| T1055 Process Injection (CreateRemoteThread) | T1055.002 Test #1 | Defense Evasion | yes | missed | high | 0.80 | realtime_etw |
+| T1003.001 OS Credential Dumping: LSASS Memory (com | T1003.001 Test #3 | Credential Access | yes | missed | high | 0.80 | realtime_etw |
+| T1003.001 OS Credential Dumping: LSASS Memory (pro | T1003.001 Test #1 | Credential Access | yes | missed | high | 0.80 | realtime_etw |
 | T1003.002 OS Credential Dumping: Security Account  | T1003.002 Test #1 (reg save HKLM\SAM) | Credential Access | yes | **DETECTED** | high | 0.80 | realtime_etw |
 | T1555 Credentials from Password Stores | T1555.003 Test #1 (browser creds) | Credential Access | yes | **DETECTED** | high | 0.80 | cred_store_poll_5s |
 | T1033 System Owner/User Discovery (whoami /pri | T1033 Test #1 | Discovery | no | missed | low | 0.30 | realtime_etw |
@@ -79,6 +79,30 @@
 | T1489 Service Stop (targeting a security-relev | T1489 Test #1 -- IMPORTANT: in any LIVE run, stop a throwaway service RENAMED into the watched set (e.g. a dummy service named 'Sysmon64'), never the real WinDefend/EventLog and never Valkyrie's own service | Impact | yes | **DETECTED** | high | 0.80 | realtime_etw |
 
 ## Missed techniques — root cause and required code change
+
+### T1055 — Process Injection (CreateRemoteThread)  `evasion-process-injection`
+
+- **Tactic:** Defense Evasion
+- **Test:** T1055.002 Test #1
+- **Predicted outcome:** DETECT
+- **Root cause:** Sysmon EID 8 (CreateRemoteThread) IS wired directly to a real-time classifier in etw/sysmon.py -- this is NOT a wiring gap like the 32 IOA rules. The condition is binary and external: Sysmon must be installed. There is no fallback sensor -- the kernel driver that could provide one (driver/ valkyrie_km, docs/adr/0026) has never been compiled.
+- **Code change required:** No code change to Valkyrie's classifier is needed -- the EID 8 handler is correct as written. The actual blocker is docs/adr/0026's kernel driver, which would give injection visibility without depending on Sysmon at all. Confirming this technique's real-world detection rate is entirely a Tier B question: does the VM have Sysmon installed and configured to log EID 8 (it is NOT logged by Sysmon's default config -- provision.ps1's sysmonconfig must explicitly enable CreateRemoteThread logging, which is high-volume and often excluded by default configs for noise reasons).
+
+### T1003.001 — OS Credential Dumping: LSASS Memory (comsvcs MiniDump)  `cred-lsass-comsvcs`
+
+- **Tactic:** Credential Access
+- **Test:** T1003.001 Test #3
+- **Predicted outcome:** DETECT
+- **Root cause:** Sysmon EID 10 (ProcessAccess -> lsass.exe) is wired directly, real-time, independent of the poller -- genuinely the most reliable credential-access detection in the product on a Sysmon-equipped host. The cmdline rule (comsvcs-minidump) is ALSO racy on its own; EID 10 is what actually saves this technique.
+- **Code change required:** No fix needed for the classifier. As with process injection, confirm Sysmon is configured to log EID 10 for lsass.exe specifically (Sysmon's default config typically DOES include an LSASS ProcessAccess rule since it's a well-known high-value signal, but provision.ps1's exact config should be checked rather than assumed).
+
+### T1003.001 — OS Credential Dumping: LSASS Memory (procdump)  `cred-lsass-procdump`
+
+- **Tactic:** Credential Access
+- **Test:** T1003.001 Test #1
+- **Predicted outcome:** DETECT
+- **Root cause:** Identical to cred-lsass-comsvcs -- same EID 10 path, different tool.
+- **Code change required:** Same as cred-lsass-comsvcs.
 
 ### T1033 — System Owner/User Discovery (whoami /priv)  `disc-whoami-priv`
 
