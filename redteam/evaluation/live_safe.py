@@ -46,19 +46,33 @@ TWO HONEST ARCHITECTURAL FACTS THIS FILE DOES NOT PAPER OVER
    channel="burst_only" and scored against the shared burst incident, with
    that caveat carried into the report.
 
+RUN A HISTORY (kept honest, not smoothed over)
+------------------------------------------------
+The first RUN A scored 0/12: `map_4688()` (Security-log 4688 path) never
+populated a parent pid, so `SequenceEngine` could never recognize the 6
+burst commands as one actor -- fixed in valkyrie/behavioral_sequences.py's
+parent-name lineage fallback (commit 453e2ff). The re-run scored 6/12
+(50%), and directly verified the reconnaissance-burst sequence firing on
+REAL command execution for the first time -- it had only ever seen
+synthetic events before that. ipconfig/netstat/hostname/reg query/sc query
+were THEN a verified no-code-path gap (the other 6 misses) and have since
+been closed (process_telemetry.py's classify_discovery, commit 4d2569e) --
+they moved from Phase 2 into the Phase 1 burst cluster below, since they
+are now burst_only techniques exactly like systeminfo/tasklist/net view.
+Only `arp -a` remains a genuine, unclosed no-code-path gap.
+
 RUNNER SHAPE
 ------------
 timestamp -> execute (bounded subprocess, argv logged before it runs) ->
 poll GET /api/edr/incidents (bounded, never hangs) -> CAPTURED/MISSED +
 latency_ms + detector + incident_id. Two isolated phases:
-  Phase 1 (burst cluster): the 6 Discovery-tactic commands, run close
+  Phase 1 (burst cluster): the 11 Discovery-tactic commands, run close
     together from this process so they share process lineage, so the
     reconnaissance-burst sequence (min_distinct=3 within 120s) gets a real
-    chance to fire on REAL executions -- it has only ever been fed synthetic
-    events before this.
-  Phase 2 (no-path probes): the 6 commands with no Valkyrie code path at all
-    (ipconfig, netstat, hostname, reg query, sc query, arp -a), run in
-    isolation so a null result is cleanly attributable.
+    chance to fire on REAL executions.
+  Phase 2 (no-path probe): `arp -a`, the one remaining command with no
+    Valkyrie code path at all, run in isolation so a null result stays
+    cleanly attributable.
 """
 
 from __future__ import annotations
@@ -178,66 +192,73 @@ BURST_TECHNIQUES = (
               "the incident gate -- this is the one Discovery-tactic "
               "command with a real standalone-capture expectation.",
     ),
-)
-
-# --- Phase 2: commands with NO Valkyrie code path today ---------------------
-# Verified by reading process_telemetry.py's _DISCOVERY_SOLO_BINS (only
-# systeminfo.exe/tasklist.exe/whoami.exe) and _discovery_cmdline_technique
-# (only nltest.exe and net.exe) plus behavioral_rules.py (no rule matches
-# any of these). Included specifically to measure the gap honestly, not
-# hidden because the expected answer is MISS.
-NO_PATH_TECHNIQUES = (
+    # The 5 below were NO_PATH_TECHNIQUES (channel="no_code_path") until
+    # commit 4d2569e added them to process_telemetry.classify_discovery.
+    # Same INFO-only, never-standalone discipline as every entry above --
+    # they moved into the burst cluster because that's the only channel
+    # they can ever be credited through, exactly like systeminfo/tasklist.
     LiveTechnique(
         id="live-ipconfig", technique_id="T1016",
         technique_name="System Network Configuration Discovery (ipconfig)",
-        argv=("ipconfig", "/all"), channel="no_code_path",
+        argv=("ipconfig", "/all"), channel="burst_only",
         why_safe="/all only displays adapter configuration; /release and "
                   "/renew (the mutating forms) are never used.",
-        notes="No rule in behavioral_rules.py or process_telemetry.py "
-              "recognizes ipconfig.exe at all.",
+        notes="_DISCOVERY_SOLO_BINS, unconditional -- no mutating form to "
+              "exclude.",
     ),
     LiveTechnique(
         id="live-netstat", technique_id="T1049",
         technique_name="System Network Connections Discovery (netstat)",
-        argv=("netstat", "-ano"), channel="no_code_path",
+        argv=("netstat", "-ano"), channel="burst_only",
         why_safe="Lists active connections/listening ports and owning "
                   "PIDs from the kernel's own connection table; a read.",
-        notes="No rule recognizes netstat.exe.",
+        notes="_DISCOVERY_SOLO_BINS, unconditional.",
     ),
     LiveTechnique(
         id="live-hostname", technique_id="T1082",
         technique_name="System Information Discovery (hostname)",
-        argv=("hostname",), channel="no_code_path",
+        argv=("hostname",), channel="burst_only",
         why_safe="Prints the computer name; takes no arguments that could "
                   "mutate anything.",
-        notes="Distinct binary from systeminfo.exe -- NOT in "
-              "_DISCOVERY_SOLO_BINS, so unlike systeminfo this contributes "
-              "nothing to the burst sequence either.",
+        notes="_DISCOVERY_SOLO_BINS, unconditional. Distinct binary from "
+              "systeminfo.exe but the same T1082.",
     ),
     LiveTechnique(
         id="live-reg-query", technique_id="T1012",
         technique_name="Query Registry (reg query)",
         argv=("reg", "query",
               r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion"),
-        channel="no_code_path",
+        channel="burst_only",
         why_safe="QUERY verb only, against a key that ships on every "
                   "Windows install. ADD/DELETE/IMPORT/SAVE are never used.",
-        notes="No rule recognizes reg.exe at all (the only reg.exe "
-              "handling anywhere in this codebase is Valkyrie reading ITS "
-              "OWN persistence-relevant keys, not classifying reg.exe "
-              "invocations by other processes).",
+        notes="Labeled only when 'query' is present AND no mutating verb "
+              "(add/delete/import/save/restore/load/unload/copy/export) is "
+              "-- see process_telemetry._REG_MUTATING_VERBS.",
     ),
     LiveTechnique(
         id="live-sc-query", technique_id="T1007",
         technique_name="System Service Discovery (sc query)",
-        argv=("sc", "query", "eventlog"), channel="no_code_path",
+        argv=("sc", "query", "eventlog"), channel="burst_only",
         why_safe="QUERY verb only, against the built-in Windows Event Log "
                   "service. behavioral_rules.py's sc.exe rules require "
                   "'stop windefend' or a 'create' verb -- neither present.",
-        notes="Deliberately queries 'eventlog', not Sysmon64/SysmonDrv, so "
-              "this probe cannot be confused with this file's own Sysmon "
-              "state verification (see verify_environment()).",
+        notes="Labeled only when 'query' is present AND no mutating verb "
+              "(create/delete/config/start/stop/...) is -- see "
+              "process_telemetry._SC_MUTATING_VERBS. Deliberately queries "
+              "'eventlog', not Sysmon64/SysmonDrv, so this probe cannot be "
+              "confused with this file's own Sysmon state verification "
+              "(see verify_environment()).",
     ),
+)
+
+# --- Phase 2: the one command with NO Valkyrie code path today -------------
+# Verified by reading process_telemetry.py (arp.exe is not in
+# _DISCOVERY_SOLO_BINS and _discovery_cmdline_technique has no arp.exe
+# branch) and behavioral_rules.py (no rule matches it either). Kept as its
+# own phase specifically to measure the gap honestly, not hidden because
+# the expected answer is MISS -- and to prove the other 5 in this file
+# were a real, closeable gap rather than an inherent limitation.
+NO_PATH_TECHNIQUES = (
     LiveTechnique(
         id="live-arp", technique_id="T1016",
         technique_name="System Network Configuration Discovery (arp -a)",
