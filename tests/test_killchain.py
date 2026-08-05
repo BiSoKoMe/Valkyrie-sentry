@@ -64,6 +64,24 @@ def main() -> int:
         {"execution", "command-and-control", "persistence", "impact"})[1] == "critical"))
     _check("2 benign-ish tactics is at most high", sev2 in ("medium", "high"))
 
+    print("\n[1b] SHIPPED DEFAULT requires 3 tactics, not 2")
+    # Regression for a live FP: the class default had drifted to min_tactics=2,
+    # which raised "multi-stage attack" incidents against ordinary powershell.exe
+    # admin scripting and TiWorker.exe (Windows Modules Installer — a legitimate
+    # OS component) purely from two loosely-related tactic labels within the
+    # 10-minute window. The module's own docstring says "three distinct tactics
+    # ... is an attack" — this pins the DEFAULT constructor (no explicit
+    # min_tactics) actually enforces that, not the weaker threshold.
+    kdef = KillChainCorrelator(window_seconds=600)   # no min_tactics → use default
+    now_d = 2000.0
+    _check("1st tactic via default ctor → no chain",
+           kdef.observe("TiWorker.exe", "T1059.001", "exec", now_d) is None)
+    _check("2 tactics via DEFAULT ctor must NOT chain (this was the live FP)",
+           kdef.observe("TiWorker.exe", "T1547.001", "run key", now_d + 1) is None)
+    c_def = kdef.observe("TiWorker.exe", "T1071.004", "beacon", now_d + 2)
+    _check("3rd distinct tactic via default ctor DOES chain",
+           c_def is not None and c_def["distinct_tactics"] == 3)
+
     print("\n[2] Correlator (deterministic ts)")
     kc = KillChainCorrelator(window_seconds=600, min_tactics=2)
     now = 1000.0
@@ -187,6 +205,15 @@ def main() -> int:
             "severity": "high", "labels": ["remote_thread_injection"],
             "reason": "remote thread", "actor_name": "rundll32.exe",
             "actor_pid": 200, "fields": {"ppid": 100, "parent_name": "powershell.exe"}})
+        # Same rundll32 (pid 200) — credential-access (a 3rd distinct tactic).
+        # The shipped default is min_tactics=3 (see [1b] above), so the engine
+        # end-to-end wiring needs a genuine 3-tactic chain to exercise it —
+        # this also matches the real inject-then-creds attack shape.
+        engine.ingest_telemetry({
+            "category": "process", "activity": "lsass_access", "action": "flagged",
+            "severity": "high", "labels": ["lsass_access"],
+            "reason": "lsass read", "actor_name": "rundll32.exe",
+            "actor_pid": 200, "fields": {"technique": "T1003.001 — LSASS Memory"}})
         time.sleep(0.2)
         chains = [i for i in engine.list_incidents() if i["category"] == "attack_chain"]
         _check("parent→child telemetry raised ONE chain incident", len(chains) == 1)

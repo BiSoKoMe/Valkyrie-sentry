@@ -195,18 +195,42 @@ class EdrEngine:
         except Exception:
             pass
 
-        if severity_rank(severity) < severity_rank("medium") and action != "flagged":
-            return None
-
         # A behavioral rule (behavioral_rules.py) carries its exact ATT&CK id on
         # the event; prefer it over inferring one from a label. Falls back to the
-        # label→technique map for events from other collectors.
+        # label→technique map for events from other collectors. Computed BEFORE
+        # the severity gate below so the reconnaissance-burst pre-check (same
+        # reason) can use it too.
         technique = str((d.get("fields") or {}).get("technique") or "")
         if not technique:
             for lab in labels:
                 if lab in _TELEMETRY_TECHNIQUE:
                     technique = _TELEMETRY_TECHNIQUE[lab]
                     break
+
+        # Reconnaissance-burst pre-check: 'discovery_command' is deliberately
+        # INFO-severity (process_telemetry.classify_discovery) and, by design,
+        # NEVER alone clears the gate below — a lone whoami/tasklist/net view
+        # must never raise an incident (precision-over-aggression; Discovery is
+        # the one tactic where a single-command alert is a guaranteed FP, per
+        # the redteam-evaluation disc-* findings). But BREADTH — several
+        # distinct discovery techniques from the same actor in a short window —
+        # is real signal, and the sequence engine can only see that if these
+        # sub-threshold events reach it. Feed it here, before the gate would
+        # otherwise drop the event outright; the completed-sequence incident
+        # (if any) is what actually surfaces, never the individual command.
+        if "discovery_command" in labels:
+            fields0 = d.get("fields") or {}
+            self._correlate_sequence(Detection(
+                source=str(d.get("source", "collector")), severity=severity,
+                category=str(d.get("category", "") or "process"), title="",
+                process_name=str(d.get("actor_name", "")),
+                process_pid=int(d.get("actor_pid", 0) or 0), technique=technique,
+                details={"labels": labels, "activity": str(d.get("activity", "")),
+                         "ppid": int(fields0.get("ppid") or fields0.get("parent_pid") or 0)}))
+
+        if severity_rank(severity) < severity_rank("medium") and action != "flagged":
+            return None
+
         entity = str(d.get("actor_path") or d.get("actor_name") or "")
         category = str(d.get("category", "") or "process")
         # Persistence detections carry a structured, *actionable* entity —

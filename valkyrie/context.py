@@ -44,6 +44,7 @@ class AppContext:
     network_collector: Optional[object] = None  # valkyrie.network_telemetry.NetworkCollector
     sensor_manager:    Optional[object] = None  # valkyrie.etw.SensorManager (real-time sensors)
     persistence_collector: Optional[object] = None  # valkyrie.persistence_telemetry.PersistenceCollector
+    cred_watch:     Optional[object] = None   # valkyrie.browser_cred_watch.CredentialStoreWatch
     heartbeat:      Optional[object] = None   # valkyrie.self_test.HeartbeatMonitor
     ransomware_shield: Optional[object] = None  # valkyrie.ransomware_shield.RansomwareShield
     threat_intel:   Optional[object] = None   # valkyrie.threat_intel.ThreatIntelManager
@@ -62,7 +63,7 @@ class AppContext:
     _SERVICES = (
         "store", "firewall", "blocklist", "intelligence", "edr",
         "mac_randomizer", "zero_log", "self_heal", "process_collector",
-        "network_collector", "persistence_collector", "sensor_manager",
+        "network_collector", "persistence_collector", "cred_watch", "sensor_manager",
         "heartbeat", "ransomware_shield", "threat_intel", "siem", "playbooks",
         "amsi", "content_watch", "tls_inspector",
     )

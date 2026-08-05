@@ -56,12 +56,38 @@ _ACTIVITY_LABEL = {
     PERSIST_STARTUP_FOLDER: "persistence_startup_folder",
 }
 
+def _enum_loaded_user_sids() -> list[str]:
+    """SIDs of currently-LOADED user hives under HKEY_USERS — i.e. actual
+    logged-on interactive users.
+
+    Valkyrie ships as a Windows service with no configured logon account, so
+    nssm runs it as LocalSystem. From that process, HKEY_CURRENT_USER is
+    LocalSystem's OWN hive (effectively HKU\\.DEFAULT) — NOT the interactive
+    desktop user's. A registry Run-key write via the interactive user's HKCU
+    (by far the most common real-world persistence path, since it needs no
+    admin rights) was therefore structurally invisible: the poller was reading
+    the wrong hive, not failing to detect in time. HKEY_USERS instead lists
+    every hive actually loaded (i.e. every logged-on user), so a service can
+    read them directly — the same capability every real EDR/AV agent relies on.
+    Mirrors _startup_dirs() below, which already solves the identical
+    service-vs-interactive-user problem for the filesystem case by enumerating
+    C:\\Users explicitly instead of trusting "current user" context.
+    """
+    if not _WINREG:
+        return []
+    # Real interactive-user SIDs look like S-1-5-21-...; skip the paired
+    # "_Classes" hive (COM registration, not autostart) and well-known
+    # non-interactive hives (.DEFAULT, LocalSystem/LocalService/NetworkService).
+    return [s for s in _subkeys(winreg.HKEY_USERS, "")
+            if s.startswith("S-1-5-21-") and not s.endswith("_Classes")]
+
+
 # Registry Run/RunOnce/Winlogon ASEPs. (hive, subkey, human location).
 def _run_key_specs() -> list:
     if not _WINREG:
         return []
     H = winreg
-    return [
+    specs = [
         (H.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", "HKLM\\...\\Run"),
         (H.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce", "HKLM\\...\\RunOnce"),
         (H.HKEY_LOCAL_MACHINE, r"SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Run", "HKLM\\...\\Run (WOW64)"),
@@ -69,6 +95,17 @@ def _run_key_specs() -> list:
         (H.HKEY_CURRENT_USER,  r"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce", "HKCU\\...\\RunOnce"),
         (H.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon", "HKLM\\...\\Winlogon"),
     ]
+    # Per-user Run/RunOnce via HKEY_USERS\<SID> — see _enum_loaded_user_sids.
+    # The static HKEY_CURRENT_USER entries above are kept too: harmless, and
+    # meaningful in the (less common) case Valkyrie runs interactively rather
+    # than as a service.
+    for sid in _enum_loaded_user_sids():
+        tag = sid[-4:]        # last 4 chars distinguish multiple logged-on users
+        specs.append((H.HKEY_USERS, f"{sid}\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                      f"HKU\\...{tag}\\...\\Run"))
+        specs.append((H.HKEY_USERS, f"{sid}\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
+                      f"HKU\\...{tag}\\...\\RunOnce"))
+    return specs
 
 _SERVICES_KEY = r"SYSTEM\CurrentControlSet\Services"
 _TASKS_DIR = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "Tasks")

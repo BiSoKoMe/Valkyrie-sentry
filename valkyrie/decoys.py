@@ -58,10 +58,35 @@ class DecoyManager:
     def target_dirs(self) -> list[Path]:
         if self._dirs is not None:
             return self._dirs
+        # os.path.expanduser("~") resolves to the CALLING PROCESS's own home —
+        # for Valkyrie's shipped default (a Windows service with no configured
+        # logon account, so nssm runs it as LocalSystem), that is
+        # C:\Windows\System32\config\systemprofile, a folder no real user or
+        # intruder ever browses. A live VM run confirmed exactly this: zero
+        # decoys existed under the interactive user's actual Desktop/Documents.
+        # Enumerate every real user profile under %SystemDrive%\Users instead,
+        # mirroring persistence_telemetry._startup_dirs's existing pattern for
+        # the identical service-vs-interactive-user problem.
         dirs: list[Path] = []
-        home = Path(os.path.expanduser("~"))
-        for sub in ("Desktop", "Documents", os.path.join("Documents", "Private")):
-            dirs.append(home / sub)
+        users_root = Path(os.environ.get("SystemDrive", "C:") + "\\") / "Users"
+        skip = {"public", "default", "default user", "all users", "defaultuser0"}
+        found_any = False
+        if users_root.is_dir():
+            try:
+                entries = list(users_root.iterdir())
+            except OSError:
+                entries = []
+            for entry in entries:
+                if not entry.is_dir() or entry.name.lower() in skip:
+                    continue
+                found_any = True
+                for sub in ("Desktop", "Documents", os.path.join("Documents", "Private")):
+                    dirs.append(entry / sub)
+        if not found_any:
+            # Fallback: non-Windows dev run, or a non-standard profile layout.
+            home = Path(os.path.expanduser("~"))
+            for sub in ("Desktop", "Documents", os.path.join("Documents", "Private")):
+                dirs.append(home / sub)
         return dirs
 
     # -- planting -----------------------------------------------------------

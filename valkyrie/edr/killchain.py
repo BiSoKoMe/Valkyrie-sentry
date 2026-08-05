@@ -95,8 +95,15 @@ TECHNIQUE_TACTIC: dict[str, str] = {
     "T1555":     "credential-access",    # Credentials from Password Stores
     "T1033":     "discovery",            # System Owner/User Discovery
     "T1482":     "discovery",            # Domain Trust Discovery
+    "T1082":     "discovery",            # System Information Discovery
+    "T1057":     "discovery",            # Process Discovery
+    "T1018":     "discovery",            # Remote System Discovery
+    "T1087":     "discovery",            # Account Discovery
+    "T1087.001": "discovery",            # Account Discovery: Local Account
     "T1021":     "lateral-movement",     # Remote Services
     "T1021.002": "lateral-movement",     # SMB/Windows Admin Shares
+    "T1570":     "lateral-movement",     # Lateral Tool Transfer
+    "T1489":     "impact",               # Service Stop
     "T1105":     "command-and-control",  # Ingress Tool Transfer
     "T1071":     "command-and-control",  # Application Layer Protocol
     "T1071.004": "command-and-control",  # DNS
@@ -176,7 +183,15 @@ class KillChainCorrelator:
 
     _MAX_CHAINS = 2048
 
-    def __init__(self, window_seconds: float = 600.0, min_tactics: int = 2) -> None:
+    # Default matches the module's own stated principle above ("three distinct
+    # tactics... is an attack") — a live VM run found the default had drifted to
+    # 2, which raised "multi-stage attack" incidents against ordinary PowerShell
+    # admin scripting and TiWorker.exe (Windows Modules Installer, a legitimate
+    # OS component) purely from two loosely-related tactic labels inside the
+    # 10-minute window. min_tactics remains a constructor parameter so callers
+    # (and this module's own unit tests) can still exercise the mechanics at any
+    # threshold; only the SHIPPED default was wrong.
+    def __init__(self, window_seconds: float = 600.0, min_tactics: int = 3) -> None:
         self._window = window_seconds
         self._min = min_tactics
         # chain id → deque[(ts, tactic, technique, title, actor_name)]

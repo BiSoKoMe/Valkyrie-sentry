@@ -76,7 +76,8 @@ from .resolver import UnboundManager
 from .rules import RulesLoader
 from .store import Store
 from .ui import Dashboard
-from .wireguard import WireGuardConfig
+# wireguard / multihop / fleet / mcp / compliance moved to experimental/ —
+# frozen, not deleted. See experimental/README.md and ADR 0044.
 
 
 # ---------------------------------------------------------------------------
@@ -309,12 +310,8 @@ def main() -> None:
     parser.add_argument("--build-baseline", action="store_true", help="Rebuild process baselines now")
     parser.add_argument("--no-firewall",  action="store_true",  help="Skip kernel IP firewall")
     parser.add_argument("--no-unbound",   action="store_true",  help="Skip local Unbound resolver")
-    parser.add_argument("--setup-wireguard", action="store_true",
-                        help="Generate WireGuard configs and print setup instructions, then exit")
-    parser.add_argument("--server-ip", type=str, default="YOUR_SERVER_IP",
-                        help="Public IP for --setup-wireguard (e.g. 203.0.113.1)")
-    parser.add_argument("--wg-iface", type=str, default="eth0",
-                        help="Server network interface for WireGuard NAT (default: eth0)")
+    # --setup-wireguard / --server-ip / --wg-iface removed: WireGuard moved to
+    # experimental/ (Valkyrie is not a VPN product). See experimental/README.md.
     parser.add_argument("--test-dns", metavar="DOMAIN", nargs="?", const="google.com",
                         help="Self-test the DNS interceptor and exit (default domain: google.com)")
     parser.add_argument("--web",      action="store_true",  help="Start web dashboard")
@@ -337,11 +334,8 @@ def main() -> None:
                         help="Privacy pillar ON at startup: randomise the MAC and "
                              "spoof the TCP/IP fingerprint every boot (the installed "
                              "service runs with this).")
-    parser.add_argument("--setup-multihop", action="store_true",
-                        help="Generate multi-hop WireGuard configs and exit")
-    parser.add_argument("--hop1", type=str, default="", help="Hop-1 server IP for --setup-multihop")
-    parser.add_argument("--hop2", type=str, default="", help="Hop-2 server IP for --setup-multihop")
-    parser.add_argument("--multihop-status", action="store_true", help="Print multi-hop VPN config status and exit")
+    # --setup-multihop / --hop1 / --hop2 / --multihop-status removed with the
+    # multi-hop VPN (experimental/).
     parser.add_argument("--zero-log",        action="store_true",  help="RAM-only mode — no disk writes")
     parser.add_argument("--zero-log-import", type=int, default=0, metavar="HOURS",
                         help="Import last N hours from disk DB into RAM at startup")
@@ -403,32 +397,19 @@ def main() -> None:
                         help="Genuinely analyze a site's CONTENT and exit: fetch the page and "
                              "score fingerprinting, cryptomining, obfuscated JS, phishing and "
                              "tracker density. List-free — it judges what the site actually does.")
-    parser.add_argument("--mcp", action="store_true",
-                        help="Run as an MCP (Model Context Protocol) server on stdio so an "
-                             "AI agent can search/investigate incidents, run threat hunts and "
-                             "query telemetry. Read-only unless --allow-response is given.")
-    parser.add_argument("--allow-response", action="store_true",
-                        help="With --mcp: expose the guarded response tool (block_domain / "
-                             "kill_process / isolate_host). Still dry-run unless the caller "
-                             "explicitly passes dry_run=false.")
+    # --mcp / --allow-response removed with the MCP server (experimental/).
     parser.add_argument("--download-lists", action="store_true",
-                        help="Opt in to downloading external blocklist/IP feeds "
-                             "(default: built-in seed list + learned intelligence, no downloads)")
+                        help="Force-enable downloading external blocklist/threat-intel feeds "
+                             "for this run, even if USE_EXTERNAL_LISTS is False in config.py "
+                             "(default: on — see --no-download-lists to opt out)")
+    parser.add_argument("--no-download-lists", action="store_true",
+                        help="Opt OUT of downloading external blocklist/IP/threat-intel feeds "
+                             "for this run — stay on the built-in seed list + learned "
+                             "intelligence only, with zero outbound fetches at startup")
     parser.add_argument("--no-dns-leak", action="store_true",
                         help="Fail-closed DNS: only ever use the local resolver upstream; "
                              "never fall back to public resolvers (auto-enabled when Unbound is active)")
-    parser.add_argument("--fleet-server", action="store_true",
-                        help="Run the fleet control-plane server (blocking) and exit — "
-                             "lets one operator monitor many Valkyrie devices")
-    parser.add_argument("--fleet-agent", type=str, default="", metavar="URL",
-                        help="Report this device's status to a fleet control plane at URL "
-                             "(metadata only — never domains). Requires --fleet-enroll-token on first run")
-    parser.add_argument("--fleet-enroll-token", type=str, default="",
-                        help="Enrollment secret for --fleet-server (to accept devices) "
-                             "or --fleet-agent (to join). Falls back to $VALKYRIE_FLEET_ENROLL_TOKEN")
-    parser.add_argument("--fleet-insecure-http", action="store_true",
-                        help="Allow --fleet-server to bind a non-loopback host over plain "
-                             "HTTP (only if TLS is terminated by a reverse proxy in front)")
+    # --fleet-* removed with the fleet control plane (experimental/).
     args = parser.parse_args()
 
     # Frozen exe double-clicked with no arguments: start the dashboard and let
@@ -449,39 +430,6 @@ def main() -> None:
             f"[cyan]config:[/cyan] {_ov.key} = {_ov.value!r} "
             f"[dim](from {_ov.source})[/dim]"
         )
-
-    # ------------------------------------------------------------------
-    # Early-exit: WireGuard config generator
-    # ------------------------------------------------------------------
-    if args.setup_wireguard:
-        wg = WireGuardConfig(console=console)
-        wg.generate(server_ip=args.server_ip, iface=args.wg_iface)
-        return
-
-    # ------------------------------------------------------------------
-    # Early-exit: fleet control-plane server (blocking)
-    # ------------------------------------------------------------------
-    if args.fleet_server:
-        from .fleet.server import run_fleet_server
-        from .config import FLEET_SERVER_PORT
-        console.print(
-            f"[bold cyan]Valkyrie Fleet Control Plane[/bold cyan] — "
-            f"http://localhost:{FLEET_SERVER_PORT}"
-        )
-        console.print("[dim]  Devices report status metadata only (never domains). "
-                      "Ctrl-C to stop.[/dim]")
-        import os as _os
-        try:
-            run_fleet_server(
-                host=args.web_host, port=FLEET_SERVER_PORT,
-                enroll_token=args.fleet_enroll_token,
-                policy_public_key_hex=_os.environ.get("VALKYRIE_FLEET_POLICY_PUBKEY", ""),
-                admin_token=_os.environ.get("VALKYRIE_FLEET_ADMIN_TOKEN", ""),
-                allow_insecure_http=args.fleet_insecure_http,
-            )
-        except SystemExit as exc:
-            console.print(f"[red]{exc}[/red]")
-        return
 
     # ------------------------------------------------------------------
     # Early-exit: intelligence status / reset / export
@@ -543,16 +491,6 @@ def main() -> None:
         else:
             console.print("[dim]Run this from an elevated (Administrator) prompt.[/dim]")
         return
-
-    # ------------------------------------------------------------------
-    # Early-exit: MCP server on stdio (AI-agent interface).
-    # Must come before any console output — stdout carries JSON-RPC only.
-    # ------------------------------------------------------------------
-    if args.mcp:
-        from .mcp import run_stdio
-        # SystemExit (not `return`) so the stdio server's code becomes the
-        # process exit code — main() itself is typed `-> None`.
-        raise SystemExit(run_stdio(allow_response=bool(args.allow_response)))
 
     # ------------------------------------------------------------------
     # Early-exit: genuine site content analysis (fetch + score, then exit)
@@ -688,28 +626,6 @@ def main() -> None:
             changed = " [yellow](randomised)[/yellow]" if info["changed"] else ""
             console.print(f"  {iface:20s}  current={info['current'] or '?'}  "
                           f"original={info['original'] or '?'}{changed}")
-        return
-
-    # ------------------------------------------------------------------
-    # Early-exit: multi-hop setup
-    # ------------------------------------------------------------------
-    if args.setup_multihop:
-        from .multihop import MultiHopVPN
-        mh   = MultiHopVPN()
-        hop1 = args.hop1 or "HOP1_IP"
-        hop2 = args.hop2 or "HOP2_IP"
-        cfg  = mh.generate_config(hop1_ip=hop1, hop2_ip=hop2)
-        console.print(f"[green]✓[/green] Configs written:")
-        console.print(f"  {cfg['hop1_path']}")
-        console.print(f"  {cfg['hop2_path']}")
-        console.print(f"\n[dim]{mh.instructions()}[/dim]")
-        return
-
-    if args.multihop_status:
-        from .multihop import MultiHopVPN
-        st = MultiHopVPN().status()
-        for k, v in st.items():
-            console.print(f"  {k:25s} {v}")
         return
 
     # ------------------------------------------------------------------
@@ -864,11 +780,28 @@ def main() -> None:
     # ------------------------------------------------------------------
     _t = time.monotonic()
     blocklist = BlocklistManager()
-    # --update / --download-lists force a download; otherwise the built-in
-    # seed blocklist (+ any previously downloaded cache) loads offline.
-    _dl = True if (args.update or args.download_lists) else None
-    count = blocklist.load(console=_verbose, allow_download=_dl)
+    # --update / --download-lists force a download; --no-download-lists forces
+    # the opposite (stay on the built-in seed list + cache only, no fetches);
+    # otherwise defer to config.USE_EXTERNAL_LISTS (default True — see config.py).
+    _dl = (True if (args.update or args.download_lists)
+           else (False if args.no_download_lists else None))
+    # PROTECTION MUST NEVER WAIT ON THE NETWORK. Startup always loads from
+    # seed + cache (instant, offline-safe); the feed refresh happens on a
+    # background thread afterwards and hot-swaps under the same lock the DNS
+    # path reads through. `--update` is the one case that stays synchronous,
+    # because there the user explicitly asked to refresh and exit.
+    #
+    # Enabling downloads by default without this made the engine block on a
+    # ~500k-domain fetch before protecting anything — minutes on a slow link,
+    # indistinguishable from a hang, and a hard failure in the offline /
+    # air-gapped environments this product specifically targets.
+    # `test_startup_smoke` caught it: 9/9 passing -> timing out.
+    count = blocklist.load(console=_verbose,
+                           allow_download=True if args.update else False)
     _tick(f"Blocklist loaded ({count:,} domains)", _t)
+    if _dl is not False and not args.update:
+        if blocklist.start_background_refresh(console=_verbose):
+            _tick("Blocklist refresh started (background)", _t)
 
     # 2b. Threat-intel IOC feeds (abuse.ch C2/malware indicators). Same
     # download policy as the blocklist; cached feeds always load offline.
@@ -877,7 +810,12 @@ def main() -> None:
     _t = time.monotonic()
     from .threat_intel import ThreatIntelManager
     threat_intel = ThreatIntelManager()
-    ioc_count = threat_intel.load(console=_verbose, allow_download=_dl)
+    # Cache-only at startup, same rule as the blocklist above: protection must
+    # never wait on the network. Offline, a synchronous load would stall for up
+    # to 30s PER FEED on urllib timeouts before the engine came up. The
+    # background daemon started below does the first refresh ~20s later.
+    ioc_count = threat_intel.load(console=_verbose,
+                                  allow_download=True if args.update else False)
     _tick(f"Threat intel loaded ({ioc_count:,} IOCs)", _t)
     if args.update:
         console.print(f"[green]Update complete.[/green] {count:,} domains, "
@@ -892,8 +830,7 @@ def main() -> None:
     _t = time.monotonic()
     firewall = FirewallManager(console=_verbose)
     if not args.no_firewall:
-        firewall.start(console=_verbose,
-                       allow_download=True if args.download_lists else None)
+        firewall.start(console=_verbose, allow_download=_dl)
         _tick("Firewall ready", _t)
     elif args.debug:
         console.print("[yellow]Firewall disabled (--no-firewall)[/yellow]")
@@ -1022,17 +959,6 @@ def main() -> None:
                 console.print(f"[dim]TCP/IP fingerprint spoof skipped: {_fp.last_error}[/dim]")
         except Exception as _exc:      # noqa: BLE001 — privacy is best-effort
             console.print(f"[dim]TCP/IP fingerprint spoof unavailable ({_exc})[/dim]")
-
-    # ------------------------------------------------------------------
-    # 7d. Multi-hop VPN (status only — configs generated via --setup-multihop)
-    # ------------------------------------------------------------------
-    _t = time.monotonic()
-    from .multihop import MultiHopVPN
-    _mh_status = MultiHopVPN().status()
-    if _mh_status["hop1_conf_exists"] and _mh_status["hop2_conf_exists"]:
-        _tick("Multi-hop VPN configs ready", _t)
-    elif args.debug:
-        console.print("[dim]Multi-hop VPN: no configs (run --setup-multihop --hop1 IP --hop2 IP)[/dim]")
 
     # ------------------------------------------------------------------
     # 8. Dashboard
@@ -1214,6 +1140,7 @@ def main() -> None:
     process_collector = None
     network_collector = None
     persistence_collector = None
+    cred_watch = None
     amsi_scanner = None
     from .config import EDR_MODE, EDR_CORRELATION_WINDOW, EDR_PLUGIN_DIR
     if EDR_MODE and not args.no_edr:
@@ -1315,6 +1242,21 @@ def main() -> None:
                 _tick("Endpoint telemetry active (persistence collector)", _tpr)
             else:
                 persistence_collector = None
+
+            # Browser credential-store watch: flags any non-browser process
+            # holding a handle open to Chrome/Edge/Brave/Firefox's own saved-
+            # password store (T1555.003) — a userland poll of open file
+            # handles, the same honest boundary as every other sensor here
+            # (real-time capture needs the kernel driver, see docs/adr/0026).
+            _tcw = time.monotonic()
+            from .browser_cred_watch import CredentialStoreWatch
+            cred_watch = CredentialStoreWatch(
+                emit=lambda ev: edr_engine.ingest_telemetry(ev))
+            if cred_watch.available():
+                cred_watch.start()
+                _tick("Endpoint telemetry active (browser credential-store watch)", _tcw)
+            else:
+                cred_watch = None
 
             # Real-time ETW-backed sensors (PowerShell script-block today; more
             # channels next) hosted by the resilient SensorManager — watchdog,
@@ -1453,6 +1395,7 @@ def main() -> None:
         ("process_collector", process_collector, "sensor"),
         ("network_collector", network_collector, "sensor"),
         ("persistence_collector", persistence_collector, "sensor"),
+        ("cred_watch", cred_watch, "sensor"),
         ("amsi", amsi_scanner, "detection"),
         ("ransomware_shield", ransomware_shield, "response"),
         ("siem", siem_exporter, "integration"),
@@ -1492,6 +1435,7 @@ def main() -> None:
             process_collector = process_collector,
             network_collector = network_collector,
             persistence_collector = persistence_collector,
+            cred_watch      = cred_watch,
             sensor_manager = sensor_manager,
             heartbeat      = heartbeat,
             ransomware_shield = ransomware_shield,
@@ -1622,57 +1566,13 @@ def main() -> None:
             web_state.self_heal = healer
 
     # ------------------------------------------------------------------
-    # 10c. Fleet agent (optional) — report this device to a control plane.
-    #      Sends status METADATA only (counts + component health), never
-    #      domains; see valkyrie/fleet/protocol.py.
-    # ------------------------------------------------------------------
-    fleet_agent = None
-    if args.fleet_agent:
-        import os as _os
-        from .fleet.agent import FleetAgent
-
-        def _fleet_status() -> dict:
-            s = dict(store.stats())
-            s["components"] = {
-                "dns":          dns_server.is_listening() if dns_server is not None else False,
-                "firewall":     not args.no_firewall,
-                "intelligence": intelligence is not None,
-            }
-            return s
-
-        # Remote response: a verified fleet command runs through the local EDR
-        # responder (real apply, audited). Inert unless the fleet policy public
-        # key is pinned via $VALKYRIE_FLEET_POLICY_PUBKEY.
-        def _fleet_command_runner(action: str, target: str):
-            if edr_engine is None:
-                return ("skipped", "EDR not enabled on this device")
-            r = edr_engine.respond(action, target, dry_run=False, operator="fleet")
-            return (r.get("status", "failed"), r.get("result", ""))
-
-        fleet_agent = FleetAgent(
-            server_url      = args.fleet_agent,
-            status_provider = _fleet_status,
-            console         = console,
-            policy_public_key_hex = _os.environ.get("VALKYRIE_FLEET_POLICY_PUBKEY", ""),
-            command_runner  = _fleet_command_runner,
-        )
-        enroll_tok = args.fleet_enroll_token or _os.environ.get(
-            "VALKYRIE_FLEET_ENROLL_TOKEN", "")
-        if fleet_agent.is_enrolled() or fleet_agent.enroll(enroll_tok):
-            fleet_agent.start()
-            console.print(f"[green]✓[/green] Fleet agent reporting to {args.fleet_agent}")
-        else:
-            console.print("[yellow]Fleet agent not started (enrollment failed — "
-                          "check --fleet-enroll-token and server URL)[/yellow]")
-            fleet_agent = None
-
-    # ------------------------------------------------------------------
     # 11. TLS inspection (optional — disabled by default)
     # ------------------------------------------------------------------
     tls_inspector = None
     if args.tls and not args.no_tls:
         from .tls_inspector import TLSInspector
-        tls_inspector = TLSInspector(store=store, blocklist=blocklist, behavioral=behavioral, rules=rules)
+        tls_inspector = TLSInspector(store=store, blocklist=blocklist, behavioral=behavioral,
+                                     rules=rules, threat_intel=threat_intel)
         if tls_inspector.start():
             ca_path = tls_inspector.setup_ca()
             console.print(f"[green]✓[/green] TLS inspector on port {tls_inspector.port}")
@@ -1757,10 +1657,10 @@ def main() -> None:
         # worker we are in the middle of shutting down.
         if content_watch is not None:
             content_watch.stop()
-        if fleet_agent is not None:
-            fleet_agent.stop()
         if persistence_collector is not None:
             persistence_collector.stop()
+        if cred_watch is not None:
+            cred_watch.stop()
         if sensor_manager is not None:
             sensor_manager.stop()
         # After the sensors that use it, so no scan is in flight at teardown.

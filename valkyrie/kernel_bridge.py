@@ -54,6 +54,11 @@ VLK_FLAG_REMOTE_THREAD = 0x04
 VLK_FLAG_BLOCKED = 0x08
 VLK_FLAG_TAMPER = 0x10
 VLK_FLAG_AUTOSTART = 0x20
+# A KERNEL driver was loaded, not a user-mode DLL. This is the
+# Bring-Your-Own-Vulnerable-Driver signal (T1068 / T1211): the standard EDR
+# bypass is to load a legitimately-signed but exploitable driver and use it to
+# read/write kernel memory. Only ring 0 can see this at all.
+VLK_FLAG_KERNEL_MODULE = 0x40
 
 # Enforcement policy pushed IN to the driver (VLK_IOCTL_SET_POLICY).
 VLK_MAX_BLOCK_HASHES = 256
@@ -172,15 +177,32 @@ def record_to_event(raw: bytes) -> Optional[dict]:
         # the driver reports the fact. A remote/UNC backing path is a weak
         # anomaly worth surfacing but never blocked here.
         remote = bool(flags & VLK_FLAG_REMOTE_IMAGE)
+        driver = bool(flags & VLK_FLAG_KERNEL_MODULE)
+        # A KERNEL driver load outranks a remote user-mode module: loading a
+        # signed-but-vulnerable driver (BYOVD) is how modern malware disables
+        # EDR entirely, and it is invisible to every user-mode sensor. Reported
+        # as a fact with the module path; user mode is responsible for matching
+        # it against a known-vulnerable-driver list before escalating further.
+        labels, reason, sev = [], "", "info"
+        if driver:
+            labels.append("kernel_driver_load")
+            reason = f"Kernel driver loaded: {extra}"
+            sev = "medium"
+        if remote:
+            labels.append("remote_module")
+            reason = (reason + "; " if reason else "") + \
+                     f"Module loaded from a remote/UNC path: {extra}"
+            sev = "medium"
         return {
             "category": CAT_PROCESS, "activity": "image_load",
-            "action": "flagged" if remote else "observed",
-            "severity": "medium" if remote else "info", "ts": ts_epoch,
+            "action": "flagged" if (remote or driver) else "observed",
+            "severity": sev, "ts": ts_epoch,
             "actor_pid": pid, "actor_name": "", "actor_path": "",
-            "reason": (f"Module loaded from a remote/UNC path: {extra}" if remote else ""),
-            "labels": (["remote_module"] if remote else []),
+            "reason": reason,
+            "labels": labels,
             "source": "kernel.image",
-            "fields": {"module": extra, "remote": remote, "kernel": True},
+            "fields": {"module": extra, "remote": remote,
+                       "kernel_driver": driver, "kernel": True},
         }
 
     if etype == VLK_EVT_THREAD_CREATE:

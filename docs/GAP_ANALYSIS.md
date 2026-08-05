@@ -175,3 +175,51 @@ compiled and the sensor-capture dimension has never been measured; (b) AMSI file
 scanning wired to process images the behavioural layers already flagged
 (conviction as corroborator); (c) vulnerability visibility (installed software vs
 local CVE feed); (d) browser protection via TLS-inspector + URLhaus full URLs.
+
+## Cycle 2026-08-04: closing the measured Tier A gaps — SHIPPED
+ADR 0041. Driven by `redteam/evaluation/`'s own root-cause output rather than a
+fresh survey: the evaluation had already named a concrete code fix per miss, so
+this cycle executed the subset needing no new infrastructure.
+
+- **Reconnaissance burst** (Discovery 17% → 83%): `classify_discovery` attaches
+  an INFO-only `discovery_command` label; the new `reconnaissance-burst` sequence
+  IOA fires (MEDIUM) only on **≥3 DISTINCT** discovery techniques from one
+  lineage in 120s. Needed a new `Step.min_distinct` capability — the sequence
+  engine could previously express only *order*, never *breadth*. A lone `whoami`
+  still raises nothing, by design. Also wired `classify_discovery` into
+  `etw/sysmon.py` EID 1 (and therefore Security/4688), because these commands
+  exit in milliseconds and the 2s poller loses them — correct logic behind a dead
+  delivery path is not detection.
+- **T1489 service stop/disable** (Impact 67% → 100%) and **T1570 lateral tool
+  transfer**: real coverage holes, now two + one rules, each with `cmd_all` verb
+  pinning and benign regression controls (`sc stop Spooler`, `sc query WinDefend`,
+  UNC copy to a non-admin share).
+- **Browser credential-store watch** (`browser_cred_watch.py`, T1555.003):
+  polls open file **handles** against the known browser password stores instead
+  of a command-line rule — catches a compiled stealer that has nothing revealing
+  on its command line. HIGH with no corroboration (owning browsers excluded).
+- **Threat-intel feeds default ON** (`USE_EXTERNAL_LISTS` False → True, new
+  `--no-download-lists` opt-out). Feodo/URLhaus/ThreatFox were silent no-ops
+  unless the user knew to pass a flag. Matching stays 100% local; only the
+  periodic fetch is affected.
+- **Path-level URL blocking** (the extension seam ADR 0015 left open): new `url`
+  indicator kind + `normalize_url` + `match_url`, enforced in `tls_addon.py`.
+  Matching is **exact**, never parent-based — malware lives on compromised
+  legitimate sites, so blocking the parent domain off one bad path would be the
+  false positive.
+
+**Measured: Tier A 25/40 (62.5%) → 32/40 (80.0%)**; efficacy gate held at
+100% recall / 0% FPR; 35 → 38 IOA rules, 5 → 6 sequence IOAs.
+
+**Honest boundaries (unchanged):** Tier A is still classifier-input replay, not a
+live attack — **Tier B has still never been run**, and that number will be worse.
+Discovery hits are scored as burst *contributors*, not standalone alerts. The
+credential watch is a 5s poll, not a minifilter. Real-time discovery delivery
+needs Sysmon or 4688 auditing. URL blocking needs the opt-in TLS inspector.
+
+**Next candidates (unchanged at the top)**: (a) **VM detonation lab** — build and
+test-sign the kernel driver (ADR 0026/0031) and run Tier B against a live agent.
+This is still the #1 gap and nothing in this cycle moved it: the driver has never
+been compiled, and prevention (as opposed to detect-and-respond) does not exist
+until it is. (b) AMSI file scanning as a corroborator on already-flagged images;
+(c) vulnerability visibility vs a local CVE feed.

@@ -156,12 +156,38 @@ def test_manager() -> None:
     # allow_download=False → no network; DoH IPs are hardcoded and always loaded
     count = fw.start(allow_download=False)
     try:
-        check("DoH resolver 1.1.1.1 blocked (bypass-via-hardcoded-IP caught)",
-              fw.is_blocked_ip("1.1.1.1"))
-        check("DoH resolver 9.9.9.9 blocked",
-              fw.is_blocked_ip("9.9.9.9"))
-        check("ordinary site IP not blocked",
-              not fw.is_blocked_ip(SAFE_IP))
+        # TWO SURFACES, DELIBERATELY DIFFERENT — this test used to assert the
+        # wrong one and reported a working protection as broken.
+        #
+        #   _ipset.contains()  = ENFORCEMENT. Is this IP in the blocked set
+        #                        (and covered by an installed kernel rule)?
+        #                        DoH resolver IPs ARE here — that is what stops
+        #                        a process hardcoding 1.1.1.1:443 to tunnel DNS
+        #                        past the interceptor.
+        #
+        #   is_blocked_ip()    = REPUTATION. "Should I treat traffic to this IP
+        #                        as malicious?" It deliberately EXEMPTS public
+        #                        resolvers (trust.is_public_resolver_ip), because
+        #                        Valkyrie's own upstream DNS goes to exactly
+        #                        those addresses — without the exemption the
+        #                        network collector flags the engine's own
+        #                        resolver traffic as C2. Added in the FP-cleanup
+        #                        pass (5418a61).
+        #
+        # Asserting is_blocked_ip() here read that safety guard as a failure.
+        # Both behaviours are now pinned so neither can silently flip.
+        check("DoH resolver 1.1.1.1 is ENFORCED (bypass-via-hardcoded-IP caught)",
+              fw._ipset.contains("1.1.1.1"))
+        check("DoH resolver 9.9.9.9 is ENFORCED",
+              fw._ipset.contains("9.9.9.9"))
+        check("ordinary site IP is NOT enforced",
+              not fw._ipset.contains(SAFE_IP))
+        # The exemption itself is intentional — pin it, so removing it (and
+        # thereby re-flagging our own upstream DNS as C2) fails loudly.
+        check("reputation surface EXEMPTS public resolvers (own-upstream FP guard)",
+              not fw.is_blocked_ip("1.1.1.1") and not fw.is_blocked_ip("9.9.9.9"))
+        check("reputation surface still reports a genuinely bad IP",
+              fw.is_blocked_ip("0.0.0.1") == fw._ipset.contains("0.0.0.1"))
         print(f"       {count:,} range(s) enforced (seed/DoH, no external feeds)")
     finally:
         fw.stop()

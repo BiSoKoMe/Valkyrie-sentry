@@ -51,11 +51,12 @@ class TLSInspector:
     """Owns the mitmproxy lifecycle and exposes start/stop/status."""
 
     def __init__(self, store, blocklist=None, behavioral=None, rules=None,
-                 port: int = TLS_PROXY_PORT) -> None:
+                 threat_intel=None, port: int = TLS_PROXY_PORT) -> None:
         self.store      = store
         self.blocklist   = blocklist
         self.behavioral  = behavioral
         self.rules       = rules
+        self.threat_intel = threat_intel
         self.port        = port
 
         self._master = None
@@ -199,6 +200,7 @@ class TLSInspector:
                 self._addon = ValkyrieAddon(
                     store=self.store, blocklist=self.blocklist,
                     behavioral=self.behavioral, rules=self.rules,
+                    threat_intel=self.threat_intel,
                 )
                 master.addons.add(self._addon)
                 self._master = master

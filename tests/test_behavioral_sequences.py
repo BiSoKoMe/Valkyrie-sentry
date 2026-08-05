@@ -62,6 +62,13 @@ def main() -> int:
             ("T1105 — Ingress Tool Transfer", ["certutil_download"]),
             ("T1547.001 — Registry Run Keys / Startup", ["persistence_runkey"]),
         ],
+        # Single-step, min_distinct=3: BREADTH not order — three DIFFERENT
+        # discovery techniques, any order, complete it.
+        "reconnaissance-burst": [
+            ("T1082 — System Information Discovery", []),
+            ("T1057 — Process Discovery", []),
+            ("T1018 — Remote System Discovery", []),
+        ],
     }
 
     print(f"[1] Each shipped sequence ({len(SEQUENCES)}) fires in order")
@@ -145,6 +152,77 @@ def main() -> int:
                         ["lolbin_network_fetch"], "", ts=2.0, pid=66, ppid=1)
     _check("an Office-spawned shell + fetch DOES fire macro-dropper-c2",
            fired is not None and fired["rule_id"] == "macro-dropper-c2")
+
+    print("\n[10] reconnaissance-burst — breadth mechanics (min_distinct=3)")
+    eng = SequenceEngine()
+    f1 = eng.observe("a.exe", "T1082 — System Information Discovery", [], "",
+                     ts=1.0, pid=70, ppid=1)
+    f2 = eng.observe("a.exe", "T1057 — Process Discovery", [], "",
+                     ts=2.0, pid=70, ppid=1)
+    _check("1st distinct discovery technique does not fire", f1 is None)
+    _check("2nd distinct discovery technique does not fire", f2 is None)
+    f3 = eng.observe("a.exe", "T1018 — Remote System Discovery", [], "",
+                     ts=3.0, pid=70, ppid=1)
+    _check("3rd DISTINCT discovery technique fires reconnaissance-burst",
+           f3 is not None and f3["rule_id"] == "reconnaissance-burst")
+
+    print("\n[10b] Repeating the SAME technique does NOT satisfy breadth")
+    eng = SequenceEngine()
+    r1 = eng.observe("a.exe", "T1033 — System Owner/User Discovery", [], "",
+                     ts=1.0, pid=71, ppid=1)
+    r2 = eng.observe("a.exe", "T1033 — System Owner/User Discovery", [], "",
+                     ts=2.0, pid=71, ppid=1)
+    r3 = eng.observe("a.exe", "T1033 — System Owner/User Discovery", [], "",
+                     ts=3.0, pid=71, ppid=1)
+    _check("three occurrences of the SAME technique never fire "
+           "(only 1 distinct signal, not 3)", r1 is None and r2 is None and r3 is None)
+
+    print("\n[10c] Isolation still holds for the burst rule")
+    eng = SequenceEngine()
+    eng.observe("a.exe", "T1082 — System Information Discovery", [], "",
+               ts=1.0, pid=72, ppid=1)
+    eng.observe("b.exe", "T1057 — Process Discovery", [], "",
+               ts=2.0, pid=73, ppid=1)   # unrelated actor
+    fired = eng.observe("a.exe", "T1018 — Remote System Discovery", [], "",
+                        ts=3.0, pid=72, ppid=1)
+    _check("only actor a.exe's 2 distinct techniques count — no burst yet",
+           fired is None)
+
+    print("\n[10d] Pipeline — sub-threshold (INFO) discovery events still "
+          "reach the engine, but only the completed BURST becomes an incident")
+    import tempfile as _tempfile
+    from valkyrie.store import Store as _Store
+    from valkyrie.edr import EdrEngine as _EdrEngine
+    with _tempfile.TemporaryDirectory() as td:
+        store = _Store(db_path=Path(td) / "r.db"); store.start()
+        engine = _EdrEngine(store); engine.start()
+        _DISC = [
+            ("systeminfo.exe", "T1082 — System Information Discovery"),
+            ("tasklist.exe", "T1057 — Process Discovery"),
+        ]
+        for name, tech in _DISC:
+            engine.ingest_telemetry({
+                "category": "process", "activity": "exec", "action": "observed",
+                "severity": "info", "labels": ["discovery_command"],
+                "reason": "discovery command observed", "actor_name": name,
+                "actor_pid": 9001, "fields": {"technique": tech, "ppid": 1}})
+        _check("2 sub-threshold discovery events alone raise NO incident",
+               engine.list_incidents() == [])
+        engine.ingest_telemetry({
+            "category": "process", "activity": "exec", "action": "observed",
+            "severity": "info", "labels": ["discovery_command"],
+            "reason": "discovery command observed", "actor_name": "net.exe",
+            "actor_pid": 9001,
+            "fields": {"technique": "T1018 — Remote System Discovery", "ppid": 1}})
+        seq_inc = None
+        for inc in engine.list_incidents():
+            dets = engine.get_incident(inc["id"]).get("detections") or []
+            if any(d.get("category") == "attack_sequence" for d in dets):
+                seq_inc = inc
+                break
+        _check("the 3rd distinct sub-threshold event completes the burst "
+               "into ONE attack_sequence incident", seq_inc is not None)
+        engine.stop(); store.stop()
 
     print("\n[8] Pipeline — a completed sequence → one 'attack_sequence' incident")
     import tempfile

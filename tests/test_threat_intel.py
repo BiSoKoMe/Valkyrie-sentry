@@ -70,6 +70,16 @@ THREATFOX_BODY = """\
 "2026-07-19 01:05:05", "1853608", "192.168.1.50:443", "ip:port", "botnet_cc"
 """
 
+# URLhaus full-URL (path-level) feed — one URL per line.
+URLHAUS_URL_BODY = """\
+# URLhaus recent URLs
+http://compromised-shop.example/wp-content/uploads/2026/payload.exe
+https://compromised-shop.example:8443/staging/loader.dll?id=42
+http://45.155.204.10/bins/mirai.arm7
+http://127.0.0.1/evil.exe
+http://localhost/evil.exe
+"""
+
 
 def main() -> int:
     from valkyrie.threat_intel import (
@@ -99,6 +109,40 @@ def main() -> int:
            tf_ips == {"43.143.7.85", "23.94.27.110"})
     _check("threatfox: private ip:port rejected",
            "192.168.1.50" not in tf_ips)
+
+    print("\n[1b] URL normalization + full-URL feed parsing")
+    from valkyrie.threat_intel import normalize_url
+    _check("scheme stripped (http and https normalize alike)",
+           normalize_url("http://a.example/x") == normalize_url("https://a.example/x")
+           == "a.example/x")
+    _check("host lowercased", normalize_url("https://A.Example/Path") == "a.example/Path")
+    _check("default ports dropped",
+           normalize_url("https://a.example:443/x") == "a.example/x"
+           and normalize_url("http://a.example:80/x") == "a.example/x")
+    _check("non-default port kept (it is part of the identity)",
+           normalize_url("https://a.example:8443/x") == "a.example:8443/x")
+    _check("fragment dropped (client-side only)",
+           normalize_url("https://a.example/x#frag") == "a.example/x")
+    _check("trailing bare slash is the same as no path",
+           normalize_url("https://a.example/") == normalize_url("https://a.example")
+           == "a.example")
+    _check("QUERY is kept — it often selects the payload",
+           normalize_url("https://a.example/d?id=42") == "a.example/d?id=42")
+    _check("private/loopback URL hosts rejected",
+           normalize_url("http://127.0.0.1/e.exe") is None
+           and normalize_url("http://10.0.0.5/e.exe") is None)
+    _check("localhost / dotless hosts rejected",
+           normalize_url("http://localhost/e.exe") is None
+           and normalize_url("http://intranet/e.exe") is None)
+    _check("embedded credentials rejected",
+           normalize_url("http://user:pw@a.example/x") is None)
+    urls = parse_feed(URLHAUS_URL_BODY, "url")
+    _check("urlhaus url feed: public URLs parsed",
+           {"compromised-shop.example/wp-content/uploads/2026/payload.exe",
+            "compromised-shop.example:8443/staging/loader.dll?id=42",
+            "45.155.204.10/bins/mirai.arm7"} == urls)
+    _check("loopback/localhost URLs never enter the match set",
+           not any("127.0.0.1" in u or "localhost" in u for u in urls))
 
     feeds = [
         IntelFeed("feodo_c2", "ip", "botnet_c2", "https://x.invalid/feodo"),
@@ -165,6 +209,85 @@ def main() -> int:
                    mgr.match_ip("185.220.101.9") is not None)
         finally:
             ti_mod.urllib.request.urlopen = real_urlopen
+
+    print("\n[4b] Full-URL matching (path-level, TLS-inspector-only seam)")
+    with tempfile.TemporaryDirectory() as td2:
+        cache2 = Path(td2)
+        (cache2 / "urlhaus_url.txt").write_text(URLHAUS_URL_BODY, encoding="utf-8")
+        umgr = ThreatIntelManager(
+            feeds=[IntelFeed("urlhaus_url", "url", "malware_distribution",
+                             "https://x.invalid/urlhaus_url")],
+            cache_dir=cache2)
+        umgr.load(allow_download=False)
+        bad = "http://compromised-shop.example/wp-content/uploads/2026/payload.exe"
+        _check("exact malicious URL matches", umgr.match_url(bad) is not None)
+        _check("same URL over https also matches (scheme-insensitive)",
+               umgr.match_url(bad.replace("http://", "https://")) is not None)
+        _check("provenance reason string",
+               umgr.match_url(bad).reason
+               == "threat_intel:urlhaus_url:malware_distribution")
+        # THE POINT of URL-level matching: the compromised host is otherwise
+        # a legitimate site, so only the malicious PATH may be blocked.
+        _check("a DIFFERENT path on the same compromised host does NOT match",
+               umgr.match_url("https://compromised-shop.example/index.html") is None)
+        _check("the bare compromised domain does NOT match",
+               umgr.match_url("https://compromised-shop.example") is None)
+        _check("a URL indicator never leaks into domain matching",
+               umgr.match_domain("compromised-shop.example") is None)
+        _check("clean URL misses",
+               umgr.match_url("https://example.com/index.html") is None)
+        _check("junk input is safely None", umgr.match_url("") is None
+               and umgr.match_url("not a url") is None)
+        _check("count includes URL indicators", umgr.count() == 3)
+        _check("status reports a url total", umgr.status()["urls"] == 3)
+
+        print("\n[4c] TLS addon blocks a malicious URL, allows the rest of the site")
+
+        class _FakeReq:
+            def __init__(self, url, host, path):
+                self.pretty_url, self.pretty_host, self.path = url, host, path
+                self.method, self.raw_content = "GET", b""
+
+        class _FakeFlow:
+            def __init__(self, url, host, path):
+                self.request = _FakeReq(url, host, path)
+                self.response = None
+                self.client_conn = None
+
+        from valkyrie.tls_addon import ValkyrieAddon
+        logged: list = []
+
+        class _FakeStore:
+            def log(self, ev):
+                logged.append(ev)
+
+        addon = ValkyrieAddon(store=_FakeStore(), threat_intel=umgr)
+        # Record _block calls instead of letting them run: the real _block
+        # constructs a mitmproxy http.Response, and mitmproxy is an optional
+        # dependency. What this pins is the DECISION ROUTING (does a URL
+        # indicator reach a block, and does a clean path on the same host
+        # avoid one) — the actual 403 construction is mitmproxy's own code.
+        blocks: list = []
+        addon._block = lambda flow, domain, url, proc, reason, category: blocks.append(
+            {"url": url, "reason": reason, "category": category})
+
+        bad_flow = _FakeFlow(
+            "https://compromised-shop.example/wp-content/uploads/2026/payload.exe",
+            "compromised-shop.example", "/wp-content/uploads/2026/payload.exe")
+        addon._handle_request(bad_flow)     # not request(): that swallows errors
+        _check("malicious URL routes to a block", len(blocks) == 1)
+        _check("block carries the threat_intel_url category",
+               blocks and blocks[0]["category"] == "threat_intel_url")
+        _check("block reason names the feed provenance",
+               blocks and "urlhaus_url" in blocks[0]["reason"])
+
+        good_flow = _FakeFlow("https://compromised-shop.example/index.html",
+                              "compromised-shop.example", "/index.html")
+        addon._handle_request(good_flow)
+        _check("a clean path on the SAME compromised host is NOT blocked",
+               len(blocks) == 1)
+        _check("the clean request was logged as allowed",
+               any(getattr(e, "decision", "") == "allowed" for e in logged))
 
     print("\n[5] DNS pipeline: intel outranks learned known-good")
     try:

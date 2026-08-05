@@ -130,6 +130,7 @@ class BlocklistManager:
         self._exact:    set[str] = set()
         self._wildcards: set[str] = set()   # stored without leading '*.'
         self._lock = threading.RLock()
+        self._refresh_thread: Optional[threading.Thread] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -185,6 +186,46 @@ class BlocklistManager:
     def reload(self) -> int:
         """Force re-read from disk (called after update)."""
         return self._read_from_disk()
+
+    def start_background_refresh(self, console=None) -> bool:
+        """Refresh the downloaded blocklist OFF the startup path.
+
+        WHY THIS EXISTS: `load(allow_download=True)` calls `update_blocklist`
+        synchronously, which fetches ~500k domains over the network. Putting
+        that on the startup path means the engine blocks — for minutes on a
+        slow link — before it protects anything, looks like a hang, and fails
+        outright in the offline/air-gapped environments this product
+        specifically targets. Measured: `test_startup_smoke` went from 9/9
+        passing to timing out the moment feed downloads were enabled by
+        default.
+
+        Protection must never wait on the network. Startup loads seed + cache
+        instantly (both offline); this then refreshes in the background and
+        hot-swaps the result under the same lock the DNS path reads through,
+        exactly like `ThreatIntelManager.start()` already does for IOC feeds.
+
+        Returns True if a refresh thread was started. Never raises.
+        """
+        if self._refresh_thread is not None and self._refresh_thread.is_alive():
+            return False
+        age = _file_age_days(BLOCKLIST_PATH)
+        if age is not None and age <= BLOCKLIST_MAX_AGE_DAYS:
+            return False                     # cache is fresh — nothing to do
+
+        def _run() -> None:
+            try:
+                update_blocklist(None)       # quiet: not on the console's turn
+                n = self._read_from_disk()   # atomic swap under self._lock
+                if console:
+                    console.print(f"[dim]Blocklist refreshed in background: "
+                                  f"{n:,} domains[/dim]")
+            except Exception:
+                pass   # a failed refresh must never affect the running engine
+
+        self._refresh_thread = threading.Thread(
+            target=_run, daemon=True, name="blocklist-refresh")
+        self._refresh_thread.start()
+        return True
 
     # ------------------------------------------------------------------
     # Query

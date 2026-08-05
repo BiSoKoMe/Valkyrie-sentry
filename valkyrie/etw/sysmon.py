@@ -32,7 +32,7 @@ from .framework import Sensor
 from .wineventlog import ChannelReader, parse_event_xml
 from ..behavior_score import classify_anomaly
 from ..behavioral_rules import classify_behavior
-from ..process_telemetry import classify_cmdline, classify_process
+from ..process_telemetry import classify_cmdline, classify_discovery, classify_process
 from ..trust import is_benign_os_autorun, is_trusted_os_path
 from ..telemetry import (
     ACT_FLAGGED, ACT_OBSERVED, CAT_NETWORK, CAT_PERSISTENCE, CAT_PROCESS,
@@ -162,6 +162,36 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
             reason = "; ".join(r for r in (reason, anomaly["reason"]) if r)
             if not technique:
                 technique = anomaly["technique"]
+
+        # Discovery-tactic weak labeling. Must run on THIS path, not just the
+        # poller: a lone discovery command is INFO by design (never alerts on
+        # its own), but the reconnaissance-burst sequence needs to SEE several
+        # of them to fire — and these commands (whoami, tasklist, net view)
+        # exit in milliseconds, so the 2s poller is exactly the source that
+        # loses them. Sysmon/4688 is the only source that reliably catches
+        # them, which makes this the delivery path the burst depends on.
+        _, dlabels, dreason, dtechnique = classify_discovery(name, cmdline)
+        for lab in dlabels:
+            if lab not in labels:
+                labels.append(lab)
+        reason = "; ".join(r for r in (reason, dreason) if r)
+        if not technique:
+            technique = dtechnique
+
+        # A discovery-labeled event is deliberately INFO and would otherwise be
+        # dropped by the gate below. Let it through: the engine's ingest
+        # chokepoint routes 'discovery_command' to the sequence engine BEFORE
+        # its own severity gate, and drops it afterwards — so this stays
+        # non-alerting on its own while still feeding the burst combiner.
+        if "discovery_command" in labels:
+            return {
+                "category": CAT_PROCESS, "activity": "exec",
+                "actor_pid": int(d.get("ProcessId", 0) or 0), "actor_name": name,
+                "actor_path": image, "target": {"path": image},
+                "severity": sev, "labels": labels,
+                "reason": reason or "process creation",
+                "technique": technique, "context": _context(d),
+            }
 
         if severity_rank(sev) < severity_rank(SEV_LOW):
             return None

@@ -222,6 +222,35 @@ def test_sysmon_process_emits_only_when_suspicious_with_context():
     assert "WINWORD.EXE" in args["context"]["parent_image"]
 
 
+def test_sysmon_eid1_emits_discovery_labels_for_the_burst_combiner():
+    """Discovery commands must survive EID 1's severity gate.
+
+    They are INFO by design (a lone `whoami` must never alert), so the gate
+    would normally drop them — but the reconnaissance-burst sequence IOA can
+    only fire if it SEES several of them, and these commands exit in
+    milliseconds, so Sysmon EID 1 / Security 4688 is the only source that
+    reliably catches them at all. The 2s poller loses the race. If EID 1
+    dropped them, the burst detector would be dead on every Sysmon host.
+    """
+    for image, cmdline, tid in (
+            (r"C:\Windows\System32\systeminfo.exe", "systeminfo.exe", "T1082"),
+            (r"C:\Windows\System32\tasklist.exe", "tasklist.exe /v", "T1057"),
+            (r"C:\Windows\System32\net.exe", "net view /all", "T1018")):
+        args = classify_sysmon(1, {
+            "ProcessId": "77", "Image": image, "CommandLine": cmdline,
+            "ParentImage": r"C:\Windows\System32\cmd.exe"})
+        assert args is not None, f"{cmdline} was dropped by the EID 1 gate"
+        assert "discovery_command" in args["labels"]
+        assert tid in args["technique"]
+        # Still INFO — this must not become a standalone alert.
+        assert args["severity"] == SEV_INFO
+
+    # A benign non-discovery process is still dropped (gate unchanged).
+    assert classify_sysmon(1, {"ProcessId": "1",
+                               "Image": r"C:\Windows\System32\notepad.exe",
+                               "ParentImage": r"C:\Windows\explorer.exe"}) is None
+
+
 def test_sysmon_unsigned_image_load():
     args = classify_sysmon(7, {"Image": r"C:\app.exe", "ImageLoaded": r"C:\Temp\evil.dll",
                                "Signed": "false", "SignatureStatus": "Unavailable",

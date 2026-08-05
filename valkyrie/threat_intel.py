@@ -9,7 +9,15 @@ matching:
 
   feodo_c2      — Feodo Tracker botnet C2 IPs (Emotet/Dridex/QakBot class)
   urlhaus       — URLhaus malware-distribution domains (hosts format)
+  urlhaus_url   — URLhaus malware-distribution FULL URLs (path-level)
   sslbl_c2      — SSL Blacklist botnet C2 IPs (TLS-fingerprinted)
+
+Three indicator kinds, three enforcement seams: an ``ip`` matches at the
+firewall/network-collector, a ``domain`` matches at DNS, and a ``url``
+matches only where a full URL is visible — the TLS inspector. URL matching
+is what distinguishes a compromised-but-legitimate host (block the one
+malicious path) from a wholly malicious domain (block the name); see
+``ThreatIntelManager.match_url``.
 
 Design contract (same posture as blocklist.py / firewall.py):
 
@@ -108,6 +116,52 @@ def _valid_domain(token: str) -> Optional[str]:
     return d
 
 
+def normalize_url(token: str) -> Optional[str]:
+    """Canonical form for URL matching: ``host[:port]/path[?query]``.
+
+    Both sides of a comparison (the feed indicator and the live request) run
+    through this, so a match is insensitive to scheme, case, a default port,
+    a fragment, and a trailing slash — the differences that are noise, not
+    identity. The QUERY IS KEPT: for malware distribution the query string is
+    frequently the payload selector, so dropping it would over-match.
+
+    Returns None for anything whose host fails the same guard rails as every
+    other indicator (private/loopback/reserved IPs, dotless or localhost
+    names) — a poisoned feed must never be able to make Valkyrie block
+    internal infrastructure.
+    """
+    t = (token or "").strip()
+    if not t or len(t) > 2048:
+        return None
+    # Strip scheme (feeds carry http:// and https:// for the same host+path).
+    for scheme in ("http://", "https://"):
+        if t.lower().startswith(scheme):
+            t = t[len(scheme):]
+            break
+    t = t.split("#", 1)[0]                       # fragment is client-side only
+    if not t:
+        return None
+    authority, sep, rest = t.partition("/")
+    authority = authority.lower()
+    # Reject embedded credentials rather than trying to interpret them.
+    if "@" in authority:
+        return None
+    host, _, port = authority.partition(":")
+    if port and not port.isdigit():
+        return None
+    if port in ("80", "443"):
+        port = ""                                # default ports carry no identity
+    # Same guard rails as the other indicator kinds — an IP host must be
+    # public and routable, a name host must be a real dotted domain.
+    if _valid_public_ip(host) is None and _valid_domain(host) is None:
+        return None
+    path = (sep + rest) if sep else ""
+    if path == "/":
+        path = ""                                # "host/" and "host" are the same
+    out = host + (":" + port if port else "") + path
+    return out or None
+
+
 def parse_feed(text: str, kind: str) -> set[str]:
     """Extract indicators of ``kind`` from one feed body.
 
@@ -118,11 +172,20 @@ def parse_feed(text: str, kind: str) -> set[str]:
     can only ever contribute well-formed public indicators.
     """
     validate: Callable[[str], Optional[str]] = (
-        _valid_public_ip if kind == "ip" else _valid_domain)
+        _valid_public_ip if kind == "ip"
+        else normalize_url if kind == "url"
+        else _valid_domain)
     out: set[str] = set()
     for raw in text.splitlines():
         line = raw.split("#", 1)[0].strip()
         if not line:
+            continue
+        # A URL feed is one full URL per line — splitting on whitespace/commas
+        # would shred a URL that legitimately contains a comma in its query.
+        if kind == "url":
+            v = validate(line.strip('"'))
+            if v is not None:
+                out.add(v)
             continue
         # Hosts format: the sinkhole IP prefix is transport, not indicator.
         tokens = line.replace(",", " ").split()
@@ -164,6 +227,7 @@ class ThreatIntelManager:
         self._lock = threading.RLock()
         self._ips:     frozenset[str] = frozenset()
         self._domains: frozenset[str] = frozenset()
+        self._urls:    frozenset[str] = frozenset()
         # indicator -> (feed, category); provenance for incident reasons
         self._origin: dict[str, tuple[str, str]] = {}
         self._feed_status: dict[str, dict] = {}
@@ -190,7 +254,8 @@ class ThreatIntelManager:
             if n:
                 console.print(
                     f"[dim]Threat intel: {n:,} IOCs "
-                    f"({len(self._domains):,} domains, {len(self._ips):,} IPs) "
+                    f"({len(self._domains):,} domains, {len(self._ips):,} IPs, "
+                    f"{len(self._urls):,} URLs) "
                     f"from {sum(1 for s in self._feed_status.values() if s.get('count'))}"
                     f"/{len(self._feeds)} feeds[/dim]")
             else:
@@ -247,17 +312,41 @@ class ThreatIntelManager:
                     return IntelMatch(cand, feed, cat)
         return None
 
+    def match_url(self, url: str) -> Optional[IntelMatch]:
+        """Exact match on a full URL (host[:port]/path[?query]).
+
+        This is the path-level counterpart to ``match_domain``, and it is
+        deliberately EXACT rather than prefix/parent-based: malware
+        distribution is overwhelmingly hosted on otherwise-innocent
+        compromised sites, so a hit on ``example.com/wp/uploads/x.exe`` says
+        nothing about ``example.com`` itself. Matching the whole path is what
+        makes it safe to act on — blocking the parent domain from a URL
+        indicator would take down the legitimate site with it.
+
+        Requires the TLS inspector (the only component that sees a full HTTPS
+        URL); the DNS path can only ever match the domain.
+        """
+        norm = normalize_url(url)
+        if norm is None:
+            return None
+        with self._lock:
+            if norm in self._urls:
+                feed, cat = self._origin.get(norm, ("unknown", "ioc"))
+                return IntelMatch(norm, feed, cat)
+        return None
+
     def count(self) -> int:
         with self._lock:
-            return len(self._ips) + len(self._domains)
+            return len(self._ips) + len(self._domains) + len(self._urls)
 
     def status(self) -> dict:
         """Dashboard/status surface: per-feed freshness and counts."""
         with self._lock:
             return {
-                "total": len(self._ips) + len(self._domains),
+                "total": len(self._ips) + len(self._domains) + len(self._urls),
                 "domains": len(self._domains),
                 "ips": len(self._ips),
+                "urls": len(self._urls),
                 "feeds": {k: dict(v) for k, v in self._feed_status.items()},
             }
 
@@ -325,6 +414,7 @@ class ThreatIntelManager:
         the cache is untrusted input (defense in depth)."""
         ips: set[str] = set()
         domains: set[str] = set()
+        urls: set[str] = set()
         origin: dict[str, tuple[str, str]] = {}
         status: dict[str, dict] = {}
         for feed in self._feeds:
@@ -339,7 +429,7 @@ class ThreatIntelManager:
             found = parse_feed(text, feed.kind)
             for ind in found:
                 origin.setdefault(ind, (feed.name, feed.category))
-            (ips if feed.kind == "ip" else domains).update(found)
+            {"ip": ips, "url": urls}.get(feed.kind, domains).update(found)
             entry["count"] = len(found)
             entry["fresh"] = not self._is_stale(cache)
             try:
@@ -352,12 +442,27 @@ class ThreatIntelManager:
         with self._lock:
             self._ips = frozenset(ips)
             self._domains = frozenset(domains)
+            self._urls = frozenset(urls)
             self._origin = origin
             self._feed_status = status
 
+    # Seconds to wait before the FIRST background refresh. Long enough for
+    # startup to finish (so the fetch never competes with bringing protection
+    # up), short enough that a machine which has been offline for weeks gets
+    # current IOCs within a minute of booting — not in six hours.
+    _INITIAL_REFRESH_DELAY = 20.0
+
     def _refresh_loop(self) -> None:
+        # First pass runs on a SHORT delay, not the full 6h interval. Startup
+        # deliberately loads cache-only (protection must never wait on the
+        # network — an offline box would otherwise stall for up to 30s per
+        # feed on urllib timeouts), so without this the first refresh of a
+        # stale cache would be six hours away.
+        first = True
         while self._running:
-            self._wake.wait(timeout=THREAT_INTEL_REFRESH_SECONDS)
+            self._wake.wait(timeout=(self._INITIAL_REFRESH_DELAY if first
+                                     else THREAT_INTEL_REFRESH_SECONDS))
+            first = False
             if not self._running:
                 return
             try:

@@ -44,6 +44,33 @@ def main() -> int:
     _check("lolbin + temp -> >= medium", T.severity_rank(sev) >= T.severity_rank(T.SEV_MEDIUM))
     _check("both labels present", "lolbin" in labels and "suspicious_path" in labels)
 
+    print("\n[1c] classify_discovery — weak, INFO-only Discovery-tactic labeling")
+    from valkyrie.process_telemetry import classify_discovery
+    sev, dlabels, _, tech = classify_discovery("systeminfo.exe", "systeminfo")
+    _check("systeminfo -> discovery_command / T1082",
+           sev == T.SEV_INFO and "discovery_command" in dlabels and "T1082" in tech)
+    _, dlabels, _, tech = classify_discovery("tasklist.exe", "tasklist")
+    _check("tasklist -> T1057", "T1057" in tech)
+    _, dlabels, _, tech = classify_discovery("whoami.exe", "whoami")
+    _check("bare whoami -> T1033", "T1033" in tech)
+    _, dlabels, _, tech = classify_discovery("net.exe", "net view")
+    _check("net view -> T1018", "T1018" in tech)
+    _, dlabels, _, tech = classify_discovery("net.exe", "net user")
+    _check("bare net user (list) -> T1087.001", "T1087.001" in tech)
+    _, dlabels, _, tech = classify_discovery("net.exe", "net localgroup administrators")
+    _check("bare net localgroup administrators (list) -> T1087.001", "T1087.001" in tech)
+    _, dlabels, _, tech = classify_discovery(
+        "net.exe", "net user backdoor P@ss /add")
+    _check("net user ... /add is NOT labeled discovery "
+           "(already alerted MEDIUM by behavioral_rules net-user-add)",
+           tech == "" and dlabels == [])
+    _, dlabels, _, tech = classify_discovery("nltest.exe", "nltest /dclist:corp")
+    _check("nltest /dclist is NOT double-labeled "
+           "(already its own MEDIUM rule in behavioral_rules)",
+           tech == "" and dlabels == [])
+    _, dlabels, _, tech = classify_discovery("chrome.exe", "chrome.exe --profile-directory=Default")
+    _check("unrelated binary -> no label", tech == "" and dlabels == [])
+
     print("\n[2] ProcInfo.to_event()")
     ev = ProcInfo(pid=42, name="powershell.exe", path="C:/ps.exe",
                   ppid=10, parent_name="winword.exe", create_time=123.0).to_event()
@@ -52,6 +79,14 @@ def main() -> int:
     _check("high-severity -> action flagged", ev.action == T.ACT_FLAGGED)
     _check("actor + parent carried",
            ev.actor_pid == 42 and ev.fields["parent_name"] == "winword.exe")
+
+    print("\n[2b] A lone discovery command NEVER escalates on its own")
+    ev2 = ProcInfo(pid=99, name="tasklist.exe", path="C:/Windows/System32/tasklist.exe",
+                   ppid=1, parent_name="cmd.exe", create_time=1.0).to_event()
+    _check("stays INFO severity / observed action",
+           ev2.severity == T.SEV_INFO and ev2.action == T.ACT_OBSERVED)
+    _check("but still carries the label + technique (for the burst combiner)",
+           "discovery_command" in ev2.labels and "T1057" in ev2.fields.get("technique", ""))
 
     print("\n[3] diff_snapshots returns only new keys")
     a = ProcInfo(pid=1, name="a", create_time=1.0)

@@ -27,6 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+from .cmdline_normalize import normalize_cmdline
 from .telemetry import (SEV_CRITICAL, SEV_HIGH, SEV_LOW, SEV_MEDIUM,
                         severity_rank)
 
@@ -119,6 +120,19 @@ RULES: tuple = (
          "rundll32_proxy", "rundll32 proxied script/remote execution",
          images=("rundll32.exe",),
          cmd_any=("javascript:", "http://", "https://", "mshtml", "url.dll,openurl")),
+    # The other half of T1218.011, and the one the rule above missed: rundll32
+    # loading a DLL from a USER-WRITABLE directory. Legitimate rundll32 use
+    # loads DLLs out of System32/SysWOW64/Program Files — a signed OS binary
+    # being pointed at C:\Users\Public\evil.dll,EntryPoint is the classic
+    # "proxy execution to look like a trusted process" shape, and the exported
+    # entry point after the comma is what a normal Windows operation never has
+    # in those paths. Found by the red-team evaluation (exec-rundll32-proxy
+    # replayed the DLL form, not the remote-script form, and nothing fired).
+    Rule("rundll32-lowtrust-dll", "T1218.011 — Rundll32", SEV_HIGH,
+         "rundll32_proxy", "rundll32 loaded a DLL from a user-writable directory",
+         images=("rundll32.exe",), cmd_all=(".dll,",),
+         cmd_any=("\\users\\public\\", "\\appdata\\", "\\temp\\", "\\downloads\\",
+                  "\\programdata\\", "\\windows\\temp\\", "\\perflogs\\")),
     # LOW, not MEDIUM: "an executable ran from temp/downloads" is not by itself
     # an attack — installers, updaters and uninstallers do it constantly, and as
     # a standalone MEDIUM this false-positived on Valkyrie's own installer and on
@@ -223,6 +237,26 @@ RULES: tuple = (
          "recovery_disabled", "Boot recovery disabled via bcdedit",
          images=("bcdedit.exe",),
          cmd_any=("recoveryenabled no", "bootstatuspolicy ignoreallfailures")),
+    # Stopping/disabling a security-relevant service is a common pre-attack or
+    # ransomware-precursor step (kill the AV/EDR/logging before the real
+    # payload runs). Two rules — not one cmd_any of "verb + service" pairs —
+    # because "stop" (sc.exe/net.exe/Stop-Service) and "disabled" (sc config
+    # .../Set-Service -StartupType Disabled) are different command shapes;
+    # cmd_all pins the required verb token, cmd_any is the curated set of
+    # security-relevant service names, so "sc query windefend" (no verb match)
+    # and "net stop spooler" (verb matches, service does not) both stay clear.
+    Rule("service-stop-security", "T1489 — Service Stop", SEV_HIGH,
+         "security_service_stop", "A security-relevant service was stopped",
+         images=("sc.exe", "net.exe", "powershell.exe", "pwsh.exe"),
+         cmd_all=("stop",),
+         cmd_any=("windefend", "securityhealthservice", "sysmon64", "sysmon",
+                  "eventlog", "wuauserv", "valkyrie")),
+    Rule("service-disable-security", "T1489 — Service Stop", SEV_HIGH,
+         "security_service_stop", "A security-relevant service was disabled",
+         images=("sc.exe", "powershell.exe", "pwsh.exe"),
+         cmd_all=("disabled",),
+         cmd_any=("windefend", "securityhealthservice", "sysmon64", "sysmon",
+                  "eventlog", "wuauserv", "valkyrie")),
 
     # ─ Discovery ─
     Rule("nltest-domain", "T1482 — Domain Trust Discovery", SEV_MEDIUM,
@@ -236,21 +270,66 @@ RULES: tuple = (
     Rule("psexec-remote", "T1021.002 — SMB/Admin Shares (PsExec)", SEV_HIGH,
          "lateral_psexec", "PsExec-style remote execution",
          cmd_any=("psexec \\\\", "psexec.exe \\\\", "paexec \\\\")),
+    # The RECEIVING end, which the rule above cannot see. psexec-remote matches
+    # the operator's outbound command — useful only on the machine the attacker
+    # already controls. PSEXESVC.exe is the service binary PsExec drops and
+    # starts on the TARGET, so its presence means someone moved laterally INTO
+    # this host. That is the more valuable half of the signal for a defender:
+    # it is evidence of an intrusion arriving, needs no command line at all
+    # (matching on image name alone), and no legitimate software ships a
+    # process by these names. PAExec/RemCom are the common PsExec clones.
+    Rule("psexec-service-host", "T1021.002 — SMB/Admin Shares (PsExec)", SEV_HIGH,
+         "lateral_psexec", "PsExec-style remote-execution service running on THIS host "
+                            "(inbound lateral movement)",
+         images=("psexesvc.exe", "paexec.exe", "remcomsvc.exe", "csexecsvc.exe")),
     Rule("wmic-remote-node", "T1047 — WMI (remote node)", SEV_HIGH,
          "lateral_wmic", "Remote command execution via wmic /node",
          images=("wmic.exe",), cmd_any=("/node:",)),
+    # A UNC path (cmd_all pins the literal "\\\\") to a well-known ADMINISTRATIVE
+    # share (C$/ADMIN$/IPC$/D$ — cmd_any) is the PsExec-era way to stage a tool
+    # on a remote host. MEDIUM, not HIGH: legitimate IT admin work copies files
+    # to admin shares too (per the redteam-evaluation lat-tool-transfer finding),
+    # so this is a real but modest signal — a plain UNC path to a NORMAL share
+    # (no $) never matches, which keeps ordinary file-server copies clear.
+    Rule("lateral-tool-transfer", "T1570 — Lateral Tool Transfer", SEV_MEDIUM,
+         "lateral_tool_transfer", "A file was copied to a remote administrative share",
+         images=("cmd.exe", "powershell.exe", "pwsh.exe", "robocopy.exe", "xcopy.exe"),
+         cmd_all=("\\\\",), cmd_any=("c$", "d$", "admin$", "ipc$")),
 )
 
 
 def match_process(image: str, parent: str, cmdline: str,
                   path: str = "") -> list[RuleHit]:
-    """Return all rule hits for a process start, highest severity first. Pure."""
+    """Return all rule hits for a process start, highest severity first. Pure.
+
+    Rules are matched against the raw command line AND its de-obfuscated form
+    (cmdline_normalize), and the hits are unioned. Matching BOTH is deliberate:
+    normalization can then only ever ADD detections, so a rule that depends on
+    raw syntax can never be broken by a normalizer change. Without this, every
+    rule here is defeated by `n^et us^er /a^dd` — measured, 5 of 8 trivial
+    obfuscations evaded the entire rule set.
+    """
     im = (image or "").lower()
     par = (parent or "").lower()
     cmd = (cmdline or "").lower()
     pth = (path or "").lower().replace("/", "\\")
-    hits = [RuleHit(r.id, r.label, r.technique, r.severity, r.reason)
-            for r in RULES if r.matches(im, par, cmd, pth)]
+
+    seen: dict[str, RuleHit] = {}
+    for r in RULES:
+        if r.matches(im, par, cmd, pth):
+            seen[r.id] = RuleHit(r.id, r.label, r.technique, r.severity, r.reason)
+
+    norm = normalize_cmdline(cmdline)
+    if norm.changed:
+        ncmd = norm.text.lower()
+        if ncmd != cmd:
+            for r in RULES:
+                if r.id not in seen and r.matches(im, par, ncmd, pth):
+                    seen[r.id] = RuleHit(r.id, r.label, r.technique, r.severity,
+                                         r.reason + " (recovered from an "
+                                         "obfuscated command line)")
+
+    hits = list(seen.values())
     hits.sort(key=lambda h: severity_rank(h.severity), reverse=True)
     return hits
 
@@ -262,15 +341,47 @@ def classify_behavior(image: str, parent: str, cmdline: str,
 
     Returns: {severity, labels, technique, reason} — technique is the top hit's
     ATT&CK id so the EDR/kill-chain get an exact tactic.
+
+    Obfuscation is treated as evidence in its own right. A command line built
+    with caret/backtick escaping, token-splitting quotes, character arithmetic
+    or string concatenation has no legitimate reason to look that way, so it
+    escalates a rule hit and — on its own — still reports MEDIUM/T1027. That
+    keeps the "attacker obfuscated something we have no rule for" case visible
+    instead of silent. Cosmetic normalization (whitespace, env vars) never
+    triggers this; only the EVASIVE transform class does.
     """
     hits = match_process(image, parent, cmdline, path)
+    norm = normalize_cmdline(cmdline)
+
     if not hits:
+        if norm.obfuscated:
+            return {
+                "severity": SEV_MEDIUM,
+                "technique": "T1027 — Obfuscated Files or Information",
+                "labels": ["obfuscated_command"],
+                "reason": ("command line uses evasion syntax with no functional "
+                           "purpose (" + ", ".join(norm.obfuscation_signals) + ")"),
+                "rule_ids": [],
+                "normalized": norm.text,
+            }
         return None
+
     top = hits[0]
+    labels = list(dict.fromkeys(h.label for h in hits))
+    reason = "; ".join(dict.fromkeys(h.reason for h in hits))
+    severity = top.severity
+    if norm.obfuscated:
+        labels.append("obfuscated_command")
+        reason += ("; obfuscated via " + ", ".join(norm.obfuscation_signals))
+        # A known-bad command that was ALSO obfuscated is less ambiguous than
+        # the same command typed plainly — an admin does not caret-escape.
+        if severity_rank(severity) < severity_rank(SEV_HIGH):
+            severity = SEV_HIGH
     return {
-        "severity": top.severity,
+        "severity": severity,
         "technique": top.technique,
-        "labels": list(dict.fromkeys(h.label for h in hits)),
-        "reason": "; ".join(dict.fromkeys(h.reason for h in hits)),
+        "labels": labels,
+        "reason": reason,
         "rule_ids": [h.rule_id for h in hits],
+        "normalized": norm.text if norm.changed else "",
     }

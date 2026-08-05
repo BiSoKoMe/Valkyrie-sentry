@@ -247,6 +247,15 @@ def known_secrets() -> list[tuple[str, Path]]:
         ("mitmproxy CA directory", C.TLS_MITMPROXY_CONF_DIR),
         ("MAC install key", C.MAC_KEY_PATH),
         ("API control token", C.DATA_DIR / "control_token.txt"),
+        # KEPT DELIBERATELY after the ADR 0044 freeze, even though core no
+        # longer creates these. An upgrader who ran an older build still has a
+        # real fleet_agent.json (device token) and wg0.conf (WireGuard
+        # PrivateKey) sitting in DATA_DIR. Dropping them from the sweep would
+        # stop protecting secrets that already exist on disk — a genuine
+        # exposure — whereas hardening a path that is absent is a harmless
+        # no-op (audit_secrets tolerates missing files by design, pinned by
+        # test_secret_hygiene). Removing these was tried and correctly
+        # rejected by that test.
         ("fleet enrolment token", C.FLEET_AGENT_IDENTITY_PATH),
         ("WireGuard server config", C.WIREGUARD_CONF_PATH),
         ("WireGuard client config", C.WIREGUARD_CLIENT_PATH),

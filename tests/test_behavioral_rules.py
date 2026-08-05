@@ -68,6 +68,15 @@ MALICIOUS = [
     ("whoami-priv", "whoami.exe", "cmd.exe", "whoami /priv", ""),
     ("psexec-remote", "psexec.exe", "cmd.exe", "psexec \\\\host -s cmd.exe", ""),
     ("wmic-remote-node", "wmic.exe", "cmd.exe", "wmic /node:10.0.0.5 process call create calc", ""),
+    ("service-stop-security", "sc.exe", "cmd.exe", "sc stop WinDefend", ""),
+    ("service-disable-security", "powershell.exe", "cmd.exe",
+     "Set-Service -Name WinDefend -StartupType Disabled", ""),
+    ("lateral-tool-transfer", "cmd.exe", "explorer.exe",
+     "copy payload.exe \\\\10.0.0.5\\C$\\Windows\\Temp\\payload.exe", ""),
+    ("rundll32-lowtrust-dll", "rundll32.exe", "cmd.exe",
+     r"rundll32.exe C:\Users\Public\evil.dll,EntryPoint", ""),
+    ("psexec-service-host", "psexesvc.exe", "services.exe",
+     r"C:\Windows\PSEXESVC.exe", ""),
 ]
 
 # Benign command shapes that must NEVER fire any rule.
@@ -90,6 +99,24 @@ BENIGN = [
     ("wmic.exe", "cmd.exe", "wmic os get caption", ""),                           # info, not process-call/node
     ("winword.exe", "explorer.exe", "winword.exe report.docx", r"C:\Program Files\Microsoft Office\winword.exe"),
     ("msbuild.exe", "devenv.exe", "msbuild project.sln", r"C:\Program Files\dotnet\msbuild.exe"),
+    # Regression controls for the redteam-evaluation T1489/T1570 findings:
+    ("sc.exe", "cmd.exe", "sc stop Spooler", ""),                       # stop verb, unrelated service
+    ("sc.exe", "cmd.exe", "sc query WinDefend", ""),                    # security service, but a query not stop/disable
+    ("net.exe", "cmd.exe", "net stop Spooler", ""),                     # stop verb, unrelated service
+    ("powershell.exe", "cmd.exe", "Get-Service -Name WinDefend", ""),   # security service, read-only
+    ("robocopy.exe", "explorer.exe", "robocopy C:\\Data D:\\Backup /MIR", ""),   # local paths, no UNC
+    ("cmd.exe", "explorer.exe", "copy \\\\fileserver\\shared\\report.docx .", ""),  # UNC to a NON-admin share
+    # rundll32 doing ordinary Windows work — DLLs from System32, which is where
+    # every legitimate rundll32 invocation loads from. These are extremely
+    # common (Control Panel applets, printer UI, network dialogs) and are the
+    # FP boundary for rundll32-lowtrust-dll.
+    ("rundll32.exe", "explorer.exe",
+     r"rundll32.exe C:\Windows\System32\shell32.dll,Control_RunDLL", ""),
+    ("rundll32.exe", "explorer.exe",
+     r"rundll32.exe C:\Windows\System32\printui.dll,PrintUIEntry /o", ""),
+    # An installer legitimately writing to ProgramData, but NOT via rundll32 —
+    # pins that the low-trust path list alone cannot fire without rundll32.
+    ("setup.exe", "explorer.exe", r"setup.exe /S", r"C:\ProgramData\App\setup.exe"),
 ]
 
 

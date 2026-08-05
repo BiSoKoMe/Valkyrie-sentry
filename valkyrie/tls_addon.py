@@ -132,11 +132,13 @@ def _is_fingerprint_path(path: str) -> bool:
 class ValkyrieAddon:
     """mitmproxy addon class — methods are mitmproxy event hooks."""
 
-    def __init__(self, store: Store, blocklist=None, behavioral=None, rules=None) -> None:
+    def __init__(self, store: Store, blocklist=None, behavioral=None, rules=None,
+                 threat_intel=None) -> None:
         self.store           = store
         self.blocklist       = blocklist
         self.behavioral      = behavioral
         self.rules           = rules
+        self.threat_intel    = threat_intel
         self.intercept_count = 0
         # response cache: url → (expiry_time, cleaned_bytes | None)
         self._resp_cache: dict[str, tuple[float, bytes | None]] = {}
@@ -223,29 +225,44 @@ class ValkyrieAddon:
             self._block(flow, domain, url, proc, "user rule: always_block", category="rule_block")
             return
 
-        # 3. Blocklist
+        # 3. Threat-intel FULL-URL match (path-level). Checked before the
+        # domain blocklist because it is the more specific verdict and the
+        # only one that can act on malware hosted at one path of an otherwise
+        # legitimate, compromised site — where blocking the whole domain
+        # would be the false positive. This seam exists only here: DNS never
+        # sees a path, so a URL indicator is unreachable without TLS
+        # inspection.
+        if self.threat_intel is not None:
+            hit = self.threat_intel.match_url(url)
+            if hit is not None:
+                self._block(flow, domain, url, proc,
+                            f"malware URL ({hit.feed}: {hit.category})",
+                            category="threat_intel_url")
+                return
+
+        # 4. Blocklist
         if self.blocklist is not None and self.blocklist.is_blocked(domain):
             self._block(flow, domain, url, proc, "domain on blocklist", category="blocked")
             return
 
-        # 4. Behavioral score
+        # 5. Behavioral score
         if self.behavioral is not None:
             should_block, score, reason = self.behavioral.should_block(domain, proc)
             if should_block and score >= BEHAVIORAL_BLOCK_SCORE:
                 self._block(flow, domain, url, proc, reason or "behavioral score", category="behavioral")
                 return
 
-        # 5. Tracking pixel / beacon paths
+        # 6. Tracking pixel / beacon paths
         if _is_tracker_path(path):
             self._block(flow, domain, url, proc, f"tracking pixel/beacon path: {path}", category="tracker_pixel")
             return
 
-        # 6. Fingerprinting scripts
+        # 7. Fingerprinting scripts
         if _is_fingerprint_path(path):
             self._block(flow, domain, url, proc, f"fingerprinting script: {path}", category="fingerprint")
             return
 
-        # 7. Data exfiltration heuristic — large POST body to a flagged domain
+        # 8. Data exfiltration heuristic — large POST body to a flagged domain
         if req.method == "POST":
             body_len = len(req.raw_content or b"")
             if body_len > EXFIL_BODY_SIZE_BYTES and (
@@ -257,7 +274,7 @@ class ValkyrieAddon:
                              category="exfil")
                 return
 
-        # 8. Allowed — strip tracking params and log
+        # 9. Allowed — strip tracking params and log
         self._strip_params(flow)
         self._log(domain, url, proc, "allowed", "", category="https")
 

@@ -171,6 +171,51 @@ def classify_cmdline(name: str, cmdline: str) -> tuple[str, list[str], str]:
     return severity, labels, "; ".join(reasons)
 
 
+# ---------------------------------------------------------------------------
+# Discovery-tactic labeling (pure, unit-tested). Deliberately INFO-only and
+# NEVER escalates severity by itself: whoami/systeminfo/tasklist/net view/net
+# user are each individually indistinguishable from routine administration
+# (redteam/evaluation's disc-* findings — Discovery is architecturally the one
+# ATT&CK tactic where firing an alerting incident on a single command is a
+# guaranteed false-positive generator, per this project's own precision-over-
+# aggression rule). The only thing this function does is attach a technique-
+# tagged label; behavioral_sequences.py's 'reconnaissance-burst' rule is what
+# actually raises an incident, and only once SEVERAL distinct ones appear from
+# the same actor in a short window.
+# ---------------------------------------------------------------------------
+_DISCOVERY_SOLO_BINS = {
+    "systeminfo.exe": "T1082 — System Information Discovery",
+    "tasklist.exe":   "T1057 — Process Discovery",
+    "whoami.exe":     "T1033 — System Owner/User Discovery",
+}
+
+
+def classify_discovery(name: str, cmdline: str) -> tuple[str, list[str], str, str]:
+    """Return (severity, labels, reason, technique) for a Discovery-tactic
+    LOLBin invocation. Severity is ALWAYS SEV_INFO — see module note above."""
+    n = (name or "").lower()
+    c = (cmdline or "").lower()
+
+    technique = _DISCOVERY_SOLO_BINS.get(n, "")
+    if not technique and n == "nltest.exe" and not any(
+            t in c for t in ("/dclist", "/domain_trusts")):
+        # nltest WITH those flags already has its own real MEDIUM rule
+        # (behavioral_rules.py nltest-domain) — don't double-label that case.
+        technique = "T1482 — Domain Trust Discovery"
+    elif not technique and n == "net.exe":
+        if "view" in c:
+            technique = "T1018 — Remote System Discovery"
+        elif ("net user" in c or "net localgroup administrators" in c) and "/add" not in c:
+            # Bare listing only — /add is real account creation, already
+            # covered (and alerted on) by behavioral_rules.py's own rules.
+            technique = "T1087.001 — Account Discovery: Local Account"
+
+    if not technique:
+        return SEV_INFO, [], "", ""
+    return (SEV_INFO, ["discovery_command"],
+            f"discovery command observed ({n})", technique)
+
+
 @dataclass(frozen=True)
 class ProcInfo:
     pid: int
@@ -227,6 +272,17 @@ class ProcInfo:
             reason = "; ".join(r for r in (reason, anomaly["reason"]) if r)
             if not technique:
                 technique = anomaly["technique"]
+
+        # Discovery-tactic weak labeling — the weakest tier, so it only fills
+        # in a technique when nothing stronger already fired (a real rule/
+        # anomaly hit always wins). See classify_discovery's module note.
+        _, dlabels, dreason, dtechnique = classify_discovery(self.name, self.cmdline)
+        for lab in dlabels:
+            if lab not in labels:
+                labels.append(lab)
+        reason = "; ".join(r for r in (reason, dreason) if r)
+        if not technique:
+            technique = dtechnique
 
         action = ACT_FLAGGED if severity_rank(severity) >= severity_rank(SEV_MEDIUM) \
             else ACT_OBSERVED
