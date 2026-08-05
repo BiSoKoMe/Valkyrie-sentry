@@ -482,6 +482,19 @@ def poll_until(predicate, deadline: float, interval: float = POLL_INTERVAL_S):
         time.sleep(interval)
 
 
+def _image_name(argv0: str) -> str:
+    """The image name Windows actually reports in an incident's process_name
+    (e.g. Detection.process_name from a 4688/Sysmon NewProcessName basename)
+    -- always carries '.exe'. argv0 is the bare command as typed
+    ('nltest', 'whoami', 'sc') and never matches that field directly. Found
+    2026-08-05: run_burst_phase compared argv[0] to process_name with no
+    '.exe' appended, so a standalone-incident match could never succeed for
+    ANY technique -- invisible for the 10 that never get a standalone
+    incident by design, but silently misattributed nltest-domain's very
+    real standalone capture to the burst instead, every single run."""
+    return argv0 if argv0.lower().endswith(".exe") else argv0 + ".exe"
+
+
 def _detector_of(api_base: str, inc: dict) -> tuple[str, str]:
     """(source, technique) of the incident's most relevant detection."""
     detail = fetch_incident_detail(api_base, inc["id"])
@@ -532,45 +545,51 @@ def run_burst_phase(api_base: str) -> list[TechniqueResult]:
     print(f"[POLL] settling up to {BURST_SETTLE_S}s for the burst incident "
           "and any standalone captures...")
 
-    def find_burst():
-        for inc in fetch_incidents(api_base):
-            if (inc["id"] not in baseline
-                    and inc.get("category") == "attack_sequence"
-                    and inc.get("title", "").startswith("Reconnaissance burst")
-                    and _parse_ts(inc["created_at"]) >= cluster_start - 2):
-                return inc
-        return None
-
-    def find_standalone(process_name: str):
-        for inc in fetch_incidents(api_base):
-            if (inc["id"] not in baseline
-                    and inc.get("category") != "attack_sequence"
-                    and inc.get("process_name", "").lower() == process_name.lower()
-                    and _parse_ts(inc["created_at"]) >= cluster_start - 2):
-                return inc
-        return None
-
-    burst_incident = poll_until(find_burst, settle_deadline)
+    # Burst AND every technique's standalone incident are polled TOGETHER in
+    # one loop, not sequentially (find_burst first, then one-shot standalone
+    # checks with whatever time happens to be left). A one-shot check
+    # performed only once find_burst() succeeds is a real race: nltest-
+    # domain's own incident is created synchronously in _ingest_detection
+    # BEFORE _correlate_sequence runs on that same detection, but async
+    # sensor processing across 11 commands means a check timed right after
+    # the burst appears can still run before nltest's own event has been
+    # processed at all. Found 2026-08-05 investigating why nltest appeared
+    # to lose its standalone identity inside the full battery: it hadn't --
+    # the incident existed moments later, this harness's old one-shot check
+    # just missed it. Confirmed by dumping every incident created during a
+    # full-battery repro (redteam/evaluation results, ADR 0048 Part 2).
+    burst_incident = None
     standalone_by_image: dict[str, dict] = {}
-    if burst_incident is None:
-        # Still worth a per-technique standalone sweep even if the burst
-        # itself never completed (e.g. nltest-domain firing alone).
-        for tech in BURST_TECHNIQUES:
-            image = tech.argv[0]
-            hit = poll_until(lambda im=image: find_standalone(im), settle_deadline)
-            if hit:
-                standalone_by_image[image] = hit
-    else:
-        print(f"[POLL] reconnaissance-burst incident CAPTURED: {burst_incident['id']}")
-        for tech in BURST_TECHNIQUES:
-            hit = find_standalone(tech.argv[0])
-            if hit:
-                standalone_by_image[tech.argv[0]] = hit
+    pending_images = {_image_name(tech.argv[0]) for tech in BURST_TECHNIQUES}
+    while True:
+        incidents = fetch_incidents(api_base)
+        if burst_incident is None:
+            for inc in incidents:
+                if (inc["id"] not in baseline
+                        and inc.get("category") == "attack_sequence"
+                        and inc.get("title", "").startswith("Reconnaissance burst")
+                        and _parse_ts(inc["created_at"]) >= cluster_start - 2):
+                    burst_incident = inc
+                    print(f"[POLL] reconnaissance-burst incident CAPTURED: {inc['id']}")
+                    break
+        for image in pending_images - standalone_by_image.keys():
+            for inc in incidents:
+                if (inc["id"] not in baseline
+                        and inc.get("category") != "attack_sequence"
+                        and inc.get("process_name", "").lower() == image.lower()
+                        and _parse_ts(inc["created_at"]) >= cluster_start - 2):
+                    standalone_by_image[image] = inc
+                    break
+        if burst_incident is not None and pending_images <= standalone_by_image.keys():
+            break                                    # nothing left to wait for
+        if time.monotonic() >= settle_deadline:
+            break
+        time.sleep(POLL_INTERVAL_S)
 
     results = []
     for tech in BURST_TECHNIQUES:
         ex = execs[tech.id]
-        image = tech.argv[0]
+        image = _image_name(tech.argv[0])
         standalone = standalone_by_image.get(image)
         if standalone is not None:
             source, technique = _detector_of(api_base, standalone)
@@ -605,7 +624,7 @@ def run_no_path_phase(api_base: str) -> list[TechniqueResult]:
     for tech in NO_PATH_TECHNIQUES:
         baseline = {i["id"] for i in fetch_incidents(api_base)}
         ex = run_command(tech.argv)
-        image = tech.argv[0]
+        image = _image_name(tech.argv[0])
         deadline = time.monotonic() + SOLO_SETTLE_S
 
         def find():
