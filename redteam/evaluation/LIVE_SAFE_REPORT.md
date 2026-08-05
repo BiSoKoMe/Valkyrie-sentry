@@ -4,22 +4,22 @@ Real read-only commands, executed on this host, scored against the real running 
 
 ## RUN A — degraded-Sysmon baseline
 
-Generated: 20260805T075017Z  
-Capture rate: **0/12 (0%)**  
-Latency: median — ms, p95 — ms  
-Detector sources: {}
+Generated: 20260805T081311Z  
+Capture rate: **6/12 (50%)**  
+Latency: median 466 ms, p95 9696 ms  
+Detector sources: {'edr.sequence': 6}
 
 Sysmon at run time: service_state=`Stopped`, collection_live=`False`, configured_eids=`[]`  
 native_audit already enabled: `True`
 
 | Technique | Executed | Captured | Latency (ms) | Detector | Incident |
 |---|---|---|---:|---|---|
-| T1033 System Owner/User Discovery (whoami /priv) | `whoami /priv` | missed | — | — | — |
-| T1082 System Information Discovery | `systeminfo` | missed | — | — | — |
-| T1057 Process Discovery | `tasklist /v` | missed | — | — | — |
-| T1018 Remote System Discovery (net view) | `net view` | missed | — | — | — |
-| T1087.001 Account Discovery: Local Account (net user) | `net user` | missed | — | — | — |
-| T1482 Domain Trust Discovery (nltest) | `nltest /dclist` | missed | — | — | — |
+| T1033 System Owner/User Discovery (whoami /priv) | `whoami /priv` | **CAPTURED** | 10936 | edr.sequence | inc_30d8fc13f9b744b6 |
+| T1082 System Information Discovery | `systeminfo` | **CAPTURED** | 5975 | edr.sequence | inc_30d8fc13f9b744b6 |
+| T1057 Process Discovery | `tasklist /v` | **CAPTURED** | 932 | edr.sequence | inc_30d8fc13f9b744b6 |
+| T1018 Remote System Discovery (net view) | `net view` | **CAPTURED** | 0 | edr.sequence | inc_30d8fc13f9b744b6 |
+| T1087.001 Account Discovery: Local Account (net user) | `net user` | **CAPTURED** | 0 | edr.sequence | inc_30d8fc13f9b744b6 |
+| T1482 Domain Trust Discovery (nltest) | `nltest /dclist` | **CAPTURED** | 0 | edr.sequence | inc_30d8fc13f9b744b6 |
 | T1016 System Network Configuration Discovery (ipconfig) | `ipconfig /all` | missed | — | — | — |
 | T1049 System Network Connections Discovery (netstat) | `netstat -ano` | missed | — | — | — |
 | T1082 System Information Discovery (hostname) | `hostname` | missed | — | — | — |

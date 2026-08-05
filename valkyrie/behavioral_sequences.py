@@ -230,9 +230,25 @@ class SequenceEngine:
         self._partials: dict[str, list[_Partial]] = {}   # root key -> partials
 
     # -- lineage -----------------------------------------------------------
-    def _root_key(self, pid: int, actor: str) -> str:
+    def _root_key(self, pid: int, actor: str, parent_name: str = "") -> str:
         """Resolve a process to its oldest tracked ancestor — so a child's
-        behaviour advances its parent's sequence (the ESP parent-pid match)."""
+        behaviour advances its parent's sequence (the ESP parent-pid match).
+
+        Falls back to grouping by PARENT NAME when no numeric lineage is
+        resolvable but a parent name is known — the Security-log 4688 path
+        (native_process sensor, no Sysmon) has no ParentProcessId field at
+        all, only ParentProcessName, so `ppid` is always 0 for events from
+        that source. Without this fallback every process from that source
+        resolves to `pid:<its own pid>` — a root key unique to itself — so
+        no two commands can ever be recognised as the same actor and a
+        sequence like reconnaissance-burst (min_distinct=3 on one actor) can
+        never complete on a non-Sysmon host, no matter how many discovery
+        commands run together (found 2026-08-05, ADR 0048 Part 2 RUN A: 0/12
+        captured). Coarser than real pid-based lineage — two unrelated
+        processes that happen to share a same-named parent (two different
+        cmd.exe sessions, say) will incorrectly merge — but that is a real
+        signal in the wrong bucket, not silence pretending to be absence.
+        """
         if not pid:
             return f"name:{(actor or '').lower()}"
         seen: set[int] = set()
@@ -247,6 +263,8 @@ class SequenceEngine:
                 break                             # parent not tracked → stop here
             cur = parent
             depth += 1
+        if cur == pid and parent_name:
+            return f"parent_name:{parent_name.lower()}"
         return f"pid:{cur}"
 
     def _track(self, pid: int, ppid: int, actor: str) -> None:
@@ -262,11 +280,12 @@ class SequenceEngine:
 
     # -- core --------------------------------------------------------------
     def observe(self, actor: str, technique: str, labels, activity: str,
-                ts: float, pid: int = 0, ppid: int = 0) -> Optional[dict]:
+                ts: float, pid: int = 0, ppid: int = 0,
+                parent_name: str = "") -> Optional[dict]:
         """Advance sequence state with one behaviour. Returns a completed
         sequence dict, or None."""
         self._track(pid, ppid, actor)
-        root = self._root_key(pid, actor)
+        root = self._root_key(pid, actor, parent_name)
         tid = _tid(technique)
         lset = frozenset(labels or ())
         act = activity or ""

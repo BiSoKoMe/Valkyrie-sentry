@@ -226,7 +226,9 @@ class EdrEngine:
                 process_name=str(d.get("actor_name", "")),
                 process_pid=int(d.get("actor_pid", 0) or 0), technique=technique,
                 details={"labels": labels, "activity": str(d.get("activity", "")),
-                         "ppid": int(fields0.get("ppid") or fields0.get("parent_pid") or 0)}))
+                         "ppid": int(fields0.get("ppid") or fields0.get("parent_pid") or 0),
+                         "parent_name": str(fields0.get("parent_name")
+                                            or fields0.get("parent_image") or "")}))
 
         if severity_rank(severity) < severity_rank("medium") and action != "flagged":
             return None
@@ -404,7 +406,8 @@ class EdrEngine:
                 activity=details.get("activity") or "",
                 ts=time.monotonic(),
                 pid=det.process_pid,
-                ppid=int(details.get("ppid") or 0))
+                ppid=int(details.get("ppid") or 0),
+                parent_name=str(details.get("parent_name") or ""))
         except Exception:
             return
         if not seq:
