@@ -1003,6 +1003,19 @@ def main() -> None:
         _tick("Page-content analysis started", _t)
 
     # ------------------------------------------------------------------
+    # 9e. Resolution log — records ALLOWED DNS answers (dns_interceptor.py)
+    #     so the list-free network scorer (network_score.py S2) can ask "was
+    #     this destination ever resolved here?" without any feed or list. A
+    #     hardcoded-IP C2 skips DNS entirely, which is exactly what this
+    #     catches. Always on: a bounded, pure in-memory structure, and a
+    #     no-op cost when nothing reads it (e.g. --no-dns / network collector
+    #     unavailable).
+    # ------------------------------------------------------------------
+    from .resolution_log import ResolutionLog
+    from .resolution_log import set_active as _set_active_resolution_log
+    _set_active_resolution_log(ResolutionLog())
+
+    # ------------------------------------------------------------------
     # 9g. Deception endpoint — DECEIVE answers a tracker beacon instead of
     #     resolving it to a dead end (0.0.0.0), which was a relabelled block
     #     that still fingerprinted the machine as "runs a blocker". Loopback

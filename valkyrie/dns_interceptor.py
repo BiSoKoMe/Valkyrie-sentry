@@ -43,6 +43,7 @@ from typing import Optional
 from .behavioral import BehavioralEngine
 from .blocklist import BlocklistManager
 from .cname_uncloak import matches_cname_tracker, same_registrable
+from .resolution_log import record_resolution
 from .site_scanner import SiteScanner
 from .config import (
     DNS_LISTEN_HOST,
@@ -401,6 +402,20 @@ class DNSInterceptor:
                     print(f"  [firewall] {qname} -> {bad_ip} blocked (threat-intel CIDR)")
                 response = self._sinkhole_response(request, qname, qtype)
 
+        # Resolution log — the list-free network scorer's strongest signal
+        # (network_score.py S2: "was this destination ever resolved here?").
+        # Recorded here, AFTER CNAME uncloaking and answer-IP screening can
+        # both still flip an initially-allowed decision to "blocked" and
+        # rewrite `response` to the sinkhole — so this only ever sees the
+        # FINAL decision and the FINAL (possibly rewritten) wire response.
+        # "allowed" and "flagged" both reach here as real forwarded answers;
+        # "blocked"/"behavioral"/"deceived" never resolve to a real
+        # destination and must never be recorded as if they did.
+        if decision not in ("blocked", "behavioral", "deceived") and response:
+            ips = self._answer_ips(response)
+            if ips:
+                record_resolution(qname, ips)
+
         # Defensive: guarantee the reply's transaction ID matches the
         # original client request, regardless of what ID was used internally
         # to reach upstream. A mismatched ID makes the client silently
@@ -465,6 +480,22 @@ class DNSInterceptor:
                 except Exception:
                     return None
         return None
+
+    def _answer_ips(self, response_wire: bytes) -> list[str]:
+        """Every A/AAAA answer IP in a wire response. Parse failures return
+        [] (fail-open — worst case is a missed resolution-log entry, never a
+        crash on the reply path)."""
+        try:
+            msg = dns.message.from_wire(response_wire)
+        except Exception:
+            return []
+        out: list[str] = []
+        for rrset in msg.answer:
+            if rrset.rdtype not in (dns.rdatatype.A, dns.rdatatype.AAAA):
+                continue
+            for rdata in rrset:
+                out.append(str(rdata))
+        return out
 
     def _cname_targets(self, response_wire: bytes) -> list[str]:
         """Parse the CNAME target chain out of a DNS answer. Pure of policy;
