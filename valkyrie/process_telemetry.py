@@ -23,6 +23,7 @@ they say so.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from dataclasses import dataclass, replace
@@ -188,7 +189,31 @@ _DISCOVERY_SOLO_BINS = {
     "systeminfo.exe": "T1082 — System Information Discovery",
     "tasklist.exe":   "T1057 — Process Discovery",
     "whoami.exe":     "T1033 — System Owner/User Discovery",
+    # Added 2026-08-05 after redteam/evaluation/live_safe.py RUN A measured
+    # these as a VERIFIED gap (no code path at all, not a guess): ipconfig,
+    # netstat, hostname. None of these has a mutating form worth excluding —
+    # unlike reg/sc below, every ipconfig/netstat/hostname invocation is
+    # equally a discovery read, so a solo-bin entry (unconditional on the
+    # binary name) is correct here the same way it already is for
+    # systeminfo/tasklist/whoami.
+    "ipconfig.exe":   "T1016 — System Network Configuration Discovery",
+    "netstat.exe":    "T1049 — System Network Connections Discovery",
+    "hostname.exe":   "T1082 — System Information Discovery",
 }
+
+# reg.exe / sc.exe (added alongside the solo bins above) are NOT solo bins:
+# 'reg add'/'reg delete' and 'sc create'/'sc stop' are real mutating actions,
+# not discovery, and some of those already have their own alerting rules
+# (behavioral_rules.py's sc.exe 'stop windefend' / 'create' rules) that must
+# never be double-labeled as a mere INFO-level discovery command. Only the
+# QUERY verb, and nothing else, earns the discovery label — same
+# positive-keyword-AND-NOT-a-mutating-keyword shape as net.exe's 'net user'
+# vs 'net user ... /add' below. \b word boundaries (not bare `in`) because
+# 'query' must be the verb, not a substring of an unrelated key/service name.
+_REG_MUTATING_VERBS = ("add", "delete", "import", "save", "restore",
+                      "load", "unload", "copy", "export", "compare")
+_SC_MUTATING_VERBS = ("create", "delete", "config", "start", "stop",
+                     "pause", "continue", "failure", "sdset", "privs", "boot")
 
 
 def _discovery_cmdline_technique(n: str, candidates: tuple) -> str:
@@ -219,6 +244,18 @@ def _discovery_cmdline_technique(n: str, candidates: tuple) -> str:
             # Bare listing only — /add is real account creation, already
             # covered (and alerted on) by behavioral_rules.py's own rules.
             return "T1087.001 — Account Discovery: Local Account"
+    elif n == "reg.exe":
+        query = any(re.search(r"\bquery\b", c) for c in candidates)
+        mutating = any(re.search(rf"\b{v}\b", c) for c in candidates
+                       for v in _REG_MUTATING_VERBS)
+        if query and not mutating:
+            return "T1012 — Query Registry"
+    elif n == "sc.exe":
+        query = any(re.search(r"\bquery\b", c) for c in candidates)
+        mutating = any(re.search(rf"\b{v}\b", c) for c in candidates
+                       for v in _SC_MUTATING_VERBS)
+        if query and not mutating:
+            return "T1007 — System Service Discovery"
     return ""
 
 

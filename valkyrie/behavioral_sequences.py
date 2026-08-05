@@ -194,7 +194,15 @@ SEQUENCES: tuple = (
         "reconnaissance-burst", "Reconnaissance burst (multiple discovery techniques)",
         "medium", "T1087.001 — Account Discovery: Local Account", 120.0,
         (Step("distinct discovery technique",
-              techniques=("T1082", "T1057", "T1018", "T1087", "T1033", "T1482"),
+              # T1016/T1049/T1012/T1007 added 2026-08-05 alongside
+              # process_telemetry.classify_discovery's ipconfig/netstat/
+              # reg-query/sc-query labels (redteam/evaluation/live_safe.py
+              # RUN A closed gaps) — without listing them here too, Step.
+              # matches() would silently never count them (found the hard
+              # way: a technique's classify_discovery label alone does NOT
+              # feed this rule unless its id is also in this tuple).
+              techniques=("T1082", "T1057", "T1018", "T1087", "T1033", "T1482",
+                         "T1016", "T1049", "T1012", "T1007"),
               min_distinct=3),),
         "Several DIFFERENT discovery techniques (system/process/account/network "
         "enumeration) were observed from the same actor within a short window. "

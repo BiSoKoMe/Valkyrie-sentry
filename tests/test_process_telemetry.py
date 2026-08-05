@@ -85,6 +85,57 @@ def main() -> int:
     _check("obfuscation does not break the double-label exclusion either "
            "(nltest /dclist still deliberately unlabeled here)", tech == "")
 
+    print("\n[1e] closing the 5 gaps redteam/evaluation/live_safe.py RUN A "
+          "measured (ipconfig/netstat/hostname/reg query/sc query had NO "
+          "code path at all before this) — same INFO-only, weak-label, "
+          "never-standalone discipline as every entry above")
+    sev, dlabels, _, tech = classify_discovery("ipconfig.exe", "ipconfig /all")
+    _check("ipconfig -> T1016, still INFO-only",
+           sev == T.SEV_INFO and "discovery_command" in dlabels and "T1016" in tech)
+    sev, dlabels, _, tech = classify_discovery("netstat.exe", "netstat -ano")
+    _check("netstat -> T1049, still INFO-only",
+           sev == T.SEV_INFO and "discovery_command" in dlabels and "T1049" in tech)
+    sev, dlabels, _, tech = classify_discovery("hostname.exe", "hostname")
+    _check("hostname -> T1082, still INFO-only",
+           sev == T.SEV_INFO and "discovery_command" in dlabels and "T1082" in tech)
+    sev, dlabels, _, tech = classify_discovery(
+        "reg.exe", r"reg query HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion")
+    _check("reg QUERY -> T1012, still INFO-only",
+           sev == T.SEV_INFO and "discovery_command" in dlabels and "T1012" in tech)
+    sev, dlabels, _, tech = classify_discovery("sc.exe", "sc query eventlog")
+    _check("sc QUERY -> T1007, still INFO-only",
+           sev == T.SEV_INFO and "discovery_command" in dlabels and "T1007" in tech)
+
+    print("\n[1f] benign controls — reg/sc MUTATING verbs must NEVER get the "
+          "discovery label (query-only, not a general reg.exe/sc.exe label)")
+    _, dlabels, _, tech = classify_discovery(
+        "reg.exe", r"reg add HKCU\Software\Evil /v x /d y")
+    _check("reg add is NOT labeled discovery", tech == "" and dlabels == [])
+    _, dlabels, _, tech = classify_discovery(
+        "reg.exe", r"reg delete HKCU\Software\Evil /f")
+    _check("reg delete is NOT labeled discovery", tech == "" and dlabels == [])
+    _, dlabels, _, tech = classify_discovery("sc.exe", "sc stop windefend")
+    _check("sc stop windefend is NOT labeled discovery "
+           "(already alerted by behavioral_rules.py's own rule)",
+           tech == "" and dlabels == [])
+    _, dlabels, _, tech = classify_discovery("sc.exe", "sc create evilsvc binPath= evil.exe")
+    _check("sc create is NOT labeled discovery "
+           "(already alerted by behavioral_rules.py's own rule)",
+           tech == "" and dlabels == [])
+    _, _, _, tech = classify_discovery("reg.exe", "reg qu^ery HKLM\\Software")
+    _check("caret-escaped 'reg query' still -> T1012 (survives obfuscation "
+           "the same way net/nltest already do)", "T1012" in tech)
+
+    print("\n[1g] reconnaissance-burst's technique whitelist actually "
+          "includes the 4 new ATT&CK ids (labeling alone does not feed the "
+          "sequence engine unless Step.techniques also lists them)")
+    from valkyrie.behavioral_sequences import SEQUENCES
+    burst = next(r for r in SEQUENCES if r.id == "reconnaissance-burst")
+    burst_techniques = burst.steps[0].techniques
+    for tid in ("T1016", "T1049", "T1012", "T1007"):
+        _check(f"{tid} is in reconnaissance-burst's Step.techniques",
+               tid in burst_techniques)
+
     print("\n[2] ProcInfo.to_event()")
     ev = ProcInfo(pid=42, name="powershell.exe", path="C:/ps.exe",
                   ppid=10, parent_name="winword.exe", create_time=123.0).to_event()
