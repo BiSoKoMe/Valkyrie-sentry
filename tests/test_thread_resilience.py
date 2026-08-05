@@ -170,33 +170,10 @@ def main() -> int:
     finally:
         dd.DOH_SCAN_INTERVAL = old_scan
 
-    # ── 4. BEHAVIOURAL: fleet agent keeps cycling through network errors ─
-    print("\n[4] fleet agent survives a failing server")
-    from valkyrie.fleet.agent import FleetAgent
-    a = FleetAgent.__new__(FleetAgent)
-    a._running = False; a._cycle_errors = 0; a._last_error = ""
-    a._interval = 0.05
-    cycles = {"n": 0}
-
-    def _fail():
-        cycles["n"] += 1
-        raise ConnectionError("fleet server unreachable")
-
-    a.send_heartbeat = _fail
-    a.fetch_and_apply_policy = lambda: None
-    a.fetch_and_run_commands = lambda: None
-    a._running = True
-    t = threading.Thread(target=a._loop, daemon=True)
-    t.start()
-    # _loop sleeps between cycles in fixed 0.5s slices (so stop() stays
-    # responsive), which sets a floor of ~0.5s per cycle regardless of
-    # _interval. Wait long enough for several cycles or this asserts nothing.
-    time.sleep(1.8)
-    a._running = False
-    c.check(f"the agent kept cycling despite a dead server "
-            f"({cycles['n']} attempts)", cycles["n"] > 2)
-    c.check(f"cycle failures were counted ({a._cycle_errors})",
-            a._cycle_errors > 0)
+    # [4] (fleet agent resilience) retired with the fleet code — ADR 0044.
+    # The loop-survives-errors invariant it protected is still covered for
+    # core workers by sections 1-3 above; the fleet agent is no longer part
+    # of the product, so a test for it is no longer part of the gate.
 
     return c.finish()
 

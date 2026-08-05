@@ -152,9 +152,6 @@ def _build_stats() -> dict:
     top      = state.store.top_blocked_domains(limit=5)
     fw_count = state.firewall.count() if state.firewall else 0
 
-    from ..multihop import MultiHopVPN
-    mh_status = MultiHopVPN().status()
-
     zero_active = state.zero_log is not None and state.zero_log.is_active()
 
     healthy = True
@@ -201,8 +198,6 @@ def _build_stats() -> dict:
         "content_analysis":   (state.content_watch.stats()
                                if state.content_watch is not None else None),
         "zero_log_active":    zero_active,
-        "multihop_hop1_ready": mh_status["hop1_conf_exists"],
-        "multihop_hop2_ready": mh_status["hop2_conf_exists"],
     }
 
 
@@ -460,18 +455,9 @@ def create_app(ctx: Optional[AppContext] = None):
             info["self_heal"] = state.self_heal.status()
         return info
 
-    @app.get("/api/compliance/report")
-    async def compliance_report(request: Request, hours: int = 720,
-                                format: str = "json"):
-        # Aggregates operational posture — token-gated off loopback like all
-        # data-revealing endpoints (enforced by the global guard middleware).
-        from ..compliance import ComplianceReporter, render_markdown
-        report = ComplianceReporter(state).generate(period_hours=max(1, hours))
-        if format == "md":
-            from fastapi.responses import PlainTextResponse
-            return PlainTextResponse(render_markdown(report),
-                                     media_type="text/markdown")
-        return report
+    # /api/compliance/report removed — compliance reporting moved to
+    # experimental/ (generating audit evidence for a product with no customers
+    # and no certification is theatre). See experimental/README.md.
 
     @app.get("/api/edr/playbooks/status")
     async def playbooks_status():
@@ -586,10 +572,8 @@ def create_app(ctx: Optional[AppContext] = None):
                 "count": len(mgr.tokens()) if mgr else 0,
                 "paths": mgr.paths()[:20] if mgr else []}
 
-    @app.get("/api/vpn/status")
-    async def vpn_status():
-        from ..multihop import MultiHopVPN
-        return MultiHopVPN().status()
+    # /api/vpn/status removed — multi-hop VPN moved to experimental/.
+    # Valkyrie is an endpoint security + privacy agent, not a VPN product.
 
     @app.get("/api/zero-log/status")
     async def zero_log_status():

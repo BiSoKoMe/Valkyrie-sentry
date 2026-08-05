@@ -273,19 +273,20 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 
     # ── Privacy: EDR data is local only ───────────────────────────────
     print("\n-- Privacy invariant -------------------------------")
-    # The fleet heartbeat must NOT carry EDR incident details/domains. The
-    # fleet protocol only ships counts/categories/components (proven in
-    # test_fleet.py); EDR adds no new wire fields, so a heartbeat built from
-    # the same status dict never sees an incident domain.
-    from valkyrie.fleet.agent import FleetAgent
-    def _status():
-        return {"blocked_24h": 5, "allowed_24h": 1, "flagged_24h": 0,
-                "components": {"dns": True}, "categories": {"tracker": 5}}
-    agent = FleetAgent("http://localhost:1", _status)
-    hb = agent._build_heartbeat().to_dict()
-    blob = repr(hb)
-    check("fleet heartbeat carries no EDR incident/domain data",
-          "c2.evil" not in blob and "incidents" not in hb and "beacon.evil" not in blob)
+    # The fleet-heartbeat version of this invariant moved with the fleet code
+    # to experimental/tests/test_fleet.py (ADR 0044). What remains here is the
+    # invariant that still applies to CORE: the EDR engine has no egress of its
+    # own. Incident data reaches the network only through an explicitly wired,
+    # opt-in exporter (siem.py) — the engine itself must expose no transport.
+    import inspect as _inspect
+    import valkyrie.edr.engine as _eng
+    _src = _inspect.getsource(_eng)
+    check("EDR engine imports no network transport",
+          not any(m in _src for m in ("import socket", "import requests",
+                                      "urllib.request", "http.client")))
+    # Subscribers receive incidents; nothing in that path writes to a socket.
+    check("engine fan-out is in-process only (EventBus, not a client)",
+          "EventBus" in _src)
 
     engine.stop()
     store.stop()
