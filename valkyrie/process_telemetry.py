@@ -30,6 +30,7 @@ from typing import Callable, Optional
 
 from .behavioral_rules import classify_behavior
 from .behavior_score import classify_anomaly
+from .cmdline_normalize import normalize_cmdline
 from .telemetry import (
     ACT_FLAGGED, ACT_OBSERVED, CAT_PROCESS,
     SEV_HIGH, SEV_INFO, SEV_LOW, SEV_MEDIUM, severity_rank, TelemetryEvent,
@@ -190,25 +191,53 @@ _DISCOVERY_SOLO_BINS = {
 }
 
 
+def _discovery_cmdline_technique(n: str, candidates: tuple) -> str:
+    """The cmdline-shape half of classify_discovery — factored out so it can
+    be evaluated against both the raw and de-obfuscated command line.
+
+    `candidates` holds the raw lowercased cmdline, plus its normalized form
+    when normalization actually changed anything. Both the POSITIVE match
+    (a keyword appears) and the EXCLUSION check (a flag that hands the event
+    to a different, already-alerting rule) are evaluated against every
+    candidate — an obfuscated exclusion flag must not slip a duplicate,
+    wrongly-labeled event past the exclusion any more than an obfuscated
+    keyword should slip past the positive match.
+    """
+    if n == "nltest.exe":
+        excluded = any(t in c for c in candidates for t in ("/dclist", "/domain_trusts"))
+        if not excluded:
+            # nltest WITH those flags already has its own real MEDIUM rule
+            # (behavioral_rules.py nltest-domain) — don't double-label that case.
+            return "T1482 — Domain Trust Discovery"
+    elif n == "net.exe":
+        if any("view" in c for c in candidates):
+            return "T1018 — Remote System Discovery"
+        add_present = any("/add" in c for c in candidates)
+        listing = any("net user" in c or "net localgroup administrators" in c
+                     for c in candidates)
+        if listing and not add_present:
+            # Bare listing only — /add is real account creation, already
+            # covered (and alerted on) by behavioral_rules.py's own rules.
+            return "T1087.001 — Account Discovery: Local Account"
+    return ""
+
+
 def classify_discovery(name: str, cmdline: str) -> tuple[str, list[str], str, str]:
     """Return (severity, labels, reason, technique) for a Discovery-tactic
     LOLBin invocation. Severity is ALWAYS SEV_INFO — see module note above."""
     n = (name or "").lower()
     c = (cmdline or "").lower()
 
-    technique = _DISCOVERY_SOLO_BINS.get(n, "")
-    if not technique and n == "nltest.exe" and not any(
-            t in c for t in ("/dclist", "/domain_trusts")):
-        # nltest WITH those flags already has its own real MEDIUM rule
-        # (behavioral_rules.py nltest-domain) — don't double-label that case.
-        technique = "T1482 — Domain Trust Discovery"
-    elif not technique and n == "net.exe":
-        if "view" in c:
-            technique = "T1018 — Remote System Discovery"
-        elif ("net user" in c or "net localgroup administrators" in c) and "/add" not in c:
-            # Bare listing only — /add is real account creation, already
-            # covered (and alerted on) by behavioral_rules.py's own rules.
-            technique = "T1087.001 — Account Discovery: Local Account"
+    # Same "match raw AND normalized" discipline as behavioral_rules.
+    # match_process — otherwise this weak-labeling path is trivially defeated
+    # by the exact obfuscation classify_behavior already survives (found by
+    # redteam/evaluation/evasion_harness.py: `net v^iew` / `net u^ser` evaded
+    # this function while the already-normalized IOA rule engine did not).
+    norm = normalize_cmdline(cmdline)
+    nc = norm.text.lower() if norm.changed else c
+    candidates = (c,) if nc == c else (c, nc)
+
+    technique = _DISCOVERY_SOLO_BINS.get(n, "") or _discovery_cmdline_technique(n, candidates)
 
     if not technique:
         return SEV_INFO, [], "", ""

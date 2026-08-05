@@ -71,6 +71,20 @@ def main() -> int:
     _, dlabels, _, tech = classify_discovery("chrome.exe", "chrome.exe --profile-directory=Default")
     _check("unrelated binary -> no label", tech == "" and dlabels == [])
 
+    print("\n[1d] classify_discovery survives trivial cmdline obfuscation "
+          "(redteam/evaluation/evasion_harness.py found this gap: the raw-only "
+          "keyword check was defeated by exactly the caret-escaping the main "
+          "IOA rule engine already survives)")
+    _, _, _, tech = classify_discovery("net.exe", "net v^iew /all")
+    _check("caret-escaped 'net view' still -> T1018", "T1018" in tech)
+    _, _, _, tech = classify_discovery("net.exe", "net u^ser")
+    _check("caret-escaped bare 'net user' still -> T1087.001", "T1087.001" in tech)
+    _, _, _, tech = classify_discovery("net.exe", 'net u"s"er')
+    _check("token-split-quote 'net user' still -> T1087.001", "T1087.001" in tech)
+    _, _, _, tech = classify_discovery("nltest.exe", "nltest /dcl^ist:corp")
+    _check("obfuscation does not break the double-label exclusion either "
+           "(nltest /dclist still deliberately unlabeled here)", tech == "")
+
     print("\n[2] ProcInfo.to_event()")
     ev = ProcInfo(pid=42, name="powershell.exe", path="C:/ps.exe",
                   ppid=10, parent_name="winword.exe", create_time=123.0).to_event()
