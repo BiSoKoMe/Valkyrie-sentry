@@ -205,7 +205,7 @@ def build_status_rows(
     *, args, dns_server=None, firewall=None, edr_engine=None, intelligence=None,
     unbound_ok=False, dns_upstream_host="", dns_upstream_port=0,
     allow_external_fallback=True, zero_log=None, mac_randomizer=None,
-    tls_inspector=None, heartbeat=None,
+    tls_inspector=None, heartbeat=None, sysmon_result=None,
 ) -> list[tuple[str, bool, str]]:
     """Build the (label, ok, detail) rows for the startup status box.
 
@@ -279,6 +279,13 @@ def build_status_rows(
         rows.append(("TLS Inspect", True, f"port {tls_inspector.port}"))
     if heartbeat is not None:
         rows.append(("Heartbeat", True, "self-check every 15s"))
+    if sysmon_result is not None:
+        # Degraded is a MAIN path, not an edge case (ADR 0048) — this row
+        # goes red on it deliberately, the same way every other row here
+        # does, rather than being hidden or softened into a footnote.
+        rows.append(("Sysmon", not sysmon_result.degraded,
+                     sysmon_result.reason if sysmon_result.degraded
+                     else sysmon_result.mode))
     if args.web:
         rows.append(("Dashboard", True, f"localhost:{args.web_port}"))
     return rows
@@ -371,6 +378,12 @@ def main() -> None:
                         help="Disable the self-learning intelligence layer")
     parser.add_argument("--no-edr", action="store_true",
                         help="Disable the EDR layer (incidents, hunting, response)")
+    parser.add_argument("--no-sysmon-setup", action="store_true",
+                        help="Skip Sysmon install/verify at startup — Valkyrie still "
+                             "runs, but command-line, process-injection and "
+                             "credential-dump detection may run in degraded mode "
+                             "without it. For hosts where Sysmon is managed "
+                             "separately, or for testing.")
     parser.add_argument("--no-ransomware-shield", action="store_true",
                         help="Disable the behavioral ransomware shield (canary tripwires)")
     parser.add_argument("--no-amsi", action="store_true",
@@ -1016,6 +1029,38 @@ def main() -> None:
     _set_active_resolution_log(ResolutionLog())
 
     # ------------------------------------------------------------------
+    # 9h. Sysmon — a first-class dependency, not an optional extra. See
+    #     docs/adr/0048-sysmon-dependency.md: without it, T1055/T1003.001 are
+    #     undetectable and command-line detection falls back to a racy 2s
+    #     poller. install_or_verify() never raises and never blocks startup —
+    #     a blocked/failed install (measured live: a mainstream consumer AV's
+    #     self-defense can silently remove the driver with no uninstall
+    #     trail) degrades detection and is reported plainly, it does not
+    #     prevent Valkyrie from running.
+    # ------------------------------------------------------------------
+    _t = time.monotonic()
+    sysmon_result = None
+    if not args.no_sysmon_setup:
+        from .sysmon_manager import install_or_verify
+        try:
+            sysmon_result = install_or_verify()
+        except Exception as exc:      # noqa: BLE001 — belt-and-suspenders on
+            # top of install_or_verify()'s own internal guards: this step must
+            # be able to fail in a way nobody anticipated without taking the
+            # whole agent down with it. Reported exactly like any other
+            # degraded mode, not swallowed silently.
+            from .sysmon_manager import SysmonEnvironment, SysmonInstallResult
+            sysmon_result = SysmonInstallResult(
+                "unknown_error", True,
+                f"Sysmon setup raised unexpectedly ({type(exc).__name__}: {exc}); "
+                "continuing without it.", SysmonEnvironment())
+        if sysmon_result.degraded:
+            console.print(f"[yellow]Sysmon: {sysmon_result.mode} — "
+                          f"{sysmon_result.reason}[/yellow]")
+        else:
+            _tick(f"Sysmon verified ({sysmon_result.mode})", _t)
+
+    # ------------------------------------------------------------------
     # 9g. Deception endpoint — DECEIVE answers a tracker beacon instead of
     #     resolving it to a dead end (0.0.0.0), which was a relabelled block
     #     that still fingerprinted the machine as "runs a blocker". Loopback
@@ -1178,6 +1223,7 @@ def main() -> None:
     network_collector = None
     persistence_collector = None
     cred_watch = None
+    sensor_tamper_monitor = None
     amsi_scanner = None
     from .config import EDR_MODE, EDR_CORRELATION_WINDOW, EDR_PLUGIN_DIR
     if EDR_MODE and not args.no_edr:
@@ -1294,6 +1340,19 @@ def main() -> None:
                 _tick("Endpoint telemetry active (browser credential-store watch)", _tcw)
             else:
                 cred_watch = None
+
+            # Sensor tamper detection (ADR 0048) — nothing previously noticed
+            # when Valkyrie's OWN sensors went dark. Watches Sysmon health
+            # (present / running / collection actually live / expected EIDs
+            # still configured) and raises a CRITICAL T1562.001 incident the
+            # moment a previously-healthy sensor stops delivering, instead of
+            # silently degrading with no signal at all.
+            _tst = time.monotonic()
+            from .sensor_tamper import SensorTamperMonitor
+            sensor_tamper_monitor = SensorTamperMonitor(
+                emit=lambda ev: edr_engine.ingest_telemetry(ev))
+            sensor_tamper_monitor.start()
+            _tick("Sensor tamper detection active", _tst)
 
             # Real-time ETW-backed sensors (PowerShell script-block today; more
             # channels next) hosted by the resilient SensorManager — watchdog,
@@ -1628,6 +1687,7 @@ def main() -> None:
     # (rendered as "off") instead of a 0 that looks like a live-but-idle count.
     if web_state is not None:
         web_state.tls_inspector = tls_inspector
+        web_state.sensor_tamper = sensor_tamper_monitor
 
     # ------------------------------------------------------------------
     # 12. Startup status box (real values) + auto-open dashboard
@@ -1639,7 +1699,7 @@ def main() -> None:
         dns_upstream_port=dns_upstream_port,
         allow_external_fallback=allow_external_fallback, zero_log=zero_log,
         mac_randomizer=mac_randomizer, tls_inspector=tls_inspector,
-        heartbeat=heartbeat,
+        heartbeat=heartbeat, sysmon_result=sysmon_result,
     )
     web_url = f"http://localhost:{args.web_port}"
 
@@ -1700,6 +1760,8 @@ def main() -> None:
             persistence_collector.stop()
         if cred_watch is not None:
             cred_watch.stop()
+        if sensor_tamper_monitor is not None:
+            sensor_tamper_monitor.stop()
         if sensor_manager is not None:
             sensor_manager.stop()
         # After the sensors that use it, so no scan is in flight at teardown.

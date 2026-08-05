@@ -563,6 +563,30 @@ def create_app(ctx: Optional[AppContext] = None):
         set_profile(str((body or {}).get("profile", "")))
         return {"current": get_profile().value}
 
+    @app.get("/api/sysmon/status")
+    async def sysmon_status():
+        """Sysmon presence/health, and whether detection is running degraded
+        without it (ADR 0048). Reads the sensor-tamper monitor's cached last
+        poll rather than probing live — probe_sysmon() shells out to
+        PowerShell several times, which is too slow for a status endpoint a
+        dashboard may poll on every refresh."""
+        if state.sensor_tamper is None:
+            return {"monitored": False,
+                    "note": "sensor tamper detection is not active "
+                            "(EDR disabled, or --no-edr)"}
+        status = state.sensor_tamper.current_status()
+        sysmon_healthy = status.get("sysmon")
+        return {"monitored": True,
+                "sysmon_healthy": sysmon_healthy,
+                "degraded": sysmon_healthy is False,
+                "detail": "unknown — no poll has completed yet"
+                          if sysmon_healthy is None else
+                          ("Sysmon is providing the event types Valkyrie needs"
+                           if sysmon_healthy else
+                           "Sysmon is degraded or absent — command-line, "
+                           "process-injection and credential-dump detection "
+                           "may be running in degraded mode")}
+
     @app.get("/api/decoys/status")
     async def decoys_status():
         """How many decoy honeytokens are live (0 = not deployed)."""

@@ -21,6 +21,12 @@ SAFETY. This boots a real engine, so it is deliberately constrained:
   * `--no-dns --no-firewall --no-unbound` — it never touches system DNS,
     never installs a firewall rule, never starts a resolver. Those are the
     paths that have taken this machine offline before.
+  * `--no-sysmon-setup` — sysmon_manager.install_or_verify() (ADR 0048) would
+    otherwise attempt a REAL download-and-install of Sysmon on whatever host
+    runs this suite every single time it boots the agent. That is a live
+    system change with its own failure modes (see the ADR — a mainstream
+    consumer AV can silently collide with it), and a unit-test smoke boot
+    must never trigger it.
 It is therefore safe on a developer workstation, which is the only reason it
 can live in the default suite rather than the host-affecting exclusion list.
 """
@@ -66,6 +72,7 @@ def main() -> int:
                PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
     cmd = [sys.executable, "-m", "valkyrie",
            "--no-dns", "--no-firewall", "--no-unbound", "--no-ui",
+           "--no-sysmon-setup",
            "--web", "--web-port", str(port)]
 
     print(f"\nbooting an isolated engine on 127.0.0.1:{port}")
