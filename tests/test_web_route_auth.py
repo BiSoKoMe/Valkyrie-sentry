@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import sys
 import tempfile
+from contextlib import ExitStack
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -40,6 +42,50 @@ _MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 # route, not an oversight. The HTML shell carries no data — every API call it
 # makes is itself gated.
 _PUBLIC_PREFIXES = ("/static", "/docs", "/redoc", "/openapi.json")
+
+# HOST-AFFECTING. This file's whole point is to let requests reach real
+# handlers with a *valid* token (step [3] below) so the "gate opens" check is
+# not vacuous — and separately, a bug that removes a route's auth gate would
+# make the *no-token* sweep reach the real handler too. Several handlers are
+# not simulations: mac.randomize()/restore() write the Windows NetworkAddress
+# registry value and cycle a real adapter with `netsh ... admin=disabled` (the
+# exact mechanism the project's safety rules forbid running live), meeting
+# mode's activate() flips the Windows Firewall to block-all, and system
+# restart/shutdown spawn a detached PowerShell script. None of that may ever
+# fire just because this file ran. Patched to safe no-ops for the whole test,
+# regardless of which routes land in the enumerated set or the sample below —
+# this is the actual safety mechanism, not the sample filtering underneath it.
+_DANGER_PATCHES = (
+    ("valkyrie.mac_randomizer.MacRandomizer.randomize",
+     lambda self, interface=None: "AA:BB:CC:DD:EE:FF"),
+    ("valkyrie.mac_randomizer.MacRandomizer.restore",
+     lambda self, interface=None: "AA:BB:CC:DD:EE:FF"),
+    ("valkyrie.meeting_mode.MeetingMode.activate",
+     lambda self: {"active": True, "test_stub": True}),
+    ("valkyrie.meeting_mode.MeetingMode.deactivate",
+     lambda self: {"active": False, "test_stub": True}),
+    ("valkyrie.web.server._run_detached_ps",
+     lambda ps_command: None),
+    ("valkyrie.telemetry_killer.TelemetryKiller.kill",
+     lambda self: {}),
+    ("valkyrie.telemetry_killer.TelemetryKiller.restore",
+     lambda self: {}),
+)
+
+# Belt-and-suspenders on top of the patches above: even with every dangerous
+# primitive stubbed out, these specific routes are excluded from the "does a
+# valid token actually open the gate" sample so that a future stub that misses
+# a new code path still can't reach live hardware/OS side effects here.
+_UNSAFE_TO_SAMPLE = {
+    ("/api/mac/randomize", "POST"),
+    ("/api/mac/restore", "POST"),
+    ("/api/system/restart", "POST"),
+    ("/api/system/shutdown", "POST"),
+    ("/api/meeting/start", "POST"),
+    ("/api/meeting/stop", "POST"),
+    ("/api/telemetry/kill", "POST"),
+    ("/api/telemetry/restore", "POST"),
+}
 
 
 def _is_public(path: str) -> bool:
@@ -76,6 +122,15 @@ def main() -> int:
     from testclient_compat import make_client
 
     c = Checks("web route auth", expect_min=8)
+
+    stack = ExitStack()
+    for target, fn in _DANGER_PATCHES:
+        try:
+            stack.enter_context(mock.patch(target, fn))
+        except (ImportError, AttributeError) as exc:
+            stack.close()
+            return skip_file("web route auth",
+                              f"could not patch host-affecting handler {target}: {exc}")
 
     td = tempfile.mkdtemp()
     store = Store(db_path=Path(td) / "route_auth.db")
@@ -134,7 +189,9 @@ def main() -> int:
     # non-empty string would pass every check above.
     print("[2] a wrong token is rejected exactly like no token")
     bad = {"X-Valkyrie-Token": "not-the-token"}
-    sample = [r for r in routes if not _concrete(r[0]).count("test-id")][:5] or routes[:5]
+    sampleable = [r for r in routes
+                  if not _concrete(r[0]).count("test-id") and r not in _UNSAFE_TO_SAMPLE]
+    sample = sampleable[:5] or routes[:5]
     wrong_ok = []
     for path, method in sample:
         code = remote.request(method, _concrete(path), headers=bad).status_code
@@ -175,6 +232,7 @@ def main() -> int:
             print(f"    - {n}")
 
     store.stop()
+    stack.close()
     return c.finish()
 
 
