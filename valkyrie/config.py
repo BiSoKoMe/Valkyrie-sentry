@@ -251,6 +251,14 @@ THREAT_INTEL_SOURCES = [
      "https://feodotracker.abuse.ch/downloads/ipblocklist.txt"),
     ("urlhaus", "domain", "malware_distribution",
      "https://urlhaus.abuse.ch/downloads/hostfile/"),
+    # Full-URL (path-level) malware distribution. The hostfile feed above can
+    # only ever say "this DOMAIN is bad", which is the wrong verdict for the
+    # common case — malware hosted on a compromised but otherwise legitimate
+    # site. This feed carries the exact URL, so the TLS inspector can block
+    # the one malicious path and leave the rest of the site working. Matched
+    # ONLY where a full URL exists (TLS inspection); DNS never sees a path.
+    ("urlhaus_url", "url", "malware_distribution",
+     "https://urlhaus.abuse.ch/downloads/text_recent/"),
     # ThreatFox recent IOC export (community-confirmed botnet C2s across
     # malware families; quoted-CSV ip:port rows). Chosen over SSLBL's IP
     # blacklist, which abuse.ch deprecated on 2025-01-03.
@@ -667,10 +675,18 @@ LEARNING_PERIOD_DAYS    = 7       # baseline learning window after first start
 ANOMALY_BLOCK_THRESHOLD = 0.7     # classifier score at/above which we block
 ANOMALY_FLAG_THRESHOLD  = 0.4     # classifier score at/above which we flag
 
-# Downloaded blocklist/IP feeds are OPT-IN: default protection is the
-# built-in seed blocklist (seed_blocklist.py) + learned intelligence.
-# Enable per-run with --download-lists, or permanently by setting True.
-USE_EXTERNAL_LISTS      = False
+# Downloaded blocklist/threat-intel feeds. DEFAULT ON (as of 2026-08):
+# "detect and block like the commercial EDRs/DNS-security products" assumes
+# live threat intelligence, not just the built-in seed blocklist + learned
+# intelligence — Feodo/URLhaus/ThreatFox (threat_intel.py) and the tracker-
+# blocklist refresh (blocklist.py) were previously silent no-ops for anyone
+# who didn't know to pass --download-lists, which is not an honest default
+# for a security product. Matching stays 100% local either way (nothing but
+# the periodic feed fetch itself ever leaves the machine — see
+# threat_intel.py's module docstring); this flag only controls whether that
+# fetch happens. Opt OUT per-run with --no-download-lists, or permanently by
+# setting False here.
+USE_EXTERNAL_LISTS      = True
 
 INTEL_FLUSH_INTERVAL    = 30      # seconds between SQLite flushes of learned state
 INTEL_HISTORY_SAMPLES   = 16      # timestamps/payloads kept per (process, domain)
