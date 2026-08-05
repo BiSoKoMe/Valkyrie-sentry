@@ -207,6 +207,22 @@ UPSTREAM_SERVERS: list[str] = [
 SINKHOLE_IPV4 = "0.0.0.0"
 SINKHOLE_IPV6 = "::"
 
+# Where a DECEIVED name resolves — the loopback deception endpoint
+# (valkyrie/deception.py), NOT the sinkhole.
+#
+# The distinction is the whole point of DECEIVE. A sinkholed beacon fails at
+# connect and tells the tracker nothing false; worse, a machine whose beacons
+# reliably fail while its other traffic resolves is identifiable as one that
+# runs a blocker — a smaller and more distinctive population than the one the
+# user was trying to disappear into. Pointing at a listening local endpoint
+# means the beacon is ANSWERED, with a plausible, persona-consistent reply.
+#
+# Loopback only. This must never be routable off-machine: a deception endpoint
+# reachable from the network is a service others can query and fingerprint.
+DECEPTION_IPV4 = "127.0.0.1"
+DECEPTION_IPV6 = "::1"
+DECEPTION_PORT = int(os.environ.get("VALKYRIE_DECEPTION_PORT", "8181"))
+
 # Reserved local name the protection heartbeat resolves to prove the DNS
 # interceptor is still answering. The interceptor serves it INSTANTLY and
 # locally (never upstream), so an offline machine still reports HEALTHY instead

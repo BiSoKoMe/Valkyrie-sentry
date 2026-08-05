@@ -53,6 +53,8 @@ from .config import (
     HEALTH_PROBE_DOMAIN,
     SINKHOLE_IPV4,
     SINKHOLE_IPV6,
+    DECEPTION_IPV4,
+    DECEPTION_IPV6,
     UPSTREAM_SERVERS,
 )
 from .process_watcher import ProcessInfo, ProcessWatcher, _UNKNOWN
@@ -134,6 +136,7 @@ class DNSInterceptor:
         firewall=None,              # valkyrie.firewall.FirewallManager (optional)
         threat_intel=None,          # valkyrie.threat_intel.ThreatIntelManager (optional)
         content_watch=None,         # valkyrie.content_watch.ContentWatcher (optional)
+        deception=None,             # valkyrie.deception.DeceptionEndpoint (optional)
         strict: bool = False,
         host: str          = DNS_LISTEN_HOST,
         port: int          = DNS_LISTEN_PORT,
@@ -152,6 +155,11 @@ class DNSInterceptor:
         # Background page-content analysis. Optional and fail-open: when None,
         # _decide behaves exactly as it did before this was added.
         self._content_watch = content_watch
+        # Deception endpoint. Optional and fail-safe: when absent or not
+        # listening, DECEIVE falls back to the sinkhole address, i.e. exactly
+        # the previous behaviour. Nothing here can make DECEIVE worse than the
+        # dead-end it used to be.
+        self._deception     = deception
         # Firewall's in-process CIDR set (12k+ threat-intel ranges). Consulted
         # AFTER an allowed query is resolved: if the upstream answer points at
         # an IP inside a blocked range we sinkhole the reply instead of handing
@@ -649,18 +657,57 @@ class DNSInterceptor:
     def _build_response(
         self, request: "dns.message.Message", qname: str, qtype: int, decision: str
     ) -> bytes:
-        # "deceived" is a soft block for tracker/telemetry (Standard profile):
-        # the app gets a decoy dead-end answer instead of a hard failure, so it
-        # keeps working while its telemetry goes nowhere. Same wire response as a
-        # sinkhole today; it is the hook a fake-data honeypot plugs into later.
-        if decision in ("blocked", "behavioral", "deceived"):
+        # "deceived" is a soft block for tracker/telemetry (Standard profile).
+        #
+        # It used to return the SINKHOLE address, which made it a relabelled
+        # block: the beacon failed at connect, the tracker learned nothing
+        # false, and a machine whose beacons reliably fail while everything
+        # else resolves is marked "runs a blocker" -- a small, stable, easily
+        # singled-out population. Deception that only fails is anti-deception.
+        #
+        # It now points at the loopback deception endpoint (deception.py), which
+        # accepts the connection and answers with a plausible, persona-consistent
+        # reply. Fall back to the sinkhole when the endpoint is not listening,
+        # because an address with nothing behind it is strictly worse than the
+        # sinkhole -- it costs the client a connect timeout for the same failure.
+        if decision == "deceived":
+            deceive_ip = self._deception_address()
+            if deceive_ip is not None:
+                return self._sinkhole_response(request, qname, qtype,
+                                               ipv4=deceive_ip,
+                                               ipv6=DECEPTION_IPV6)
+            return self._sinkhole_response(request, qname, qtype)
+        if decision in ("blocked", "behavioral"):
             return self._sinkhole_response(request, qname, qtype)
         else:
             return self._forward(request)
 
+    def _deception_address(self) -> "str | None":
+        """Loopback IP to hand out for DECEIVE, or None to use the sinkhole.
+
+        Checked per response rather than cached at construction: the endpoint
+        can fail to bind (port in use) or be stopped at runtime, and handing out
+        an address with nothing behind it turns a served lie into a connect
+        timeout -- a worse outcome than the sinkhole we came from.
+        """
+        ep = getattr(self, "_deception", None)
+        try:
+            if ep is not None and ep.running:
+                return DECEPTION_IPV4
+        except Exception:
+            pass
+        return None
+
     def _sinkhole_response(
-        self, request: "dns.message.Message", qname: str, qtype: int
+        self, request: "dns.message.Message", qname: str, qtype: int,
+        ipv4: str = SINKHOLE_IPV4, ipv6: str = SINKHOLE_IPV6,
     ) -> bytes:
+        """Answer locally with `ipv4`/`ipv6`.
+
+        Defaults are the sinkhole (a dead-end). DECEIVE overrides them with the
+        deception endpoint's loopback address so the beacon is answered rather
+        than dropped -- same wire construction, different destination.
+        """
         response = dns.message.make_response(request)
         response.flags |= dns.flags.AA
 
@@ -669,13 +716,13 @@ class DNSInterceptor:
             rrset = response.find_rrset(
                 response.answer, name, dns.rdataclass.IN, dns.rdatatype.AAAA, create=True
             )
-            rdata = dns.rdtypes.IN.AAAA.AAAA(dns.rdataclass.IN, dns.rdatatype.AAAA, SINKHOLE_IPV6)
+            rdata = dns.rdtypes.IN.AAAA.AAAA(dns.rdataclass.IN, dns.rdatatype.AAAA, ipv6)
             rrset.add(rdata, ttl=60)
         else:
             rrset = response.find_rrset(
                 response.answer, name, dns.rdataclass.IN, dns.rdatatype.A, create=True
             )
-            rdata = dns.rdtypes.IN.A.A(dns.rdataclass.IN, dns.rdatatype.A, SINKHOLE_IPV4)
+            rdata = dns.rdtypes.IN.A.A(dns.rdataclass.IN, dns.rdatatype.A, ipv4)
             rrset.add(rdata, ttl=60)
 
         return response.to_wire()

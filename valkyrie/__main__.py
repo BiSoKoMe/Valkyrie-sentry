@@ -1003,6 +1003,29 @@ def main() -> None:
         _tick("Page-content analysis started", _t)
 
     # ------------------------------------------------------------------
+    # 9g. Deception endpoint — DECEIVE answers a tracker beacon instead of
+    #     resolving it to a dead end (0.0.0.0), which was a relabelled block
+    #     that still fingerprinted the machine as "runs a blocker". Loopback
+    #     only (DeceptionEndpoint enforces this in its constructor); a failed
+    #     bind (port in use) leaves `deception` None and DNSInterceptor falls
+    #     back to the sinkhole exactly as before — this can only ever improve
+    #     on the old behaviour, never regress it. See deception.py / persona.py.
+    # ------------------------------------------------------------------
+    _t = time.monotonic()
+    deception = None
+    if not args.no_dns:
+        from .config import DECEPTION_PORT
+        from .deception import DeceptionEndpoint
+        deception = DeceptionEndpoint(port=DECEPTION_PORT)
+        if deception.start():
+            _tick(f"Deception endpoint listening on 127.0.0.1:{DECEPTION_PORT}", _t)
+        else:
+            console.print(f"[dim]Deception endpoint unavailable (port "
+                          f"{DECEPTION_PORT} in use) — DECEIVE falls back to "
+                          f"the sinkhole[/dim]")
+            deception = None
+
+    # ------------------------------------------------------------------
     # 10. DNS interceptor
     # ------------------------------------------------------------------
     _t = time.monotonic()
@@ -1026,6 +1049,7 @@ def main() -> None:
             firewall        = (firewall if not args.no_firewall else None),
             threat_intel    = threat_intel,
             content_watch   = content_watch,
+            deception       = deception,
             strict          = args.strict,
             host            = args.host,
             port            = args.port,
@@ -1657,6 +1681,8 @@ def main() -> None:
         # worker we are in the middle of shutting down.
         if content_watch is not None:
             content_watch.stop()
+        if deception is not None:
+            deception.stop()
         if persistence_collector is not None:
             persistence_collector.stop()
         if cred_watch is not None:
