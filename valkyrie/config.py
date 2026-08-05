@@ -253,6 +253,15 @@ BLOCKLIST_SOURCES = [
 BLOCKLIST_MAX_AGE_DAYS = 7
 
 # ---------------------------------------------------------------------------
+# Sysmon (valkyrie/sysmon_manager.py) — a first-class dependency, not a
+# bundled binary. The Sysinternals EULA forbids redistribution, so Valkyrie
+# never ships Sysmon64.exe; it downloads the official signed build from
+# Microsoft's own Sysinternals live endpoint at install/first-run time and
+# verifies the Authenticode signature before executing anything extracted
+# from it. See docs/adr/0048-sysmon-dependency.md.
+SYSMON_DOWNLOAD_URL = "https://download.sysinternals.com/files/Sysmon.zip"
+
+# ---------------------------------------------------------------------------
 # Threat-intelligence IOC feeds (valkyrie/threat_intel.py)
 # ---------------------------------------------------------------------------
 # Active threat infrastructure — botnet C2s and live malware-distribution
