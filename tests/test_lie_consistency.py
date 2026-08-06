@@ -78,7 +78,8 @@ BEACON_PATHS = [
 # and is not listed here it simply is not consistency-checked, so this list is
 # deliberately derived from the reply body rather than hand-maintained.
 _IDENTITY_KEYS = ("id", "locale", "lang", "tz", "tz_offset", "country",
-                  "cores", "mem", "platform", "screen")
+                  "cores", "mem", "platform", "screen",
+                  "geo", "os", "browser")
 
 
 def _client_block(body: bytes):
@@ -217,6 +218,48 @@ def main() -> int:
                 len(vals) <= 1)
 
     # ------------------------------------------------------------------
+    # 3b. REPLAY STABILITY — mechanical proof that "the same tracker asking
+    #     twice gets the same answer" holds under repetition, not just once.
+    #     A pure-function check alone could pass while the HTTP layer (header
+    #     ordering, keep-alive state, encoding) drifted between calls, so this
+    #     replays through BOTH the pure function and a real socket.
+    # ------------------------------------------------------------------
+    replay_path, replay_query, _ = BEACON_PATHS[0]
+    pure_replies = {build_reply("GET", replay_path, replay_query, {}, p).body
+                    for _ in range(100)}
+    c.check(f"pure layer: same beacon replayed 100x is byte-identical every "
+            f"time ({len(pure_replies)} distinct response(s))",
+            len(pure_replies) == 1)
+
+    ep_replay = DeceptionEndpoint(port=0, persona=PersonaStore(seed_path).persona())
+    c.check("replay session: deception endpoint bound and running",
+            ep_replay.start() and ep_replay.running)
+    try:
+        url = f"http://127.0.0.1:{ep_replay.port}{replay_path}?{replay_query}"
+        seen = set()
+        for _ in range(100):
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                seen.add(resp.read())
+        c.check(f"LIVE: same beacon replayed 100x over a real socket is "
+                f"byte-identical every time ({len(seen)} distinct response(s))",
+                len(seen) == 1)
+    finally:
+        ep_replay.stop()
+
+    # And once more across freshly-simulated sessions (fresh process, fresh
+    # store, same persisted seed) rather than one long-lived connection — the
+    # scenario the module's stability guarantee is actually about.
+    cross_session_replies = set()
+    for _ in range(5):
+        persona_n = PersonaStore(seed_path).persona()
+        for _ in range(20):     # 5 sessions x 20 = 100 replays total
+            cross_session_replies.add(
+                build_reply("GET", replay_path, replay_query, {}, persona_n).body)
+    c.check(f"same beacon replayed 100x across 5 simulated sessions is "
+            f"byte-identical every time ({len(cross_session_replies)} distinct)",
+            len(cross_session_replies) == 1)
+
+    # ------------------------------------------------------------------
     # 4. NEGATIVE CONTROLS — prove the checker rejects real contradictions.
     #    Without these the whole file could be passing vacuously.
     # ------------------------------------------------------------------
@@ -245,6 +288,20 @@ def main() -> int:
          replace(base, languages=())),
         ("non-positive screen dimensions",
          replace(base, screen_width=0)),
+        ("geo city/region contradicts timezone",
+         replace(base, city="Tokyo", region="Tokyo")),
+        ("coordinates contradict the claimed city",
+         replace(base, lat=35.7, lon=139.7)),
+        ("latitude out of range",
+         replace(base, lat=200.0)),
+        ("empty city",
+         replace(base, city="", region="")),
+        ("os_name contradicts Win32 platform",
+         replace(base, os_name="Linux")),
+        ("browser_version is not a dotted-numeric string",
+         replace(base, browser_version="latest")),
+        ("browser is not a real browser name",
+         replace(base, browser="ValkyrieBrowser")),
     ]
     c.check("the control persona is itself coherent (else the mutations below "
             "prove nothing)", base.is_coherent())

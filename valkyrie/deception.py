@@ -155,6 +155,13 @@ def _persona_block(p: Persona) -> dict:
         "cores": p.hardware_concurrency,
         "mem": p.device_memory,
         "platform": p.platform,
+        # Coarse geo (city-level, from the SAME persona row as tz/country --
+        # see persona.py) and OS/browser hints. Every field below still comes
+        # from this one Persona object, so adding them cannot introduce a
+        # second source of truth for any beacon family to disagree through.
+        "geo": {"region": p.region, "city": p.city, "lat": p.lat, "lon": p.lon},
+        "os": {"name": p.os_name, "version": p.os_version},
+        "browser": {"name": p.browser, "version": p.browser_version},
     }
 
 

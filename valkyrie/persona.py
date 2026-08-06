@@ -64,6 +64,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import threading
 import uuid
@@ -71,7 +72,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
 
-PERSONA_SCHEMA = 1
+PERSONA_SCHEMA = 2
 
 # ---------------------------------------------------------------------------
 # Coherence tables.
@@ -91,31 +92,52 @@ PERSONA_SCHEMA = 1
 # client whose offset never changes across a DST boundary while claiming a
 # DST-observing zone is itself a contradiction.
 # ---------------------------------------------------------------------------
+#
+# `region`/`city`/`lat`/`lon` add COARSE geo — the resolution an IP-based geo
+# lookup actually gives a real beacon (tens of km), never GPS precision. Kept
+# in the SAME row as locale/tz/country/std_offset so geo is physically
+# incapable of disagreeing with the timezone it lives beside — there is no
+# separate "pick a city" step that a different persona-derived channel could
+# get wrong. lat/lon are rounded to 1 decimal (~11km) on purpose: a location
+# reported to six decimal places is street-level precision no IP-geo service
+# hands out, and would itself be an implausibly precise "coarse" geo.
 _LOCALES: tuple[dict, ...] = (
     {"locale": "en-US", "languages": ("en-US", "en"), "tz": "America/New_York",
-     "std_offset": -300, "dst": True,  "country": "US", "weight": 26},
+     "std_offset": -300, "dst": True,  "country": "US", "weight": 26,
+     "region": "New York", "city": "New York", "lat": 40.7, "lon": -74.0},
     {"locale": "en-US", "languages": ("en-US", "en"), "tz": "America/Chicago",
-     "std_offset": -360, "dst": True,  "country": "US", "weight": 12},
+     "std_offset": -360, "dst": True,  "country": "US", "weight": 12,
+     "region": "Illinois", "city": "Chicago", "lat": 41.9, "lon": -87.6},
     {"locale": "en-US", "languages": ("en-US", "en"), "tz": "America/Los_Angeles",
-     "std_offset": -480, "dst": True,  "country": "US", "weight": 14},
+     "std_offset": -480, "dst": True,  "country": "US", "weight": 14,
+     "region": "California", "city": "Los Angeles", "lat": 34.1, "lon": -118.2},
     {"locale": "en-GB", "languages": ("en-GB", "en"), "tz": "Europe/London",
-     "std_offset": 0,    "dst": True,  "country": "GB", "weight": 9},
+     "std_offset": 0,    "dst": True,  "country": "GB", "weight": 9,
+     "region": "England", "city": "London", "lat": 51.5, "lon": -0.1},
     {"locale": "de-DE", "languages": ("de-DE", "de", "en"), "tz": "Europe/Berlin",
-     "std_offset": 60,   "dst": True,  "country": "DE", "weight": 8},
+     "std_offset": 60,   "dst": True,  "country": "DE", "weight": 8,
+     "region": "Berlin", "city": "Berlin", "lat": 52.5, "lon": 13.4},
     {"locale": "fr-FR", "languages": ("fr-FR", "fr", "en"), "tz": "Europe/Paris",
-     "std_offset": 60,   "dst": True,  "country": "FR", "weight": 6},
+     "std_offset": 60,   "dst": True,  "country": "FR", "weight": 6,
+     "region": "Ile-de-France", "city": "Paris", "lat": 48.9, "lon": 2.4},
     {"locale": "es-ES", "languages": ("es-ES", "es", "en"), "tz": "Europe/Madrid",
-     "std_offset": 60,   "dst": True,  "country": "ES", "weight": 5},
+     "std_offset": 60,   "dst": True,  "country": "ES", "weight": 5,
+     "region": "Madrid", "city": "Madrid", "lat": 40.4, "lon": -3.7},
     {"locale": "pt-BR", "languages": ("pt-BR", "pt", "en"), "tz": "America/Sao_Paulo",
-     "std_offset": -180, "dst": False, "country": "BR", "weight": 6},
+     "std_offset": -180, "dst": False, "country": "BR", "weight": 6,
+     "region": "Sao Paulo", "city": "Sao Paulo", "lat": -23.6, "lon": -46.6},
     {"locale": "en-CA", "languages": ("en-CA", "en", "fr"), "tz": "America/Toronto",
-     "std_offset": -300, "dst": True,  "country": "CA", "weight": 4},
+     "std_offset": -300, "dst": True,  "country": "CA", "weight": 4,
+     "region": "Ontario", "city": "Toronto", "lat": 43.7, "lon": -79.4},
     {"locale": "en-AU", "languages": ("en-AU", "en"), "tz": "Australia/Sydney",
-     "std_offset": 600,  "dst": True,  "country": "AU", "weight": 3},
+     "std_offset": 600,  "dst": True,  "country": "AU", "weight": 3,
+     "region": "New South Wales", "city": "Sydney", "lat": -33.9, "lon": 151.2},
     {"locale": "it-IT", "languages": ("it-IT", "it", "en"), "tz": "Europe/Rome",
-     "std_offset": 60,   "dst": True,  "country": "IT", "weight": 4},
+     "std_offset": 60,   "dst": True,  "country": "IT", "weight": 4,
+     "region": "Lazio", "city": "Rome", "lat": 41.9, "lon": 12.5},
     {"locale": "nl-NL", "languages": ("nl-NL", "nl", "en"), "tz": "Europe/Amsterdam",
-     "std_offset": 60,   "dst": True,  "country": "NL", "weight": 3},
+     "std_offset": 60,   "dst": True,  "country": "NL", "weight": 3,
+     "region": "North Holland", "city": "Amsterdam", "lat": 52.4, "lon": 4.9},
 )
 
 # Real desktop resolutions, ordered roughly by market share. `taskbar` is the
@@ -145,6 +167,29 @@ _CORES: tuple[dict, ...] = (
 _MEMORY: tuple[dict, ...] = (
     {"v": 4, "weight": 30}, {"v": 8, "weight": 55}, {"v": 2, "weight": 15},
 )
+
+# OS/browser hints. Every row is Windows -- `platform` is a Win32 constant
+# below, not derived, so a row pairing a Windows platform with a non-Windows
+# browser build would be exactly the "picked independently" contradiction this
+# whole module exists to avoid. Windows 10 and 11 are DELIBERATELY both
+# "os_version": "10.0" -- that is not a typo, it is what real UA strings do:
+# Windows 11 never bumped the kernel version token trackers actually read, so
+# a persona that reported "11.0" here would be MORE identifiable than either
+# real OS, not more honest. Versions are recent-but-not-bleeding-edge builds,
+# matching what a population that updates on a normal cadence looks like.
+_CLIENTS: tuple[dict, ...] = (
+    {"os": "Windows 11", "os_version": "10.0", "browser": "Chrome",
+     "browser_version": "124.0.0.0", "weight": 30},
+    {"os": "Windows 10", "os_version": "10.0", "browser": "Chrome",
+     "browser_version": "124.0.0.0", "weight": 24},
+    {"os": "Windows 11", "os_version": "10.0", "browser": "Edge",
+     "browser_version": "124.0.2478.80", "weight": 18},
+    {"os": "Windows 10", "os_version": "10.0", "browser": "Firefox",
+     "browser_version": "125.0", "weight": 12},
+    {"os": "Windows 11", "os_version": "10.0", "browser": "Edge",
+     "browser_version": "123.0.2420.97", "weight": 10},
+)
+_BROWSER_VERSION_RE = re.compile(r"^\d+(?:\.\d+){1,3}$")
 
 
 def _weighted_pick(table: tuple[dict, ...], token: int) -> dict:
@@ -186,6 +231,14 @@ class Persona:
     hardware_concurrency: int
     device_memory: int
     platform: str
+    region: str                  # coarse geo: state/province, same row as tz
+    city: str                    # coarse geo: representative city, same row
+    lat: float                   # rounded to 1 decimal -- city-level, not GPS
+    lon: float
+    os_name: str                 # marketing name, e.g. "Windows 11"
+    os_version: str              # UA-reported kernel token, e.g. "10.0"
+    browser: str
+    browser_version: str
 
     def as_dict(self) -> dict:
         d = asdict(self)
@@ -218,6 +271,34 @@ class Persona:
             if row["country"] != self.country:
                 errs.append(f"country {self.country!r} contradicts timezone "
                             f"{self.timezone!r}")
+            if row["region"] != self.region or row["city"] != self.city:
+                errs.append(
+                    f"geo {self.city!r}, {self.region!r} does not match "
+                    f"timezone {self.timezone!r} (expected {row['city']!r}, "
+                    f"{row['region']!r})")
+            if row["lat"] != self.lat or row["lon"] != self.lon:
+                errs.append(
+                    f"coordinates ({self.lat}, {self.lon}) do not match the "
+                    f"city they claim to be in (expected "
+                    f"({row['lat']}, {row['lon']}))")
+
+        if not (-90.0 <= self.lat <= 90.0):
+            errs.append(f"latitude {self.lat} is out of range")
+        if not (-180.0 <= self.lon <= 180.0):
+            errs.append(f"longitude {self.lon} is out of range")
+        if not self.region or not self.city:
+            errs.append("empty region/city -- no real IP-geo lookup returns none")
+
+        if self.platform == "Win32" and not self.os_name.startswith("Windows"):
+            errs.append(
+                f"os_name {self.os_name!r} contradicts platform "
+                f"{self.platform!r} (Win32 must report a Windows os_name)")
+        if not _BROWSER_VERSION_RE.match(self.browser_version):
+            errs.append(
+                f"browser_version {self.browser_version!r} is not a "
+                f"dotted-numeric version string")
+        if self.browser not in {"Chrome", "Edge", "Firefox"}:
+            errs.append(f"browser {self.browser!r} is not a real browser name")
 
         if not self.languages:
             errs.append("empty language list -- no real browser reports none")
@@ -274,6 +355,7 @@ def build_persona(seed: bytes) -> Persona:
     scr = _weighted_pick(_SCREENS, _derive(seed, "screen"))
     cores = _weighted_pick(_CORES, _derive(seed, "cores"))
     mem = _weighted_pick(_MEMORY, _derive(seed, "memory"))
+    client = _weighted_pick(_CLIENTS, _derive(seed, "client"))
 
     # A GUID derived from the seed rather than uuid4(), so it survives restarts.
     # Version/variant bits are set so it is a well-formed v4 UUID -- a GUID that
@@ -301,6 +383,14 @@ def build_persona(seed: bytes) -> Persona:
         hardware_concurrency=cores["v"],
         device_memory=mem["v"],
         platform="Win32",
+        region=loc["region"],
+        city=loc["city"],
+        lat=loc["lat"],
+        lon=loc["lon"],
+        os_name=client["os"],
+        os_version=client["os_version"],
+        browser=client["browser"],
+        browser_version=client["browser_version"],
     )
 
 
