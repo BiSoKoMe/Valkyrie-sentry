@@ -294,6 +294,7 @@ class EdrEngine:
                     title=det.title, severity=det.severity, category=det.category,
                     entity=det.entity, process_name=det.process_name,
                     process_pid=det.process_pid, detection_count=1,
+                    technique=det.technique,
                 )
                 inc.timeline.append(TimelineEntry(
                     kind="detection", summary=det.title,
@@ -322,6 +323,12 @@ class EdrEngine:
                 det.incident_id = existing.id
                 self._edr.add_detection(det)
                 existing.severity = max_severity(existing.severity, det.severity)
+                # Backfill only when missing -- the FIRST detection to name a
+                # technique wins. A later correlated detection with no
+                # technique of its own (e.g. a plain DNS re-hit) must never
+                # blank out one an earlier detection already established.
+                if not existing.technique and det.technique:
+                    existing.technique = det.technique
                 existing.detection_count += 1
                 existing.touch()
                 existing.timeline.append(TimelineEntry(
@@ -552,13 +559,39 @@ class EdrEngine:
 # Wire helpers
 # ---------------------------------------------------------------------------
 
+def _incident_explanation(inc: Incident) -> str:
+    """One plain-language line for why this incident exists.
+
+    Without this, seeing the "why" behind an incident meant opening the full
+    replay view to read the timeline — the list a user actually scans showed
+    only a title. Prefers the profile-aware decision engine's own reasoning
+    (`kind="decision"`, written by `decide()` specifically to be read by a
+    human — see engine.py's ingest path), which explains the ACTION taken,
+    not just what was observed; falls back to the first detection's summary,
+    then the bare title, so this is never empty.
+    """
+    for entry in inc.timeline:
+        if isinstance(entry, dict) and entry.get("kind") == "decision":
+            summary = entry.get("summary")
+            if summary:
+                return str(summary)
+    for entry in inc.timeline:
+        if isinstance(entry, dict) and entry.get("kind") == "detection":
+            summary = entry.get("summary")
+            if summary:
+                return str(summary)
+    return inc.title
+
+
 def _inc_wire(inc: Incident) -> dict:
     """A compact incident view for lists and live pushes (no full timeline)."""
     return {
         "id": inc.id,
         "title": inc.title,
+        "explanation": _incident_explanation(inc),
         "severity": inc.severity,
         "category": inc.category,
+        "technique": inc.technique,
         "entity": inc.entity,
         "process_name": inc.process_name,
         "process_pid": inc.process_pid,

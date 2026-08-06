@@ -148,6 +148,7 @@ class Incident:
     category:     str = ""
     entity:       str = ""                  # primary subject (process or domain)
     status:       str = "open"
+    technique:    str = ""                  # MITRE id(s), e.g. "T1562.001"
     process_name: str = ""
     process_pid:  int = 0                    # live only; not persisted (see store)
     assignee:     str = ""

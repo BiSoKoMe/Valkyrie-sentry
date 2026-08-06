@@ -161,6 +161,29 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     check("distinct category → separate incident",
           len(engine.list_incidents()) == 2)
 
+    # `technique` was captured per-Detection from day one (edr_detections has
+    # had the column since the start) but never copied onto the Incident it
+    # correlated into, so a real MITRE id like T1562.001 was computed and
+    # then discarded before it ever reached the incident list/API.
+    engine.report_detection(schema.Detection(
+        source="sensor_tamper_monitor", severity="critical", category="process",
+        title="sensor tamper", entity="sysmon", technique="T1562.001"))
+    tamper_incs = [i for i in engine.list_incidents() if i["entity"] == "sysmon"]
+    check("a new incident carries its detection's technique",
+          bool(tamper_incs) and tamper_incs[0]["technique"] == "T1562.001")
+    check("the wire format includes an 'explanation' field",
+          bool(tamper_incs) and bool(tamper_incs[0].get("explanation")))
+
+    # A second, technique-LESS detection folding into the same incident must
+    # not blank out the technique the first detection already established.
+    engine.report_detection(schema.Detection(
+        source="sensor_tamper_monitor", severity="critical", category="process",
+        title="sensor tamper again", entity="sysmon", technique=""))
+    tamper_incs2 = [i for i in engine.list_incidents() if i["entity"] == "sysmon"]
+    check("still ONE incident (correlated, not duplicated)", len(tamper_incs2) == 1)
+    check("a later technique-less detection does not blank an established technique",
+          bool(tamper_incs2) and tamper_incs2[0]["technique"] == "T1562.001")
+
     inc_id = fw_incs[0]["id"]
     detail = engine.get_incident(inc_id)
     check("incident detail carries its detections", len(detail["detections"]) == 3)

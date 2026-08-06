@@ -86,6 +86,7 @@ class EdrStore:
                     entity          TEXT NOT NULL DEFAULT '',
                     process_name    TEXT NOT NULL DEFAULT '',
                     status          TEXT NOT NULL DEFAULT 'open',
+                    technique       TEXT NOT NULL DEFAULT '',
                     assignee        TEXT NOT NULL DEFAULT '',
                     notes           TEXT NOT NULL DEFAULT '',
                     detection_count INTEGER NOT NULL DEFAULT 0,
@@ -110,6 +111,19 @@ class EdrStore:
                 CREATE INDEX IF NOT EXISTS idx_resp_incident ON edr_responses(incident_id);
             """)
             conn.commit()
+            # Migration for pre-existing DBs: `technique` was captured per-
+            # Detection from day one (see edr_detections above) but never
+            # copied onto the Incident it correlated into, so a real MITRE id
+            # like T1562.001 was computed and then discarded before it ever
+            # reached the incident list/API. Same add-column-if-missing
+            # pattern as valkyrie/store.py's `events.url` migration.
+            cols = {row[1] for row in
+                    conn.execute("PRAGMA table_info(edr_incidents)").fetchall()}
+            if "technique" not in cols:
+                conn.execute(
+                    "ALTER TABLE edr_incidents ADD COLUMN technique "
+                    "TEXT NOT NULL DEFAULT ''")
+                conn.commit()
 
     # ------------------------------------------------------------------
     # Detections
@@ -162,11 +176,12 @@ class EdrStore:
             conn.execute(
                 "INSERT OR REPLACE INTO edr_incidents"
                 "(id,created_at,updated_at,title,severity,category,entity,"
-                " process_name,status,assignee,notes,detection_count,timeline,actions)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " process_name,status,technique,assignee,notes,detection_count,"
+                " timeline,actions)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (inc.id, inc.created_at, inc.updated_at, inc.title, inc.severity,
                  inc.category, inc.entity, inc.process_name, inc.status,
-                 inc.assignee, inc.notes, inc.detection_count,
+                 inc.technique, inc.assignee, inc.notes, inc.detection_count,
                  json.dumps([t if isinstance(t, dict) else t.to_dict() for t in inc.timeline]),
                  json.dumps([a if isinstance(a, dict) else a.to_dict() for a in inc.actions])),
             )
