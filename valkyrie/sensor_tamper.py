@@ -79,6 +79,13 @@ class SensorTamperMonitor:
         self._interval = max(30.0, float(interval))
         # name -> True/False/None(unknown yet)
         self._last: dict = {}
+        # name -> the SAME poll's detail text (why it's healthy/unhealthy --
+        # present vs. running vs. missing the specific EIDs Valkyrie reads).
+        # Kept separate from `_last` rather than folded into it because
+        # current_status()'s {name: bool} shape is an established contract
+        # (server.py and tests read it directly) -- adding detail text here
+        # is additive instead of a breaking reshape.
+        self._last_detail: dict = {}
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
@@ -89,6 +96,15 @@ class SensorTamperMonitor:
         frequently reads this cache instead of paying that cost per request.
         Empty until start() has run once."""
         return dict(self._last)
+
+    def current_detail(self) -> dict:
+        """The last-known DETAIL TEXT per sensor -- e.g. "Sysmon running but
+        not delivering events" vs. "no longer configured for ['LSASS access']"
+        vs. "Sysmon not running". current_status() collapses this to a bool
+        for the tamper-transition logic; a status UI showing WHY a sensor is
+        degraded (present? running? missing an EID?) needs the prose this
+        returns instead. Same cache-not-probe rule as current_status()."""
+        return dict(self._last_detail)
 
     def poll_once(self) -> int:
         """Run every registered check once. Returns how many transitions
@@ -101,6 +117,7 @@ class SensorTamperMonitor:
                 continue   # a broken checker must never take the monitor down
             was = self._last.get(h.name)
             self._last[h.name] = h.healthy
+            self._last_detail[h.name] = h.detail
             if was is True and not h.healthy:
                 self._emit_tamper(h)
                 emitted += 1
@@ -132,6 +149,7 @@ class SensorTamperMonitor:
             try:
                 h = check()
                 self._last[h.name] = h.healthy
+                self._last_detail[h.name] = h.detail
             except Exception:
                 continue
         self._running = True

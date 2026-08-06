@@ -123,6 +123,13 @@ def main() -> int:
         mon5.start()
     c.check("current_status reports the seeded baseline",
             mon5.current_status() == {"sysmon": True})
+    c.check("current_detail() reports the SAME poll's detail text, not just "
+            "the collapsed bool (the UI needs the prose to say WHY)",
+            mon5.current_detail() == {"sysmon": "ok"})
+    with mock.patch.object(st, "_CHECKS", (lambda: unhealthy,)):
+        mon5.poll_once()
+    c.check("current_detail() updates on the next poll",
+            mon5.current_detail() == {"sysmon": "driver gone"})
     mon5.stop()
 
     return c.finish()
