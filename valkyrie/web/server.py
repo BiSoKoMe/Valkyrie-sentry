@@ -598,6 +598,30 @@ def create_app(ctx: Optional[AppContext] = None):
             },
         }
 
+    @app.get("/api/doh/status")
+    async def doh_status():
+        """DNS-over-HTTPS bypass detection: a process that resolves straight
+        to a public DoH resolver's IP is routing DNS around Valkyrie's
+        interception entirely — the same "escape the blocker" story as an
+        undeceived tracker, one layer down the stack (see deception_status
+        above). Combines the LIVE detector's own health (doh_detector.py's
+        `status()` — is psutil available, is the scan loop actually running)
+        with the store's counts of what it has caught, so "detector running
+        but psutil missing" and "detector fine, nothing to report" read as
+        the two distinct states they are, not the same silent zero.
+        """
+        if state.doh is not None:
+            live = state.doh.status()
+        else:
+            live = {"running": False, "available": False, "alerts_seen": 0,
+                    "scan_errors": 0, "last_error": ""}
+        if state.store is None:
+            stats = {"bypass_attempts_24h": 0, "bypass_processes_24h": 0,
+                     "bypass_attempts_total": 0, "most_recent": None}
+        else:
+            stats = state.store.doh_bypass_stats()
+        return {**live, **stats}
+
     @app.get("/api/sysmon/status")
     async def sysmon_status():
         """Sysmon presence/health, and whether detection is running degraded

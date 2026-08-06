@@ -1541,6 +1541,7 @@ def main() -> None:
             registry       = registry,
             amsi           = amsi_scanner,
             content_watch  = content_watch,
+            doh            = doh,
             # tls_inspector is created further down (it needs the store and a
             # started engine), so it is attached to the context after start()
             # rather than here — see the assignment below.

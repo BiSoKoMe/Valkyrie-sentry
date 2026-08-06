@@ -248,6 +248,40 @@ class Store:
             "beacons_deceived_total": total_all,
         }
 
+    def doh_bypass_stats(self) -> dict:
+        """DoH-bypass counters for the UI: a process resolving DNS-over-HTTPS
+        straight to a public resolver's IP is routing around Valkyrie's DNS
+        interception entirely — the same "escape the blocker" story as a
+        deceived tracker, one layer down the stack. "doh_bypass" is
+        doh_detector.py's own raw_category label (see DoHDetector._scan) —
+        this reads it, it does not redefine it.
+        """
+        since = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+        with self._session() as conn:
+            total_24h = conn.execute(
+                "SELECT COUNT(*) FROM events WHERE timestamp >= ? AND raw_category = 'doh_bypass'",
+                (since,),
+            ).fetchone()[0]
+            processes_24h = conn.execute(
+                "SELECT COUNT(DISTINCT process_name) FROM events "
+                "WHERE timestamp >= ? AND raw_category = 'doh_bypass'",
+                (since,),
+            ).fetchone()[0]
+            total_all = conn.execute(
+                "SELECT COUNT(*) FROM events WHERE raw_category = 'doh_bypass'"
+            ).fetchone()[0]
+            recent_row = conn.execute(
+                "SELECT timestamp, process_name, domain FROM events "
+                "WHERE raw_category = 'doh_bypass' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        return {
+            "bypass_attempts_24h":   total_24h,
+            "bypass_processes_24h":  processes_24h,
+            "bypass_attempts_total": total_all,
+            "most_recent": ({"timestamp": recent_row[0], "process_name": recent_row[1],
+                            "resolver_ip": recent_row[2]} if recent_row else None),
+        }
+
     # ------------------------------------------------------------------
     # Scan cache (site_scanner.py results)
     # ------------------------------------------------------------------
