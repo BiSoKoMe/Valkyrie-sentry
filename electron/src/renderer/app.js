@@ -488,7 +488,9 @@ PAGES.privacy = {
         <button class="btn" id="pvMac">${ICON.network}<span>Randomize MAC</span></button>
       </div>
       ${sectionHead('Deception Engine', 'Fake replies fed to trackers instead of a dead end')}
-      <div id="decRows"><div class="empty">Loading…</div></div>`;
+      <div id="decRows"><div class="empty">Loading…</div></div>
+      ${sectionHead('DoH Bypass Detection', 'Apps trying to route DNS around Valkyrie entirely')}
+      <div id="dohRows"><div class="empty">Loading…</div></div>`;
     $('pvKill').onclick = killTelemetry;
     $('pvMac').onclick = randomizeMac;
   },
@@ -503,17 +505,20 @@ PAGES.privacy = {
     if (vs.kind !== 'list') {
       box.innerHTML = stateBlock(vs.kind, vs.title, vs.sub);
       const decBox = $('decRows'); if (decBox) decBox.innerHTML = stateBlock(vs.kind, vs.title, vs.sub);
+      const dohBox = $('dohRows'); if (dohBox) dohBox.innerHTML = stateBlock(vs.kind, vs.title, vs.sub);
       return;
     }
-    const [tel, vpn, zero, mac, fp, dec] = await Promise.all([
+    const [tel, vpn, zero, mac, fp, dec, doh] = await Promise.all([
       safe(() => V.api.get('/api/telemetry/status'), {}),
       safe(() => V.api.get('/api/vpn/status'), {}),
       safe(() => V.api.get('/api/zero-log/status'), {}),
       safe(() => V.api.get('/api/mac/status'), {}),
       safe(() => V.api.get('/api/fingerprint/status'), {}),
       safe(() => V.api.get('/api/deception/status'), null),
+      safe(() => V.api.get('/api/doh/status'), null),
     ]);
     renderDeceptionRows($('decRows'), dec);
+    renderDohRows($('dohRows'), doh);
     const telStatus = tel.status === 'KILLED' ? badge('Killed', 'ok')
       : tel.status === 'ACTIVE' ? badge('Telemetry active', 'warn')
       : tel.status === 'PARTIAL' ? badge('Partial', 'warn') : badge('Unknown', 'off');
@@ -558,6 +563,28 @@ function renderDeceptionRows(box, dec) {
     ['Current persona', p ? `${escapeHtml(p.city)}, ${escapeHtml(p.region)} · ${escapeHtml(p.locale)}` : '—', 'target'],
     ['Persona device', p ? `${escapeHtml(p.os)} · ${escapeHtml(p.browser)}` : '—', 'cpu'],
     ['Persona display', p ? `${escapeHtml(p.screen)} · ${p.cores}-core · ${p.memory_gb}GB` : '—', 'network'],
+  ]);
+}
+
+// DoH-bypass rows — a process resolving DNS-over-HTTPS straight to a public
+// resolver's IP is routing DNS around Valkyrie entirely, so it never reaches
+// the deception/block decision at all. A NULL `doh` (endpoint call failed)
+// renders as '—'; a wired-but-unavailable detector (no psutil) renders as
+// its own distinct badge rather than looking identical to "nothing found".
+function renderDohRows(box, doh) {
+  if (!box) return;
+  if (!doh) { box.innerHTML = rowsPanel([['DoH bypass detection', '—', 'globe']]); return; }
+  const statusBadge = !doh.available ? badge('Unavailable', 'off')
+    : doh.running ? badge('Monitoring', 'ok') : badge('Not running', 'warn');
+  const r = doh.most_recent;
+  const recent = r ? `${escapeHtml(r.process_name || 'unknown')} → ${escapeHtml(r.resolver_ip || '?')} · ${rpTime(r.timestamp)}`
+    : badge('None seen', 'ok');
+  box.innerHTML = rowsPanel([
+    ['Detector', statusBadge, 'globe'],
+    ['Bypass attempts (24h)', fmt(doh.bypass_attempts_24h), 'alert'],
+    ['Distinct processes (24h)', fmt(doh.bypass_processes_24h), 'apps'],
+    ['Bypass attempts (all time)', fmt(doh.bypass_attempts_total), 'alert'],
+    ['Most recent attempt', recent, 'activity'],
   ]);
 }
 
