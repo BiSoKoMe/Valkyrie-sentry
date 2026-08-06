@@ -563,6 +563,41 @@ def create_app(ctx: Optional[AppContext] = None):
         set_profile(str((body or {}).get("profile", "")))
         return {"current": get_profile().value}
 
+    @app.get("/api/deception/status")
+    async def deception_status():
+        """How the deception engine is doing: how many tracker/telemetry
+        beacons were answered with a fabricated persona instead of hard-
+        failed (dns_interceptor's own 'deceived' decision — read here, not
+        redefined, so this can never disagree with what actually happened on
+        the wire), and what that persona currently looks like.
+
+        Read-only. There is no endpoint that lets a caller pick, rotate, or
+        otherwise influence the persona — the whole point of persona.py is
+        that it does NOT change on request.
+        """
+        if state.store is None:
+            stats = {"beacons_deceived_24h": 0, "trackers_deceived_24h": 0,
+                     "trackers_deceived_total": 0, "beacons_deceived_total": 0}
+        else:
+            stats = state.store.deception_stats()
+        from ..persona import current_persona
+        p = current_persona()
+        return {
+            **stats,
+            "persona": {
+                "locale":  p.locale,
+                "country": p.country,
+                "timezone": p.timezone,
+                "city":    p.city,
+                "region":  p.region,
+                "os":      p.os_name,
+                "browser": f"{p.browser} {p.browser_version}",
+                "screen":  f"{p.screen_width}x{p.screen_height}",
+                "cores":   p.hardware_concurrency,
+                "memory_gb": p.device_memory,
+            },
+        }
+
     @app.get("/api/sysmon/status")
     async def sysmon_status():
         """Sysmon presence/health, and whether detection is running degraded
@@ -576,16 +611,22 @@ def create_app(ctx: Optional[AppContext] = None):
                             "(EDR disabled, or --no-edr)"}
         status = state.sensor_tamper.current_status()
         sysmon_healthy = status.get("sysmon")
+        # Real prose from the last probe (present? running? which EIDs are
+        # missing?) when one has completed — see sensor_tamper.py's
+        # _sysmon_health(). Falls back to a generic line only before the
+        # first poll has had a chance to run.
+        live_detail = state.sensor_tamper.current_detail().get("sysmon")
         return {"monitored": True,
                 "sysmon_healthy": sysmon_healthy,
                 "degraded": sysmon_healthy is False,
-                "detail": "unknown — no poll has completed yet"
+                "detail": live_detail if live_detail else (
+                          "unknown — no poll has completed yet"
                           if sysmon_healthy is None else
                           ("Sysmon is providing the event types Valkyrie needs"
                            if sysmon_healthy else
                            "Sysmon is degraded or absent — command-line, "
                            "process-injection and credential-dump detection "
-                           "may be running in degraded mode")}
+                           "may be running in degraded mode"))}
 
     @app.get("/api/decoys/status")
     async def decoys_status():

@@ -216,6 +216,38 @@ class Store:
             ).fetchone()
         return row[0] or 0
 
+    def deception_stats(self) -> dict:
+        """Deception-engine counters for the UI: how many beacons were answered
+        with a fabricated persona instead of hard-failed, and how many
+        distinct trackers that covers. "deceived" is dns_interceptor's own
+        decision label (see DnsEvent.decision) — this reads it, it does not
+        redefine it, so it can never drift from what actually happened on the
+        wire.
+        """
+        since = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+        with self._session() as conn:
+            total_24h = conn.execute(
+                "SELECT COUNT(*) FROM events WHERE timestamp >= ? AND decision = 'deceived'",
+                (since,),
+            ).fetchone()[0]
+            trackers_24h = conn.execute(
+                "SELECT COUNT(DISTINCT domain) FROM events "
+                "WHERE timestamp >= ? AND decision = 'deceived'",
+                (since,),
+            ).fetchone()[0]
+            trackers_total = conn.execute(
+                "SELECT COUNT(DISTINCT domain) FROM events WHERE decision = 'deceived'"
+            ).fetchone()[0]
+            total_all = conn.execute(
+                "SELECT COUNT(*) FROM events WHERE decision = 'deceived'"
+            ).fetchone()[0]
+        return {
+            "beacons_deceived_24h":  total_24h,
+            "trackers_deceived_24h": trackers_24h,
+            "trackers_deceived_total": trackers_total,
+            "beacons_deceived_total": total_all,
+        }
+
     # ------------------------------------------------------------------
     # Scan cache (site_scanner.py results)
     # ------------------------------------------------------------------
