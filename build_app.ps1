@@ -61,8 +61,37 @@ if ($SkipEngine) {
     python -m pip install --upgrade pip | Out-Null
     python -m pip install -r requirements_modular.txt pyinstaller cryptography httpx
     # AI investigation is vendor-neutral over httpx (installed above); no AI SDK.
+
+    # Capture the pre-build state so "the file exists" can never again be
+    # mistaken for "this run produced it". On 2026-08-05, valkyrie.spec had a
+    # stale datas entry (a file moved to experimental/ months earlier); every
+    # PyInstaller run hard-errored on it, and the ONLY check below --
+    # Test-Path -- passed anyway because a TWO-DAY-OLD dist\valkyrie.exe was
+    # still sitting there from the last successful build. The pipeline
+    # staged, audited, and shipped that stale engine as a "Done." build,
+    # containing none of the day's actual changes. Caught by hand, after the
+    # fact, by comparing the exe's timestamp to wall-clock time -- that
+    # comparison is now load-bearing, not optional.
+    $preBuildTime = if (Test-Path $engineExe) { (Get-Item $engineExe).LastWriteTimeUtc } else { $null }
+
     python -m PyInstaller --clean --noconfirm valkyrie.spec
-    if (-not (Test-Path $engineExe)) { throw "Engine build failed - dist\valkyrie.exe not produced." }
+    $pyinstallerExit = $LASTEXITCODE
+
+    if ($pyinstallerExit -ne 0) {
+        throw "Engine build failed - PyInstaller exited with code $pyinstallerExit (see log above)."
+    }
+    if (-not (Test-Path $engineExe)) {
+        throw "Engine build failed - dist\valkyrie.exe not produced."
+    }
+    $postBuildTime = (Get-Item $engineExe).LastWriteTimeUtc
+    if ($preBuildTime -ne $null -and $postBuildTime -le $preBuildTime) {
+        throw ("Engine build did not actually run: dist\valkyrie.exe's timestamp " +
+               "($postBuildTime) is no newer than before this build started " +
+               "($preBuildTime). PyInstaller exited 0 but a stale binary was left " +
+               "in place -- aborting rather than packaging it. Check the PyInstaller " +
+               "log above for a swallowed error.")
+    }
+    Write-Host "     engine rebuilt: $engineExe ($postBuildTime UTC)" -ForegroundColor DarkGray
 }
 
 # ---------------------------------------------------------------------------
