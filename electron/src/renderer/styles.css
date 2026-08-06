@@ -388,6 +388,9 @@ html, body {
 .list-row .lr-title { color: var(--text-0); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .list-row .lr-sub { color: var(--text-2); font-size: 11.5px; }
 .list-row .lr-val { color: var(--text-1); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* Plain-language incident explanation — one line, quieter than .lr-sub's
+   status/host line so title -> where -> why reads as a clear hierarchy. */
+.list-row .lr-explain { opacity: 0.72; font-style: italic; }
 
 /* Incident rows: a leading severity rail + monochrome severity chip. */
 .list-row.inc-row { grid-template-columns: 3px auto 1fr auto; gap: 14px; padding-left: 0; }

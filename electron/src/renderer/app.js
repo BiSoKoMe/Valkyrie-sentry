@@ -98,6 +98,10 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+function truncate(s, n) {
+  const str = String(s || '');
+  return str.length > n ? str.slice(0, n - 1) + '…' : str;
+}
 
 /* Component builders -------------------------------------------------- */
 function statCard(id, label, icon, cls) {
@@ -408,7 +412,10 @@ PAGES.protection = {
         <button class="btn primary" id="protToggle">${ICON.power}<span>Toggle Protection</span></button>
         <button class="btn" id="protMeeting">${ICON.lock}<span>Meeting Mode</span></button>
         <button class="btn" id="protLogs">${ICON.activity}<span>Open Logs</span></button>
-      </div>`;
+      </div>
+      ${sectionHead('Sensor Health', 'Detection sensors this engine depends on')}
+      <div id="sensorBanner"></div>
+      <div id="sensorRows"><div class="empty">Loading…</div></div>`;
     $('protToggle').onclick = toggleProtection;
     $('protLogs').onclick = () => V && V.openLogs();
     $('protMeeting').onclick = toggleMeetingMode;
@@ -424,6 +431,43 @@ PAGES.protection = {
       ['Meeting mode', s.meeting_active ? badge('On', 'warn') : badge('Off', 'off'), 'lock'],
       ['Running as service', s.running_as_service ? badge('Yes', 'ok') : badge('No', 'off'), 'cpu'],
       ['Uptime', up ? fmtUptime(s.uptime_seconds) : '—', 'activity'],
+    ]);
+  },
+  interval: 5000,
+  async poll() {
+    const banner = $('sensorBanner'), box = $('sensorRows');
+    if (!box) return;
+    const [sysmon, incidents] = await Promise.all([
+      safe(() => V.api.get('/api/sysmon/status'), null),
+      safe(() => V.api.get('/api/edr/incidents'), []),
+    ]);
+    const arr = Array.isArray(incidents) ? incidents : (incidents.incidents || []);
+    // Sensor tamper (T1562.001): a security tool's OWN sensor going dark is
+    // itself an attack technique (Impair Defenses) — surface it as loudly as
+    // any other detection, not folded quietly into the generic list.
+    const tamper = arr.filter((i) => (i.technique || '').includes('T1562.001'));
+    const openTamper = tamper.find((i) => i.status === 'open') || tamper[0];
+
+    if (banner) {
+      if (sysmon && sysmon.monitored && sysmon.degraded) {
+        banner.innerHTML = stateBlock('error', 'DEGRADED — a detection sensor is down',
+          sysmon.detail || 'Sysmon is absent or not delivering the events Valkyrie reads.');
+      } else if (openTamper) {
+        banner.innerHTML = stateBlock('error', 'Sensor tamper detected (T1562.001)',
+          openTamper.explanation || openTamper.title);
+      } else {
+        banner.innerHTML = '';
+      }
+    }
+
+    box.innerHTML = rowsPanel([
+      ['Sysmon', !sysmon ? badge('—', 'off')
+        : !sysmon.monitored ? badge('Not monitored', 'off')
+        : sysmon.sysmon_healthy == null ? badge('Checking…', 'off')
+        : sysmon.sysmon_healthy ? badge('Healthy', 'ok') : badge('Degraded', 'warn'),
+        'shield'],
+      ['Coverage detail', sysmon && sysmon.monitored ? (sysmon.detail || '—') : '—', 'activity'],
+      ['Sensor tamper alerts', tamper.length ? badge(`${tamper.length} (T1562.001)`, 'warn') : badge('None', 'ok'), 'alert'],
     ]);
   },
 };
@@ -442,7 +486,9 @@ PAGES.privacy = {
       <div class="btn-row">
         <button class="btn" id="pvKill">${ICON.shield}<span>Kill Telemetry</span></button>
         <button class="btn" id="pvMac">${ICON.network}<span>Randomize MAC</span></button>
-      </div>`;
+      </div>
+      ${sectionHead('Deception Engine', 'Fake replies fed to trackers instead of a dead end')}
+      <div id="decRows"><div class="empty">Loading…</div></div>`;
     $('pvKill').onclick = killTelemetry;
     $('pvMac').onclick = randomizeMac;
   },
@@ -454,14 +500,20 @@ PAGES.privacy = {
   async poll() {
     const box = $('privRows'); if (!box) return;
     const vs = ViewState.privacyRowsState(state.engineUp);
-    if (vs.kind !== 'list') { box.innerHTML = stateBlock(vs.kind, vs.title, vs.sub); return; }
-    const [tel, vpn, zero, mac, fp] = await Promise.all([
+    if (vs.kind !== 'list') {
+      box.innerHTML = stateBlock(vs.kind, vs.title, vs.sub);
+      const decBox = $('decRows'); if (decBox) decBox.innerHTML = stateBlock(vs.kind, vs.title, vs.sub);
+      return;
+    }
+    const [tel, vpn, zero, mac, fp, dec] = await Promise.all([
       safe(() => V.api.get('/api/telemetry/status'), {}),
       safe(() => V.api.get('/api/vpn/status'), {}),
       safe(() => V.api.get('/api/zero-log/status'), {}),
       safe(() => V.api.get('/api/mac/status'), {}),
       safe(() => V.api.get('/api/fingerprint/status'), {}),
+      safe(() => V.api.get('/api/deception/status'), null),
     ]);
+    renderDeceptionRows($('decRows'), dec);
     const telStatus = tel.status === 'KILLED' ? badge('Killed', 'ok')
       : tel.status === 'ACTIVE' ? badge('Telemetry active', 'warn')
       : tel.status === 'PARTIAL' ? badge('Partial', 'warn') : badge('Unknown', 'off');
@@ -490,6 +542,24 @@ PAGES.privacy = {
     ]);
   },
 };
+
+// Deception engine rows — how many trackers got a fabricated persona instead
+// of a dead end, and what that persona currently looks like. A NULL `dec`
+// means the endpoint call failed (engine off, or an older build without it);
+// rendered as '—' rather than 0, since 0 would falsely read as "deception is
+// active and simply has nothing to report yet".
+function renderDeceptionRows(box, dec) {
+  if (!box) return;
+  const p = (dec && dec.persona) || null;
+  box.innerHTML = rowsPanel([
+    ['Trackers deceived (24h)', dec ? fmt(dec.trackers_deceived_24h) : '—', 'shield'],
+    ['Beacons answered (24h)', dec ? fmt(dec.beacons_deceived_24h) : '—', 'activity'],
+    ['Trackers deceived (all time)', dec ? fmt(dec.trackers_deceived_total) : '—', 'shield'],
+    ['Current persona', p ? `${escapeHtml(p.city)}, ${escapeHtml(p.region)} · ${escapeHtml(p.locale)}` : '—', 'target'],
+    ['Persona device', p ? `${escapeHtml(p.os)} · ${escapeHtml(p.browser)}` : '—', 'cpu'],
+    ['Persona display', p ? `${escapeHtml(p.screen)} · ${p.cores}-core · ${p.memory_gb}GB` : '—', 'network'],
+  ]);
+}
 
 /* ---- Firewall ---- */
 PAGES.firewall = {
@@ -584,6 +654,11 @@ PAGES.threats = {
       const entity = i.entity || i.host || '';
       const sub = [i.status, i.host].filter(Boolean).join(' · ');
       const title = i.title || i.name || i.rule || 'Incident';
+      // Plain-language "why" — the decision engine's own reasoning where
+      // available (see edr/engine.py's _incident_explanation), so a user can
+      // see why an incident exists without opening the replay view. Omitted
+      // when it would just repeat the title verbatim.
+      const explain = (i.explanation && i.explanation !== title) ? i.explanation : '';
       return `<div class="list-row inc-row" data-sev="${sevClass}" data-id="${escapeHtml(i.id || '')}"
         tabindex="0" role="button" aria-label="Replay incident: ${escapeHtml(title)}, ${escapeHtml(sevText)}">
         <span class="inc-rail"></span>
@@ -591,6 +666,7 @@ PAGES.threats = {
         <div class="lr-main">
           <span class="lr-title">${escapeHtml(title)}</span>
           <span class="lr-sub">${entity ? `<span class="mono-tag">${escapeHtml(entity)}</span> ` : ''}${escapeHtml(sub)}</span>
+          ${explain ? `<span class="lr-sub lr-explain">${escapeHtml(truncate(explain, 160))}</span>` : ''}
         </div>
         ${tech ? `<span class="mono-tag">${escapeHtml(tech[0])}</span>` : ''}
         <span class="rp-open">▶ Replay</span>
