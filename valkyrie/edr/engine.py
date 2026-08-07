@@ -479,6 +479,11 @@ class EdrEngine:
         d["detections"] = [x.to_dict() for x in
                            self._edr.list_detections(incident_id=inc_id, limit=200)]
         d["responses"] = self._edr.list_responses(incident_id=inc_id, limit=100)
+        # Full detail view has the detections list (their `labels`), so this
+        # gets the more specific dispatch (decoy/credential-access/injection)
+        # that the compact _inc_wire() view can't see -- see edr/impact.py.
+        from . import impact as _impact
+        d["impact"] = _impact.assess(d).to_dict()
         return d
 
     def mttd_mttr(self, limit: int = 200) -> dict:
@@ -611,8 +616,16 @@ def _incident_explanation(inc: Incident) -> str:
 
 
 def _inc_wire(inc: Incident) -> dict:
-    """A compact incident view for lists and live pushes (no full timeline)."""
-    return {
+    """A compact incident view for lists and live pushes (no full timeline).
+
+    ``explanation`` answers WHY this incident exists (what triggered it);
+    ``impact`` (NIST SP 800-30 harm-to-individuals vocabulary, see
+    edr/impact.py) answers what it MEANS for the person reading it — what
+    was exposed, to whom, is it reversible, what to do. Deliberately not a
+    color or a 0-100 score (Clinton ch.4's specific critique) -- severity
+    stays the machine-readable field correlation/playbooks key off.
+    """
+    d = {
         "id": inc.id,
         "title": inc.title,
         "explanation": _incident_explanation(inc),
@@ -627,3 +640,6 @@ def _inc_wire(inc: Incident) -> dict:
         "created_at": inc.created_at,
         "updated_at": inc.updated_at,
     }
+    from . import impact as _impact
+    d["impact"] = _impact.assess(d).to_dict()
+    return d
