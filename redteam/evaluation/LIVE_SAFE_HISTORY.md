@@ -9,3 +9,4 @@ One row per run. See LIVE_SAFE_REPORT.md for the latest full report and delta.
 | 20260805T082858Z | poller_only | 11 | 12 | 92% | 2917 |
 | 20260805T083844Z | poller_only | 11 | 12 | 92% | 6842 |
 | 20260805T084234Z | poller_only | 11 | 12 | 92% | 5601 |
+| 20260807T024531Z | poller_only | 11 | 12 | 92% | 4869 |
