@@ -32,7 +32,10 @@ from .killchain import KillChainCorrelator
 from ..behavioral_sequences import SequenceEngine
 from .plugins import PluginContext, PluginRegistry
 from .response import ResponseManager, register_responders
-from .schema import Detection, Incident, TimelineEntry, max_severity, severity_rank
+from .schema import (
+    Detection, Incident, TimelineEntry, iso_from_epoch, max_severity,
+    severity_rank,
+)
 
 # Map process-telemetry labels onto rough MITRE ATT&CK techniques for display.
 _TELEMETRY_TECHNIQUE = {
@@ -256,7 +259,7 @@ class EdrEngine:
         fields = d.get("fields") or {}
         ppid = int(fields.get("ppid") or fields.get("parent_pid") or 0)
         parent_name = str(fields.get("parent_name") or fields.get("parent_image") or "")
-        det = Detection(
+        det_kwargs = dict(
             source=str(d.get("source", "collector")),
             severity=severity,
             category=category,
@@ -270,6 +273,19 @@ class EdrEngine:
                      "ppid": ppid, "parent_name": parent_name,
                      "parent_chain": list(fields.get("parent_chain") or [])},
         )
+        # Preserve the COLLECTOR's own event timestamp (event.ts) instead of
+        # defaulting to "now" (when the engine got around to processing it).
+        # For a polling collector (process/persistence/network telemetry) the
+        # two can differ by up to a poll interval -- that gap is the real
+        # detect-latency signal MTTD needs (see edr/metrics.py) and was
+        # previously discarded here entirely.
+        raw_ts = d.get("ts")
+        if raw_ts:
+            try:
+                det_kwargs["timestamp"] = iso_from_epoch(float(raw_ts))
+            except (TypeError, ValueError):
+                pass
+        det = Detection(**det_kwargs)
         # _ingest_detection takes the correlation lock itself — do not wrap.
         self._ingest_detection(det)
         return det.incident_id
@@ -464,6 +480,15 @@ class EdrEngine:
                            self._edr.list_detections(incident_id=inc_id, limit=200)]
         d["responses"] = self._edr.list_responses(incident_id=inc_id, limit=100)
         return d
+
+    def mttd_mttr(self, limit: int = 200) -> dict:
+        """Median + p95 detect/respond latency over the most recent real
+        incidents (see edr/metrics.py). Read-only, on-demand -- not cached,
+        since this is a stats endpoint, not a hot path."""
+        from . import metrics
+        details = [self.get_incident(i["id"]) for i in self.list_incidents(limit=limit)]
+        result = metrics.compute([d for d in details if d is not None])
+        return {"mttd": result["mttd"].to_dict(), "mttr": result["mttr"].to_dict()}
 
     def update_incident(self, inc_id: str, *, status=None, notes=None,
                         assignee=None, operator="local") -> Optional[dict]:

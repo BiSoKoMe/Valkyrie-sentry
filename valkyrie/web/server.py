@@ -877,6 +877,18 @@ def create_app(ctx: Optional[AppContext] = None):
             return JSONResponse({"error": "EDR not enabled"}, status_code=503)
         return state.edr.list_incidents(status=status, severity=severity, limit=200)
 
+    @app.get("/api/edr/metrics/mttd-mttr")
+    async def edr_mttd_mttr():
+        """Median + p95 MTTD (first observable event -> incident raised) and
+        MTTR (incident raised -> first real responder action completed) over
+        the most recent real incidents -- Clinton ch.10 / IIBA §9.1.2's
+        headline security metrics, for actual production incidents, not just
+        the eval harness (see valkyrie/edr/metrics.py for the exact
+        definitions and their honest limits)."""
+        if state.edr is None:
+            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+        return state.edr.mttd_mttr()
+
     @app.get("/api/sensors/status")
     async def sensors_status():
         """Real-time sensor host health + metrics (observability for the
