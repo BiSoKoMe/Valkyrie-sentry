@@ -391,6 +391,23 @@ html, body {
 /* Plain-language incident explanation — one line, quieter than .lr-sub's
    status/host line so title -> where -> why reads as a clear hierarchy. */
 .list-row .lr-explain { opacity: 0.72; font-style: italic; }
+/* Impact (NIST SP 800-30, valkyrie/edr/impact.py) — what was exposed, is
+   it reversible, what to do. Supplements severity (the .sev chip), never
+   replaces it; set apart by a hairline top rule rather than color so it
+   reads as "a different KIND of information," not "a different urgency". */
+.list-row .lr-impact { padding-top: 6px; margin-top: 2px; border-top: 1px solid var(--line); opacity: 0.85; }
+
+/* Same impact line, in the Replay header — bigger surface, so it gets a
+   caption instead of relying on truncation. */
+.impact-line {
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 3px; max-width: 62ch;
+}
+.impact-line .il-cap {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-2);
+}
+.impact-line .il-text { font-size: 12.5px; color: var(--text-1); line-height: 1.5; }
 
 /* Incident rows: a leading severity rail + monochrome severity chip. */
 .list-row.inc-row { grid-template-columns: 3px auto 1fr auto; gap: 14px; padding-left: 0; }
@@ -497,6 +514,27 @@ html, body {
 .bar-track { height: 6px; border-radius: 6px; background: rgba(255,255,255,0.06); overflow: hidden; }
 .bar-fill { height: 100%; border-radius: 6px; background: var(--text-0); opacity: 0.85; transition: width 0.6s var(--ease); }
 .bar-row .bv { color: var(--text-0); text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+
+/* Defense coverage — three states (effective/degraded/absent), encoded
+   ONLY by fill/opacity/outline, never color. Mirrors the severity-rail
+   language above (.sev.critical solid+glow, .sev.medium hollow outline):
+   effective = solid white, degraded = mid-opacity grey, absent = hairline
+   outline on empty track, so "nothing here" is visibly a gap, not just a
+   quiet absence. */
+.cov-head { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+.cov-frac { font-size: 32px; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; color: var(--text-0); }
+.cov-frac .unit { font-size: 14px; color: var(--text-2); font-weight: 500; margin-left: 6px; }
+.cov-legend { display: flex; gap: 16px; font-size: 11px; color: var(--text-2); letter-spacing: 0.01em; }
+.cov-legend .lg { display: inline-flex; align-items: center; gap: 6px; }
+.cov-legend .sw { width: 8px; height: 8px; border-radius: 2px; flex: 0 0 auto; }
+.cov-legend .sw.effective { background: #fff; }
+.cov-legend .sw.degraded { background: var(--text-1); opacity: 0.5; }
+.cov-legend .sw.absent { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-2); }
+.cov-track { display: flex; height: 8px; border-radius: 6px; overflow: hidden; margin: 16px 0 6px; background: rgba(255,255,255,0.035); border: 1px solid var(--line); }
+.cov-seg { height: 100%; transition: width 0.6s var(--ease); }
+.cov-seg.effective { background: #fff; opacity: 0.92; }
+.cov-seg.degraded { background: var(--text-1); opacity: 0.4; }
+.cov-seg.absent { background: transparent; }
 
 /* ============================ Splash =================================== */
 #splash {

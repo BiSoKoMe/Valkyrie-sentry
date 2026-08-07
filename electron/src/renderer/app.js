@@ -55,6 +55,19 @@ const state = { engineUp: false, protected: false, busy: false, route: 'dashboar
 
 /* ============================ Utilities ============================== */
 function fmt(n) { return (n == null || isNaN(n)) ? '0' : Number(n).toLocaleString('en-US'); }
+// Formats a duration in SECONDS (fractional — MTTD/MTTR are often
+// sub-second) into the shortest reasonable human string. Used only for
+// valkyrie/edr/metrics.py's median_seconds/p95_seconds — null means "not
+// enough data", handled by the caller before this is reached.
+function fmtDuration(s) {
+  if (s == null || isNaN(s)) return '—';
+  if (s < 1) return `${Math.round(s * 1000)}ms`;
+  if (s < 60) return `${s.toFixed(s < 10 ? 1 : 0)}s`;
+  const m = Math.floor(s / 60), rem = Math.round(s % 60);
+  if (m < 60) return rem ? `${m}m ${rem}s` : `${m}m`;
+  const h = Math.floor(m / 60), remM = m % 60;
+  return remM ? `${h}h ${remM}m` : `${h}h`;
+}
 function fmtUptime(s) {
   if (!s || s < 0) return '—';
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
@@ -127,6 +140,17 @@ function stateBlock(kind, title, sub) {
   const ic = { offline: ICON.power, empty: ICON.shieldCheck || ICON.shield, error: ICON.alert }[kind] || ICON.shield;
   return `<div class="state-block ${kind}"><div class="sb-ic">${ic || ''}</div>
     <div class="sb-t">${escapeHtml(title)}</div>${sub ? `<div class="sb-s">${escapeHtml(sub)}</div>` : ''}</div>`;
+}
+// Plain-language incident impact (valkyrie/edr/impact.py, NIST SP 800-30
+// harm-to-individuals vocabulary): what was exposed, to whom, is it
+// reversible, what to do. Supplements severity — never replaces the .sev
+// chip already shown alongside it — and is deliberately never a color or a
+// score: harm_level is named in the caption, not painted. Missing/older-
+// build incidents (no `impact` key) render nothing, not a placeholder.
+function renderImpactLine(impact) {
+  if (!impact || !impact.line) return '';
+  return `<div class="impact-line"><span class="il-cap">Impact (${escapeHtml(impact.harm_level || 'unknown')}${impact.confirmed ? ', confirmed' : ''})</span>
+    <span class="il-text">${escapeHtml(impact.line)}</span></div>`;
 }
 
 /* ============================ Particles ============================== */
@@ -413,8 +437,11 @@ PAGES.protection = {
         <button class="btn" id="protMeeting">${ICON.lock}<span>Meeting Mode</span></button>
         <button class="btn" id="protLogs">${ICON.activity}<span>Open Logs</span></button>
       </div>
+      ${sectionHead('Defense Coverage', 'What fraction of Valkyrie\'s defenses are actually running, right now')}
+      <div id="tamperBanner"></div>
+      <div id="covHead"><div class="empty">Loading…</div></div>
+      <div id="covGaps"></div>
       ${sectionHead('Sensor Health', 'Detection sensors this engine depends on')}
-      <div id="sensorBanner"></div>
       <div id="sensorRows"><div class="empty">Loading…</div></div>`;
     $('protToggle').onclick = toggleProtection;
     $('protLogs').onclick = () => V && V.openLogs();
@@ -435,32 +462,35 @@ PAGES.protection = {
   },
   interval: 5000,
   async poll() {
-    const banner = $('sensorBanner'), box = $('sensorRows');
-    if (!box) return;
-    const [sysmon, incidents] = await Promise.all([
+    const tamperBanner = $('tamperBanner'), covHead = $('covHead'), covGaps = $('covGaps'),
+      sensorBox = $('sensorRows');
+    if (!sensorBox) return;
+    const [sysmon, coverage, incidents] = await Promise.all([
       safe(() => V.api.get('/api/sysmon/status'), null),
+      safe(() => V.api.get('/api/controls/coverage'), null),
       safe(() => V.api.get('/api/edr/incidents'), []),
     ]);
     const arr = Array.isArray(incidents) ? incidents : (incidents.incidents || []);
     // Sensor tamper (T1562.001): a security tool's OWN sensor going dark is
-    // itself an attack technique (Impair Defenses) — surface it as loudly as
-    // any other detection, not folded quietly into the generic list.
+    // itself an attack technique (Impair Defenses). This is DIFFERENT
+    // information from the coverage gap list below — an active-tampering
+    // signal, not just "something isn't running" — so it keeps its own
+    // banner rather than being folded into coverage. The old binary
+    // "DEGRADED" banner (sysmon.degraded alone) is retired: the coverage
+    // section below already reports that, with the effective/degraded/
+    // absent nuance a boolean can't carry.
     const tamper = arr.filter((i) => (i.technique || '').includes('T1562.001'));
     const openTamper = tamper.find((i) => i.status === 'open') || tamper[0];
-
-    if (banner) {
-      if (sysmon && sysmon.monitored && sysmon.degraded) {
-        banner.innerHTML = stateBlock('error', 'DEGRADED — a detection sensor is down',
-          sysmon.detail || 'Sysmon is absent or not delivering the events Valkyrie reads.');
-      } else if (openTamper) {
-        banner.innerHTML = stateBlock('error', 'Sensor tamper detected (T1562.001)',
-          openTamper.explanation || openTamper.title);
-      } else {
-        banner.innerHTML = '';
-      }
+    if (tamperBanner) {
+      tamperBanner.innerHTML = openTamper
+        ? stateBlock('error', 'Sensor tamper detected (T1562.001)',
+            openTamper.explanation || openTamper.title)
+        : '';
     }
 
-    box.innerHTML = rowsPanel([
+    renderCoverage(covHead, covGaps, coverage);
+
+    sensorBox.innerHTML = rowsPanel([
       ['Sysmon', !sysmon ? badge('—', 'off')
         : !sysmon.monitored ? badge('Not monitored', 'off')
         : sysmon.sysmon_healthy == null ? badge('Checking…', 'off')
@@ -471,6 +501,57 @@ PAGES.protection = {
     ]);
   },
 };
+
+// Defense coverage (valkyrie/coverage.py): the headline fraction plus the
+// NAMED gaps — "which parts of my defense are not running" is the actual
+// deliverable, not the percentage alone. Three states, encoded by
+// fill/opacity only (no color): effective = solid, degraded = mid-opacity,
+// absent = hairline outline on empty track. A present-but-STOPPED sensor
+// (e.g. Sysmon installed but not delivering events) lands in absent, never
+// effective — see coverage.py's own module docstring for why that
+// distinction is the entire point of this metric.
+function renderCoverage(headBox, gapsBox, cov) {
+  if (!headBox || !gapsBox) return;
+  if (!cov) {
+    headBox.innerHTML = rowsPanel([['Defense coverage', '—', 'shieldCheck']]);
+    gapsBox.innerHTML = '';
+    return;
+  }
+  const counts = cov.counts || {}, total = cov.total || 0;
+  const eff = counts.effective || 0, deg = counts.degraded || 0, abs = counts.absent || 0;
+  const pct = total ? Math.round((eff / total) * 100) : 0;
+  const segPct = (n) => total ? Math.max(n > 0 ? 1.5 : 0, (n / total) * 100) : 0;
+  headBox.innerHTML = `
+    <div class="cov-head">
+      <div class="cov-frac">${fmt(eff)} / ${fmt(total)}<span class="unit">controls effective · ${pct}%</span></div>
+      <div class="cov-legend">
+        <span class="lg"><span class="sw effective"></span>Effective (${fmt(eff)})</span>
+        <span class="lg"><span class="sw degraded"></span>Degraded (${fmt(deg)})</span>
+        <span class="lg"><span class="sw absent"></span>Absent (${fmt(abs)})</span>
+      </div>
+    </div>
+    <div class="cov-track">
+      <span class="cov-seg effective" style="width:${segPct(eff)}%"></span>
+      <span class="cov-seg degraded" style="width:${segPct(deg)}%"></span>
+      <span class="cov-seg absent" style="width:${segPct(abs)}%"></span>
+    </div>`;
+
+  const gaps = (cov.gaps || []).slice()
+    // Absent first — the most actionable state — then degraded.
+    .sort((a, b) => (a.state === b.state ? 0 : a.state === 'absent' ? -1 : 1));
+  if (!gaps.length) {
+    gapsBox.innerHTML = stateBlock('empty', 'Every control is effective', 'No named gaps right now.');
+    return;
+  }
+  gapsBox.innerHTML = `<div class="list">${gaps.slice(0, 25).map((g) => {
+    const stateBadge = g.state === 'absent' ? badge('Absent', 'err')
+      : g.state === 'degraded' ? badge('Degraded', 'warn') : badge(g.state, 'off');
+    return `<div class="list-row"><div class="lr-main">
+        <span class="lr-title">${escapeHtml(g.name)}</span>
+        <span class="lr-sub">${escapeHtml(g.category || '')} · ${escapeHtml(truncate(g.detail || '', 130))}</span>
+      </div>${stateBadge}</div>`;
+  }).join('')}</div>`;
+}
 
 /* ---- Privacy ---- */
 PAGES.privacy = {
@@ -621,12 +702,32 @@ function renderTopBlocked(box, top, up) {
   }).join('');
 }
 
+// MTTD/MTTR (valkyrie/edr/metrics.py) — labeled in plain words, not
+// acronyms alone, per the task: "time to detect" / "time to respond".
+// median/p95 side by side (never a single average — see metrics.py's own
+// docstring on why). n==0 renders as "not enough data yet", never a
+// fabricated 0s, since a metric with no samples is not the same claim as
+// an instant one.
+function renderMttdMttr(box, m) {
+  if (!box) return;
+  if (!m) { box.innerHTML = rowsPanel([['Response speed', '—', 'activity']]); return; }
+  const cell = (metric) => metric.n > 0
+    ? `${fmtDuration(metric.median_seconds)} median · ${fmtDuration(metric.p95_seconds)} p95 <span class="lr-sub" style="display:inline">(${fmt(metric.n)} of ${fmt(metric.total)} incidents)</span>`
+    : badge(`Not enough data yet (0 of ${fmt(metric.total)} incidents)`, 'off');
+  box.innerHTML = rowsPanel([
+    ['Time to detect', cell(m.mttd), 'search'],
+    ['Time to respond', cell(m.mttr), 'shield'],
+  ]);
+}
+
 /* ---- Threats (EDR) ---- */
 PAGES.threats = {
   render() {
     $('page').innerHTML = `
       <div class="page-intro">Endpoint detection &amp; response — incidents raised by the behavioral engine.</div>
       <div class="grid" id="edrCards"><div class="empty">Loading EDR…</div></div>
+      ${sectionHead('Response Speed', 'Time to detect a threat, and time to respond to it — the headline security metrics')}
+      <div id="mttdRows"><div class="empty">Loading…</div></div>
       ${sectionHead('Recent Incidents')}
       <div class="list" id="edrList"><div class="empty">Loading…</div></div>`;
     // Delegated: click or keyboard-activate an incident to replay it
@@ -651,16 +752,20 @@ PAGES.threats = {
     // Honesty first: never imply "clean" when the engine isn't monitoring. A
     // security product that shows reassurance while protection is off is worse
     // than one that shows nothing. state.engineUp is driven by live telemetry.
+    const mttdBox = $('mttdRows');
     if (!state.engineUp) {
       if (cards) cards.innerHTML = '';
+      if (mttdBox) mttdBox.innerHTML = '';
       list.innerHTML = stateBlock('offline', 'Protection is off',
         'Valkyrie is not monitoring this endpoint right now. Start protection to see incidents and live detections.');
       return;
     }
-    const [stats, incidents] = await Promise.all([
+    const [stats, incidents, mttdMttr] = await Promise.all([
       safe(() => V.api.get('/api/edr/stats'), {}),
       safe(() => V.api.get('/api/edr/incidents'), []),
+      safe(() => V.api.get('/api/edr/metrics/mttd-mttr'), null),
     ]);
+    renderMttdMttr(mttdBox, mttdMttr);
     if (cards) cards.innerHTML = `
       <div class="card accent-green"><div class="label">${ICON.alert}Open Incidents</div><div class="value">${fmt(stats.open || stats.open_incidents || 0)}</div></div>
       <div class="card"><div class="label">${ICON.shield}Total Incidents</div><div class="value">${fmt(stats.total || stats.total_incidents || (Array.isArray(incidents) ? incidents.length : 0))}</div></div>
@@ -694,6 +799,7 @@ PAGES.threats = {
           <span class="lr-title">${escapeHtml(title)}</span>
           <span class="lr-sub">${entity ? `<span class="mono-tag">${escapeHtml(entity)}</span> ` : ''}${escapeHtml(sub)}</span>
           ${explain ? `<span class="lr-sub lr-explain">${escapeHtml(truncate(explain, 160))}</span>` : ''}
+          ${i.impact && i.impact.line ? `<span class="lr-sub lr-impact">${escapeHtml(truncate(i.impact.line, 170))}</span>` : ''}
         </div>
         ${tech ? `<span class="mono-tag">${escapeHtml(tech[0])}</span>` : ''}
         <span class="rp-open">▶ Replay</span>
@@ -959,10 +1065,19 @@ PAGES.dns = {
 };
 
 /* ---- Devices ---- */
+// Asset inventory (CIS Controls #1/#2, valkyrie/asset_inventory.py): what's
+// installed, listening and loaded on THIS device. The snapshot counts are
+// bookkeeping; "Recent Changes" — the delta since the engine started
+// watching — is the actual product surface, so it renders second and gets
+// the fuller treatment (per-row detail), not the reverse.
 PAGES.devices = {
   render() { $('page').innerHTML = `
     <div class="page-intro">This protected endpoint. Fleet devices appear here when a fleet server is connected.</div>
-    <div id="devRows"></div>`; },
+    <div id="devRows"></div>
+    ${sectionHead('Asset Inventory', 'What is installed, listening, and loaded — CIS Controls #1/#2')}
+    <div id="assetCounts"><div class="empty">Loading…</div></div>
+    ${sectionHead('Recent Changes', 'New since Valkyrie started watching — the delta is the signal')}
+    <div class="list" id="assetChanges"><div class="empty">Loading…</div></div>`; },
   onTele(data) {
     const s = (data && data.stats) || {}, up = !!(data && data.ok), prot = !!(data && data.protected);
     $('devRows').innerHTML = rowsPanel([
@@ -972,7 +1087,78 @@ PAGES.devices = {
       ['Scanner decisions', fmt(s.scanner_decisions || 0), 'shield'],
     ]);
   },
+  // Backed by an hourly server-side poll (AssetInventoryCollector) and now a
+  // fast in-memory cache (see valkyrie/asset_inventory.py's last_snapshot())
+  // — no need to hit it as often as the 2s telemetry stream.
+  interval: 15000,
+  async poll() {
+    const counts = $('assetCounts'), changes = $('assetChanges');
+    if (!counts || !changes) return;
+    if (!state.engineUp) {
+      counts.innerHTML = '';
+      changes.innerHTML = stateBlock('offline', 'Protection is off',
+        'Asset inventory is collected by the live engine — start protection to see it.');
+      return;
+    }
+    const inv = await safe(() => V.api.get('/api/asset-inventory'), null);
+    renderAssetCounts(counts, inv);
+    renderAssetChanges(changes, inv);
+  },
 };
+
+// A NULL inv means the endpoint call itself failed (engine off, or an older
+// build without it) — rendered as '—', never 0, for the same reason
+// renderDeceptionRows does: 0 would read as "collected, found nothing",
+// which is a different (and false, here) claim than "no data arrived".
+function renderAssetCounts(box, inv) {
+  if (!box) return;
+  if (!inv) { box.innerHTML = rowsPanel([['Asset inventory', '—', 'apps']]); return; }
+  const c = inv.counts || {};
+  box.innerHTML = rowsPanel([
+    ['Installed software', fmt(c.software), 'apps'],
+    ['Listening ports', fmt(c.listening_ports), 'network'],
+    ['Kernel drivers', fmt(c.kernel_drivers), 'cpu'],
+    ['Autostart entries', fmt(c.boot_items), 'activity'],
+    ['Snapshot taken', inv.taken_at ? rpTime(inv.taken_at) : '—', 'activity'],
+  ]);
+}
+
+const ASSET_CHANGE_LABEL = {
+  new_installed_software: 'New software installed',
+  new_listening_port: 'New listening port',
+  new_kernel_driver: 'New kernel driver',
+};
+const ASSET_CHANGE_ICON = {
+  new_installed_software: 'apps',
+  new_listening_port: 'network',
+  new_kernel_driver: 'cpu',
+};
+// Recent changes — the actual product surface (see the PAGES.devices
+// comment above). Each row states what changed, and — encoded by fill vs.
+// outline per the monochrome design language, never color — whether it
+// came from a trusted, Microsoft-owned path ('ok', filled) or not
+// ('warn', outline), the same badge vocabulary the rest of the app uses
+// for effective-vs-degraded state.
+function renderAssetChanges(box, inv) {
+  if (!box) return;
+  if (!inv) { box.innerHTML = stateBlock('error', 'Could not load asset inventory', ''); return; }
+  const rows = inv.recent_changes || [];
+  if (!rows.length) {
+    box.innerHTML = stateBlock('empty', 'No changes observed yet',
+      'Valkyrie snapshots this device hourly; a change is reported the poll after it first appears.');
+    return;
+  }
+  box.innerHTML = rows.slice(0, 30).map((r) => {
+    const label = ASSET_CHANGE_LABEL[r.activity] || r.activity || 'Change';
+    const icon = ASSET_CHANGE_ICON[r.activity] || 'activity';
+    const trustBadge = r.trusted_os_path ? badge('Trusted OS path', 'ok') : badge('Unverified path', 'warn');
+    const path = r.path ? truncate(r.path, 70) : '';
+    return `<div class="list-row"><div class="lr-main">
+        <span class="lr-title">${ICON[icon] || ''}${escapeHtml(label)}: ${escapeHtml(r.identity || '')}</span>
+        <span class="lr-sub">${path ? `<span class="mono-tag">${escapeHtml(path)}</span> · ` : ''}${rpTime(r.detected_at)}</span>
+      </div>${trustBadge}</div>`;
+  }).join('');
+}
 
 /* ---- Updates ---- */
 PAGES.updates = {
@@ -1454,7 +1640,8 @@ const Replay = {
       <div class="rp-head">
         <div class="rp-tt"><h3>${escapeHtml(inc.title || 'Incident')}</h3>
           <div class="rp-meta"><span class="sev ${sev}">${escapeHtml(sev || (inc.status || 'incident'))}</span>
-            <span>${escapeHtml(String(inc.id || ''))}</span><span>·</span><span>${steps.length} steps replayed</span></div></div>
+            <span>${escapeHtml(String(inc.id || ''))}</span><span>·</span><span>${steps.length} steps replayed</span></div>
+          ${renderImpactLine(inc.impact)}</div>
         <button class="rp-x" data-a="close">${RP_ICON.x}</button>
       </div>
       <div class="rp-body">
