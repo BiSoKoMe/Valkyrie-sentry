@@ -370,7 +370,7 @@ PAGES.dashboard = {
   },
   onTele(data) {
     const stats = (data && data.stats) || {}, up = !!(data && data.ok);
-    setProtectionUI(!!(data && data.protected));
+    setProtectionUI(!!(data && data.protected), up);
     const ps = privacyScore(stats, up);
     const vals = {
       dns_blocked: stats.dns_blocked || 0, fw_blocked: stats.fw_blocked || 0,
@@ -1333,18 +1333,24 @@ async function randomizeMac() {
 }
 
 /* ============================ Live topbar =========================== */
-function setProtectionUI(on) {
+// `on` (armed/disarmed) and `up` (did the engine actually answer this poll)
+// are independent facts — armed is a filesystem marker, up is live telemetry.
+// The toggle affordance (orb glow, START/STOP label) tracks the real armed
+// state either way, since that's true regardless of whether stats loaded.
+// The status TEXT must not claim "Protected" on a poll that has no data to
+// back it — that reads as reassurance the app cannot support.
+function setProtectionUI(on, up) {
   const wrap = $('orbWrap'), label = $('orbLabel'), pill = $('statusPill'), txt = $('statusText');
   if (wrap) wrap.classList.toggle('on', on);
   if (label && !state.busy) label.textContent = on ? 'STOP PROTECTION' : 'START PROTECTION';
   if (pill) pill.classList.toggle('on', on);
-  if (txt) txt.textContent = on ? 'Protected' : 'Not protected';
+  if (txt) txt.textContent = !up ? 'No data' : (on ? 'Protected' : 'Not protected');
 }
 function updateTopbar(data) {
   const s = (data && data.stats) || {}, up = !!(data && data.ok), prot = !!(data && data.protected);
   state.engineUp = up; state.protected = prot;
-  $('tbStatus').textContent = prot ? 'Protected' : (up ? 'Standby' : 'Off');
-  $('tbStatus').style.color = prot ? 'var(--text-0)' : 'var(--text-1)';
+  $('tbStatus').textContent = !up ? 'No data' : (prot ? 'Protected' : 'Standby');
+  $('tbStatus').style.color = (up && prot) ? 'var(--text-0)' : 'var(--text-1)';
   $('tbBlocked').textContent = fmt((s.dns_blocked || 0) + (s.fw_blocked || 0));
   $('tbPrivacy').textContent = up ? privacyScore(s, up) : '—';
   $('tbUptime').textContent = up ? fmtUptime(s.uptime_seconds) : '—';

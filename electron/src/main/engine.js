@@ -13,7 +13,7 @@
 // only ever receives already-parsed JSON over IPC.
 // ---------------------------------------------------------------------------
 
-const http = require('http');
+const { net } = require('electron');
 const { spawn, execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -74,28 +74,40 @@ function stopPortableEngine() {
 }
 
 // ---------------------------------------------------------------------------
-// Low-level HTTP GET against the loopback API. Resolves parsed JSON, or rejects
-// on any transport/parse error (used both for health polling and telemetry).
+// Low-level HTTP against the loopback API — built on Electron's `net` module
+// (Chromium's network stack), NOT Node's built-in `http`. This is load-bearing:
+// on a machine running the Valkyrie engine's own traffic filtering, raw
+// Winsock connections (Node's http/net, curl, anything using plain sockets)
+// to 127.0.0.1:WEB_PORT get silently black-holed — TCP connects instantly,
+// the request is sent, and then nothing ever comes back, forever, until the
+// caller's own timeout fires. WinHTTP-based clients (PowerShell, .NET) are
+// unaffected and answer in well under a second. Electron's `net` module goes
+// through the same OS network stack those do and is equally unaffected, so it
+// is used here instead of `http`, not merely as a style preference.
 // ---------------------------------------------------------------------------
-function apiGet(pathname, timeoutMs = 1500) {
+function netGet(pathname, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const req = http.get(
-      { host: HOST, port: WEB_PORT, path: pathname, timeout: timeoutMs },
-      (res) => {
-        let body = '';
-        res.on('data', (c) => (body += c));
-        res.on('end', () => {
-          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-            try { resolve(JSON.parse(body)); }
-            catch (e) { reject(e); }
-          } else {
-            reject(new Error(`HTTP ${res.statusCode}`));
-          }
-        });
-      }
-    );
-    req.on('timeout', () => req.destroy(new Error('timeout')));
-    req.on('error', reject);
+    const req = net.request({ method: 'GET', protocol: 'http:', hostname: HOST, port: WEB_PORT, path: pathname });
+    let settled = false;
+    const finish = (fn, arg) => { if (settled) return; settled = true; clearTimeout(timer); fn(arg); };
+    const timer = setTimeout(() => { req.abort(); }, timeoutMs);
+    req.on('response', (res) => {
+      let body = '';
+      res.on('data', (c) => (body += c));
+      res.on('end', () => finish(resolve, { statusCode: res.statusCode, body }));
+      res.on('error', (e) => finish(reject, e));
+    });
+    req.on('error', (e) => finish(reject, e));
+    req.end();
+  });
+}
+
+// Resolves parsed JSON, or rejects on any transport/parse error (used both
+// for health polling and telemetry).
+function apiGet(pathname, timeoutMs = 1500) {
+  return netGet(pathname, timeoutMs).then(({ statusCode, body }) => {
+    if (statusCode && statusCode >= 200 && statusCode < 300) return JSON.parse(body);
+    throw new Error(`HTTP ${statusCode}`);
   });
 }
 
@@ -103,20 +115,9 @@ function apiGet(pathname, timeoutMs = 1500) {
 // (e.g. the compliance report's ?format=md), so apiGet's JSON.parse never
 // gets in the way of a body that was never meant to be JSON.
 function apiGetText(pathname, timeoutMs = 4000) {
-  return new Promise((resolve, reject) => {
-    const req = http.get(
-      { host: HOST, port: WEB_PORT, path: pathname, timeout: timeoutMs },
-      (res) => {
-        let body = '';
-        res.on('data', (c) => (body += c));
-        res.on('end', () => {
-          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) resolve(body);
-          else reject(new Error(`HTTP ${res.statusCode}`));
-        });
-      }
-    );
-    req.on('timeout', () => req.destroy(new Error('timeout')));
-    req.on('error', reject);
+  return netGet(pathname, timeoutMs).then(({ statusCode, body }) => {
+    if (statusCode && statusCode >= 200 && statusCode < 300) return body;
+    throw new Error(`HTTP ${statusCode}`);
   });
 }
 
@@ -132,32 +133,33 @@ function apiRequest(method, pathname, { token, body, timeoutMs = 4000 } = {}) {
       headers['Content-Length'] = Buffer.byteLength(data);
     }
     if (token) headers['x-valkyrie-token'] = token;
-    const req = http.request(
-      { host: HOST, port: WEB_PORT, path: pathname, method, headers, timeout: timeoutMs },
-      (res) => {
-        let b = '';
-        res.on('data', (c) => (b += c));
-        res.on('end', () => {
-          const ok = res.statusCode >= 200 && res.statusCode < 300;
-          let parsed = null;
-          try { parsed = b ? JSON.parse(b) : null; } catch {}
-          if (ok) resolve(parsed);
-          else {
-            // .status is set explicitly (not left to string-matching the
-            // message) so callers — apiPost's retry below in particular —
-            // can tell "the token is stale" apart from every other failure
-            // mode without depending on the exact wording the backend chose
-            // for that error, which is exactly the kind of fragile parsing
-            // this audit pass was looking for.
-            const err = new Error((parsed && parsed.error) || `HTTP ${res.statusCode}`);
-            err.status = res.statusCode;
-            reject(err);
-          }
-        });
-      }
-    );
-    req.on('timeout', () => req.destroy(new Error('timeout')));
-    req.on('error', reject);
+    // net.request, not http.request — see the block comment above netGet().
+    const req = net.request({ method, protocol: 'http:', hostname: HOST, port: WEB_PORT, path: pathname });
+    for (const [k, v] of Object.entries(headers)) req.setHeader(k, v);
+    let settled = false;
+    const finish = (fn, arg) => { if (settled) return; settled = true; clearTimeout(timer); fn(arg); };
+    const timer = setTimeout(() => { req.abort(); }, timeoutMs);
+    req.on('response', (res) => {
+      let b = '';
+      res.on('data', (c) => (b += c));
+      res.on('end', () => {
+        const ok = res.statusCode >= 200 && res.statusCode < 300;
+        let parsed = null;
+        try { parsed = b ? JSON.parse(b) : null; } catch {}
+        if (ok) { finish(resolve, parsed); return; }
+        // .status is set explicitly (not left to string-matching the
+        // message) so callers — apiPost's retry below in particular —
+        // can tell "the token is stale" apart from every other failure
+        // mode without depending on the exact wording the backend chose
+        // for that error, which is exactly the kind of fragile parsing
+        // this audit pass was looking for.
+        const err = new Error((parsed && parsed.error) || `HTTP ${res.statusCode}`);
+        err.status = res.statusCode;
+        finish(reject, err);
+      });
+      res.on('error', (e) => finish(reject, e));
+    });
+    req.on('error', (e) => finish(reject, e));
     if (data) req.write(data);
     req.end();
   });
@@ -298,8 +300,10 @@ async function waitUntilReady(onTick, { attempts = 60, intervalMs = 1000 } = {})
 // availability so a half-warmed engine still renders something real.
 async function telemetry() {
   const out = { ok: false, protected: isProtected(), stats: null, events: [] };
-  try { out.stats = await apiGet('/api/stats', 1500); out.ok = true; } catch {}
-  try { out.events = await apiGet('/api/events', 1500); } catch {}
+  try { out.stats = await apiGet('/api/stats', 1500); out.ok = true; }
+  catch (err) { console.error('[engine.telemetry] GET /api/stats failed:', err && err.stack || err); }
+  try { out.events = await apiGet('/api/events', 1500); }
+  catch (err) { console.error('[engine.telemetry] GET /api/events failed:', err && err.stack || err); }
   return out;
 }
 
