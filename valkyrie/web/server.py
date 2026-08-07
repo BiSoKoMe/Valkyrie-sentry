@@ -823,6 +823,12 @@ def create_app(ctx: Optional[AppContext] = None):
             "kernel_drivers": snap.kernel_drivers,
             "taken_at": snap.taken_at,
             "collector_running": ai.is_running(),
+            # The delta is the product; the snapshot above is bookkeeping.
+            # Most recent first, capped at 50 (AssetInventoryCollector's own
+            # bound) -- empty until a second poll has run (default 1h after
+            # start, since nothing "changed" relative to nothing on the
+            # first poll).
+            "recent_changes": ai.recent_changes(),
         }
 
     # ── System control (launcher / dashboard buttons) ───────────────────

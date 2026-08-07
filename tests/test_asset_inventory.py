@@ -127,6 +127,34 @@ def test_collector_seeds_baseline_and_emits_on_add() -> None:
             "asset_change" in ev.labels)
     c.check("event names the specific app in its target/fields",
             ev.target.get("identity") == "App B")
+    c.check("recent_changes() records it too -- the UI-facing delta feed, "
+            "not just the transient TelemetryEvent",
+            len(collector.recent_changes()) == 1
+            and collector.recent_changes()[0]["identity"] == "App B")
+
+
+def test_recent_changes_ordering_and_cap() -> None:
+    print("\n[3b] recent_changes(): most-recent-first, bounded at 50")
+    events = []
+    collector = ai.AssetInventoryCollector(emit=events.append, interval=9999)
+    seq = [ai.AssetSnapshot(software={})]
+    for i in range(60):
+        seq.append(ai.AssetSnapshot(software={f"App{j}": {"version": "1", "publisher": "",
+                                                           "install_location": ""}
+                                               for j in range(i + 1)}))
+    with patch.object(collector, "current_snapshot", side_effect=seq):
+        for _ in range(len(seq)):
+            collector.poll_once()
+    recent = collector.recent_changes()
+    c.check("bounded at 50 entries even after 60 changes", len(recent) == 50)
+    c.check("most recent change is FIRST (App59, the last one added)",
+            recent[0]["identity"] == "App59")
+    c.check("each entry carries a real detected_at timestamp",
+            isinstance(recent[0]["detected_at"], float) and recent[0]["detected_at"] > 0)
+
+    empty_collector = ai.AssetInventoryCollector(emit=lambda e: None, interval=9999)
+    c.check("a fresh collector (no polls yet) has an empty recent_changes()",
+            empty_collector.recent_changes() == [])
 
 
 def test_removed_items_never_emit() -> None:
@@ -301,6 +329,9 @@ def test_api_endpoint() -> None:
         fake.last_snapshot.return_value = ai.AssetSnapshot(
             software={"X": {"version": "1", "publisher": "", "install_location": ""}})
         fake.is_running.return_value = True
+        fake.recent_changes.return_value = [
+            {"activity": "new_installed_software", "identity": "X",
+             "path": "", "trusted_os_path": False, "detected_at": 1234.0}]
         state.asset_inventory = fake
         app2 = create_app()
         client2 = make_client(app2, "127.0.0.1")
@@ -309,6 +340,9 @@ def test_api_endpoint() -> None:
         body = resp2.json()
         c.check("response has counts/software/listening_ports/kernel_drivers",
                 {"counts", "software", "listening_ports", "kernel_drivers"} <= set(body.keys()))
+        c.check("response has recent_changes -- the delta feed the UI reads "
+                "('the delta is the product; the inventory is bookkeeping')",
+                "recent_changes" in body and body["recent_changes"][0]["identity"] == "X")
         c.check("the endpoint served the CACHE (last_snapshot()), never the "
                 "slow live probe (current_snapshot())",
                 fake.last_snapshot.called and not fake.current_snapshot.called)
@@ -326,6 +360,7 @@ def main() -> int:
     test_real_enumeration_on_this_host()
     test_diff_snapshots()
     test_collector_seeds_baseline_and_emits_on_add()
+    test_recent_changes_ordering_and_cap()
     test_removed_items_never_emit()
     test_trusted_path_labeling()
     test_reuses_persistence_collector_without_duplicating_detection()

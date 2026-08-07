@@ -43,6 +43,7 @@ import os
 import socket
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -259,6 +260,13 @@ class AssetInventoryCollector:
     of change, pure noise for a delta feed). First poll seeds the baseline
     silently — same contract as ProcessCollector.poll_once()."""
 
+    # Same reasoning as ChangeType's cap elsewhere: a UI-facing recency
+    # feed needs "the last N", not an unbounded history -- that belongs in
+    # the store (edr_detections), which this signal deliberately stays out
+    # of (see the module docstring). Kept in-memory only: a restart clears
+    # it, same as any other "since last poll" cache in this codebase.
+    _RECENT_MAX = 50
+
     def __init__(self, emit: Callable[[TelemetryEvent], None],
                  interval: float = 3600.0,
                  persistence_collector: Optional[PersistenceCollector] = None) -> None:
@@ -268,6 +276,14 @@ class AssetInventoryCollector:
         self._last: Optional[AssetSnapshot] = None
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        # A bounded, UI-facing record of recent changes -- what "show the
+        # delta, not the snapshot" (the product surface this collector
+        # exists for) actually reads. The TelemetryEvent this same call
+        # emits is INFO-only and, by design (see engine.ingest_telemetry's
+        # severity gate), is never persisted to the detections table on its
+        # own -- so without this, a UI asking "what changed recently" would
+        # have nothing to query the moment after the event fired.
+        self._recent_changes: deque = deque(maxlen=self._RECENT_MAX)
 
     def available(self) -> bool:
         return os.name == "nt" and (_WINREG or _PSUTIL)
@@ -322,12 +338,23 @@ class AssetInventoryCollector:
             emitted += 1
         return emitted
 
+    def recent_changes(self) -> list[dict]:
+        """The last (up to) 50 asset changes, most recent first. Each entry:
+        {activity, identity, path, trusted_os_path, detected_at, **extra}.
+        Empty until the SECOND poll completes (the first only seeds the
+        baseline, by design -- nothing "changed" relative to nothing)."""
+        return list(reversed(self._recent_changes))
+
     def _emit_change(self, activity: str, identity: str, path: str,
                      extra: dict) -> None:
         trusted = is_trusted_os_path(path) if path else False
         labels = ["asset_change", activity]
         if trusted:
             labels.append("trusted_os_path")
+        self._recent_changes.append({
+            "activity": activity, "identity": identity, "path": path,
+            "trusted_os_path": trusted, "detected_at": time.time(), **extra,
+        })
         ev = TelemetryEvent(
             category=CAT_ASSET, activity=activity, action=ACT_OBSERVED,
             actor_name=(os.path.basename(path.strip('"')) if path else identity),
