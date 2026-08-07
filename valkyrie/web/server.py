@@ -678,6 +678,32 @@ def create_app(ctx: Optional[AppContext] = None):
             "live_compensation_active": live_compensation,
         }
 
+    @app.get("/api/controls/coverage")
+    async def controls_coverage():
+        """What fraction of Valkyrie's intended defenses are actually live,
+        right now, on THIS host — not a static claim. Three states per
+        control (effective/degraded/absent), not a binary installed/not —
+        see valkyrie/coverage.py. Wires in every live singleton this
+        process actually has, so e.g. Sysmon installed-but-stopped reports
+        'absent', not 'effective'."""
+        from ..coverage import CoverageContext, check_all, summarize
+        ctx = CoverageContext(
+            firewall=state.firewall,
+            sensor_tamper=state.sensor_tamper,
+            playbook_engine=state.playbooks,
+            sensor_manager=state.sensor_manager,
+        )
+        results = check_all(ctx)
+        summary = summarize(results)
+        return {
+            "fraction_effective": round(summary.fraction_effective, 4),
+            "counts": summary.counts,
+            "total": summary.total,
+            "gaps": [{"name": r.name, "category": r.category,
+                     "state": r.state, "detail": r.detail}
+                    for r in summary.gaps],
+        }
+
     @app.get("/api/decoys/status")
     async def decoys_status():
         """How many decoy honeytokens are live (0 = not deployed)."""
