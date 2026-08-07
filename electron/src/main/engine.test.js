@@ -11,36 +11,51 @@
    whole app was relaunched — including the restart control itself being the
    one action that broke every other control afterward.
 
-   http is faked by monkey-patching the shared 'http' module object BEFORE
-   requiring engine.js (CommonJS's module cache means both this file and
-   engine.js share the exact same object, so patching .request/.get here is
-   visible to engine.js's own `const http = require('http')`). No real
-   listener, no new dependency — same zero-dependency style as the existing
-   renderer tests. Run with: node --test electron/src/main/engine.test.js
+   'electron's net module is faked by pre-populating require.cache with a
+   fake module BEFORE requiring engine.js (CommonJS's module cache means
+   engine.js's own `const { net } = require('electron')` resolves to this
+   fake instead of running the real (stub, path-string-only outside the
+   Electron runtime) 'electron' package). No real listener, no new
+   dependency — same zero-dependency style as the existing renderer tests.
+
+   Updated 2026-08-07 for commit 34d037c, which replaced Node's http module
+   with Electron's net module for the actual loopback API calls (raw
+   Winsock connections were getting silently black-holed on a host running
+   Valkyrie's own traffic filtering — see engine.js's netGet() comment).
+   Before that fix this file mocked 'http'; net.request's shape differs
+   (setHeader()/abort() instead of a headers option, and the request
+   object itself emits 'response' rather than a get()/request() callback
+   receiving it), so the fake had to change shape, not just target.
+   Run with: node --test electron/src/main/engine.test.js
    ========================================================================= */
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
-const http = require('http');
 
 // ---------------------------------------------------------------------------
-// Fake HTTP layer. `plan` is a queue of {statusCode, body} the next request
-// consumes in order, so each test scripts exactly the server responses it
-// needs without a real socket.
+// Fake net.request layer. `plan` is a queue of {statusCode, body} the next
+// request consumes in order, so each test scripts exactly the server
+// responses it needs without a real socket.
 // ---------------------------------------------------------------------------
 let _plan = [];
 function scriptResponses(...responses) { _plan = responses.slice(); }
 
-function fakeRequest(options, callback) {
+// Mirrors Electron's net.ClientRequest/IncomingMessage shape closely enough
+// for engine.js's netGet()/apiRequest(): the request is an EventEmitter with
+// setHeader/write/end/abort, 'response' fires with an EventEmitter carrying
+// statusCode + 'data'/'end'.
+function fakeNetRequest(_options) {
   const req = new EventEmitter();
+  req.setHeader = () => {};
   req.write = () => {};
+  req.abort = () => { req.emit('error', new Error('aborted')); };
   req.end = () => {
     const next = _plan.shift() || { statusCode: 500, body: '{}' };
     setImmediate(() => {
       const res = new EventEmitter();
       res.statusCode = next.statusCode;
-      callback(res);
+      req.emit('response', res);
       setImmediate(() => {
         res.emit('data', Buffer.from(next.body));
         res.emit('end');
@@ -50,11 +65,10 @@ function fakeRequest(options, callback) {
   return req;
 }
 
-http.request = fakeRequest;
-http.get = (options, callback) => {
-  const req = fakeRequest(options, callback);
-  req.end();
-  return req;
+const ELECTRON_PATH = require.resolve('electron');
+require.cache[ELECTRON_PATH] = {
+  id: ELECTRON_PATH, filename: ELECTRON_PATH, loaded: true, children: [],
+  exports: { net: { request: fakeNetRequest } },
 };
 
 // engine.js's _tokenCache is module-level state, exactly like it would be in
