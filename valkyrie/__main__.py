@@ -1349,8 +1349,20 @@ def main() -> None:
             # silently degrading with no signal at all.
             _tst = time.monotonic()
             from .sensor_tamper import SensorTamperMonitor
+            # Compensating control (valkyrie/control_taxonomy.py, IIBA §4.2.3):
+            # when Sysmon dies, actively tighten the independent psutil-based
+            # process poller instead of silently continuing at its normal
+            # cadence. Partial coverage only — see control_taxonomy.py for
+            # exactly what this does and does not substitute for.
+            _sysmon_compensations = {}
+            if process_collector is not None:
+                _sysmon_compensations["sysmon"] = (
+                    lambda: process_collector.tighten(4.0),
+                    process_collector.restore_interval,
+                )
             sensor_tamper_monitor = SensorTamperMonitor(
-                emit=lambda ev: edr_engine.ingest_telemetry(ev))
+                emit=lambda ev: edr_engine.ingest_telemetry(ev),
+                compensations=_sysmon_compensations)
             sensor_tamper_monitor.start()
             _tick("Sensor tamper detection active", _tst)
 

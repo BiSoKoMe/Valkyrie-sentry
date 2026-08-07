@@ -386,7 +386,8 @@ class ProcessCollector:
     def __init__(self, emit: Callable[[TelemetryEvent], None],
                  interval: float = 2.0) -> None:
         self._emit = emit
-        self._interval = max(0.25, float(interval))
+        self._base_interval = max(0.25, float(interval))
+        self._interval = self._base_interval
         # None = no baseline yet (a sentinel, not truthiness) so an empty first
         # snapshot is still a valid baseline rather than causing a re-seed.
         self._last: Optional[dict] = None
@@ -395,6 +396,32 @@ class ProcessCollector:
 
     def available(self) -> bool:
         return _PSUTIL
+
+    # -- compensating-control hook (valkyrie/control_taxonomy.py) -----------
+    #
+    # This poller is Valkyrie's documented COMPENSATING control for the
+    # Sysmon/ETW process-visibility sensors: when sensor_tamper.py detects
+    # Sysmon has gone from healthy to unhealthy, it calls tighten() here to
+    # actively substitute more frequent (lower-latency) userland polling for
+    # the lost real-time kernel signal, instead of silently continuing at the
+    # same cadence a healthy Sysmon never needed to compensate for anything.
+    # restore_interval() reverts once Sysmon recovers. `_loop` reads
+    # `self._interval` fresh every cycle, so this takes effect on the very
+    # next sleep with no thread restart.
+    def tighten(self, factor: float = 4.0) -> float:
+        """Poll up to `factor`x more often (floored at 0.25s). Returns the
+        new interval. Idempotent — calling it again while already tightened
+        does not compound."""
+        self._interval = max(0.25, self._base_interval / max(1.0, factor))
+        return self._interval
+
+    def restore_interval(self) -> float:
+        """Revert to the configured baseline interval. Returns it."""
+        self._interval = self._base_interval
+        return self._interval
+
+    def current_interval(self) -> float:
+        return self._interval
 
     def snapshot(self) -> dict:
         """Return {key: ProcInfo} for currently-running processes.

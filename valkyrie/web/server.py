@@ -652,6 +652,32 @@ def create_app(ctx: Optional[AppContext] = None):
                            "process-injection and credential-dump detection "
                            "may be running in degraded mode"))}
 
+    @app.get("/api/controls/taxonomy")
+    async def controls_taxonomy():
+        """Every Valkyrie control classified preventive/detective/corrective/
+        deterrent/compensating/directive/recovery (IIBA §4.2.3), plus any
+        category with no primary control — an empty category is a finding,
+        not a bug in this endpoint. Static classification merged with the
+        LIVE compensating-control activation state (sensor_tamper.py) where
+        available, so 'compensating' reflects whether it is actually
+        running right now, not just whether the code exists."""
+        from ..control_taxonomy import CATEGORIES, by_category, gaps
+        grouped = by_category()
+        live_compensation = (state.sensor_tamper.current_compensation()
+                             if state.sensor_tamper is not None else {})
+        return {
+            "categories": {
+                cat: [
+                    {"name": ctl.name, "module": ctl.module,
+                     "secondary": ctl.category != cat, "note": ctl.note}
+                    for ctl in grouped[cat]
+                ]
+                for cat in CATEGORIES
+            },
+            "gaps": gaps(),
+            "live_compensation_active": live_compensation,
+        }
+
     @app.get("/api/decoys/status")
     async def decoys_status():
         """How many decoy honeytokens are live (0 = not deployed)."""

@@ -197,6 +197,26 @@ both found the hard way.
   of that problem, and doing the harder version half-way would be worse than
   not attempting it.
 
+## Addendum (2026-08-06) — a real compensating control, not just a passive fallback
+
+Control-taxonomy classification (`valkyrie/control_taxonomy.py`, IIBA §4.2.3)
+found that the "falls back to a 2-second psutil poll" language above was
+accurate but incomplete: the poller was *already running independently* of
+Sysmon, but nothing *activated* it as a substitute — it polled at the same
+cadence whether Sysmon was healthy or not, and there was no compensating
+category anywhere in the codebase. `SensorTamperMonitor` now accepts a
+`compensations` map; on the sysmon healthy→unhealthy transition it calls
+`ProcessCollector.tighten()` (4x the poll rate, floored at 0.25s) and calls
+`restore_interval()` back on recovery. Both transitions are recorded as
+telemetry (`sensor_tamper` / `sensor_recovered`), so the compensation
+turning on and off is itself auditable, not a silent internal state change.
+
+This remains honest about its limits, unchanged from the original finding
+above: it only helps process-CREATION visibility. It does nothing for the
+EID 8/10/7/13-only signals (injection, LSASS access, unsigned modules,
+autorun registry writes) that have no userland equivalent. See
+`control_taxonomy.py`'s `sysmon_compensation` entry for the exact list.
+
 ## The long-term answer
 
 The kernel driver (`driver/valkyrie_km`, ADR 0026/0031/0043) removes this

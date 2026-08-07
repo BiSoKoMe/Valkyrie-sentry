@@ -23,6 +23,20 @@ dying. It is deliberately shaped so another sensor's health check could be
 added the same way later — see `_CHECKS` — not because more are needed
 today, but so "add a check" stays a one-function change rather than a new
 watchdog class each time.
+
+**Compensating control (valkyrie/control_taxonomy.py, IIBA §4.2.3).** Before
+this pass, a Sysmon failure was detective-only: an incident was raised, and
+detection quality silently fell back to whatever ran independently of
+Sysmon (`process_telemetry.ProcessCollector`'s 2-second psutil poll — see
+`docs/adr/0048-sysmon-dependency.md`). Nothing actively responded to the
+loss. `SensorTamperMonitor` now accepts an optional `compensations` map so a
+sensor's health transition can trigger a real substitute action — e.g.
+tightening that poller's interval on the healthy→unhealthy transition, and
+reverting it on recovery. This is honest about its limits: a userland poll
+can partially cover process-creation visibility, but it cannot see the
+ETW-only signals (process injection, LSASS access, image-load hashes) —
+see `docs/adr/0048-sysmon-dependency.md` and `control_taxonomy.py` for what
+is and is not compensated.
 """
 
 from __future__ import annotations
@@ -33,7 +47,9 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from .sysmon_manager import _EID_RULE_SECTION, SysmonEnvironment, probe_sysmon
-from .telemetry import ACT_FLAGGED, CAT_PROCESS, SEV_CRITICAL, TelemetryEvent
+from .telemetry import (
+    ACT_FLAGGED, CAT_PROCESS, SEV_CRITICAL, SEV_INFO, TelemetryEvent,
+)
 
 
 @dataclass(frozen=True)
@@ -74,9 +90,17 @@ class SensorTamperMonitor:
     """
 
     def __init__(self, emit: Callable[[TelemetryEvent], None],
-                 interval: float = 300.0) -> None:
+                 interval: float = 300.0,
+                 compensations: Optional[dict] = None) -> None:
+        """``compensations`` maps a sensor name (e.g. ``"sysmon"``) to a
+        ``(activate, deactivate)`` pair of zero-arg callables — the real
+        compensating-control action to run on that sensor's healthy→unhealthy
+        transition, and the reverting action to run on recovery. Both are
+        called defensively (a broken compensation must never take the
+        monitor down, same discipline as a broken health check)."""
         self._emit = emit
         self._interval = max(30.0, float(interval))
+        self._compensations = dict(compensations) if compensations else {}
         # name -> True/False/None(unknown yet)
         self._last: dict = {}
         # name -> the SAME poll's detail text (why it's healthy/unhealthy --
@@ -86,8 +110,18 @@ class SensorTamperMonitor:
         # (server.py and tests read it directly) -- adding detail text here
         # is additive instead of a breaking reshape.
         self._last_detail: dict = {}
+        # name -> True once that sensor's compensating action is active, so
+        # a recovery only fires deactivate() when something was activated
+        # (and so current_compensation() can report it without a live probe).
+        self._compensated: dict = {}
         self._running = False
         self._thread: Optional[threading.Thread] = None
+
+    def current_compensation(self) -> dict:
+        """{sensor_name: bool} -- whether that sensor's compensating action
+        is currently active. Empty for sensors with no registered
+        compensation at all (distinct from False = registered-but-inactive)."""
+        return dict(self._compensated)
 
     def current_status(self) -> dict:
         """The last-known health per sensor, from the most recent poll — not
@@ -120,23 +154,77 @@ class SensorTamperMonitor:
             self._last_detail[h.name] = h.detail
             if was is True and not h.healthy:
                 self._emit_tamper(h)
+                self._activate_compensation(h)
                 emitted += 1
+            elif was is False and h.healthy:
+                self._emit_recovery(h)
+                self._deactivate_compensation(h)
         return emitted
 
     def _emit_tamper(self, h: SensorHealth) -> None:
+        compensated = h.name in self._compensations
         ev = TelemetryEvent(
             category=CAT_PROCESS, activity="sensor_tamper",
             action=ACT_FLAGGED, severity=SEV_CRITICAL,
             source="sensor_tamper_monitor",
-            reason=f"detection sensor '{h.name}' went from healthy to unhealthy: {h.detail}",
-            labels=["sensor_tamper", f"{h.name}_degraded"],
+            reason=f"detection sensor '{h.name}' went from healthy to unhealthy: {h.detail}"
+                  + (f" — compensating control activated for '{h.name}'" if compensated
+                     else f" — NO compensating control registered for '{h.name}'"),
+            labels=["sensor_tamper", f"{h.name}_degraded"]
+                  + (["compensating_control_activated"] if compensated else []),
             fields={"technique": "T1562.001 — Impair Defenses: Disable or Modify Tools",
-                   "sensor": h.name},
+                   "sensor": h.name, "compensated": compensated},
         )
         try:
             self._emit(ev)
         except Exception:
             pass   # a bad emitter must never stop the monitor
+
+    def _emit_recovery(self, h: SensorHealth) -> None:
+        """Informational (not critical) -- recovery is good news, but IIBA
+        §4.2.5's "leave no residual state" applies to the monitor's OWN
+        compensating actions too: silently reverting a tightened poll
+        interval with no record would be exactly the kind of unannounced
+        state change this whole audit exists to stop."""
+        ev = TelemetryEvent(
+            category=CAT_PROCESS, activity="sensor_recovered",
+            action=ACT_FLAGGED, severity=SEV_INFO,
+            source="sensor_tamper_monitor",
+            reason=f"detection sensor '{h.name}' recovered: {h.detail}",
+            labels=["sensor_recovered", f"{h.name}_recovered"],
+            fields={"sensor": h.name},
+        )
+        try:
+            self._emit(ev)
+        except Exception:
+            pass
+
+    def _activate_compensation(self, h: SensorHealth) -> None:
+        pair = self._compensations.get(h.name)
+        if pair is None:
+            self._compensated[h.name] = False
+            return
+        activate, _deactivate = pair
+        try:
+            activate()
+            self._compensated[h.name] = True
+        except Exception:
+            # A broken compensating action must not hide the tamper alert
+            # that already fired above -- it is reported False, not silently
+            # dropped.
+            self._compensated[h.name] = False
+
+    def _deactivate_compensation(self, h: SensorHealth) -> None:
+        pair = self._compensations.get(h.name)
+        if pair is None or not self._compensated.get(h.name):
+            return
+        _activate, deactivate = pair
+        try:
+            deactivate()
+        except Exception:
+            pass
+        finally:
+            self._compensated[h.name] = False
 
     # -- lifecycle ------------------------------------------------------------
     def start(self) -> None:
