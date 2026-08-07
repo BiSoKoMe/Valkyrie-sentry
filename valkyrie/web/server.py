@@ -797,16 +797,25 @@ def create_app(ctx: Optional[AppContext] = None):
 
     @app.get("/api/asset-inventory")
     async def asset_inventory_status():
-        """CIS Controls #1/#2: a live snapshot of what's installed,
-        listening, and loaded, plus counts -- read-only, computed on
-        request (not cached), since this is an on-demand inventory view,
-        not a hot path. 503 (not a crash) when the collector isn't
-        available on this host/build."""
+        """CIS Controls #1/#2: the most recent snapshot of what's
+        installed, listening, and loaded, plus counts. Reads the
+        collector's CACHE (``last_snapshot()``), never a fresh probe --
+        confirmed via a real boot that a fresh snapshot takes 30+ SECONDS
+        on a real host (474 kernel-driver registry keys alone), which would
+        block this whole async server for that long on every request. Same
+        cache-not-probe contract as ``/api/sysmon/status``. See
+        ``AssetSnapshot.taken_at`` in the response for exactly how stale the
+        data is (poll interval defaults to 1h). 503 (not a crash) when the
+        collector isn't available, or hasn't completed its first poll yet."""
         ai = getattr(state, "asset_inventory", None)
         if ai is None:
             return JSONResponse({"error": "asset inventory not available"},
                                 status_code=503)
-        snap = ai.current_snapshot()
+        snap = ai.last_snapshot()
+        if snap is None:
+            return JSONResponse(
+                {"error": "asset inventory has not completed its first poll yet"},
+                status_code=503)
         return {
             "counts": snap.counts(),
             "software": snap.software,

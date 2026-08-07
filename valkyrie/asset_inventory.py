@@ -273,7 +273,25 @@ class AssetInventoryCollector:
         return os.name == "nt" and (_WINREG or _PSUTIL)
 
     def current_snapshot(self) -> AssetSnapshot:
+        """A FRESH, synchronous snapshot — real registry/socket enumeration,
+        confirmed to take over 30 SECONDS on a real host (474 kernel driver
+        registry keys, ~250 installed-software keys). NEVER call this from
+        a request handler; it will block the caller (and, if that caller is
+        an async event loop, every OTHER request too) for that long. Use
+        ``last_snapshot()`` instead — same cache-not-probe contract as
+        ``sensor_tamper.SensorTamperMonitor.current_status()``, which
+        documents the identical tradeoff for the identical reason."""
         return take_snapshot(self._persistence_collector)
+
+    def last_snapshot(self) -> Optional[AssetSnapshot]:
+        """The most recent poll's snapshot — cheap, does not touch the
+        registry or the network. Populated synchronously by start() before
+        it returns, so by the time anything can be serving requests this is
+        already non-None; still Optional so a caller cannot be surprised if
+        asked before start() ever ran. May be up to `interval` seconds old
+        (default 1h) -- callers that need to know exactly how stale it is
+        should read AssetSnapshot.taken_at, not assume freshness."""
+        return self._last
 
     def poll_once(self) -> int:
         """Snapshot, diff against the last poll, emit one event per newly

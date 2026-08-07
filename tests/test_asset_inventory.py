@@ -280,8 +280,25 @@ def test_api_endpoint() -> None:
         resp = client.get("/api/asset-inventory")
         c.check("no collector wired -> 503, not a crash", resp.status_code == 503)
 
+        # Collector wired but hasn't completed its first poll yet -- must be
+        # an honest 503, never a 30+-second block while it computes one on
+        # the spot (see the fresh-vs-cached-snapshot regression this guards:
+        # a real boot showed /api/asset-inventory taking 34s when it called
+        # current_snapshot() -- a fresh registry enumeration -- instead of
+        # last_snapshot() -- the collector's own cache).
+        fake_not_polled = MagicMock()
+        fake_not_polled.last_snapshot.return_value = None
+        state.asset_inventory = fake_not_polled
+        app0 = create_app()
+        client0 = make_client(app0, "127.0.0.1")
+        resp0 = client0.get("/api/asset-inventory")
+        c.check("collector wired but no poll completed yet -> 503, not a hang",
+                resp0.status_code == 503)
+        c.check("the endpoint NEVER calls the slow current_snapshot() itself",
+                not fake_not_polled.current_snapshot.called)
+
         fake = MagicMock()
-        fake.current_snapshot.return_value = ai.AssetSnapshot(
+        fake.last_snapshot.return_value = ai.AssetSnapshot(
             software={"X": {"version": "1", "publisher": "", "install_location": ""}})
         fake.is_running.return_value = True
         state.asset_inventory = fake
@@ -292,6 +309,9 @@ def test_api_endpoint() -> None:
         body = resp2.json()
         c.check("response has counts/software/listening_ports/kernel_drivers",
                 {"counts", "software", "listening_ports", "kernel_drivers"} <= set(body.keys()))
+        c.check("the endpoint served the CACHE (last_snapshot()), never the "
+                "slow live probe (current_snapshot())",
+                fake.last_snapshot.called and not fake.current_snapshot.called)
         c.check("counts reflects the fake snapshot", body["counts"]["software"] == 1)
         c.check("no POST route exists (read-only monitoring surface)",
                 client2.post("/api/asset-inventory").status_code == 405)
