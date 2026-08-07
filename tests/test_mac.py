@@ -197,10 +197,21 @@ check("disable failure returns False", result is False)
 check("disable failure sets a 'disable failed' last_error", "disable failed" in err, err)
 check("disable failure makes exactly 1 netsh call (no enable attempt)", calls == 1, str(calls))
 
-# 7b. netsh disable succeeds, enable fails (nonzero return) -> False
-result, err, calls = _run_apply_windows([_ok(0), _ok(1)])
+# 7b. netsh disable succeeds, enable fails (nonzero return) -> False, and a
+# best-effort retry-enable is attempted so the adapter is never left stranded
+# disabled with zero recovery attempt (tests/test_responder_reversibility.py
+# documents this as the closed rollback path for the mac_randomize action).
+result, err, calls = _run_apply_windows([_ok(0), _ok(1), _ok(0)])
 check("enable failure returns False", result is False)
 check("enable failure sets an 'enable failed' last_error", "enable failed" in err, err)
+check("enable failure attempts a best-effort retry-enable (3 netsh calls)",
+      calls == 3, str(calls))
+
+# 7b2. same, but the best-effort retry ALSO fails — must not raise, still False
+result, err, calls = _run_apply_windows([_ok(0), _ok(1), _ok(1)])
+check("enable failure + failed retry still returns False", result is False)
+check("enable failure + failed retry still attempts the retry (3 netsh calls)",
+      calls == 3, str(calls))
 
 # 7c. netsh disable times out -> False, best-effort re-enable attempted (2 calls total)
 result, err, calls = _run_apply_windows([_subprocess.TimeoutExpired(cmd="netsh", timeout=15)])

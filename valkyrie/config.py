@@ -625,6 +625,21 @@ TELEMETRY_BACKUP_PATH = DATA_DIR / "telemetry_backup.json"
 TELEMETRY_SERVICES_TO_DISABLE = ["DiagTrack", "dmwappushservice"]
 
 # ---------------------------------------------------------------------------
+# EDR responder rollback snapshots (see valkyrie/edr/reversibility.py)
+# ---------------------------------------------------------------------------
+# isolate_host backs up the FULL pre-isolation firewall state here (a Windows
+# `netsh advfirewall export` .wfw file, or a Linux `iptables-save` ruleset)
+# before touching anything, so release_isolation can restore the machine to
+# exactly what it was — not to a hardcoded guess at the "normal" policy. See
+# IIBA Cybersecurity Analysis handbook §4.2.5 ("can it be backed out?").
+ISOLATION_BACKUP_DIR = DATA_DIR / "isolation_backup"
+# remove_persistence backs up the exact ASEP it is about to delete (registry
+# value + type / scheduled-task XML / service config / startup-file bytes)
+# here first, so a false-positive removal can be undone — the task previously
+# ran as delete-only with no way back.
+PERSISTENCE_BACKUP_DIR = DATA_DIR / "persistence_backup"
+
+# ---------------------------------------------------------------------------
 # Page content cleaner (tls_addon.py response hook)
 # ---------------------------------------------------------------------------
 TRACKING_SCRIPT_DOMAINS: list[str] = [

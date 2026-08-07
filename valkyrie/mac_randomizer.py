@@ -426,6 +426,21 @@ class MacRandomizer:
                 f"Adapter '{iface}' enable failed: "
                 f"{(ena.stdout + ena.stderr).strip()}"
             )
+            # Reversibility gap closed here: an explicit (non-timeout) enable
+            # failure previously returned False and left the adapter DISABLED
+            # with no further attempt — the exact "unreversible in practice"
+            # residual state audited in item 1 (a network outage with no
+            # automatic recovery). The timeout branch above already retries;
+            # a clean non-zero return code deserves the same best-effort retry,
+            # not less effort just because netsh answered instead of hanging.
+            try:
+                subprocess.run(
+                    ["netsh", "interface", "set", "interface",
+                     f"name={iface}", "admin=enabled"],
+                    capture_output=True, text=True, timeout=15,
+                )
+            except Exception:
+                pass   # best-effort only; the failure above is already recorded
             return False
 
         # Verify on the machine, not by assumption: the live MAC must now match

@@ -236,4 +236,5 @@ class PlaybookEngine:
                 dry_run=(pb.mode != "enforce"),
                 operator=f"playbook:{pb.id}",
                 incident_id=incident.get("id", ""),
+                severity=incident.get("severity", ""),
             )

@@ -491,9 +491,11 @@ class EdrEngine:
     # ------------------------------------------------------------------
 
     def respond(self, action: str, target: str = "", *, dry_run: bool = True,
-                operator: str = "local", incident_id: str = "") -> dict:
+                operator: str = "local", incident_id: str = "",
+                severity: str = "") -> dict:
         act = self._responder.respond(action, target, dry_run=dry_run,
-                                      operator=operator, incident_id=incident_id)
+                                      operator=operator, incident_id=incident_id,
+                                      severity=severity)
         # Attach the action to its incident's timeline for a full audit trail.
         if incident_id:
             inc = self._edr.get_incident(incident_id)
