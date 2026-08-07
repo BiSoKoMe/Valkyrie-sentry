@@ -56,6 +56,7 @@ class AppContext:
     tls_inspector:  Optional[object] = None   # valkyrie.tls_inspector.TLSInspector
     sensor_tamper:  Optional[object] = None   # valkyrie.sensor_tamper.SensorTamperMonitor
     doh:            Optional[object] = None   # valkyrie.doh_detector.DoHDetector
+    asset_inventory: Optional[object] = None  # valkyrie.asset_inventory.AssetInventoryCollector
 
     start_time: float = 0.0
     dns_port:   int   = 0     # actual DNS listen port (for dashboard display)
@@ -68,6 +69,7 @@ class AppContext:
         "network_collector", "persistence_collector", "cred_watch", "sensor_manager",
         "heartbeat", "ransomware_shield", "threat_intel", "siem", "playbooks",
         "amsi", "content_watch", "tls_inspector", "sensor_tamper", "doh",
+        "asset_inventory",
     )
 
     def components(self) -> dict[str, bool]:

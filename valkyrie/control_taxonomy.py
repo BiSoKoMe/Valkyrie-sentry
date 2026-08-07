@@ -159,6 +159,12 @@ CONTROLS: list[Control] = [
     Control("persistence_telemetry", "valkyrie.persistence_telemetry", DETECTIVE,
             note="watches ASEPs (run keys/services/tasks/startup folder) "
                  "for new autostart entries"),
+    Control("asset_inventory", "valkyrie.asset_inventory", DETECTIVE,
+            note="CIS Controls #1/#2: snapshot+diff of installed software, "
+                 "listening ports, and kernel drivers; the delta feeds "
+                 "correlation the same weak/INFO-only way process_telemetry."
+                 "classify_discovery's labels do -- never a standalone "
+                 "incident on its own"),
     Control("browser_cred_watch", "valkyrie.browser_cred_watch", DETECTIVE,
             note="flags non-browser processes touching a saved-password store"),
     Control("etw_sysmon", "valkyrie.etw.sysmon", DETECTIVE,

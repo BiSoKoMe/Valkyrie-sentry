@@ -795,6 +795,27 @@ def create_app(ctx: Optional[AppContext] = None):
             "persistence_running":  bool(pc and pc.is_running()),
         }
 
+    @app.get("/api/asset-inventory")
+    async def asset_inventory_status():
+        """CIS Controls #1/#2: a live snapshot of what's installed,
+        listening, and loaded, plus counts -- read-only, computed on
+        request (not cached), since this is an on-demand inventory view,
+        not a hot path. 503 (not a crash) when the collector isn't
+        available on this host/build."""
+        ai = getattr(state, "asset_inventory", None)
+        if ai is None:
+            return JSONResponse({"error": "asset inventory not available"},
+                                status_code=503)
+        snap = ai.current_snapshot()
+        return {
+            "counts": snap.counts(),
+            "software": snap.software,
+            "listening_ports": snap.listening_ports,
+            "kernel_drivers": snap.kernel_drivers,
+            "taken_at": snap.taken_at,
+            "collector_running": ai.is_running(),
+        }
+
     # ── System control (launcher / dashboard buttons) ───────────────────
     @app.get("/api/system/token")
     async def system_token(request: Request):

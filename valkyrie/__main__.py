@@ -1222,6 +1222,7 @@ def main() -> None:
     process_collector = None
     network_collector = None
     persistence_collector = None
+    asset_inventory = None
     cred_watch = None
     sensor_tamper_monitor = None
     amsi_scanner = None
@@ -1325,6 +1326,22 @@ def main() -> None:
                 _tick("Endpoint telemetry active (persistence collector)", _tpr)
             else:
                 persistence_collector = None
+
+            # Asset inventory (CIS Controls #1/#2): software / listening
+            # ports / kernel drivers. Reuses persistence_collector for the
+            # boot-items slice of a full report rather than re-detecting
+            # autostart changes it already owns. Hourly by default -- this
+            # is inventory drift, not a real-time sensor.
+            _tai = time.monotonic()
+            from .asset_inventory import AssetInventoryCollector
+            asset_inventory = AssetInventoryCollector(
+                emit=lambda ev: edr_engine.ingest_telemetry(ev),
+                persistence_collector=persistence_collector)
+            if asset_inventory.available():
+                asset_inventory.start()
+                _tick("Endpoint telemetry active (asset inventory)", _tai)
+            else:
+                asset_inventory = None
 
             # Browser credential-store watch: flags any non-browser process
             # holding a handle open to Chrome/Edge/Brave/Firefox's own saved-
@@ -1554,6 +1571,7 @@ def main() -> None:
             amsi           = amsi_scanner,
             content_watch  = content_watch,
             doh            = doh,
+            asset_inventory = asset_inventory,
             # tls_inspector is created further down (it needs the store and a
             # started engine), so it is attached to the context after start()
             # rather than here — see the assignment below.
@@ -1771,6 +1789,8 @@ def main() -> None:
             deception.stop()
         if persistence_collector is not None:
             persistence_collector.stop()
+        if asset_inventory is not None:
+            asset_inventory.stop()
         if cred_watch is not None:
             cred_watch.stop()
         if sensor_tamper_monitor is not None:

@@ -221,7 +221,14 @@ class EdrEngine:
         # sub-threshold events reach it. Feed it here, before the gate would
         # otherwise drop the event outright; the completed-sequence incident
         # (if any) is what actually surfaces, never the individual command.
-        if "discovery_command" in labels:
+        # Same pre-gate treatment for 'asset_change' (asset_inventory.py) as
+        # 'discovery_command' above: a single new listener / new install /
+        # new driver is deliberately INFO-only and never alone raises an
+        # incident (Windows Update installs software constantly), but SEVERAL
+        # asset changes clustered with other activity from the same actor is
+        # real signal a sequence rule could key on -- feed it through before
+        # the severity gate would otherwise drop it outright.
+        if "discovery_command" in labels or "asset_change" in labels:
             fields0 = d.get("fields") or {}
             self._correlate_sequence(Detection(
                 source=str(d.get("source", "collector")), severity=severity,
