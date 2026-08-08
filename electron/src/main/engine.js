@@ -90,7 +90,16 @@ function netGet(pathname, timeoutMs) {
     const req = net.request({ method: 'GET', protocol: 'http:', hostname: HOST, port: WEB_PORT, path: pathname });
     let settled = false;
     const finish = (fn, arg) => { if (settled) return; settled = true; clearTimeout(timer); fn(arg); };
-    const timer = setTimeout(() => { req.abort(); }, timeoutMs);
+    // Abort alone is not enough: net.ClientRequest.abort() emits 'abort', and
+    // an 'error' only follows on some Electron versions. When it does not, no
+    // handler below ever runs, `finish` is never called, and this promise stays
+    // pending forever -- the caller's await never returns and the panel sits on
+    // its loading state permanently. Reject explicitly so a timeout is always a
+    // rejection, never a hang.
+    const timer = setTimeout(() => {
+      req.abort();
+      finish(reject, new Error(`timeout after ${timeoutMs}ms: ${pathname}`));
+    }, timeoutMs);
     req.on('response', (res) => {
       let body = '';
       res.on('data', (c) => (body += c));
@@ -104,7 +113,17 @@ function netGet(pathname, timeoutMs) {
 
 // Resolves parsed JSON, or rejects on any transport/parse error (used both
 // for health polling and telemetry).
-function apiGet(pathname, timeoutMs = 1500) {
+// 6000ms, not 1500ms. Measured against a healthy engine on this machine:
+//   /api/stats 2110ms   /api/events 1970ms
+//   /api/components 2325ms   /api/controls/coverage 2758ms
+// The old 1500ms default was below the real latency of most endpoints the app
+// polls, so essentially every poll timed out and every panel reported "no
+// data" against a perfectly healthy engine. Note this is a floor, not a fix:
+// 2-3s for a loopback JSON call is itself a server-side defect (these routes
+// recompute per request instead of caching, the same class as the 34s
+// asset-inventory hang), and until that is fixed the poll interval can still
+// be shorter than the response time.
+function apiGet(pathname, timeoutMs = 6000) {
   return netGet(pathname, timeoutMs).then(({ statusCode, body }) => {
     if (statusCode && statusCode >= 200 && statusCode < 300) return JSON.parse(body);
     throw new Error(`HTTP ${statusCode}`);
@@ -138,7 +157,16 @@ function apiRequest(method, pathname, { token, body, timeoutMs = 4000 } = {}) {
     for (const [k, v] of Object.entries(headers)) req.setHeader(k, v);
     let settled = false;
     const finish = (fn, arg) => { if (settled) return; settled = true; clearTimeout(timer); fn(arg); };
-    const timer = setTimeout(() => { req.abort(); }, timeoutMs);
+    // Abort alone is not enough: net.ClientRequest.abort() emits 'abort', and
+    // an 'error' only follows on some Electron versions. When it does not, no
+    // handler below ever runs, `finish` is never called, and this promise stays
+    // pending forever -- the caller's await never returns and the panel sits on
+    // its loading state permanently. Reject explicitly so a timeout is always a
+    // rejection, never a hang.
+    const timer = setTimeout(() => {
+      req.abort();
+      finish(reject, new Error(`timeout after ${timeoutMs}ms: ${pathname}`));
+    }, timeoutMs);
     req.on('response', (res) => {
       let b = '';
       res.on('data', (c) => (b += c));
@@ -300,9 +328,9 @@ async function waitUntilReady(onTick, { attempts = 60, intervalMs = 1000 } = {})
 // availability so a half-warmed engine still renders something real.
 async function telemetry() {
   const out = { ok: false, protected: isProtected(), stats: null, events: [] };
-  try { out.stats = await apiGet('/api/stats', 1500); out.ok = true; }
+  try { out.stats = await apiGet('/api/stats', 6000); out.ok = true; }
   catch (err) { console.error('[engine.telemetry] GET /api/stats failed:', err && err.stack || err); }
-  try { out.events = await apiGet('/api/events', 1500); }
+  try { out.events = await apiGet('/api/events', 6000); }
   catch (err) { console.error('[engine.telemetry] GET /api/events failed:', err && err.stack || err); }
   return out;
 }
