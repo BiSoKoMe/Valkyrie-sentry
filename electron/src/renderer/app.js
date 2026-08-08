@@ -80,8 +80,26 @@ function privacyScore(stats, up) {
   const blocked = (stats.dns_blocked || 0) + (stats.fw_blocked || 0);
   return Math.min(100, Math.round(72 + 28 * (1 - 1 / (1 + blocked / 200))));
 }
+// Sentinel for "this poll did not reach the engine", which is NOT the same as
+// null ("this layer is switched off") and NOT the same as 0 ("we looked and
+// found none"). Three distinct truths that all used to render as "0".
+const NO_DATA = '—';
+// Map a telemetry number for display: only trust it when the poll succeeded.
+// Every counter these cards show is cumulative, so a 0 arriving on a failed
+// poll is never real data -- it is the {} fallback in each onTele().
+function statVal(up, v) { return up ? (v || 0) : NO_DATA; }
+
 function animateNumber(node, to) {
   if (!node) return;
+  if (to === NO_DATA) {
+    // Deliberately does NOT clear dataset.v: the last known value is kept so
+    // the number animates back from where it was once the engine returns,
+    // rather than counting up from zero and looking like fresh activity.
+    node.textContent = NO_DATA;
+    node.classList.add('stat-off');
+    node.title = 'No data — could not reach the engine on this poll';
+    return;
+  }
   // null/undefined means "the subsystem that produces this number is not
   // running" — distinct from a real zero. Rendering it as 0 reads as
   // "running, nothing found", which is false reassurance about a layer that
@@ -397,12 +415,15 @@ PAGES.dashboard = {
     setProtectionUI(!!(data && data.protected), up);
     const ps = privacyScore(stats, up);
     const vals = {
-      dns_blocked: stats.dns_blocked || 0, fw_blocked: stats.fw_blocked || 0,
-      flagged: stats.flagged || 0, total_24h: stats.total_24h || 0, allowed: stats.allowed || 0,
+      dns_blocked: statVal(up, stats.dns_blocked), fw_blocked: statVal(up, stats.fw_blocked),
+      flagged: statVal(up, stats.flagged), total_24h: statVal(up, stats.total_24h),
+      allowed: statVal(up, stats.allowed),
       // elements_cleaned is intentionally NOT `|| 0`: the API sends null when
       // TLS inspection isn't running, and that must render as "Off", not 0.
-      elements_cleaned: stats.elements_cleaned ?? null,
-      scanner_decisions: stats.scanner_decisions || 0, privacy: ps,
+      // On a failed poll we don't even know that much, so it is NO_DATA, not Off.
+      elements_cleaned: up ? (stats.elements_cleaned ?? null) : NO_DATA,
+      scanner_decisions: statVal(up, stats.scanner_decisions),
+      privacy: up ? ps : NO_DATA,
     };
     for (const [k, v] of Object.entries(vals)) animateNumber($('card-' + k), v);
     renderFeed((data && data.events) || [], up);
@@ -576,9 +597,9 @@ PAGES.privacy = {
     $('pvMac').onclick = randomizeMac;
   },
   onTele(data) {
-    const s = (data && data.stats) || {};
-    animateNumber($('card-cleaned'), s.elements_cleaned ?? null);
-    animateNumber($('card-pblocked'), (s.dns_blocked || 0) + (s.fw_blocked || 0));
+    const s = (data && data.stats) || {}, up = !!(data && data.ok);
+    animateNumber($('card-cleaned'), up ? (s.elements_cleaned ?? null) : NO_DATA);
+    animateNumber($('card-pblocked'), statVal(up, (s.dns_blocked || 0) + (s.fw_blocked || 0)));
   },
   async poll() {
     const box = $('privRows'); if (!box) return;
@@ -683,8 +704,8 @@ PAGES.firewall = {
   },
   onTele(data) {
     const s = (data && data.stats) || {}, up = !!(data && data.ok);
-    animateNumber($('card-fw'), s.fw_blocked || 0);
-    animateNumber($('card-fwallowed'), s.allowed || 0);
+    animateNumber($('card-fw'), statVal(up, s.fw_blocked));
+    animateNumber($('card-fwallowed'), statVal(up, s.allowed));
     renderTopBlocked($('fwBars'), s.top_blocked || [], up);
   },
 };
@@ -1032,10 +1053,10 @@ PAGES.network = {
     <div id="netRows"></div>`; },
   onTele(data) {
     const s = (data && data.stats) || {}, up = !!(data && data.ok);
-    animateNumber($('card-nTotal'), s.total_24h || 0);
-    animateNumber($('card-nAllowed'), s.allowed || 0);
-    animateNumber($('card-nBlocked'), s.dns_blocked || 0);
-    animateNumber($('card-nFlagged'), s.flagged || 0);
+    animateNumber($('card-nTotal'), statVal(up, s.total_24h));
+    animateNumber($('card-nAllowed'), statVal(up, s.allowed));
+    animateNumber($('card-nBlocked'), statVal(up, s.dns_blocked));
+    animateNumber($('card-nFlagged'), statVal(up, s.flagged));
     $('netRows').innerHTML = rowsPanel([
       ['DNS port', up ? String(s.dns_port || 53) : '—', 'dns'],
       ['Web / API port', up ? String(s.web_port || 8090) : '—', 'globe'],
@@ -1057,9 +1078,9 @@ PAGES.dns = {
     <div class="bars" id="dnsBars"><div class="empty">No blocks yet.</div></div>`; },
   onTele(data) {
     const s = (data && data.stats) || {}, up = !!(data && data.ok);
-    animateNumber($('card-dTotal'), s.total_24h || 0);
-    animateNumber($('card-dBlocked'), s.dns_blocked || 0);
-    animateNumber($('card-dAllowed'), s.allowed || 0);
+    animateNumber($('card-dTotal'), statVal(up, s.total_24h));
+    animateNumber($('card-dBlocked'), statVal(up, s.dns_blocked));
+    animateNumber($('card-dAllowed'), statVal(up, s.allowed));
     renderTopBlocked($('dnsBars'), s.top_blocked || [], up);
   },
 };
