@@ -1537,7 +1537,14 @@ function updateTopbar(data) {
   state.engineUp = up; state.protected = prot;
   $('tbStatus').textContent = !up ? 'No data' : (prot ? 'Protected' : 'Standby');
   $('tbStatus').style.color = (up && prot) ? 'var(--text-0)' : 'var(--text-1)';
-  $('tbBlocked').textContent = fmt((s.dns_blocked || 0) + (s.fw_blocked || 0));
+  // A failed poll leaves data.stats null, so `s` falls back to {} and every
+  // lookup below yields 0. Rendering that as "0" is a lie: it reads as "we
+  // checked and nothing was blocked", when the truth is "we could not reach
+  // the engine this tick". The counter is cumulative and never legitimately
+  // returns to 0 once it has moved, so a 0 here is ALWAYS a failed poll --
+  // that is the "numbers drop to zero and come back" flicker. Guard it with
+  // `up` exactly like its two siblings already were.
+  $('tbBlocked').textContent = up ? fmt((s.dns_blocked || 0) + (s.fw_blocked || 0)) : '—';
   $('tbPrivacy').textContent = up ? privacyScore(s, up) : '—';
   $('tbUptime').textContent = up ? fmtUptime(s.uptime_seconds) : '—';
 }
