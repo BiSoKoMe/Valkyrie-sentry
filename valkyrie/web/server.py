@@ -32,6 +32,8 @@ from urllib.parse import urlparse
 
 from ..config import DATA_DIR, WEB_HOST, WEB_PORT
 from ..context import AppContext
+from .cache import (CACHE, COLD_TIMEOUT_S, TTL_COMPONENTS, TTL_COVERAGE,
+                    TTL_EVENTS, TTL_STATS)
 
 _WEB_DIR = Path(__file__).parent
 _PROJECT_ROOT = _WEB_DIR.parent.parent   # .../valkyrie/web -> .../valkyrie -> repo root
@@ -143,6 +145,63 @@ def _fmt_events(raw: list) -> list:
             "url":          r.get("url", ""),
         })
     return out
+
+
+async def _cached(key: str, producer, ttl_s: float):
+    """Serve ``producer()`` through the response cache, off the event loop.
+
+    On failure with no previously good value this returns a 503 carrying the
+    real reason — never a zero-filled payload. The renderer already treats a
+    failed poll as "no data" and renders the — sentinel (30827db, 86cc36a);
+    handing it fabricated zeros instead would put the "numbers turn to 0" bug
+    back, this time with the server as the source.
+    """
+    try:
+        return await CACHE.get(key, producer, ttl_s=ttl_s,
+                               timeout_s=COLD_TIMEOUT_S)
+    except (asyncio.TimeoutError, TimeoutError):
+        return JSONResponse(
+            {"error": f"{key} timed out after {COLD_TIMEOUT_S}s"},
+            status_code=503)
+    except Exception as exc:                                  # noqa: BLE001
+        log.warning("%s unavailable: %s: %s", key, type(exc).__name__, exc)
+        return JSONResponse(
+            {"error": f"{key} unavailable: {type(exc).__name__}: {exc}"},
+            status_code=503)
+
+
+def _build_coverage() -> dict:
+    """Producer for /api/controls/coverage. ~3.3s of real host probing.
+
+    NEVER call this from a request handler directly — it is handed to the
+    response cache, which runs it in a worker thread and serves the result for
+    TTL_COVERAGE seconds. Called inline it blocks the whole event loop, which
+    is what made this endpoint take 22.4s and drag every other route with it.
+    """
+    from ..coverage import CoverageContext, check_all, summarize
+    ctx = CoverageContext(
+        firewall=state.firewall,
+        sensor_tamper=state.sensor_tamper,
+        playbook_engine=state.playbooks,
+        sensor_manager=state.sensor_manager,
+    )
+    summary = summarize(check_all(ctx))
+    return {
+        "fraction_effective": round(summary.fraction_effective, 4),
+        "counts": summary.counts,
+        "total": summary.total,
+        "gaps": [{"name": r.name, "category": r.category,
+                 "state": r.state, "detail": r.detail}
+                for r in summary.gaps],
+    }
+
+
+def _build_components() -> dict:
+    if state.registry is None:
+        return {"enabled": False, "components": []}
+    reg = state.registry
+    return {"enabled": True, "overall": reg.overall(),
+            "components": reg.snapshot()}
 
 
 def _build_stats() -> dict:
@@ -392,13 +451,15 @@ def create_app(ctx: Optional[AppContext] = None):
     async def get_stats():
         if state.store is None:
             return JSONResponse({"error": "store not ready"}, status_code=503)
-        return _build_stats()
+        return await _cached("stats", _build_stats, TTL_STATS)
 
     @app.get("/api/events")
     async def get_events():
         if state.store is None:
             return JSONResponse({"error": "store not ready"}, status_code=503)
-        return _fmt_events(state.store.recent_events(limit=200))
+        return await _cached(
+            "events", lambda: _fmt_events(state.store.recent_events(limit=200)),
+            TTL_EVENTS)
 
     @app.get("/api/telemetry/status")
     async def telemetry_status():
@@ -472,9 +533,7 @@ def create_app(ctx: Optional[AppContext] = None):
         # Uniform plugin surface: every subsystem's health + metrics + config.
         if state.registry is None:
             return {"enabled": False, "components": []}
-        reg = state.registry
-        return {"enabled": True, "overall": reg.overall(),
-                "components": reg.snapshot()}
+        return await _cached("components", _build_components, TTL_COMPONENTS)
 
     @app.post("/api/components/{name}/restart")
     async def component_restart(name: str, request: Request):
@@ -504,6 +563,35 @@ def create_app(ctx: Optional[AppContext] = None):
         info = state.threat_intel.status()
         info["enabled"] = True
         return info
+
+    @app.get("/api/ping")
+    async def ping():
+        """Pure liveness: can the ASGI app accept and answer a request.
+
+        Deliberately touches NO state — no store, no heartbeat, no registry.
+        The self-healing watchdog used to probe /api/stats, which is a
+        five-query 24h aggregate; with a 3s timeout against a measured 2.5s
+        (6.3s under concurrency) response, the watchdog was timing out on a
+        perfectly healthy server and logging "web_dashboard unhealthy" every
+        30s forever.
+
+        A liveness probe must measure liveness. Probing an expensive endpoint
+        measures LOAD, and then reports load as death — which is how a busy
+        server gets declared dead and "recovered" while it is working fine.
+        /api/health is a different question (is PROTECTION healthy) and is not
+        a substitute for this one.
+        """
+        return {"ok": True}
+
+    @app.get("/api/cache/stats")
+    async def cache_stats():
+        """Per-key age, refresh errors and hit counters for the response cache.
+
+        Exposed because a cache that has silently stopped refreshing looks
+        from the outside exactly like a system where nothing is happening —
+        and those two must never be indistinguishable in a security product.
+        """
+        return CACHE.snapshot()
 
     @app.get("/api/stats/cleaned")
     async def get_cleaned_stats():
@@ -685,24 +773,12 @@ def create_app(ctx: Optional[AppContext] = None):
         control (effective/degraded/absent), not a binary installed/not —
         see valkyrie/coverage.py. Wires in every live singleton this
         process actually has, so e.g. Sysmon installed-but-stopped reports
-        'absent', not 'effective'."""
-        from ..coverage import CoverageContext, check_all, summarize
-        ctx = CoverageContext(
-            firewall=state.firewall,
-            sensor_tamper=state.sensor_tamper,
-            playbook_engine=state.playbooks,
-            sensor_manager=state.sensor_manager,
-        )
-        results = check_all(ctx)
-        summary = summarize(results)
-        return {
-            "fraction_effective": round(summary.fraction_effective, 4),
-            "counts": summary.counts,
-            "total": summary.total,
-            "gaps": [{"name": r.name, "category": r.category,
-                     "state": r.state, "detail": r.detail}
-                    for r in summary.gaps],
-        }
+        'absent', not 'effective'.
+
+        Served from the response cache: the probe costs ~3.3s of real host
+        interrogation, which is why this endpoint measured 22.4s and starved
+        every other route. See valkyrie/web/cache.py."""
+        return await _cached("coverage", _build_coverage, TTL_COVERAGE)
 
     @app.get("/api/decoys/status")
     async def decoys_status():

@@ -507,6 +507,15 @@ class Store:
                 CREATE INDEX IF NOT EXISTS idx_events_ts   ON events(timestamp);
                 CREATE INDEX IF NOT EXISTS idx_events_proc ON events(process_name);
                 CREATE INDEX IF NOT EXISTS idx_events_dom  ON events(domain);
+                -- cleaned_count() filters on raw_category with NO time bound,
+                -- so without this it full-scans the whole events table on
+                -- every /api/stats poll. Measured on the live 75MB DB
+                -- (44,544 rows): 11.8ms -> 0.1ms.
+                CREATE INDEX IF NOT EXISTS idx_events_rawcat ON events(raw_category);
+                -- decision is filtered by stats(), top_blocked_domains(),
+                -- deception_stats() and doh_bypass_stats(). Measured on the
+                -- same DB: top_blocked_domains 26.1ms -> 4.9ms.
+                CREATE INDEX IF NOT EXISTS idx_events_decision ON events(decision);
 
                 CREATE TABLE IF NOT EXISTS baselines (
                     process_name    TEXT PRIMARY KEY,
