@@ -65,6 +65,7 @@ from .config import (
     DNS_LISTEN_HOST,
     DNS_LISTEN_PORT,
     INTELLIGENCE_MODE,
+    LEASE_SWEEP_INTERVAL,
     WEB_HOST,
     WEB_PORT,
 )
@@ -1701,6 +1702,66 @@ def main() -> None:
         healer.start()
         if args.web:
             web_state.self_heal = healer
+
+    # ------------------------------------------------------------------
+    # 10c. Enforcement-lease sweeper — the half of the lease design that
+    #      makes time-boxing real.
+    #
+    #      Every autonomous enforcement Valkyrie applies is granted a lease
+    #      with a deadline (valkyrie/edr/leases.py). A real threat renews its
+    #      lease through recurring evidence; a false positive simply stops
+    #      producing evidence and its enforcement expires on its own, without
+    #      anyone having to notice it happened. None of that is true unless
+    #      something actually calls the sweeper on a clock -- until now
+    #      nothing did, so leases were granted and never swept, and a
+    #      "time-boxed" block was in practice a permanent one.
+    #
+    #      Reverse actions are restorative BY CONSTRUCTION (unblock_domain,
+    #      release_isolation): a sweep can only ever remove enforcement, never
+    #      add it, so a bug in this loop fails toward the host being LESS
+    #      constrained. That asymmetry is why this is safe to run unattended.
+    # ------------------------------------------------------------------
+    if edr_engine is not None:
+        import logging as _logging
+        _sweep_log = _logging.getLogger("valkyrie.leases")
+
+        # Coverage is the oracle for authority's coverage gate: a detector
+        # whose sensors are dark must not buy the same authority as one whose
+        # sensors are live. TTL-cached and refreshed off the detection path —
+        # check_all() costs ~3.3s and must never run inside the path that has
+        # to react to an attack. Before the registry-backed probes landed this
+        # gate would have reported "degraded" for 50 of 57 controls and
+        # throttled everything for no real reason.
+        from .edr import coverage_state as _cov_state
+        from .coverage import CoverageContext as _CovCtx
+        _cov_state.install(_cov_state.CoverageStateProvider(
+            lambda: _CovCtx(
+                firewall=firewall,
+                sensor_tamper=sensor_tamper_monitor,
+                playbook_engine=playbook_engine,
+                sensor_manager=sensor_manager,
+                component_registry=registry,
+                responder_registry=edr_engine,
+            )))
+
+        def _lease_sweep_loop() -> None:
+            while True:
+                time.sleep(LEASE_SWEEP_INTERVAL)
+                try:
+                    swept = edr_engine.sweep_expired_leases()
+                except Exception as exc:            # noqa: BLE001
+                    # Never kill the thread: the next sweep must still run, or
+                    # enforcement quietly becomes permanent again.
+                    _sweep_log.warning("lease sweep failed: %s: %s",
+                                       type(exc).__name__, exc)
+                    continue
+                for act in swept:
+                    _sweep_log.info("lease expired -> %s %s: %s",
+                                    act.get("action"), act.get("target"),
+                                    act.get("status"))
+
+        threading.Thread(target=_lease_sweep_loop, daemon=True,
+                         name="lease-sweeper").start()
 
     # ------------------------------------------------------------------
     # 11. TLS inspection (optional — disabled by default)

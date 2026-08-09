@@ -331,11 +331,33 @@ class EdrEngine:
                 try:
                     from ..decision import decide, signal_from_incident
                     from ..profiles import get_profile
-                    _dec = decide(signal_from_incident(det.to_dict()), get_profile())
+                    _sig = signal_from_incident(det.to_dict())
+                    _dec = decide(_sig, get_profile())
                     inc.timeline.append(TimelineEntry(
                         kind="decision",
                         summary=f"{_dec.action.value}: {_dec.reason}",
                         data=_dec.to_dict()).to_dict())
+                    # What the evidence justifies (above) and what may
+                    # actually be done autonomously (below) are different
+                    # questions, and conflating them is how an agent ends up
+                    # very confidently doing something catastrophic. Record
+                    # both. This still does not enforce -- enforcement stays
+                    # with the audited playbooks -- but the authority verdict
+                    # is now computed from live state and visible on the
+                    # incident, instead of existing only in tests.
+                    _au = self._authorize(_sig, _dec)
+                    if _au is not None and (_au.downgraded or _au.vetoed):
+                        inc.timeline.append(TimelineEntry(
+                            kind="authority",
+                            summary=(f"{_dec.action.value} -> "
+                                     f"{_au.action.value}"
+                                     f" (limited by "
+                                     f"{', '.join(_au.limited_by)})"),
+                            data=_au.to_dict() if hasattr(_au, "to_dict")
+                            else {"action": _au.action.value,
+                                  "limited_by": list(_au.limited_by),
+                                  "reasons": list(_au.reasons),
+                                  "vetoed": _au.vetoed}).to_dict())
                 except Exception:
                     pass
                 det.incident_id = inc.id
@@ -548,8 +570,41 @@ class EdrEngine:
                 self._edr.save_incident(inc)
         return act.to_dict()
 
+    def _authorize(self, sig, decision):
+        """Run the four-gate authority model over a decision. Never raises.
+
+        Returns None when authority cannot be evaluated at all, which callers
+        treat as "record nothing" rather than as a grant. Each individual gate
+        is independently optional inside authorize(), and skipping one is a
+        no-op, never an implicit pass.
+        """
+        try:
+            from . import authority, cascade, coverage_state
+            return authority.authorize(
+                sig, decision,
+                target=(sig.entity or sig.process_name or ""),
+                sensor_state=coverage_state.sensor_state(),
+                budget_permits=cascade.budget().permits,
+            )
+        except Exception:                                     # noqa: BLE001
+            return None
+
     def available_actions(self) -> list[str]:
         return self._responder.available_actions()
+
+    def sweep_expired_leases(self, *, dry_run: bool = False) -> list[dict]:
+        """Revert every enforcement whose time-boxed lease has run out.
+
+        The half of the lease design that makes it real: without a sweeper a
+        lease is a note nobody reads, and a "time-boxed" block is a permanent
+        one. Reverse actions are restorative only (unblock_domain,
+        release_isolation), so a sweep can only ever REMOVE enforcement.
+
+        Meant to be called on a timer -- see _start_lease_sweeper in
+        __main__.py. Returns the actions taken, for logging.
+        """
+        return [a.to_dict()
+                for a in self._responder.sweep_expired_leases(dry_run=dry_run)]
 
     def hunt(self, filters=None, limit=200) -> dict:
         return self._hunter.run(filters, limit)

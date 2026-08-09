@@ -755,6 +755,13 @@ INTEL_GOOD_AFTER_ALLOWS = 5       # clean allows before a domain is remembered g
 
 SELF_HEAL_INTERVAL      = 30      # seconds between component health checks
 
+# Seconds between enforcement-lease sweeps. Leases default to a 900s TTL
+# (valkyrie/edr/leases.py), so 60s is fine-grained enough that an expiry is
+# lifted promptly while the sweep itself stays cheap. A sweep can only ever
+# REMOVE enforcement, so erring toward sweeping more often is the safe
+# direction.
+LEASE_SWEEP_INTERVAL    = 60
+
 # ---------------------------------------------------------------------------
 # EDR layer (detection -> incident -> response, on top of the existing sensors)
 # ---------------------------------------------------------------------------
