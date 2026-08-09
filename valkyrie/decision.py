@@ -155,6 +155,48 @@ def classify_threat(sig: Signal) -> ThreatClass:
     return ThreatClass.OTHER
 
 
+_CONFIDENCE_ORDER = [Confidence.LOW, Confidence.MEDIUM, Confidence.HIGH]
+
+
+def _confidence_down(conf: Confidence, notches: int) -> Confidence:
+    if notches <= 0:
+        return conf
+    i = max(0, _CONFIDENCE_ORDER.index(conf) - notches)
+    return _CONFIDENCE_ORDER[i]
+
+
+def _confidence_cap(conf: Confidence, cap: Optional[str]) -> Confidence:
+    if not cap:
+        return conf
+    ceiling = Confidence(cap)
+    if _CONFIDENCE_ORDER.index(conf) > _CONFIDENCE_ORDER.index(ceiling):
+        return ceiling
+    return conf
+
+
+def apply_sensor_state(conf: Confidence, sig: Signal,
+                       sensor_state) -> tuple[Confidence, tuple]:
+    """Degrade *conf* when the sensors this detection depends on are dark.
+
+    Kept OUT of assess_confidence() and injected instead, so both stay pure:
+    sensor liveness is a runtime fact, and threading it through as an argument
+    means the whole policy remains testable with a dict and no live engine.
+
+    ``sensor_state`` is a callable mapping a coverage control id to one of
+    sensor_deps.STATE_*. Passing None disables the adjustment entirely, which
+    is what every existing caller does until the engine wires coverage in --
+    so this is additive and changes no current behaviour by itself.
+    """
+    if sensor_state is None:
+        return conf, ()
+    from .edr import sensor_deps
+    adj = sensor_deps.assess(sig.source or "", sensor_state,
+                             extra_detectors=(sig.category or "",))
+    if adj.clean:
+        return conf, ()
+    return _confidence_cap(_confidence_down(conf, adj.notches_down), adj.cap), adj.reasons
+
+
 def assess_confidence(sig: Signal) -> Confidence:
     # A detector that measured a probability wins — it is the most direct signal.
     if sig.confidence is not None:
