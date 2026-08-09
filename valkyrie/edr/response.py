@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..config import ISOLATION_BACKUP_DIR, PERSISTENCE_BACKUP_DIR
-from . import reversibility
+from . import cascade, invariants, leases, reversibility
 from .plugins import PluginContext, ResponderPlugin
 from .schema import ResponseAction, severity_rank
 
@@ -789,9 +789,76 @@ class ResponseManager:
                     f"— confidence floor for actions with no rollback path")
         return None
 
+    def _after_enforced(self, action: str, target: str,
+                        lease_ttl_s: Optional[float]) -> None:
+        """Book-keeping after an enforcement action really ran.
+
+        Two things, both best-effort: neither may take down the response path,
+        because a bookkeeping failure must not turn a successful enforcement
+        into a reported failure.
+
+        The lease is granted AFTER the action succeeds, never before. A lease
+        recorded for enforcement that then failed to apply would schedule a
+        reverse action against a host state that was never changed.
+        """
+        try:
+            cascade.budget().record(action, target)
+        except Exception:                                  # noqa: BLE001
+            log.exception("cascade budget record failed for %s on %s", action, target)
+        rev = reversibility.get(action)
+        if rev is not None and rev.leasable:
+            try:
+                leases.registry().grant(
+                    action, target,
+                    ttl_s=lease_ttl_s or leases.DEFAULT_TTL_S,
+                    reason=f"auto-granted on {action}")
+            except Exception:                              # noqa: BLE001
+                log.exception("lease grant failed for %s on %s", action, target)
+
+    def _invariant_block(self, action: str, target: str) -> Optional[tuple[str, str]]:
+        """Categorical veto. Checked BEFORE the severity floor, because a floor
+        is a threshold and this is not -- there is no severity at which
+        disabling the user's network adapter or terminating lsass.exe becomes
+        the right call. See valkyrie/edr/invariants.py.
+        """
+        inv = invariants.check(action, target)
+        if inv is None:
+            return None
+        return ("skipped",
+                f"refusing '{action}' on '{target}': invariant "
+                f"{inv.invariant_id!r} — {inv.reason}")
+
+    def sweep_expired_leases(self, *, dry_run: bool = False,
+                             now: Optional[float] = None) -> list[ResponseAction]:
+        """Revert every enforcement whose lease has run out.
+
+        This is the half of the lease design that makes it real: without a
+        sweeper, a lease is a note nobody reads and a time-boxed block is just
+        a permanent one. Reverse actions are RESTORATIVE (unblock_domain,
+        release_isolation) -- a sweep can only ever remove enforcement, never
+        add it, so a bug here fails toward the host being less constrained.
+
+        Leases whose deadline passed while the process was down are included,
+        which is why they are persisted (see leases.py).
+        """
+        out: list[ResponseAction] = []
+        reg = leases.registry()
+        for lease in reg.due(now=now):
+            act = self.respond(lease.reverse_action, lease.target,
+                               dry_run=dry_run, operator="lease-sweeper",
+                               severity="critical")
+            out.append(act)
+            # Release only on a real, successful revert. If the reverse action
+            # failed, the lease stays due and the next sweep retries it --
+            # dropping it here would strand the very enforcement this exists
+            # to lift.
+            if not dry_run and act.status in ("ok", "success", "completed"):
+                reg.release(lease.lease_id)
+        return out
+
     def respond(self, action: str, target: str = "", *, dry_run: bool = True,
                 operator: str = "local", incident_id: str = "",
-                severity: str = "") -> ResponseAction:
+                severity: str = "", lease_ttl_s: Optional[float] = None) -> ResponseAction:
         """Run (or simulate) a response action and return the audited record.
 
         ``severity`` lets a caller that already knows the triggering
@@ -806,10 +873,15 @@ class ResponseManager:
             act.status = "failed"
             act.result = f"no responder handles action '{action}'"
         else:
-            floor_block = (self._reversibility_floor_block(action, incident_id, severity)
-                           if not dry_run else None)
-            if floor_block is not None:
-                act.status, act.result = floor_block
+            # Invariants first: categorical, and cheap to check. A severity
+            # floor is a threshold that a confident-enough incident clears;
+            # this is not one, so it must not sit behind it.
+            block = (self._invariant_block(action, target)
+                     if not dry_run else None)
+            if block is None and not dry_run:
+                block = self._reversibility_floor_block(action, incident_id, severity)
+            if block is not None:
+                act.status, act.result = block
             else:
                 try:
                     status, result = responder.execute(
@@ -818,6 +890,9 @@ class ResponseManager:
                 except Exception as exc:          # noqa: BLE001
                     act.status = "failed"
                     act.result = f"responder error: {type(exc).__name__}: {exc}"
+                else:
+                    if not dry_run and status in ("ok", "success", "completed"):
+                        self._after_enforced(action, target, lease_ttl_s)
         if self._store is not None:
             try:
                 self._store.record_response(act)
