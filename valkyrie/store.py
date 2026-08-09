@@ -11,6 +11,7 @@ thread drains that queue and commits in batches.
 from __future__ import annotations
 
 import json
+import logging
 import queue
 import sqlite3
 import threading
@@ -28,6 +29,8 @@ from .config import (
     STORE_FLUSH_EVERY,
     STORE_QUEUE_SIZE,
 )
+
+log = logging.getLogger("valkyrie.store")
 from .eventbus import EventBus
 
 
@@ -105,6 +108,10 @@ class Store:
         # Rows the writer could not persist. A gap in the audit trail must be
         # countable, not invisible.
         self._write_errors = 0
+        # Set when a performance index could not be created (read-only or
+        # locked database). Non-fatal, but never silent — see
+        # _init_optional_indexes.
+        self.last_index_error: str = ""
         self._writer_thread = threading.Thread(
             target=self._writer_loop, daemon=True, name="store-writer"
         )
@@ -507,15 +514,6 @@ class Store:
                 CREATE INDEX IF NOT EXISTS idx_events_ts   ON events(timestamp);
                 CREATE INDEX IF NOT EXISTS idx_events_proc ON events(process_name);
                 CREATE INDEX IF NOT EXISTS idx_events_dom  ON events(domain);
-                -- cleaned_count() filters on raw_category with NO time bound,
-                -- so without this it full-scans the whole events table on
-                -- every /api/stats poll. Measured on the live 75MB DB
-                -- (44,544 rows): 11.8ms -> 0.1ms.
-                CREATE INDEX IF NOT EXISTS idx_events_rawcat ON events(raw_category);
-                -- decision is filtered by stats(), top_blocked_domains(),
-                -- deception_stats() and doh_bypass_stats(). Measured on the
-                -- same DB: top_blocked_domains 26.1ms -> 4.9ms.
-                CREATE INDEX IF NOT EXISTS idx_events_decision ON events(decision);
 
                 CREATE TABLE IF NOT EXISTS baselines (
                     process_name    TEXT PRIMARY KEY,
@@ -541,6 +539,52 @@ class Store:
             if "url" not in cols:
                 conn.execute("ALTER TABLE events ADD COLUMN url TEXT NOT NULL DEFAULT ''")
                 conn.commit()
+            self._init_optional_indexes(conn)
+
+    # Performance-only indexes. Deliberately SEPARATE from the schema above,
+    # and deliberately non-fatal.
+    #
+    # On an already-populated database every statement in _init_schema is a
+    # no-op (IF NOT EXISTS, all satisfied), so SQLite never needs a write lock
+    # and the whole call succeeds even when the process can only READ the file.
+    # Adding two genuinely new CREATE INDEX statements made schema init the
+    # first WRITE it had ever attempted there -- and on a host where the DB is
+    # not writable by this process that turned a silent condition into
+    #
+    #     sqlite3.OperationalError: attempt to write a readonly database
+    #
+    # thrown out of store.start(), i.e. an unhandled-exception dialog and no
+    # engine at all. A missing index is a slower query; it is never a reason to
+    # refuse to start.
+    #
+    # The underlying read-only condition is NOT swallowed: it is reported by
+    # last_index_error and by is_writing()/the store_writer watchdog, which is
+    # where "this engine cannot record anything" belongs -- that IS fatal to
+    # the audit trail and must stay visible.
+    _OPTIONAL_INDEXES = (
+        # cleaned_count() filters raw_category with no time bound, so without
+        # this it full-scans the events table on every /api/stats poll.
+        # Measured on the live 75MB DB (44,544 rows): 11.8ms -> 0.1ms.
+        ("idx_events_rawcat",
+         "CREATE INDEX IF NOT EXISTS idx_events_rawcat ON events(raw_category)"),
+        # decision is filtered by stats(), top_blocked_domains(),
+        # deception_stats() and doh_bypass_stats(). Same DB:
+        # top_blocked_domains 26.1ms -> 4.9ms.
+        ("idx_events_decision",
+         "CREATE INDEX IF NOT EXISTS idx_events_decision ON events(decision)"),
+    )
+
+    def _init_optional_indexes(self, conn) -> None:
+        for name, sql in self._OPTIONAL_INDEXES:
+            try:
+                conn.execute(sql)
+                conn.commit()
+            except sqlite3.Error as exc:
+                self.last_index_error = f"{name}: {exc}"
+                log.warning(
+                    "optional index %s could not be created (%s) — queries "
+                    "that use it stay slow; the engine continues", name, exc)
+                break     # a readonly/locked DB fails the next one identically
 
     def _writer_loop(self) -> None:
         """Background thread: drain queue, batch-commit to SQLite."""

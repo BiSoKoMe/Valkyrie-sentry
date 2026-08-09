@@ -52,10 +52,16 @@ class _Clock:
         self.t += dt
 
 
-async def _settle() -> None:
-    """Let background refresh tasks run to completion."""
-    for _ in range(12):
-        await asyncio.sleep(0)
+async def _settle(cache) -> None:
+    """Wait for background refreshes to actually finish.
+
+    This used to spin ``await asyncio.sleep(0)`` a fixed number of times.
+    That yields to the event loop but does NOT wait for the worker-thread
+    round trip a stale refresh performs, so it was a race: it passed on an
+    idle machine and failed under load, which is exactly how a flaky test
+    launders a real timing assumption into an apparent pass.
+    """
+    await cache.drain()
 
 
 def main() -> int:
@@ -148,7 +154,7 @@ def main() -> int:
                 first == 1 and stale == 1)
         c.check("a stale serve is counted as such, not as a hit",
                 cache.stats.stale_serves == 1)
-        await _settle()
+        await _settle(cache)
         fresh = await cache.get("swr", counted, ttl_s=5.0)
         c.check("the background refresh did land, so the next read is new data",
                 fresh == 2)
@@ -170,7 +176,7 @@ def main() -> int:
         mode["fail"] = True
         clock.advance(99.0)
         held = await cache.get("f", flaky, ttl_s=5.0)
-        await _settle()
+        await _settle(cache)
         held2 = await cache.get("f", flaky, ttl_s=5.0)
         c.check("the last good value survives a failing refresh", held == "good")
         c.check("and keeps being served rather than turning into an error",

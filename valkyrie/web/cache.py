@@ -209,6 +209,22 @@ class ResponseCache:
             },
         }
 
+    async def drain(self) -> None:
+        """Await any background refreshes currently in flight.
+
+        Stale-while-revalidate deliberately returns before its refresh
+        finishes, so there is otherwise no way to observe "the refresh
+        landed" — a caller that spins on ``asyncio.sleep(0)`` yields to the
+        event loop but never waits for the worker-thread round trip, which
+        makes it a race that passes under light load and fails under heavy
+        load. Also useful on shutdown, to avoid abandoning a refresh midway.
+        """
+        while True:
+            pending = [t for t in self._inflight.values() if not t.done()]
+            if not pending:
+                return
+            await asyncio.gather(*pending, return_exceptions=True)
+
     def invalidate(self, key: str) -> None:
         self._entries.pop(key, None)
 
