@@ -184,6 +184,14 @@ def _build_coverage() -> dict:
         sensor_tamper=state.sensor_tamper,
         playbook_engine=state.playbooks,
         sensor_manager=state.sensor_manager,
+        # The component and responder registries are live health surfaces the
+        # engine already maintains. Without them 50 of 57 controls report
+        # "no independent liveness probe is wired" -- which measures coverage.py,
+        # not the host.
+        component_registry=state.registry,
+        # EdrEngine.available_actions() is the dispatchable-action surface;
+        # _check_responder only needs that one method.
+        responder_registry=state.edr,
     )
     summary = summarize(check_all(ctx))
     return {

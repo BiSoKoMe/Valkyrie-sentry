@@ -81,6 +81,8 @@ class CoverageContext:
     decoy_manager: Optional[object] = None             # valkyrie.decoys.DecoyManager (defaults to the process-global _ACTIVE)
     playbook_engine: Optional[object] = None           # valkyrie.edr.playbooks.PlaybookEngine
     sensor_manager: Optional[object] = None            # valkyrie.etw.framework.SensorManager
+    component_registry: Optional[object] = None        # valkyrie.components.ComponentRegistry
+    responder_registry: Optional[object] = None        # valkyrie.edr.plugins.PluginRegistry
 
 
 def _module_importable(module_path: str) -> tuple[bool, str]:
@@ -252,6 +254,119 @@ def _check_etw_sensor(control_name: str, sensor_name: str,
                           f"running, {h.get('emitted', 0)} event(s) emitted")
 
 
+# ---------------------------------------------------------------------------
+# Registry-backed probes.
+#
+# Before these, 50 of the 57 controls reported the same sentence: "module
+# present and importable, but no independent liveness probe is wired". That is
+# not a measurement of the defense -- it is a measurement of how many probes
+# someone has written. The coverage number was therefore reporting the state of
+# coverage.py, not the state of the host, while being consumed as if it meant
+# the latter (including, in authority.py, as a gate on autonomous action).
+#
+# Two live health surfaces already existed in a running engine and were simply
+# not consulted here:
+#
+#   * ComponentRegistry -- 19 subsystems, each already exposing real health()
+#     (up / degraded / down / disabled / error).
+#   * the responder PluginRegistry -- which response actions are actually
+#     registered and dispatchable right now.
+#
+# These probes can and DO return ABSENT. That is the point: converting an
+# "unknown" into a truthful "absent" LOWERS the effective fraction, and that is
+# a better number than the one before it. A probe that can only confirm good
+# news is not a probe.
+# ---------------------------------------------------------------------------
+
+# Control name -> the ComponentRegistry name that IS that control. Only
+# genuine 1:1 relationships belong here. ransomware_canaries is deliberately
+# absent: it would have to be inferred from ransomware_shield, and a proxy
+# reported as a direct measurement is exactly the dishonesty being removed.
+_COMPONENT_BACKED = {
+    "blocklist":             "blocklist",
+    "threat_intel":          "threat_intel",
+    "process_telemetry":     "process_collector",
+    "network_telemetry":     "network_collector",
+    "persistence_telemetry": "persistence_collector",
+    "browser_cred_watch":    "cred_watch",
+    "amsi_scan":             "amsi",
+    "ransomware_response":   "ransomware_shield",
+    "playbook_automation":   "playbooks",
+    "mac_randomizer":        "mac_randomizer",
+    "content_watch":         "content_watch",
+    "process_watcher":       "process_watcher",
+}
+
+# Component health state -> coverage state. "disabled" maps to ABSENT, not to
+# some fourth thing: a control that does not apply on this host is not
+# protecting this host, whatever the reason.
+_COMPONENT_STATE_MAP = {
+    "up":       EFFECTIVE,
+    "degraded": DEGRADED,
+    "error":    DEGRADED,     # the probe itself failed -- genuinely unknown
+    "down":     ABSENT,
+    "disabled": ABSENT,
+}
+
+# Control name -> the response action that must be dispatchable for it to be
+# real. A responder whose module imports but which no registry will dispatch
+# is not a control, it is dead code.
+_RESPONDER_BACKED = {
+    "block_domain":        "block_domain",
+    "kill_process":        "kill_process",
+    "isolate_host":        "isolate_host",
+    "remove_persistence":  "remove_persistence",
+    "release_isolation":   "release_isolation",
+    "restore_persistence": "restore_persistence",
+    "mac_restore":         "mac_restore",
+}
+
+
+def _check_component(ctl: Control, ctx: CoverageContext) -> Optional[CoverageResult]:
+    """Resolve a control from the live ComponentRegistry's own health."""
+    reg = ctx.component_registry
+    comp_name = _COMPONENT_BACKED.get(ctl.name)
+    if reg is None or comp_name is None:
+        return None
+    try:
+        health = reg.health()
+    except Exception as exc:                              # noqa: BLE001
+        return CoverageResult(ctl.name, ctl.category, DEGRADED,
+                              f"component registry health() raised: {exc}")
+    h = health.get(comp_name)
+    if h is None:
+        # Registered nowhere. Not "unknown" -- the engine booted and did not
+        # wire this up, which is a real, reportable absence.
+        return CoverageResult(ctl.name, ctl.category, ABSENT,
+                              f"no component '{comp_name}' registered in this "
+                              f"engine -- not wired at startup")
+    state = _COMPONENT_STATE_MAP.get(h.get("state", ""), DEGRADED)
+    detail = h.get("detail") or ""
+    return CoverageResult(
+        ctl.name, ctl.category, state,
+        f"component '{comp_name}' reports {h.get('state')}"
+        + (f": {detail}" if detail else ""))
+
+
+def _check_responder(ctl: Control, ctx: CoverageContext) -> Optional[CoverageResult]:
+    """A response control is real only if its action is dispatchable now."""
+    reg = ctx.responder_registry
+    action = _RESPONDER_BACKED.get(ctl.name)
+    if reg is None or action is None:
+        return None
+    try:
+        available = set(reg.available_actions())
+    except Exception as exc:                              # noqa: BLE001
+        return CoverageResult(ctl.name, ctl.category, DEGRADED,
+                              f"responder registry raised: {exc}")
+    if action not in available:
+        return CoverageResult(ctl.name, ctl.category, ABSENT,
+                              f"no enabled responder handles '{action}' -- "
+                              f"the module exists but nothing will dispatch it")
+    return CoverageResult(ctl.name, ctl.category, EFFECTIVE,
+                          f"'{action}' is registered and dispatchable")
+
+
 def _check_sensor_tamper(ctx: CoverageContext) -> Optional[CoverageResult]:
     if ctx.sensor_tamper is None:
         return None
@@ -313,7 +428,16 @@ def check_all(ctx: Optional[CoverageContext] = None) -> list[CoverageResult]:
             if ctl.name in _STANDALONE_CHECKS:
                 out.append(_STANDALONE_CHECKS[ctl.name](ctx))
                 continue
-            out.append(_generic_verdict(ctl))
+            # Registry-backed probes come after the hand-written specific
+            # checks (which are more precise) and before the generic verdict
+            # (which measures nothing but importability). Each returns None
+            # when the relevant registry was not supplied, so a standalone
+            # invocation degrades to the old behaviour instead of inventing a
+            # verdict from a registry it does not have.
+            r = _check_component(ctl, ctx)
+            if r is None:
+                r = _check_responder(ctl, ctx)
+            out.append(r if r is not None else _generic_verdict(ctl))
         except Exception as exc:                          # noqa: BLE001
             # A broken probe must be visible, not silently absent from the
             # report -- and it must not crash the whole coverage pass.
