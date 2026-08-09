@@ -1623,10 +1623,20 @@ def main() -> None:
 
         if args.web:
             def _check_web() -> bool:
+                # /api/ping, NOT /api/stats. This probe used to hit /api/stats
+                # -- a five-query 24h aggregate measured at 2.5s alone and
+                # 6.3s under concurrent polling -- with a 3s timeout. On a
+                # perfectly healthy server the check timed out, declared
+                # "web_dashboard unhealthy", and logged that to the event store
+                # every 30s forever. Worse, it was self-reinforcing: each log
+                # line is an events row, and a bigger events table makes
+                # /api/stats slower, which makes the next check likelier to
+                # time out. /api/ping touches no state, so it measures the one
+                # thing a liveness probe should: is the server answering.
                 import urllib.request
                 try:
                     with urllib.request.urlopen(
-                        f"http://127.0.0.1:{args.web_port}/api/stats", timeout=3
+                        f"http://127.0.0.1:{args.web_port}/api/ping", timeout=10
                     ) as resp:
                         return resp.status == 200
                 except Exception:

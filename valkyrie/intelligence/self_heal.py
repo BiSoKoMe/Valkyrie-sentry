@@ -18,9 +18,30 @@ from typing import Callable, Optional
 from ..config import SELF_HEAL_INTERVAL
 
 
+def _should_log_failure(consecutive: int) -> bool:
+    """Log failure 1, 2, 4, 8, 16, ... — never every single cycle.
+
+    A component that stays down writes one ``self_heal`` row per check
+    forever. At a 30s interval that is 2,880 rows a day, and the events table
+    is what ``/api/stats`` aggregates and what the UI's Recent Events list
+    renders. Two consequences, both bad:
+
+      * real detections get pushed out of the events view by watchdog noise,
+        which is detection LOSS in a security product's primary surface;
+      * the table grows, ``/api/stats`` slows, and on the old 3s-timeout probe
+        that made the next health check likelier to fail. The symptom fed the
+        cause.
+
+    Powers of two keep the first failures immediately visible (which is when
+    they matter), then decay to a sparse permanent trail. The state itself is
+    never hidden -- ``status()`` always reports ok/failures/last_error live.
+    """
+    return consecutive <= 2 or (consecutive & (consecutive - 1)) == 0
+
+
 class _Component:
     __slots__ = ("name", "check_fn", "recover_fn", "ok", "last_check",
-                 "failures", "recoveries", "last_error")
+                 "failures", "recoveries", "last_error", "consecutive")
 
     def __init__(self, name: str,
                  check_fn: Callable[[], bool],
@@ -33,6 +54,8 @@ class _Component:
         self.failures   = 0
         self.recoveries = 0
         self.last_error = ""
+        # Run of consecutive failures; resets on recovery. Drives log backoff.
+        self.consecutive = 0
 
 
 class SelfHealing:
@@ -72,11 +95,15 @@ class SelfHealing:
         with self._lock:
             return {
                 c.name: {
-                    "ok":         c.ok,
-                    "failures":   c.failures,
-                    "recoveries": c.recoveries,
-                    "last_error": c.last_error,
-                    "last_check": c.last_check,
+                    "ok":          c.ok,
+                    "failures":    c.failures,
+                    "recoveries":  c.recoveries,
+                    "last_error":  c.last_error,
+                    "last_check":  c.last_check,
+                    # Live and never rate-limited, unlike the event log:
+                    # backing off the LOGGING must not hide the STATE.
+                    "consecutive": c.consecutive,
+                    "recoverable": c.recover_fn is not None,
                 }
                 for c in self._components.values()
             }
@@ -110,24 +137,47 @@ class SelfHealing:
                                                     # thread (see _loop below).
 
         if healthy:
+            # A component coming BACK is information, and it used to be logged
+            # nowhere at all -- the trail showed the failure and then silence,
+            # which reads identically to "still broken, watchdog gave up".
+            if not comp.ok:
+                self._log(f"{comp.name} recovered after {comp.consecutive} "
+                          f"failed check(s)")
             comp.ok = True
             comp.last_error = ""
+            comp.consecutive = 0
             return
 
         comp.ok = False
         comp.failures += 1
+        comp.consecutive += 1
         comp.last_error = error or "health check returned False"
-        self._log(f"{comp.name} unhealthy ({comp.last_error}) — attempting recovery")
 
         if comp.recover_fn is None:
+            # Do not claim an action that cannot happen. This branch used to
+            # log "attempting recovery" for every component, including the
+            # ones registered with no recover_fn at all -- web_dashboard being
+            # exactly that case. Announcing a recovery that no code will ever
+            # perform is worse than silence: it makes an unattended failure
+            # look like it is being handled.
+            if _should_log_failure(comp.consecutive):
+                self._log(f"{comp.name} unhealthy ({comp.last_error}) — "
+                          f"no recovery action is registered for it "
+                          f"(failure #{comp.consecutive})")
             return
+
+        if _should_log_failure(comp.consecutive):
+            self._log(f"{comp.name} unhealthy ({comp.last_error}) — "
+                      f"attempting recovery (failure #{comp.consecutive})")
         try:
             comp.recover_fn()
             comp.recoveries += 1
-            self._log(f"{comp.name} recovery attempted")
+            if _should_log_failure(comp.consecutive):
+                self._log(f"{comp.name} recovery attempted")
         except BaseException as exc:
             comp.last_error = f"recovery raised: {exc}"
-            self._log(f"{comp.name} recovery failed: {exc}")
+            if _should_log_failure(comp.consecutive):
+                self._log(f"{comp.name} recovery failed: {exc}")
 
     def _loop(self) -> None:
         while self._running:
