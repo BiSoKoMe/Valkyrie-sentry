@@ -60,11 +60,36 @@ class Reversibility:
     false_positive_impact: str
     # Hard floor: ResponseManager refuses dry_run=False below this severity.
     min_severity: str = "high"
+    #  MACHINE-READABLE inverse: the registered action name that undoes this
+    #  one, e.g. "unblock_domain" for "block_domain". ``rollback`` above is
+    #  prose for a human reading an audit; this is what code can dispatch.
+    #  Required for an action to be LEASABLE (see valkyrie/edr/leases.py):
+    #  a time-boxed lease must know what to fire when the clock runs out, and
+    #  a prose sentence is not something a sweeper can execute. Optional so
+    #  that documenting an action stays cheap -- an action without it is
+    #  simply never granted a lease, which is the safe default.
+    reverse_action: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.reversible and not self.rollback.strip():
             raise ValueError(
                 f"{self.action}: reversible=True requires a non-empty rollback description")
+        if self.reverse_action and not self.reversible:
+            # An irreversible action cannot have an inverse by definition; if
+            # one is named, one of the two fields is wrong and silently
+            # trusting either would let a lease "undo" a kill.
+            raise ValueError(
+                f"{self.action}: reversible=False cannot declare "
+                f"reverse_action={self.reverse_action!r}")
+
+    @property
+    def leasable(self) -> bool:
+        """True when this action can be granted a time-boxed lease.
+
+        Reversible AND with a dispatchable inverse. Anything else must be a
+        permanent decision made at its full severity floor.
+        """
+        return self.reversible and bool(self.reverse_action)
 
 
 _REGISTRY: dict[str, Reversibility] = {}

@@ -847,6 +847,7 @@ reversibility.register(reversibility.Reversibility(
                           "runs; no data loss, no persistent host-state change "
                           "beyond the analysis-memory entry itself",
     min_severity="low",
+    reverse_action="unblock_domain",
 ))
 reversibility.register(reversibility.Reversibility(
     action="unblock_domain", reversible=True,
@@ -892,6 +893,7 @@ reversibility.register(reversibility.Reversibility(
                           "exact real incident that motivated this audit "
                           "(docs/FIREWALL_AUDIT_REPORT.md)",
     min_severity="critical",
+    reverse_action="release_isolation",
 ))
 reversibility.register(reversibility.Reversibility(
     action="release_isolation", reversible=True,
