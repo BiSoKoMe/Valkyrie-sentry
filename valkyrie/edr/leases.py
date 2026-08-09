@@ -70,6 +70,36 @@ DEFAULT_TTL_S = 900.0          # 15 minutes
 # extra steps, and a corrupted/tampered expiry must not become immortal.
 MAX_TTL_S = 86_400.0           # 24 hours
 
+# A lease must outlive several missed observations of the behaviour it is
+# blocking, or the renewal mechanism inverts and starts working for the
+# attacker. See ttl_for().
+RENEWAL_MARGIN = 3.0
+
+
+def ttl_for(detector: str = "", *, observed_interval_s: Optional[float] = None,
+            default: float = DEFAULT_TTL_S) -> float:
+    """TTL that outlives the RHYTHM of the behaviour being blocked.
+
+    A flat TTL is a real flaw, not a simplification. Renewal only works if the
+    behaviour recurs before the lease expires, so a constant 900s quietly
+    inverts the design for anything slower than 15 minutes:
+
+        implant beacons hourly -> lease granted for 900s -> expires at +900s
+        with no second observation -> block silently lifts -> next beacon at
+        +3600s gets through -> grants a fresh 900s lease -> repeat forever.
+
+    The block lifts on exactly the threat most worth blocking, because
+    low-and-slow C2 is stealthier than noisy C2 and would be rewarded for it.
+
+    So the lease is scaled to the observed cadence: survive RENEWAL_MARGIN
+    missed check-ins before giving up. A detector that measured an interval
+    passes it; one that has not measured one gets the default, which is only
+    safe for behaviours faster than the default itself.
+    """
+    if observed_interval_s and observed_interval_s > 0:
+        return min(MAX_TTL_S, max(default, observed_interval_s * RENEWAL_MARGIN))
+    return min(MAX_TTL_S, max(1.0, default))
+
 _LOCK = threading.RLock()
 
 
