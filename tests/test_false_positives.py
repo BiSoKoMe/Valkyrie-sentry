@@ -136,8 +136,14 @@ def main() -> int:
                              "ProcessId": "1"})
     c.check("STILL FIRES: powershell -enc from System32 is a real incident",
             _incident(ev["severity"]))
-    c.check("  ...and carries the T1027 obfuscation technique",
-            "T1027" in (ev.get("technique") or ""))
+    # Encoded PowerShell is BOTH T1059.001 (EncodedCommand execution, now the
+    # primary technique from the behavioral rule) AND T1027 (obfuscation, from
+    # the anomaly nose). The obfuscation technique must still be carried — on
+    # `technique` or in the preserved `all_techniques` union — not dropped
+    # because a more specific rule claimed the primary slot.
+    _ev_techs = (ev.get("technique") or "") + " " + " ".join(ev.get("all_techniques") or [])
+    c.check("  ...and still carries the T1027 obfuscation technique",
+            "T1027" in _ev_techs)
     # The exemption is PATH-gated, not a blanket name allowlist: the exact same
     # machine-generated name in an untrusted temp dir must still be scored.
     masq = score_process("CHXSmartScreen.exe", "explorer.exe", "CHXSmartScreen.exe",

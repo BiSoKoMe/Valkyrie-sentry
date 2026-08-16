@@ -1,0 +1,104 @@
+name: Red Team Tier B (live evaluation)
+
+# The one measurement this project has never produced: a real Atomic Red Team
+# run against a REAL, RUNNING Valkyrie instance, instead of Tier A's classifier
+# replay. redteam/evaluation/run_live_evaluation.ps1 has existed, fully authored,
+# since before this workflow — this file's only job is to give it somewhere to
+# actually run. The GitHub-hosted windows-latest runner is disposable by
+# construction (destroyed after the job), which is exactly the "throwaway VM
+# with a fresh snapshot" the script's own header demands.
+#
+# Manual trigger only — this never runs on a push. Defaults to
+# -SkipDestructive so the first (and default) run excludes the catalog's
+# genuinely destructive atomics (Defender disable, shadow-copy deletion,
+# event-log clearing, service stop, local-account creation). Set the
+# skip_destructive input to false only with intent.
+#
+# Scoped to loopback: Valkyrie starts with --no-dns --no-firewall --no-unbound
+# --no-tls so this never touches the runner's real DNS, firewall, or TLS
+# config — only the EDR/detection layer answering on 127.0.0.1:8090 is live.
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_destructive:
+        description: "Skip the genuinely destructive atomics (Defender/firewall disable, shadow-copy delete, event-log clear, service stop, account create)"
+        type: boolean
+        default: true
+
+jobs:
+  tier-b:
+    name: Live evaluation (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Valkyrie dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements_modular.txt
+
+      - name: Provision (Sysmon + PS logging + Invoke-AtomicRedTeam)
+        shell: pwsh
+        run: redteam\provision.ps1
+
+      - name: Start Valkyrie (loopback-only: no DNS/firewall/TLS interception)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath python `
+            -ArgumentList "-m", "valkyrie", "--web", "--web-port", "8090", `
+              "--no-dns", "--no-firewall", "--no-unbound", "--no-tls", "--no-sysmon-setup" `
+            -RedirectStandardOutput "valkyrie_stdout.log" `
+            -RedirectStandardError "valkyrie_stderr.log" `
+            -PassThru -WindowStyle Hidden
+          $p.Id | Out-File valkyrie.pid
+
+          $deadline = (Get-Date).AddSeconds(60)
+          do {
+            Start-Sleep -Seconds 2
+            try {
+              Invoke-RestMethod -Uri "http://127.0.0.1:8090/api/health" -TimeoutSec 3 | Out-Null
+              Write-Host "Valkyrie API is answering."
+              exit 0
+            } catch {}
+          } while ((Get-Date) -lt $deadline)
+          Write-Error "Valkyrie API never answered on :8090 within 60s"
+          Get-Content valkyrie_stdout.log, valkyrie_stderr.log -ErrorAction SilentlyContinue
+          exit 1
+
+      - name: Run Tier B (real Atomic Red Team against the real running agent)
+        shell: pwsh
+        run: |
+          $skip = "${{ inputs.skip_destructive }}" -eq "true"
+          redteam\evaluation\run_live_evaluation.ps1 -SkipDestructive:$skip *>&1 |
+            Tee-Object -FilePath tierb_transcript.log
+
+      - name: Stop Valkyrie
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path valkyrie.pid) {
+            Stop-Process -Id (Get-Content valkyrie.pid) -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Upload Tier B evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tier-b-results
+          path: |
+            tierb_transcript.log
+            valkyrie_stdout.log
+            valkyrie_stderr.log
+            redteam/evaluation/results/*.json
+            redteam/evaluation/catalog_export.json
+          if-no-files-found: warn
+          retention-days: 30

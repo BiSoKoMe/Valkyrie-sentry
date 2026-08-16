@@ -130,6 +130,11 @@ _DOC_AND_NET_APPS = frozenset({
     "acrord32.exe", "acrobat.exe", "foxitreader.exe", "sumatrapdf.exe",
     # Comms (common phishing delivery)
     "teams.exe", "slack.exe", "zoom.exe", "discord.exe", "thunderbird.exe",
+    # Archive tools — a malicious .zip/.rar/.7z that, once opened, spawns a
+    # shell is the same foothold shape as a macro; these open untrusted content
+    # and have no legitimate reason to launch an interpreter.
+    "winrar.exe", "7z.exe", "7zfm.exe", "7zg.exe", "winzip.exe", "winzip64.exe",
+    "peazip.exe", "bandizip.exe",
 })
 
 # Internet-facing service processes. One of these spawning a shell is the
@@ -142,6 +147,29 @@ _SERVER_PROCS = frozenset({
 })
 _SHELLS = frozenset({"cmd.exe", "powershell.exe", "pwsh.exe", "wscript.exe",
                      "cscript.exe", "mshta.exe", "bash.exe", "sh.exe"})
+
+# The ONE legitimate parent of certain core processes. A genuine svchost is only
+# ever launched by services.exe (the SCM); a genuine lsass/services only by
+# wininit. A different parent means the name is a masquerade or the real process
+# was hollowed/injected. Restricted to children whose expected parent PERSISTS
+# (so the parent basename is reliably reported) — csrss/winlogon/wininit are
+# excluded because their launcher smss.exe exits, making the parent unreliable.
+_EXPECTED_PARENT = {
+    "svchost.exe": frozenset({"services.exe"}),
+    "lsass.exe":   frozenset({"wininit.exe"}),
+    "lsaiso.exe":  frozenset({"wininit.exe"}),
+    "services.exe": frozenset({"wininit.exe"}),
+    "spoolsv.exe": frozenset({"services.exe"}),
+}
+# Protected processes that never legitimately spawn an interpreter/shell. lsass
+# spawning cmd is credential-theft injection; winlogon spawning cmd is the
+# accessibility-feature (sticky-keys/utilman) RCE; csrss/services likewise.
+# svchost is deliberately EXCLUDED — a hosted service can legitimately spawn a
+# child, so that stays a compounding signal, not a standalone one.
+_NEVER_SPAWN_SHELL = frozenset({
+    "lsass.exe", "lsaiso.exe", "winlogon.exe", "csrss.exe", "services.exe",
+    "smss.exe", "wininit.exe",
+})
 
 # Low-trust, user-writable execution locations. Kept TIGHT on purpose: AppData\
 # Local\<app>\ and Program Files are where legitimate updaters and apps live, so
@@ -438,6 +466,24 @@ def _sig_lowtrust_exec(c: _Ctx) -> Optional[Signal]:
 
 
 def _sig_impossible_ancestry(c: _Ctx) -> Optional[Signal]:
+    # A core process with the WRONG parent — a fake svchost not under services,
+    # an lsass/services not under wininit — is masquerade or process hollowing.
+    # Only fires when the parent is KNOWN (an empty/unknown parent is not
+    # evidence), and the expected parents were chosen to be ones that persist.
+    expected = _EXPECTED_PARENT.get(c.image)
+    if expected and c.parent and c.parent not in expected:
+        return Signal("wrong_parent_system_proc", 0.7,
+                      f"'{c.image}' has parent '{c.parent}', not the expected "
+                      f"{'/'.join(sorted(expected))} — masquerade or injection",
+                      "T1055 — Process Injection")
+    # A protected system process spawning a shell/interpreter is impossible for a
+    # real one — injected code, or a masquerade using the name (and winlogon→cmd
+    # is specifically the accessibility-feature RCE).
+    if c.parent in _NEVER_SPAWN_SHELL and c.image in (_SHELLS | _INTERPRETERS):
+        return Signal("system_proc_spawned_shell", 0.65,
+                      f"core system process '{c.parent}' spawned interpreter "
+                      f"'{c.image}' — injection or foothold",
+                      "T1059 — Command & Scripting Interpreter")
     # Web/DB server spawning a shell → web-shell / exploited service.
     if c.parent in _SERVER_PROCS and c.image in _SHELLS:
         return Signal("server_spawned_shell", 0.6,
@@ -503,17 +549,54 @@ def _sig_lolbin_remote(c: _Ctx) -> Optional[Signal]:
     return None
 
 
+# A long run of whitespace in a file name has no legitimate purpose — it exists
+# to push the real extension out of view (`invoice.pdf<many spaces>.exe`), the
+# space-padding cousin of the bidi and double-extension tricks.
+_WS_RUN = re.compile(r"\s{6,}")
+
+
+def _sig_padded_extension(c: _Ctx) -> Optional[Signal]:
+    # Space/tab-padded name hiding the real extension. The double-extension
+    # signal misses this because the padding lands between the two extensions
+    # ('doc' + spaces is no longer the literal lure stem). Near-zero FP: real
+    # files do not carry six-plus consecutive spaces in their name.
+    if _WS_RUN.search(c.raw_image):
+        return Signal("padded_name_masquerade", 0.55,
+                      f"'{' '.join(c.raw_image.split())}' pads its name with a "
+                      f"long run of whitespace to hide the real extension",
+                      "T1036.007 — Double File Extension")
+    return None
+
+
+def _sig_payload_from_lowtrust(c: _Ctx) -> Optional[Signal]:
+    # A trusted interpreter (which itself lives in System32, so _sig_lowtrust_exec
+    # stays silent) pointed at a payload — script / DLL / exe — sitting in a
+    # user-writable directory. Weak/compounding by design: a developer does
+    # occasionally run a script from Downloads, so this only tips a case that
+    # already has another tell (obfuscation, odd ancestry) over the bar.
+    if c.image in (_INTERPRETERS | _SHELLS):
+        _, _, args = c.cmd.partition(" ")
+        if args and any(d in args for d in _LOWTRUST_DIRS):
+            return Signal("payload_from_lowtrust", 0.35,
+                          f"interpreter '{c.image}' references a payload in a "
+                          f"low-trust / user-writable directory",
+                          "T1059 — Command & Scripting Interpreter")
+    return None
+
+
 # Ordered: strongest / most specific intrinsic tells first (affects which
 # technique becomes dominant on ties).
 _SIGNALS: tuple[Callable[[_Ctx], Optional[Signal]], ...] = (
     _sig_masquerade,
     _sig_bidi_trick,
+    _sig_padded_extension,
     _sig_double_extension,
     _sig_impossible_ancestry,
     _sig_system_typosquat,
     _sig_obfuscated_cmd,
     _sig_lolbin_remote,
     _sig_lowtrust_exec,
+    _sig_payload_from_lowtrust,
     _sig_random_name,
 )
 

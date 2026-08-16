@@ -60,6 +60,15 @@ MALICIOUS = [
      r"C:\Users\v\AppData\Local\Temp\powershell.exe"),
     ("mshta remote over UNC", "mshta.exe", "explorer.exe",
      "mshta \\\\10.0.0.5\\share\\x.hta", ""),
+    # Impossible parent→child ancestry — masquerade / injection detected with a
+    # totally benign-looking command line and even the CORRECT image path, so no
+    # rule and no path/name signal can catch it; only the ancestry check does.
+    ("fake svchost — wrong parent (masquerade/injection)", "svchost.exe", "cmd.exe",
+     "svchost.exe -k netsvcs", r"C:\Windows\System32\svchost.exe"),
+    ("lsass spawns a shell (credential-theft injection)", "cmd.exe", "lsass.exe",
+     "cmd /c whoami", r"C:\Windows\System32\cmd.exe"),
+    ("winlogon spawns cmd (accessibility-feature RCE)", "cmd.exe", "winlogon.exe",
+     "cmd.exe", r"C:\Windows\System32\cmd.exe"),
 ]
 
 # Benign shapes that MUST NOT fire — the false-positive boundary. These are the
@@ -70,6 +79,10 @@ BENIGN = [
      r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
     ("real svchost from system32", "svchost.exe", "services.exe",
      "svchost.exe -k netsvcs", r"C:\Windows\System32\svchost.exe"),
+    ("real lsass from wininit", "lsass.exe", "wininit.exe",
+     "lsass.exe", r"C:\Windows\System32\lsass.exe"),
+    ("real services from wininit", "services.exe", "wininit.exe",
+     "services.exe", r"C:\Windows\System32\services.exe"),
     ("msbuild under devenv (lolbin, benign)", "msbuild.exe", "devenv.exe",
      "msbuild project.sln /p:Configuration=Release",
      r"C:\Program Files\Microsoft Visual Studio\MSBuild\Current\Bin\msbuild.exe"),

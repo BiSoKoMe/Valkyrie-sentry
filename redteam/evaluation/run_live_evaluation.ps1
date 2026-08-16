@@ -47,7 +47,16 @@
 [CmdletBinding()]
 param(
     [string]$ApiBase = "http://127.0.0.1:8090",
-    [int]$SettleSeconds = 10,
+    # Maximum time to wait for a matching incident before scoring a MISS. The
+    # detection is polled, not slept-on: a fast real-time detection breaks out in
+    # under a second (and records true latency), while this ceiling must clear
+    # the SLOWEST sensor's period plus ingest. The persistence collector polls
+    # every 15s (valkyrie/persistence_telemetry.py PersistenceCollector.interval)
+    # and the process poller every ~2s, so a 10s fixed sleep -- the previous
+    # behaviour -- structurally could NOT observe an artifact-at-rest detection.
+    # 30s clears 15s + poll jitter + ingest with margin.
+    [int]$DetectWindowSeconds = 30,
+    [int]$PollIntervalSeconds = 2,
     [switch]$SkipDestructive,
     [string]$RepoRoot = (Resolve-Path "$PSScriptRoot\..\..").Path
 )
@@ -123,11 +132,32 @@ function Get-NetworkEvidence {
     } catch { @() }
 }
 
+# Invoke-RestMethod (WinINet/HttpWebRequest) hangs to its own timeout against
+# this API in some guest environments even though the server answers instantly
+# -- reproduced directly, isolated from proxy/Expect100Continue settings, cause
+# not fully root-caused. curl.exe (a completely separate HTTP stack) is 100%
+# reliable against the same endpoint, so these thin wrappers replace every
+# Invoke-RestMethod call site rather than leave a flaky harness.
+function Invoke-CurlGet([string]$Uri, [int]$TimeoutSec = 10) {
+    $raw = & cmd.exe /c "curl.exe -s -m $TimeoutSec `"$Uri`"" 2>$null
+    $raw = ($raw -join "`n")
+    if ([string]::IsNullOrWhiteSpace($raw)) { throw "curl-via-cmd (exit $LASTEXITCODE) returned nothing from $Uri" }
+    if ($raw -notmatch '^\s*[\{\[]') { throw "curl-via-cmd (exit $LASTEXITCODE) non-JSON output from ${Uri}: $raw" }
+    return $raw | ConvertFrom-Json
+}
+function Invoke-CurlPost([string]$Uri, [hashtable]$Headers = @{}, [int]$TimeoutSec = 10) {
+    $headerArgs = @()
+    foreach ($k in $Headers.Keys) { $headerArgs += @("-H", "${k}: $($Headers[$k])") }
+    $raw = & curl.exe -s -m $TimeoutSec -X POST @headerArgs $Uri 2>$null
+    if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+    try { return $raw | ConvertFrom-Json } catch { return $raw }
+}
+
 function Get-DnsEvidence([string]$SinceIso) {
     # Valkyrie's own DNS event log, via its real API -- not the OS resolver
     # cache, since Valkyrie's OWN view of what it saw is the relevant evidence.
     try {
-        $events = Invoke-RestMethod -Uri "$ApiBase/api/events?limit=50" -TimeoutSec 8
+        $events = Invoke-CurlGet -Uri "$ApiBase/api/events?limit=50" -TimeoutSec 8
         @($events | Where-Object { $_.type -eq "dns" -or $_.domain } |
             ForEach-Object { @{ domain = $_.domain; decision = $_.decision;
                                 timestamp = $_.timestamp } })
@@ -153,19 +183,24 @@ function Get-FileEvidence([string[]]$WatchDirs) {
 # Incident helpers
 # ---------------------------------------------------------------------------
 function Get-Incidents {
-    try { return @(Invoke-RestMethod -Uri "$ApiBase/api/edr/incidents" -TimeoutSec 10) }
+    try { return @(Invoke-CurlGet -Uri "$ApiBase/api/edr/incidents" -TimeoutSec 10) }
     catch { return @() }
 }
 function Get-IncidentDetail([string]$id) {
-    try { return Invoke-RestMethod -Uri "$ApiBase/api/edr/incidents/$id" -TimeoutSec 10 }
+    try { return Invoke-CurlGet -Uri "$ApiBase/api/edr/incidents/$id" -TimeoutSec 10 }
     catch { return $null }
 }
 
 # ---------------------------------------------------------------------------
 # Liveness
 # ---------------------------------------------------------------------------
-try { Invoke-RestMethod -Uri "$ApiBase/api/health" -TimeoutSec 8 | Out-Null }
-catch { throw "Valkyrie API not reachable at $ApiBase -- install/start Valkyrie in the VM first." }
+$HealthOk = $false
+$LastErr = $null
+for ($i = 1; $i -le 5; $i++) {
+    try { Invoke-CurlGet -Uri "$ApiBase/api/health" -TimeoutSec 8 | Out-Null; $HealthOk = $true; break }
+    catch { $LastErr = $_; Start-Sleep -Seconds 3 }
+}
+if (-not $HealthOk) { throw "Valkyrie API not reachable at $ApiBase after 5 attempts -- $($LastErr.Exception.Message)" }
 $HaveAtomics = [bool](Get-Module -ListAvailable -Name Invoke-AtomicRedTeam)
 if ($HaveAtomics) { Import-Module Invoke-AtomicRedTeam -Force }
 else { Warn "Invoke-AtomicRedTeam not installed -- vetted-ART techniques will be SKIPPED, not faked. Run provision.ps1 first for full coverage." }
@@ -185,6 +220,14 @@ foreach ($t in $Techniques) {
     Info "-- $($t.id)  [$($t.technique_id)]  $($t.technique_name)"
     $beforeIds = @(Get-Incidents | ForEach-Object { $_.id })
     $beforeProc = Get-ProcessEvidence
+    # Time-anchor the scoring. Valkyrie CORRELATES related detections into one
+    # incident per actor-lineage, so a detection for this technique may fold
+    # into a PRE-EXISTING incident instead of creating a new id -- diffing
+    # incident ids alone then scores a real detection as a miss. Match instead
+    # on any detection whose technique fits AND whose own timestamp is at/after
+    # this moment, which is robust to correlation and to a dirty incident store.
+    # 5s of skew tolerance for collector event.ts vs this process's clock.
+    $execStartUtc = (Get-Date).ToUniversalTime().AddSeconds(-5)
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $attackExecuted = $false
     $executionError = ""
@@ -224,7 +267,7 @@ foreach ($t in $Techniques) {
                     # into a real user's Documents folder -- it exercises the
                     # canary + entropy path the way the product ships it.
                     try {
-                        Invoke-RestMethod -Method Post -Uri "$ApiBase/api/ransomware/self-test" `
+                        Invoke-CurlPost -Uri "$ApiBase/api/ransomware/self-test" `
                             -Headers @{ "X-Valkyrie-Token" = $env:VALKYRIE_TOKEN } -TimeoutSec 15 | Out-Null
                         $attackExecuted = $true
                     } catch { $executionError = $_.Exception.Message }
@@ -266,46 +309,79 @@ foreach ($t in $Techniques) {
         Warn "   execution raised: $executionError"
     }
 
-    Start-Sleep -Seconds $SettleSeconds
-    $sw.Stop()
-
-    # ── Score against new incidents ─────────────────────────────────────────
-    $afterIds = @(Get-Incidents | ForEach-Object { $_.id })
-    $newIds = $afterIds | Where-Object { $_ -notin $beforeIds }
-
+    # ── Condition-based, correlation-robust detection wait ───────────────────
+    # Poll until a matching DETECTION (not just a new incident) appears or the
+    # window expires. A detection matches when its technique fits this technique
+    # AND its own timestamp is at/after $execStartUtc -- so a detection that
+    # folds into a pre-existing correlated incident still counts, and stale
+    # detections from earlier techniques never do. A real-time hit breaks out in
+    # ~1s; artifact-at-rest hits get the full window to clear the 15s poll.
     $detected = $false; $detectionCategory = "none"; $matchedSeverity = ""
     $matchedConfidence = 0.0; $matchedReason = ""; $latency = $null
-    $falsePositiveIds = @()
+    $matchedSource = ""; $matchedLabels = @()
+    $newIncidentIds = @{}
+    $tid = $t.technique_id
+    $deadline = (Get-Date).AddSeconds($DetectWindowSeconds)
 
-    foreach ($id in $newIds) {
+    function _ParseUtc([string]$s) {
+        try { return [datetime]::Parse($s, [Globalization.CultureInfo]::InvariantCulture,
+                 [Globalization.DateTimeStyles]::AdjustToUniversal) } catch { return [datetime]::MinValue }
+    }
+
+    while ((Get-Date) -lt $deadline -and -not $detected) {
+        Start-Sleep -Seconds $PollIntervalSeconds
+        $incs = @(Get-Incidents)
+        foreach ($head in $incs) {
+            if ($head.id -and ($head.id -notin $beforeIds)) { $newIncidentIds[$head.id] = $true }
+            # Only pull detail for incidents actually touched since we started.
+            $upd = _ParseUtc ([string]$head.updated_at)
+            if ($upd -lt $execStartUtc) { continue }
+            $inc = Get-IncidentDetail $head.id
+            if (-not $inc) { continue }
+            foreach ($d in @($inc.detections)) {
+                $dts = _ParseUtc ([string]$d.timestamp)
+                if ($dts -lt $execStartUtc) { continue }        # stale detection
+                $techs = @()
+                if ($d.technique) { $techs += [string]$d.technique }
+                if ($d.details -and $d.details.all_techniques) {
+                    foreach ($at in @($d.details.all_techniques)) { $techs += [string]$at } }
+                if (-not ($techs | Where-Object { $_ -like "*$tid*" })) { continue }
+                $category = "$($inc.category)".ToLower()
+                $dreason = "$($d.title)$($inc.reason)".ToLower()
+                if ($category -eq "user_rule" -or $dreason -like "*user:always_block*") {
+                    $detectionCategory = "user_rule"
+                    Warn "   matched via a USER-DEFINED rule -- NOT counted (see scoring rule)"
+                    continue
+                }
+                $detected = $true
+                $detectionCategory = if ($d.source) { [string]$d.source } elseif ($category) { $category } else { "behavioral" }
+                $matchedSeverity = "$($d.severity)"
+                $matchedReason = "$($d.title)"
+                $matchedSource = "$($d.source)"
+                if ($d.details -and $d.details.labels) { $matchedLabels = @($d.details.labels | Select-Object -Unique) }
+                $latency = [math]::Round($sw.Elapsed.TotalSeconds, 2)
+                break
+            }
+            if ($detected) { break }
+        }
+    }
+    $sw.Stop()
+
+    # False positives: NEW incidents raised during the window whose techniques
+    # never matched this one. (A folded detection on a pre-existing incident is
+    # not a new incident, so it is never miscounted as an FP.)
+    $falsePositiveIds = @()
+    foreach ($id in $newIncidentIds.Keys) {
         $inc = Get-IncidentDetail $id
         if (-not $inc) { continue }
         $techs = @()
-        foreach ($d in @($inc.detections)) { if ($d.technique) { $techs += [string]$d.technique } }
-        if ($inc.technique) { $techs += [string]$inc.technique }
-        $isMatch = $techs | Where-Object { $_ -like "*$($t.technique_id)*" }
-
-        if ($isMatch) {
-            # EXCLUSION RULE, applied here at the point of live truth: a
-            # detection whose category/reason marks it as a user-authored
-            # always_block rule does not count as a behavioral detection,
-            # per the evaluation brief. Checked against the incident's own
-            # recorded category/reason, not inferred.
-            $category = "$($inc.category)".ToLower()
-            $reason = "$($inc.reason)".ToLower()
-            if ($category -eq "user_rule" -or $reason -like "user:always_block*") {
-                $detectionCategory = "user_rule"
-                Warn "   matched via a USER-DEFINED rule -- NOT counted (see scoring rule)"
-            } else {
-                $detected = $true
-                $detectionCategory = if ($category) { $category } else { "behavioral" }
-                $matchedSeverity = "$($inc.severity)"
-                $matchedReason = "$($inc.reason)"
-                if (-not $latency) { $latency = [math]::Round($sw.Elapsed.TotalSeconds, 2) }
-            }
-        } else {
-            $falsePositiveIds += $id
+        foreach ($d in @($inc.detections)) {
+            if ($d.technique) { $techs += [string]$d.technique }
+            if ($d.details -and $d.details.all_techniques) {
+                foreach ($at in @($d.details.all_techniques)) { $techs += [string]$at } }
         }
+        if ($inc.technique) { $techs += [string]$inc.technique }
+        if (-not ($techs | Where-Object { $_ -like "*$tid*" })) { $falsePositiveIds += $id }
     }
 
     $record = [ordered]@{
@@ -330,9 +406,22 @@ foreach ($t in $Techniques) {
         detection_category = $detectionCategory
         is_user_defined_rule = ($detectionCategory -eq "user_rule")
 
+        # Explicit, mutually-exclusive Tier B outcome state so the report never
+        # has to re-derive "why" from a bare detected/missed boolean. A miss on a
+        # technique that never executed is NOT a detection failure and must not be
+        # scored as one.
+        outcome = if ($detected) { "detected" }
+                  elseif ($detectionCategory -eq "user_rule") { "detected_user_rule_excluded" }
+                  elseif (-not $attackExecuted -and $executionError) { "blocked_before_execution" }
+                  elseif (-not $attackExecuted) { "not_executed_no_command" }
+                  else { "executed_missed" }
+
         detection_latency_seconds = $latency
         theoretical_latency_bound_seconds = $null
-        latency_note = if ($latency) { "measured: execution to first matching incident" } else { "no matching incident observed within the $SettleSeconds s settle window" }
+        latency_note = if ($latency) { "measured: execution to first matching incident" } else { "no matching incident observed within the ${DetectWindowSeconds}s detection window" }
+
+        matched_source = $matchedSource     # which sensor produced the detection
+        matched_labels = $matchedLabels     # the detection's own labels
 
         severity_assigned = $matchedSeverity
         confidence_score = $matchedConfidence

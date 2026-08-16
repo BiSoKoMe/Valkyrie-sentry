@@ -199,6 +199,12 @@ _DISCOVERY_SOLO_BINS = {
     "ipconfig.exe":   "T1016 — System Network Configuration Discovery",
     "netstat.exe":    "T1049 — System Network Connections Discovery",
     "hostname.exe":   "T1082 — System Information Discovery",
+    # AdFind is the near-universal AD-recon tool in ransomware intrusions
+    # (LockBit/Black Basta/Conti playbooks). It exists to enumerate Active
+    # Directory, so — like the LOLBins above — it earns only an INFO discovery
+    # label that FEEDS the recon-burst sequence; it never alerts alone, keeping
+    # this name-based entry an honest supplement, not a standalone list-detector.
+    "adfind.exe":     "T1087.002 — Account Discovery: Domain Account",
 }
 
 # reg.exe / sc.exe (added alongside the solo bins above) are NOT solo bins:
@@ -238,6 +244,11 @@ def _discovery_cmdline_technique(n: str, candidates: tuple) -> str:
         if any("view" in c for c in candidates):
             return "T1018 — Remote System Discovery"
         add_present = any("/add" in c for c in candidates)
+        if any("net group" in c for c in candidates) and not add_present:
+            # 'net group' enumerates DOMAIN groups ("domain admins", "enterprise
+            # admins") — a domain-account discovery distinct from local 'net
+            # user'/'net localgroup'. /add is group creation, handled elsewhere.
+            return "T1087.002 — Account Discovery: Domain Account"
         listing = any("net user" in c or "net localgroup administrators" in c
                      for c in candidates)
         if listing and not add_present:

@@ -65,13 +65,14 @@ MAX_ROUNDS = 3          # decoding can reveal further obfuscation; bounded
 # "concat_benign" is a join of meaningfully-sized fragments — ordinary string
 # building in program text (python -c, a git commit message). The join is still
 # performed for matching; it just is not evidence of evasion.
-COSMETIC = frozenset({"env_expand", "whitespace", "shortpath", "concat_benign"})
+COSMETIC = frozenset({"env_expand", "whitespace", "shortpath", "concat_benign",
+                      "format_op_benign"})
 # unicode_fold is EVASIVE, not cosmetic: nobody types `ｎｅｔ` (full-width
 # Latin) or embeds a zero-width joiner mid-keyword by accident — both exist
 # only to break string matching. Caveat: U+3000 (ideographic space) can appear
 # legitimately in CJK filenames, so this signal alone is MEDIUM, never a block.
 EVASIVE = frozenset({"caret", "backtick", "split_quotes", "char_arith",
-                     "concat", "b64_decode", "unicode_fold"})
+                     "concat", "b64_decode", "unicode_fold", "format_op"})
 
 # Environment variables worth expanding: the ones attackers actually use to
 # hide a binary path. Values are the canonical defaults, NOT read from this
@@ -113,11 +114,22 @@ _RE_PSENV = re.compile(r"\$\{?env:([a-z0-9_()]+)\}?", re.I)
 _RE_CONCAT = re.compile(
     r"""\(?\s*(['"])([^'"]{0,64})\1(?:\s*\+\s*(['"])([^'"]{0,64})\3)+\s*\)?""")
 _RE_CONCAT_PART = re.compile(r"""(['"])([^'"]{0,64})\1""")
-# [char]110 + [char]101 ...  and  [char[]](110,101,116)
+# [char]110 + [char]101 ...  and  [char[]](110,101,116). Codepoints may be
+# decimal (110) OR hex (0x6e) — obfuscators use both, and a decimal-only matcher
+# leaves `[char]0x6e+[char]0x65+[char]0x74` (=>"net") fully un-normalized.
+_CODE = r"(?:0x[0-9a-f]{1,6}|\d{1,7})"
 _RE_CHAR_ARITH = re.compile(
-    r"""\[char\]\s*(\d{1,7})(?:\s*\+\s*\[char\]\s*(?:\d{1,7}))*""", re.I)
-_RE_CHAR_ONE = re.compile(r"\[char\]\s*(\d{1,7})", re.I)
-_RE_CHAR_ARRAY = re.compile(r"\[char\[\]\]\s*\(\s*([\d\s,]{1,512})\)", re.I)
+    rf"""\[char\]\s*{_CODE}(?:\s*\+\s*\[char\]\s*{_CODE})*""", re.I)
+_RE_CHAR_ONE = re.compile(rf"\[char\]\s*({_CODE})", re.I)
+_RE_CHAR_ARRAY = re.compile(r"\[char\[\]\]\s*\(\s*([0-9a-fx\s,]{1,512})\)", re.I)
+# PowerShell format operator:  "{0}{1}" -f 'ne','t'  ->  net . The template is a
+# quoted string containing {N} placeholders; the args are a comma-separated list
+# of quoted literals. Only literal args are resolvable (a variable arg leaves the
+# placeholder in place, so a benign `"{0:N2}" -f $x` is untouched).
+_RE_FORMAT = re.compile(
+    r"""(['"])((?:[^'"]){0,256}?\{\d+\}(?:[^'"]){0,256}?)\1"""
+    r"""\s*-f\s*((?:\s*(['"])[^'"]{0,64}\4\s*,?)+)""", re.I)
+_RE_FMT_ARG = re.compile(r"""(['"])([^'"]{0,64})\1""")
 # -enc / -encodedcommand <base64>
 _RE_ENC = re.compile(
     r"(?:-|/)(?:e|ec|enc|encod|encodedcommand)\s+([A-Za-z0-9+/=]{16,})", re.I)
@@ -130,7 +142,10 @@ _RE_WS = re.compile(r"\s+")
 # keeps option-value quoting safe: `findstr /C:"net user"` has ':' before the
 # quote, so it is left alone. An earlier \S version stripped it and turned a
 # benign findstr into a T1136.001 hit; the benign corpus caught it.
-_RE_SPLIT_QUOTE = re.compile(r"(?<=\w)['\"](?=\w)")
+# One OR MORE quotes between two word chars: n"e"t AND the empty-pair form
+# ad""d (which cmd.exe also collapses to `add`). A single \S-safe guard on both
+# sides keeps option-value quoting (`/C:"net user"`) untouched.
+_RE_SPLIT_QUOTE = re.compile(r"(?<=\w)['\"]+(?=\w)")
 # A concatenation is EVASIVE only when a fragment is short enough to have no
 # purpose but evasion. `'ne'+'t'` fragments a single keyword; `'hello' +
 # 'world'` inside `python -c "..."` is ordinary source code and must NOT be
@@ -222,35 +237,69 @@ def _join_concat(s: str) -> tuple[str, bool]:
     return _RE_CONCAT.sub(repl, s), evasive
 
 
+def _code_to_int(tok: str):
+    """Parse a codepoint token — decimal (110) or hex (0x6e) — or None."""
+    tok = tok.strip()
+    try:
+        return int(tok, 16) if tok.lower().startswith("0x") else int(tok)
+    except (ValueError, OverflowError):
+        return None
+
+
 def _resolve_char_arith(s: str) -> str:
-    """[char]110+[char]101+[char]116 -> net ; [char[]](110,101) -> ne."""
+    """[char]110+[char]101+[char]116 -> net ; [char[]](110,101) -> ne. Decimal
+    and hex (0x6e) codepoints both supported."""
     def repl_chain(m: re.Match) -> str:
         out = []
         for c in _RE_CHAR_ONE.finditer(m.group(0)):
-            try:
-                v = int(c.group(1))
-                if 0 <= v <= 0x10FFFF:
-                    out.append(chr(v))
-            except (ValueError, OverflowError):
+            v = _code_to_int(c.group(1))
+            if v is None or not (0 <= v <= 0x10FFFF):
                 return m.group(0)
+            out.append(chr(v))
         return "".join(out) if out else m.group(0)
 
     def repl_array(m: re.Match) -> str:
         out = []
         for tok in m.group(1).split(","):
-            tok = tok.strip()
-            if not tok.isdigit():
+            if not tok.strip():
+                continue
+            v = _code_to_int(tok)
+            if v is None or not (0 <= v <= 0x10FFFF):
                 return m.group(0)
-            try:
-                v = int(tok)
-                if 0 <= v <= 0x10FFFF:
-                    out.append(chr(v))
-            except (ValueError, OverflowError):
-                return m.group(0)
+            out.append(chr(v))
         return "".join(out) if out else m.group(0)
 
     s = _RE_CHAR_ARRAY.sub(repl_array, s)
     return _RE_CHAR_ARITH.sub(repl_chain, s)
+
+
+def _resolve_format(s: str) -> tuple[str, bool]:
+    """`"{0}{1}" -f 'ne','t'` -> `net`. Returns (text, was_evasive).
+
+    The substitution always happens (recovering the string can only help
+    matching); `was_evasive` is True only when a resolved fragment is short
+    enough (<= _EVASIVE_FRAGMENT_LEN) to be keyword-splitting rather than
+    ordinary formatting — mirrors the concat design so `"{0:N2}" -f 'total'`
+    (one long literal) is not flagged as obfuscation."""
+    evasive = False
+
+    def repl(m: re.Match) -> str:
+        nonlocal evasive
+        tmpl = m.group(2)
+        args = [a.group(2) for a in _RE_FMT_ARG.finditer(m.group(3))]
+        if not args:
+            return m.group(0)
+
+        def sub_ph(ph: re.Match) -> str:
+            i = int(ph.group(1))
+            return args[i] if 0 <= i < len(args) else ph.group(0)
+
+        resolved = re.sub(r"\{(\d+)\}", sub_ph, tmpl)
+        if any(len(a) <= _EVASIVE_FRAGMENT_LEN for a in args):
+            evasive = True
+        return resolved
+
+    return _RE_FORMAT.sub(repl, s), evasive
 
 
 def _decode_b64_payloads(s: str) -> list[str]:
@@ -326,6 +375,13 @@ def normalize_cmdline(cmdline: str) -> Normalized:
             s, concat_evasive = _join_concat(cur)
             if s != cur:
                 fired.append("concat" if concat_evasive else "concat_benign")
+            cur = s
+
+            # Format operator is also quote-delimited, so it runs alongside
+            # concat BEFORE quote-stripping (same ordering lesson as concat).
+            s, fmt_evasive = _resolve_format(cur)
+            if s != cur:
+                fired.append("format_op" if fmt_evasive else "format_op_benign")
             cur = s
 
             s = _resolve_char_arith(cur)

@@ -42,7 +42,13 @@ from ..telemetry import (
 
 _CHANNEL = "Microsoft-Windows-Sysmon/Operational"
 # The subset we consume (Sysmon logs far more; these carry the most signal).
-_EVENT_IDS = (1, 3, 7, 8, 10, 11, 12, 13, 25)
+_EVENT_IDS = (1, 3, 6, 7, 8, 10, 11, 12, 13, 25)
+
+# Directories a legitimate kernel driver never loads from. A signed-but-
+# vulnerable driver dropped here is the BYOVD pattern; genuine drivers live in
+# System32\drivers / DriverStore and load from there.
+_DRIVER_DROP_DIRS = ("\\appdata\\", "\\temp\\", "\\downloads\\",
+                     "\\users\\public\\", "\\programdata\\", "\\$recycle")
 
 # LSASS-read access masks that indicate credential dumping (Mimikatz-style).
 _LSASS_READ_MASKS = {"0x1010", "0x1410", "0x1438", "0x143a", "0x1fffff", "0x1010h"}
@@ -126,6 +132,7 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
         sev, labels, reason = classify_process(name, image, parent)
         labels = list(labels)
         technique = ""
+        all_techniques: list[str] = []
 
         # Command-line heuristics (encoded/hidden PowerShell, download cradles).
         csev, clabels, creason = classify_cmdline(name, cmdline)
@@ -148,6 +155,7 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
                     labels.append(lab)
             reason = "; ".join(r for r in (reason, behavior["reason"]) if r)
             technique = behavior["technique"]
+            all_techniques = list(behavior.get("all_techniques") or [])
 
         # The generalizing anomaly scorer — catches shapes no rule was written
         # for (masquerade, obfuscation, impossible ancestry). Defers to a
@@ -162,6 +170,12 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
             reason = "; ".join(r for r in (reason, anomaly["reason"]) if r)
             if not technique:
                 technique = anomaly["technique"]
+            # Preserve the anomaly's technique even when a rule already claimed
+            # the primary slot: an encoded PowerShell is BOTH T1059.001
+            # (EncodedCommand, from the rule) AND T1027 (obfuscation, from the
+            # anomaly nose) — dropping either loses real ATT&CK context.
+            if anomaly.get("technique") and anomaly["technique"] not in all_techniques:
+                all_techniques.append(anomaly["technique"])
 
         # Discovery-tactic weak labeling. Must run on THIS path, not just the
         # poller: a lone discovery command is INFO by design (never alerts on
@@ -177,6 +191,8 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
         reason = "; ".join(r for r in (reason, dreason) if r)
         if not technique:
             technique = dtechnique
+        if dtechnique and dtechnique not in all_techniques:
+            all_techniques.append(dtechnique)
 
         # A discovery-labeled event is deliberately INFO and would otherwise be
         # dropped by the gate below. Let it through: the engine's ingest
@@ -190,7 +206,8 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
                 "actor_path": image, "target": {"path": image},
                 "severity": sev, "labels": labels,
                 "reason": reason or "process creation",
-                "technique": technique, "context": _context(d),
+                "technique": technique, "all_techniques": all_techniques,
+                "context": _context(d),
             }
 
         if severity_rank(sev) < severity_rank(SEV_LOW):
@@ -200,7 +217,8 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
             "actor_pid": int(d.get("ProcessId", 0) or 0), "actor_name": name,
             "actor_path": image, "target": {"path": image},
             "severity": sev, "labels": labels, "reason": reason or "process creation",
-            "technique": technique, "context": _context(d),
+            "technique": technique, "all_techniques": all_techniques,
+            "context": _context(d),
         }
 
     # EID 3 — network connection (process context DNS/firewall lacks).
@@ -220,6 +238,47 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
                        "proto": d.get("Protocol", "")},
             "severity": SEV_INFO, "labels": ["outbound"], "reason": "outbound connection",
             "technique": "", "context": {"user": d.get("User", "")},
+        }
+
+    # EID 6 — kernel driver load. BYOVD (bring-your-own-vulnerable-driver) is
+    # the dominant EDR-killer technique of 2024-25 (Backstab, AuKill, Terminator
+    # and friends): load a signed-but-vulnerable — or plainly unsigned — kernel
+    # driver, then use its raw kernel access to terminate protection. Two
+    # list-free tells, either of which is abnormal on a healthy host:
+    #   * unsigned / invalid signature — modern Windows blocks unsigned drivers
+    #     via DSE, so a load getting through means signing was subverted;
+    #   * loaded from a user-writable directory — real drivers ship signed in
+    #     System32\drivers / DriverStore and never load out of %TEMP%/Downloads.
+    # A signed driver loading from the OS driver store (the normal case) is
+    # ignored, so this does not fire on ordinary GPU/AV/VPN driver loads.
+    if eid == 6:
+        loaded = d.get("ImageLoaded", "")
+        low = loaded.lower().replace("/", "\\")
+        status = (d.get("SignatureStatus", "") or "").lower()
+        signed = (d.get("Signed", "") or "").lower()
+        bad_sig = signed == "false" or (status not in ("", "valid"))
+        dropped = any(p in low for p in _DRIVER_DROP_DIRS)
+        if not (bad_sig or dropped):
+            return None
+        why = []
+        if bad_sig:
+            why.append("unsigned/invalid signature")
+        if dropped:
+            why.append("loaded from a user-writable directory")
+        labels = ["driver_load"]
+        labels.append("byovd" if dropped else "unsigned_driver")
+        return {
+            "category": CAT_PROCESS, "activity": "driver_load",
+            "actor_pid": int(d.get("ProcessId", 0) or 0),
+            "actor_name": _name(loaded), "actor_path": loaded,
+            "target": {"path": loaded},
+            "severity": SEV_HIGH, "labels": labels,
+            "reason": "kernel driver load (" + ", ".join(why) + ")",
+            "technique": "T1068 — Exploitation for Privilege Escalation (vulnerable driver)",
+            "context": {"sha256": parse_hashes(d.get("Hashes", "")).get("sha256", ""),
+                        "signature": d.get("Signature", ""),
+                        "signature_status": d.get("SignatureStatus", ""),
+                        "signed": d.get("Signed", "")},
         }
 
     # EID 7 — image/DLL load. Emit only unsigned / invalid-signature loads.
@@ -387,6 +446,7 @@ class SysmonSensor(Sensor):
         action = ACT_FLAGGED if severity_rank(sev) >= severity_rank(SEV_MEDIUM) else ACT_OBSERVED
         context = args.pop("context", {})
         technique = args.pop("technique", "")
+        all_techniques = args.pop("all_techniques", [])
         tgt = args.get("target", {})
         dedup = f"sysmon:{ev.get('event_id')}:{args['actor_pid']}:" \
                 f"{tgt.get('path') or tgt.get('ip') or tgt.get('location') or ''}"
@@ -397,6 +457,7 @@ class SysmonSensor(Sensor):
             actor_path=args.get("actor_path", ""),
             target=tgt, severity=sev, reason=args["reason"], source="etw.sysmon",
             labels=args.get("labels", []),
-            fields={"technique": technique, "event_id": ev.get("event_id", 0),
+            fields={"technique": technique, "all_techniques": all_techniques,
+                    "event_id": ev.get("event_id", 0),
                     "user_sid": ev.get("user_sid", ""), "_dedup": dedup[:200], **context},
         ))

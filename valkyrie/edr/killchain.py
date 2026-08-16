@@ -80,9 +80,37 @@ TECHNIQUE_TACTIC: dict[str, str] = {
     "T1070":     "defense-evasion",      # Indicator Removal
     "T1070.001": "defense-evasion",      # Clear Windows Event Logs
     "T1218":     "defense-evasion",      # System Binary Proxy Execution
+    "T1218.001": "defense-evasion",      # Compiled HTML File (hh.exe)
+    "T1218.003": "defense-evasion",      # CMSTP
+    "T1218.004": "defense-evasion",      # InstallUtil
     "T1218.005": "defense-evasion",      # Mshta
+    "T1218.007": "defense-evasion",      # Msiexec
+    "T1218.008": "defense-evasion",      # Odbcconf
+    "T1218.009": "defense-evasion",      # Regsvcs/Regasm
     "T1218.010": "defense-evasion",      # Regsvr32
     "T1218.011": "defense-evasion",      # Rundll32
+    "T1127":     "defense-evasion",      # Trusted Developer Utilities Proxy Execution
+    "T1127.001": "defense-evasion",      # MSBuild
+    "T1202":     "defense-evasion",      # Indirect Command Execution
+    "T1216":     "defense-evasion",      # Signed Script Proxy Execution
+    "T1220":     "defense-evasion",      # XSL Script Processing
+    "T1548":     "privilege-escalation", # Abuse Elevation Control Mechanism
+    "T1548.002": "privilege-escalation", # Bypass User Account Control
+    "T1068":     "privilege-escalation", # Exploitation for Priv Esc (BYOVD driver)
+    "T1562":     "defense-evasion",      # Impair Defenses
+    "T1562.001": "defense-evasion",      # Disable or Modify Tools
+    "T1562.002": "defense-evasion",      # Disable Windows Event Logging
+    "T1562.004": "defense-evasion",      # Disable/Modify System Firewall
+    "T1562.006": "defense-evasion",      # Indicator Blocking (ETW)
+    "T1546":     "persistence",          # Event Triggered Execution
+    "T1546.007": "persistence",          # Netsh Helper DLL
+    "T1546.008": "persistence",          # Accessibility Features
+    "T1546.010": "persistence",          # AppInit DLLs
+    "T1546.012": "persistence",          # Image File Execution Options Injection
+    "T1546.015": "persistence",          # Component Object Model Hijacking
+    "T1547.004": "persistence",          # Winlogon Helper DLL
+    "T1053.002": "persistence",          # Scheduled Task/Job: At
+    "T1070.006": "defense-evasion",      # Timestomp
     "T1197":     "defense-evasion",      # BITS Jobs
     "T1036":     "defense-evasion",      # Masquerading
     "T1036.002": "defense-evasion",      # Right-to-Left Override
@@ -92,7 +120,28 @@ TECHNIQUE_TACTIC: dict[str, str] = {
     "T1003.001": "credential-access",    # LSASS Memory
     "T1003.002": "credential-access",    # Security Account Manager
     "T1003.003": "credential-access",    # NTDS
+    "T1003.006": "credential-access",    # DCSync
+    "T1558":     "credential-access",    # Steal or Forge Kerberos Tickets
+    "T1558.001": "credential-access",    # Golden Ticket
+    "T1558.003": "credential-access",    # Kerberoasting
+    "T1550":     "lateral-movement",     # Use Alternate Authentication Material
+    "T1550.002": "lateral-movement",     # Pass the Hash
+    "T1550.003": "lateral-movement",     # Pass the Ticket
     "T1555":     "credential-access",    # Credentials from Password Stores
+    "T1555.003": "credential-access",    # Credentials from Web Browsers
+    "T1552":     "credential-access",    # Unsecured Credentials
+    "T1552.001": "credential-access",    # Unsecured Credentials in Files
+    "T1560":     "collection",           # Archive Collected Data
+    "T1560.001": "collection",           # Archive via Utility (encrypted)
+    "T1040":     "credential-access",    # Network Sniffing
+    "T1098":     "persistence",          # Account Manipulation
+    "T1553":     "defense-evasion",      # Subvert Trust Controls
+    "T1553.006": "defense-evasion",      # Code Signing Policy Modification
+    "T1112":     "defense-evasion",      # Modify Registry
+    "T1620":     "defense-evasion",      # Reflective Code Loading
+    "T1078":     "defense-evasion",      # Valid Accounts
+    "T1021.006": "lateral-movement",     # Remote Services: WinRM
+    "T1041":     "exfiltration",         # Exfiltration Over C2 Channel
     "T1033":     "discovery",            # System Owner/User Discovery
     "T1482":     "discovery",            # Domain Trust Discovery
     "T1082":     "discovery",            # System Information Discovery
@@ -100,6 +149,7 @@ TECHNIQUE_TACTIC: dict[str, str] = {
     "T1018":     "discovery",            # Remote System Discovery
     "T1087":     "discovery",            # Account Discovery
     "T1087.001": "discovery",            # Account Discovery: Local Account
+    "T1046":     "discovery",            # Network Service Discovery (scan fan-out)
     "T1021":     "lateral-movement",     # Remote Services
     "T1021.002": "lateral-movement",     # SMB/Windows Admin Shares
     "T1570":     "lateral-movement",     # Lateral Tool Transfer
@@ -107,12 +157,20 @@ TECHNIQUE_TACTIC: dict[str, str] = {
     "T1105":     "command-and-control",  # Ingress Tool Transfer
     "T1071":     "command-and-control",  # Application Layer Protocol
     "T1071.004": "command-and-control",  # DNS
+    "T1090":     "command-and-control",  # Proxy (port forwarding)
     "T1568":     "command-and-control",  # Dynamic Resolution
     "T1568.002": "command-and-control",  # DGA
     "T1572":     "command-and-control",  # Protocol Tunnelling
     "T1041":     "exfiltration",         # Exfil Over C2
     "T1048.003": "exfiltration",         # Exfil Over Alternative Protocol (DNS)
+    "T1567":     "exfiltration",         # Exfil Over Web Service
+    "T1567.002": "exfiltration",         # Exfil to Cloud Storage (rclone)
     "T1486":     "impact",               # Data Encrypted for Impact
+    "T1485":     "impact",               # Data Destruction
+    "T1561":     "impact",               # Disk Wipe
+    "T1561.001": "impact",               # Disk Wipe: Content
+    "T1569":     "execution",            # System Services
+    "T1569.002": "execution",            # Service Execution (PsExec)
 }
 
 # Tactics whose presence makes a chain materially worse — the "objective"

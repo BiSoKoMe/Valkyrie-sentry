@@ -77,6 +77,25 @@ def _is_counted(rec: dict) -> bool:
     return bool(rec.get("counted_as_detected"))
 
 
+def _outcome_of(rec: dict) -> str:
+    """The live Tier B outcome state for one record. Prefers the harness's own
+    explicit `outcome` field; derives it from the observable facts for older
+    result files that predate it. Never guesses a detection where none was
+    recorded."""
+    o = rec.get("outcome")
+    if o:
+        return o
+    if _is_counted(rec):
+        return "detected"
+    if rec.get("detection_category") == "user_rule":
+        return "detected_user_rule_excluded"
+    if not rec.get("attack_executed") and rec.get("error"):
+        return "blocked_before_execution"
+    if not rec.get("attack_executed"):
+        return "not_executed_no_command"
+    return "executed_missed"
+
+
 def score(records: list[dict]) -> dict:
     by_tactic: dict[str, dict] = {t: {"detected": 0, "total": 0, "missed": []}
                                   for t in TACTIC_ORDER}
@@ -160,6 +179,21 @@ def render_markdown(data: dict, records: list[dict], tier: str,
           "(`run_live_evaluation.ps1`, VM required) is what turns this into "
           "a live-attack answer.")
         a("")
+    elif tier.startswith("B_"):
+        a("> **This is Tier B: live-fire.** Each technique was actually "
+          "executed on the instrumented host and scored against the REAL "
+          "running EDR's incident store -- `attack_executed`, measured "
+          "`detection_latency_seconds`, the producing sensor (`matched_source`) "
+          "and per-technique false positives are live observations, not "
+          "predictions. Read the outcome breakdown below before the headline: a "
+          "technique the host **blocked before it executed** (e.g. Defender "
+          "killing a remote-scriptlet fetch) produced no attacker process for "
+          "Valkyrie to observe and is NOT a Valkyrie detection failure -- it is "
+          "reported separately from techniques that executed and were missed. "
+          "The `predicted_tier_b` and static root-cause text carried per "
+          "technique are the Tier A **prediction**, kept for comparison and "
+          "labelled as such, never as a live observation.")
+        a("")
 
     a("## Scoring rules applied")
     a("")
@@ -190,6 +224,46 @@ def render_markdown(data: dict, records: list[dict], tier: str,
     a(f"**{s['total_detected']} / {s['total']} techniques detected "
       f"({s['overall_pct']:.1f}%)**")
     a("")
+
+    # Tier B: the honest denominator. A technique that never executed (blocked
+    # by the host's own AV, or no runnable command) cannot be a detection
+    # failure. Surface an "of those that actually executed" rate alongside the
+    # raw one so neither number can mislead on its own.
+    if tier.startswith("B_"):
+        buckets = {"detected": 0, "executed_missed": 0,
+                   "blocked_before_execution": 0, "not_executed_no_command": 0,
+                   "detected_user_rule_excluded": 0, "other": 0}
+        for r in records:
+            o = r.get("outcome")
+            if o is None:  # older result file without the field: derive it
+                if _is_counted(r):
+                    o = "detected"
+                elif not r.get("attack_executed") and r.get("error"):
+                    o = "blocked_before_execution"
+                elif not r.get("attack_executed"):
+                    o = "not_executed_no_command"
+                else:
+                    o = "executed_missed"
+            buckets[o if o in buckets else "other"] += 1
+        executed = buckets["detected"] + buckets["executed_missed"] + buckets["detected_user_rule_excluded"]
+        exec_pct = (100.0 * buckets["detected"] / executed) if executed else 0.0
+        a("### Outcome breakdown (live)")
+        a("")
+        a("| Outcome | Count | Meaning |")
+        a("|---|---:|---|")
+        a(f"| detected | {buckets['detected']} | executed and a matching incident was raised |")
+        a(f"| executed, missed | {buckets['executed_missed']} | executed but no matching incident — a REAL detection gap |")
+        a(f"| blocked before execution | {buckets['blocked_before_execution']} | the host (AV/OS) stopped the technique before it ran — no attacker process to observe, NOT a Valkyrie miss |")
+        a(f"| not executed (no command) | {buckets['not_executed_no_command']} | the harness had no runnable command/atomic for this probe — a test-coverage gap, NOT a Valkyrie miss |")
+        if buckets["detected_user_rule_excluded"]:
+            a(f"| detected via user rule (excluded) | {buckets['detected_user_rule_excluded']} | matched only a user-authored always-block rule; excluded per the scoring brief |")
+        a("")
+        a(f"**Detection rate on techniques that actually executed: "
+          f"{buckets['detected']} / {executed} = {exec_pct:.1f}%**  "
+          f"(vs {s['total_detected']} / {s['total']} = {s['overall_pct']:.1f}% "
+          f"over the full catalog).")
+        a("")
+
     a("| Tactic | Detected | Total | % |")
     a("|---|---:|---:|---:|")
     for tactic in TACTIC_ORDER:
@@ -205,35 +279,94 @@ def render_markdown(data: dict, records: list[dict], tier: str,
 
     a("## Per-test results")
     a("")
-    a("| Technique | Test | Tactic | Logic fires | Detected | Severity | "
-      "Confidence | Delivery |")
-    a("|---|---|---|:---:|:---:|---|---:|---|")
-    for r in records:
-        counted = _is_counted(r)
-        a(f"| {r['technique_id']} {r['technique_name'][:40]} "
-          f"| {r['test_number']} | {r['tactic']} "
-          f"| {'yes' if r.get('classifier_logic_fires') else 'no'} "
-          f"| {'**DETECTED**' if counted else 'missed'} "
-          f"| {r['severity_assigned']} | {r['confidence_score']:.2f} "
-          f"| {r['delivery_mechanism']} |")
-    a("")
+    is_b = tier.startswith("B_")
+    if is_b:
+        a("| Technique | Test | Tactic | Outcome | Latency (s) | Sensor | Severity |")
+        a("|---|---|---|:---:|---:|---|---|")
+        for r in records:
+            lat = r.get("detection_latency_seconds")
+            lat_s = f"{lat:.2f}" if isinstance(lat, (int, float)) else "—"
+            a(f"| {r['technique_id']} {r['technique_name'][:38]} "
+              f"| {r['test_number']} | {r['tactic']} "
+              f"| {_outcome_of(r)} | {lat_s} "
+              f"| {r.get('matched_source') or '—'} "
+              f"| {r.get('severity_assigned') or '—'} |")
+        a("")
+    else:
+        a("| Technique | Test | Tactic | Logic fires | Detected | Severity | "
+          "Confidence | Delivery |")
+        a("|---|---|---|:---:|:---:|---|---:|---|")
+        for r in records:
+            counted = _is_counted(r)
+            a(f"| {r['technique_id']} {r['technique_name'][:40]} "
+              f"| {r['test_number']} | {r['tactic']} "
+              f"| {'yes' if r.get('classifier_logic_fires') else 'no'} "
+              f"| {'**DETECTED**' if counted else 'missed'} "
+              f"| {r['severity_assigned']} | {r['confidence_score']:.2f} "
+              f"| {r['delivery_mechanism']} |")
+        a("")
 
-    a("## Missed techniques — root cause and required code change")
-    a("")
-    if not s["missed_records"]:
-        a("None.")
-    for r in s["missed_records"]:
-        root_cause, code_change = _root_cause_for(r)
-        a(f"### {r['technique_id']} — {r['technique_name']}  `{r['id']}`")
+    if is_b:
+        # Only techniques that ACTUALLY EXECUTED and were still missed are real
+        # detection gaps. Blocked-before-execution and not-executed records are
+        # reported separately so they are never mistaken for detection failures.
+        real_gaps = [r for r in s["missed_records"]
+                     if _outcome_of(r) == "executed_missed"]
+        not_failures = [r for r in s["missed_records"]
+                        if _outcome_of(r) in ("blocked_before_execution",
+                                              "not_executed_no_command")]
+        a("## Executed but missed — real detection gaps")
         a("")
-        a(f"- **Tactic:** {r['tactic']}")
-        a(f"- **Test:** {r['test_number']}")
-        a(f"- **Predicted outcome:** {r.get('predicted_tier_b', 'n/a')}")
-        if r.get("known_mismatch"):
-            a(f"- **Known mismatch:** {r['known_mismatch']}")
-        a(f"- **Root cause:** {root_cause}")
-        a(f"- **Code change required:** {code_change}")
+        a("These techniques ran to completion and Valkyrie raised no matching "
+          "incident. This is the list to engineer against.")
         a("")
+        if not real_gaps:
+            a("None. Every technique that executed was detected.")
+        for r in real_gaps:
+            root_cause, code_change = _root_cause_for(r)
+            a(f"### {r['technique_id']} — {r['technique_name']}  `{r['id']}`")
+            a("")
+            a(f"- **Tactic:** {r['tactic']}")
+            a(f"- **Test:** {r['test_number']}")
+            a(f"- **Live observation:** executed, no matching incident within the "
+              f"detection window"
+              + (f"; false positives generated: {r['false_positives_generated']}"
+                 if r.get("false_positives_generated") else ""))
+            a(f"- **Static (Tier A) prediction:** {r.get('predicted_tier_b', 'n/a')} "
+              f"— {root_cause}")
+            a(f"- **Candidate code change (from Tier A analysis, verify against "
+              f"the live miss):** {code_change}")
+            a("")
+        a("## Not a detection failure (reported for completeness)")
+        a("")
+        if not not_failures:
+            a("None.")
+        for r in not_failures:
+            o = _outcome_of(r)
+            why = ("the host (AV/OS) blocked it before the attacker process ran"
+                   if o == "blocked_before_execution"
+                   else "the harness had no runnable command/atomic for this probe")
+            err = f" — `{r.get('error')}`" if r.get("error") else ""
+            a(f"- **{r['technique_id']} {r['technique_name']}** (`{r['id']}`): "
+              f"{o.replace('_', ' ')} — {why}{err}")
+        a("")
+    else:
+        a("## Missed techniques — root cause and required code change")
+        a("")
+        if not s["missed_records"]:
+            a("None.")
+        for r in s["missed_records"]:
+            root_cause, code_change = _root_cause_for(r)
+            a(f"### {r['technique_id']} — {r['technique_name']}  `{r['id']}`")
+            a("")
+            a(f"- **Tactic:** {r['tactic']}")
+            a(f"- **Test:** {r['test_number']}")
+            a(f"- **Predicted outcome:** {r.get('predicted_tier_b', 'n/a')}")
+            if r.get("known_mismatch"):
+                a(f"- **Known mismatch:** {r['known_mismatch']}")
+            a(f"- **Root cause:** {root_cause}")
+            a(f"- **Code change required:** {code_change}")
+            a("")
 
     a("## Standalone findings (discovered by running the harness)")
     a("")

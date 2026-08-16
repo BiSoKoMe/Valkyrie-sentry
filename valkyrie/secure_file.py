@@ -186,19 +186,14 @@ def access_sids(path: Path) -> tuple[set[str], str]:
     return {ln.strip() for ln in out.splitlines() if ln.strip()}, ""
 
 
-def verify(path: Path) -> tuple[bool, str]:
-    """True when only privileged principals can reach *path*."""
-    p = Path(path)
-    if not p.exists():
-        return False, f"does not exist: {p}"
+def _verdict_from_sids(sids: set[str], err: str) -> tuple[bool, str]:
+    """The ACL verdict for a Windows secret, given the SIDs that hold access.
 
-    if not _IS_WINDOWS:
-        mode = stat.S_IMODE(p.stat().st_mode)
-        if mode & 0o077:
-            return False, f"group/other bits set: {oct(mode)}"
-        return True, f"mode {oct(mode)}"
-
-    sids, err = access_sids(p)
+    Single source of truth so the per-file ``verify()`` and the batched
+    ``audit_secrets()`` cannot drift apart. A read error or an empty ACL is
+    treated as NOT protected — the conservative direction for a secret we
+    cannot confirm is locked down.
+    """
     if err:
         return False, err
     if not sids:
@@ -212,6 +207,22 @@ def verify(path: Path) -> tuple[bool, str]:
     if extra:
         return False, f"readable by non-privileged principal(s): {sorted(extra)}"
     return True, f"restricted to {sorted(sids)}"
+
+
+def verify(path: Path) -> tuple[bool, str]:
+    """True when only privileged principals can reach *path*."""
+    p = Path(path)
+    if not p.exists():
+        return False, f"does not exist: {p}"
+
+    if not _IS_WINDOWS:
+        mode = stat.S_IMODE(p.stat().st_mode)
+        if mode & 0o077:
+            return False, f"group/other bits set: {oct(mode)}"
+        return True, f"mode {oct(mode)}"
+
+    sids, err = access_sids(p)
+    return _verdict_from_sids(sids, err)
 
 
 def describe(path: Path) -> str:
@@ -264,17 +275,95 @@ def known_secrets() -> list[tuple[str, Path]]:
     ]
 
 
+def _access_sids_batch(paths: list[Path]) -> dict[str, tuple[set[str], str]]:
+    """Read the access SIDs for MANY paths in a SINGLE PowerShell invocation.
+
+    The per-file `access_sids()` spawns one PowerShell process each; auditing
+    ~10 secrets that way cost ~6s (measured) and dominated the coverage
+    refresh. One batched Get-Acl pass is the same read, ~10x fewer subprocess
+    launches. Returns {str(path): (sids, err)}; any path the batch could not
+    read back is marked unread so its verdict stays conservative (not
+    protected), exactly as a single-file read error would.
+    """
+    result: dict[str, tuple[set[str], str]] = {}
+    if not _IS_WINDOWS or not paths:
+        return {str(p): (set(), "") for p in paths}
+
+    def _q(s: object) -> str:                      # PowerShell single-quote escaping
+        return "'" + str(s).replace("'", "''") + "'"
+
+    arr = ",".join(_q(p) for p in paths)
+    script = (
+        "$ErrorActionPreference='SilentlyContinue';"
+        f"$ps=@({arr});"
+        "foreach($p in $ps){'###P###'+$p;"
+        "try{(Get-Acl -LiteralPath $p).Access|ForEach-Object{"
+        "try{$_.IdentityReference.Translate("
+        "[System.Security.Principal.SecurityIdentifier]).Value}"
+        "catch{$_.IdentityReference.Value}}}"
+        "catch{'###E###'+$_.Exception.Message}}"
+    )
+    code, out = _run([_POWERSHELL, "-NoProfile", "-NonInteractive",
+                      "-Command", script])
+    cur = None
+    for raw in out.splitlines():
+        ln = raw.strip()
+        if not ln:
+            continue
+        if ln.startswith("###P###"):
+            cur = ln[len("###P###"):]
+            result.setdefault(cur, (set(), ""))
+            continue
+        if cur is None:
+            continue
+        if ln.startswith("###E###"):
+            result[cur] = (set(), ln[len("###E###"):] or "Get-Acl failed")
+            continue
+        sids, err = result[cur]
+        if err:
+            continue
+        result[cur] = (sids | {ln}, "")
+    # A path the batch never echoed back (truncated/failed output) must not read
+    # as protected — keep the conservative "unread" verdict for it.
+    for p in paths:
+        result.setdefault(str(p), (set(), "ACL not returned by batch read"))
+    return result
+
+
 def audit_secrets() -> list[tuple[str, Path, bool, str]]:
-    """Report protection state for every known secret that exists on disk."""
-    out = []
+    """Report protection state for every known secret that exists on disk.
+
+    On Windows the ACL reads are batched into a single PowerShell call (see
+    `_access_sids_batch`) so the whole audit is one subprocess rather than one
+    per file — the coverage layer runs this off the hot path, but it should not
+    cost seconds. The verdict per file is identical to `verify()`.
+    """
+    existing: list[tuple[str, Path]] = []
     for label, path in known_secrets():
         try:
-            if not Path(path).exists():
-                continue
-            ok, detail = verify(path)
-        except Exception as exc:                  # noqa: BLE001
-            ok, detail = False, f"{type(exc).__name__}: {exc}"
-        out.append((label, Path(path), ok, detail))
+            p = Path(path)
+            if p.exists():
+                existing.append((label, p))
+        except Exception:                          # noqa: BLE001
+            # A path that cannot even be stat'd is not an exposed secret.
+            continue
+
+    if not _IS_WINDOWS:
+        out = []
+        for label, p in existing:
+            try:
+                ok, detail = verify(p)
+            except Exception as exc:               # noqa: BLE001
+                ok, detail = False, f"{type(exc).__name__}: {exc}"
+            out.append((label, p, ok, detail))
+        return out
+
+    sids_by_path = _access_sids_batch([p for _, p in existing])
+    out = []
+    for label, p in existing:
+        sids, err = sids_by_path.get(str(p), (set(), "ACL not read"))
+        ok, detail = _verdict_from_sids(sids, err)
+        out.append((label, p, ok, detail))
     return out
 
 

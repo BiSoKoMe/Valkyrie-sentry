@@ -230,9 +230,22 @@ class SensorTamperMonitor:
     def start(self) -> None:
         if self._running:
             return
-        # Seed the baseline synchronously so a sensor that is ALREADY down at
-        # startup is recorded as a known-bad starting point (no false
-        # transition-alert on the very first poll) rather than as "unknown".
+        # Baseline seeding runs INSIDE the monitor thread (see _loop), not here.
+        # Each check() shells out (sc query, Get-Acl, driver probe); on a host
+        # where spawning those is slow this seeding measured ~60s, and doing it
+        # in start() blocked the whole agent — including the web server bind —
+        # for that entire time. The "no false first-alert" guarantee is
+        # preserved: the first real poll cannot fire before one _interval has
+        # elapsed anyway, and _loop seeds the baseline before that first sleep.
+        self._running = True
+        self._thread = threading.Thread(
+            target=self._loop, daemon=True, name="sensor-tamper-monitor")
+        self._thread.start()
+
+    def _seed_baseline(self) -> None:
+        """Record each sensor's CURRENT health as the starting point so a sensor
+        already down at startup is a known-bad baseline, not a false transition
+        alert on the first poll. Runs once, in-thread, before the poll loop."""
         for check in _CHECKS:
             try:
                 h = check()
@@ -240,10 +253,6 @@ class SensorTamperMonitor:
                 self._last_detail[h.name] = h.detail
             except Exception:
                 continue
-        self._running = True
-        self._thread = threading.Thread(
-            target=self._loop, daemon=True, name="sensor-tamper-monitor")
-        self._thread.start()
 
     def stop(self) -> None:
         self._running = False
@@ -252,6 +261,12 @@ class SensorTamperMonitor:
         return bool(self._thread and self._thread.is_alive())
 
     def _loop(self) -> None:
+        # Seed the baseline first (was in start(); moved here so its slow
+        # subprocess checks never block agent startup — see start()).
+        try:
+            self._seed_baseline()
+        except Exception:
+            pass
         while self._running:
             time.sleep(self._interval)
             if not self._running:

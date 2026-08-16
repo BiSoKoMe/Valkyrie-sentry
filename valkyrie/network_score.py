@@ -52,10 +52,16 @@ W_BEACON_RHYTHM     = 0.30
 W_PROCESS_NOVELTY   = 0.15
 W_VOLUME_ANOMALY    = 0.25
 W_PROTOCOL_MISMATCH = 0.25
+W_SCAN_FANOUT       = 0.35      # one process, many distinct peers = scanning
 W_INTEL             = 0.30      # corroboration only
 
 THRESHOLD = 0.55                # surfacing floor
 BLOCK_FLOOR = 0.75              # decision engine may escalate above this
+
+# A horizontal scan is one process reaching this many DISTINCT peers within the
+# caller's recent window. Set high so a couple of parallel connections (a
+# browser, an updater fanning to a CDN) never looks like a sweep.
+_SCAN_FANOUT = 20
 
 # Ports where a plaintext/raw payload is expected and a "no TLS" observation
 # is therefore meaningless. Keeps S6 from firing on ordinary HTTP.
@@ -89,6 +95,8 @@ class ConnFacts:
     beacon_interval: Optional[float] = None     # seconds, if periodic
     beacon_jitter: Optional[float] = None       # 0..1 relative deviation
     beacon_count: int = 0                       # repetitions observed
+    distinct_peers_recent: Optional[int] = None # distinct dest hosts this
+                                                # process hit in the window (S8)
     tls_expected: bool = False            # port implies TLS
     tls_observed: Optional[bool] = None   # ClientHello actually seen
     intel_hit: bool = False               # a feed knows this IP (S7)
@@ -152,6 +160,19 @@ def _signals(f: ConnFacts) -> list[_Sig]:
                         f"port {f.raddr_port} implies TLS but no TLS handshake "
                         f"was observed"))
 
+    # S8 — horizontal scan. One process reaching a large number of DISTINCT
+    # peers in a short window is network-service discovery / scanning (T1046) —
+    # the list-free way to catch SoftPerfect NetScan / Advanced IP Scanner and
+    # the like without ever naming the tool. Like every signal it cannot fire
+    # alone, so a sanctioned admin scanner (trusted, resolved) stays quiet while
+    # the same fan-out from an untrusted or never-before-networked binary
+    # compounds past the threshold.
+    if (f.distinct_peers_recent is not None
+            and f.distinct_peers_recent >= _SCAN_FANOUT):
+        out.append(_Sig("scan_fanout", W_SCAN_FANOUT,
+                        f"contacted {f.distinct_peers_recent} distinct hosts in a "
+                        f"short window — horizontal network scan"))
+
     # S7 — corroboration ONLY. Weighted like any other signal; never special,
     # never an override. See the module docstring and the list-free gate.
     if f.intel_hit:
@@ -190,9 +211,16 @@ def classify_connection_anomaly(f: ConnFacts) -> Optional[dict]:
     r = score_connection(f)
     if not r["fires"]:
         return None
+    # Name the technique after the dominant tell: a scan fan-out is Discovery
+    # (T1046), a periodic beacon is C2 (T1071); otherwise the generic app-layer
+    # C2 label. Keeps the kill-chain tactic accurate instead of always C2.
+    if "scan_fanout" in r["labels"]:
+        technique = "T1046 — Network Service Discovery"
+    else:
+        technique = "T1071 — Application Layer Protocol"
     return {
         "severity": r["severity"],
-        "technique": "T1071 — Application Layer Protocol",
+        "technique": technique,
         "labels": ["network_anomaly"] + r["labels"],
         "reason": r["reason"],
         "confidence": r["score"],

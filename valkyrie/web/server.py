@@ -44,6 +44,7 @@ _PROJECT_ROOT = _WEB_DIR.parent.parent   # .../valkyrie/web -> .../valkyrie -> r
 try:
     from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
     from fastapi.responses import FileResponse, JSONResponse
+    from starlette.concurrency import run_in_threadpool
     _FASTAPI_OK = True
 except ImportError:
     _FASTAPI_OK = False
@@ -995,7 +996,13 @@ def create_app(ctx: Optional[AppContext] = None):
                             severity: Optional[str] = None):
         if state.edr is None:
             return JSONResponse({"error": "EDR not enabled"}, status_code=503)
-        return state.edr.list_incidents(status=status, severity=severity, limit=200)
+        # Off the event loop: list_incidents is a synchronous SQLite read (opens a
+        # connection, ORDER BY ... LIMIT 200). Run on the loop it blocks every
+        # other request — including the self-heal /api/ping — for its whole
+        # duration, which under eval/dashboard polling load is exactly how the
+        # server declared ITSELF "web_dashboard unhealthy" in a tight loop.
+        return await run_in_threadpool(
+            state.edr.list_incidents, status=status, severity=severity, limit=200)
 
     @app.get("/api/edr/metrics/mttd-mttr")
     async def edr_mttd_mttr():
@@ -1007,7 +1014,10 @@ def create_app(ctx: Optional[AppContext] = None):
         definitions and their honest limits)."""
         if state.edr is None:
             return JSONResponse({"error": "EDR not enabled"}, status_code=503)
-        return state.edr.mttd_mttr()
+        # Off the event loop: mttd_mttr fans out to get_incident for up to 200
+        # incidents (~3 queries + impact assessment each) — by far the heaviest
+        # read in the API. On the loop it stalls everything for seconds.
+        return await run_in_threadpool(state.edr.mttd_mttr)
 
     @app.get("/api/sensors/status")
     async def sensors_status():
@@ -1023,7 +1033,9 @@ def create_app(ctx: Optional[AppContext] = None):
     async def edr_incident(incident_id: str):
         if state.edr is None:
             return JSONResponse({"error": "EDR not enabled"}, status_code=503)
-        inc = state.edr.get_incident(incident_id)
+        # Off the event loop: get_incident runs ~3 synchronous SQLite queries
+        # (incident + detections + responses) plus an impact assessment.
+        inc = await run_in_threadpool(state.edr.get_incident, incident_id)
         if inc is None:
             return JSONResponse({"error": "unknown incident"}, status_code=404)
         return inc
@@ -1043,6 +1055,50 @@ def create_app(ctx: Optional[AppContext] = None):
         dets = inc.get("detections") or [inc]
         sig = signal_from_incident(dets[0])
         return decide(sig, get_profile()).to_dict()
+
+    @app.get("/api/edr/incidents/{incident_id}/causality")
+    async def edr_incident_causality(incident_id: str):
+        """The causality subgraph behind an incident: the Causality Group Owner
+        (what started this), the process chain down to the alerting process, the
+        rest of that owner's process tree, and every artifact attributed to it.
+
+        The honesty flags on the payload are load-bearing and must be rendered,
+        not dropped: ``inferred_nodes`` counts ancestry the graph guessed at
+        rather than observed, ``truncated`` means the tree walk hit its bound,
+        and ``evicted`` means nodes had already been dropped for memory before
+        this query ran. A short chain for any of those reasons is not the same
+        claim as a genuinely short chain.
+
+        404 (not an empty graph) when the incident has no attributable pid, so a
+        caller can tell "nothing to show" from "no process to show it for".
+        """
+        if state.edr is None:
+            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+        inc = await run_in_threadpool(state.edr.get_incident, incident_id)
+        if inc is None:
+            return JSONResponse({"error": "unknown incident"}, status_code=404)
+        pid = int(inc.get("process_pid") or 0)
+        if pid <= 0:
+            # process_pid is live-only (not persisted — see edr/store.py), so
+            # fall back to the pid carried on the incident's own detections
+            # before giving up on it.
+            for det in (inc.get("detections") or []):
+                pid = int(det.get("process_pid") or 0)
+                if pid > 0:
+                    break
+        if pid <= 0:
+            return JSONResponse(
+                {"error": "incident has no attributed process"}, status_code=404)
+        graph = state.edr.causality_subgraph(pid)
+        graph["incident_id"] = incident_id
+        return graph
+
+    @app.get("/api/edr/causality/stats")
+    async def edr_causality_stats():
+        """Process-ancestry graph size and health (nodes, inferred, evicted)."""
+        if state.edr is None:
+            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+        return state.edr.causality_stats()
 
     @app.post("/api/edr/incidents/{incident_id}/status")
     async def edr_incident_status(incident_id: str, request: Request):

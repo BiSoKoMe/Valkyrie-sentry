@@ -762,17 +762,29 @@ def main() -> None:
     #    write site that forgets. Idempotent and cheap; already-restricted
     #    files are skipped.
     # ------------------------------------------------------------------
-    try:
-        from .secure_file import harden_known_secrets
-        _healed = harden_known_secrets()
-        for _label, _p, _ok, _detail in _healed:
-            if _ok:
-                console.print(f"[dim]  Secured {_label} ({_p.name})[/dim]")
-            else:
-                console.print(f"[yellow]  ! {_label} ({_p.name}) is readable by "
-                              f"other local accounts: {_detail}[/yellow]")
-    except Exception as _exc:      # noqa: BLE001 — never block startup
-        console.print(f"[yellow]  ! secret permission sweep failed: {_exc}[/yellow]")
+    # Run OFF the startup critical path. verify() shells out to `powershell
+    # Get-Acl` once per secret with a 20s timeout each (secure_file._TIMEOUT);
+    # on a host where spawning powershell is slow — measured on a VM under load —
+    # those calls TIME OUT, so a sweep of 4+ secrets added up to ~80s of dead
+    # wait before the store even started and the web server bound. The comment
+    # below always claimed "never block startup", but only exceptions were
+    # non-blocking, not the latency. The sweep is an idempotent backstop (every
+    # write site already restricts its own file), so it is safe to let it finish
+    # in the background while the agent comes up.
+    def _harden_secrets_bg() -> None:
+        try:
+            from .secure_file import harden_known_secrets
+            for _label, _p, _ok, _detail in harden_known_secrets():
+                if _ok:
+                    console.print(f"[dim]  Secured {_label} ({_p.name})[/dim]")
+                else:
+                    console.print(f"[yellow]  ! {_label} ({_p.name}) is readable "
+                                  f"by other local accounts: {_detail}[/yellow]")
+        except Exception as _exc:      # noqa: BLE001 — never block startup
+            console.print(f"[yellow]  ! secret permission sweep failed: {_exc}[/yellow]")
+
+    threading.Thread(target=_harden_secrets_bg, name="secret-hardening",
+                     daemon=True).start()
 
     # ------------------------------------------------------------------
     # 1. Store
@@ -1592,6 +1604,37 @@ def main() -> None:
             name="web-dashboard",
         )
         web_thread.start()
+
+        # Wait for the socket to actually be listening before the main thread
+        # goes on to the Rich dashboard render loop. Python has one GIL: that
+        # render loop is CPU-bound and, on a busy/constrained host, was starving
+        # uvicorn's bind badly enough that the API took MINUTES to come up (or
+        # appeared hung) — measured directly on a VM, where --no-ui made it
+        # instant. Blocking here in a poll (time.sleep releases the GIL, handing
+        # uvicorn the CPU it needs to finish binding) makes startup deterministic
+        # regardless of what the main thread does next. Bounded so a genuinely
+        # failed bind still surfaces instead of hanging forever.
+        def _web_listening() -> bool:
+            import socket as _sock
+            probe_host = "127.0.0.1" if args.web_host in ("0.0.0.0", "::", "") else args.web_host
+            try:
+                with _sock.create_connection((probe_host, args.web_port), timeout=0.5):
+                    return True
+            except OSError:
+                return False
+
+        _wt = time.monotonic()
+        _bound = False
+        while time.monotonic() - _wt < 30.0:
+            if _web_listening():
+                _bound = True
+                break
+            time.sleep(0.25)
+        if _bound:
+            _tick("Web dashboard listening", _wt)
+        else:
+            console.print("[yellow]Web dashboard slow to bind (>30s) — "
+                          "continuing; it may still come up.[/yellow]")
         if args.debug:
             console.print(
                 f"[green]✓[/green] Web dashboard  "

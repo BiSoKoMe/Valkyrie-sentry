@@ -26,6 +26,7 @@ from typing import Callable, Optional
 
 from ..eventbus import EventBus
 from .builtin import register_builtin
+from .causality import CausalityGraph
 from .investigate import Investigator
 from .hunt import ThreatHunter
 from .killchain import KillChainCorrelator
@@ -114,6 +115,14 @@ class EdrEngine:
         self._killchain = KillChainCorrelator(window_seconds=correlation_window_seconds)
         # ESP-style named behavioural-sequence IOAs (specific attack patterns).
         self._sequences = SequenceEngine()
+        # Process-ancestry graph. Unlike the two correlators above it produces no
+        # detections and casts no verdict — it records STRUCTURE (who spawned
+        # whom, what each process touched) so an alert can be explained by the
+        # chain that led to it. Fed from ingest_telemetry for every process
+        # event, benign ones included: the ancestors of an attack are benign by
+        # definition right up until they aren't, and a chain missing them is
+        # useless. See edr/causality.py.
+        self._causality = CausalityGraph()
         self._running = False
 
     # ------------------------------------------------------------------
@@ -172,6 +181,20 @@ class EdrEngine:
         from ..trust import is_self
         if is_self(str(d.get("actor_name", "")), str(d.get("actor_path", ""))):
             return None
+
+        # Causality graph is fed HERE — above the severity gate below — and that
+        # placement is the whole point. The gate exists so a routine process
+        # start never becomes an incident, but a causality chain made only of
+        # things that already alerted is not a chain at all: the ancestry that
+        # explains an alert (explorer → winword → cmd) is entirely info-severity
+        # until the moment the last hop isn't. Recording structure is not the
+        # same act as raising an alert, so the gate that governs alerting must
+        # not govern this. Never allowed to break ingest.
+        try:
+            self._record_causality(d)
+        except Exception:
+            pass
+
         severity = str(d.get("severity", "info"))
         action = str(d.get("action", ""))
 
@@ -278,7 +301,12 @@ class EdrEngine:
             details={"labels": labels, "target": d.get("target", {}),
                      "activity": d.get("activity", ""),
                      "ppid": ppid, "parent_name": parent_name,
-                     "parent_chain": list(fields.get("parent_chain") or [])},
+                     "parent_chain": list(fields.get("parent_chain") or []),
+                     # Every ATT&CK technique this one event matched, not just the
+                     # top pick surfaced in `technique`. A single action can be
+                     # several techniques at once; keep them all on the detection
+                     # so correlation and the SOC view never lose the others.
+                     "all_techniques": list(fields.get("all_techniques") or [])},
         )
         # Preserve the COLLECTOR's own event timestamp (event.ts) instead of
         # defaulting to "now" (when the engine got around to processing it).
@@ -297,6 +325,122 @@ class EdrEngine:
         self._ingest_detection(det)
         return det.incident_id
 
+    # ------------------------------------------------------------------
+    # Causality graph
+    # ------------------------------------------------------------------
+
+    def _record_causality(self, d: dict) -> None:
+        """Fold one normalized telemetry event into the process-ancestry graph.
+
+        Process-start events become NODES; everything else that carries an
+        attributable pid (a DNS query, a connection, a file or registry write)
+        becomes an ARTIFACT hanging off the process that caused it.
+
+        On create_time, which is what protects the graph from PID reuse: only
+        ``process_collector``'s exec events may use the event ``ts`` as one —
+        ``ProcInfo.to_event`` sets ``ts=self.create_time`` explicitly, so there
+        it is the real process start. Sysmon stamps ``ts=time.time()`` at emit,
+        which is an arrival time and would be a *wrong* identity if treated as a
+        start. Those nodes fall back to a pid-only key and are flagged inferred
+        rather than being given a fabricated create_time.
+        """
+        pid = int(d.get("actor_pid", 0) or 0)
+        if pid <= 0:
+            return
+        fields = d.get("fields") or {}
+        category = str(d.get("category", ""))
+        activity = str(d.get("activity", ""))
+        source = str(d.get("source", ""))
+        ts = float(d.get("ts") or 0.0)
+
+        create_time = 0.0
+        raw_ct = fields.get("create_time")
+        if raw_ct:
+            try:
+                create_time = float(raw_ct)
+            except (TypeError, ValueError):
+                create_time = 0.0
+        elif source == "process_collector" and activity == "exec":
+            create_time = ts
+
+        name = str(d.get("actor_name", ""))
+        ppid = int(fields.get("ppid") or fields.get("parent_pid") or 0)
+        parent_name = str(fields.get("parent_name") or fields.get("parent_image") or "")
+
+        if category == "process" and activity == "exec":
+            self._causality.observe_process(
+                pid, name, ppid=ppid, path=str(d.get("actor_path", "")),
+                cmdline=str(fields.get("cmdline", "")),
+                create_time=create_time, parent_name=parent_name, ts=ts)
+            return
+
+        target = d.get("target") or {}
+        if not isinstance(target, dict):
+            target = {}
+        subject = (target.get("domain") or target.get("ip") or target.get("path")
+                   or target.get("location") or "")
+        summary = str(d.get("reason") or subject or activity or category)
+        # `name` is passed so an artifact can still create its own node when the
+        # process-start event was missed (short-lived process between polls);
+        # attribute() drops the artifact outright when there is no name either,
+        # rather than inventing an owner for it.
+        self._causality.attribute(
+            pid, category or "event", summary, create_time=create_time, ts=ts,
+            data={"activity": activity, "subject": str(subject),
+                  "severity": str(d.get("severity", "")), "source": source},
+            name=name, ppid=ppid)
+
+    def _enrich_causality(self, det: Detection) -> None:
+        """Record the detection on its process node and stamp the CGO on it.
+
+        The two halves are deliberately separate. Attribution makes the alert
+        visible *inside* the graph (so a subgraph query shows what fired and
+        where). The stamp makes the graph's answer visible *on* the alert:
+        ``details['causality']`` carries the owning process, the chain as a
+        readable ``a → b → c`` path, and whether any hop in it was inferred.
+
+        The inferred flag is not decoration. A chain that reads
+        ``winword.exe → powershell.exe`` because the graph guessed at a parent
+        it never observed must not be presented with the same confidence as one
+        every hop of which was seen — so the flag rides along with the answer
+        and any consumer can qualify it.
+        """
+        pid = int(det.process_pid or 0)
+        if pid <= 0:
+            return
+        details = det.details if isinstance(det.details, dict) else {}
+        self._causality.attribute(
+            pid, "detection", det.title,
+            data={"severity": det.severity, "technique": det.technique,
+                  "source": det.source, "entity": det.entity},
+            name=det.process_name,
+            ppid=int(details.get("ppid") or 0))
+        chain = self._causality.chain(pid)
+        if not chain:
+            return
+        owner = chain[0]
+        det.details = dict(details)
+        det.details["causality"] = {
+            "cgo": owner.name,
+            "cgo_pid": owner.pid,
+            "cgo_path": owner.path,
+            "chain": [n.name for n in chain],
+            "path": " -> ".join(n.name for n in chain if n.name),
+            "depth": len(chain),
+            "inferred": any(n.inferred for n in chain),
+        }
+
+    def causality_subgraph(self, pid: int, create_time: float = 0.0,
+                           max_nodes: int = 512) -> dict:
+        """The causality subgraph around one process — CGO, chain, descendant
+        tree and attributed artifacts. See edr/causality.py for the honesty
+        flags on the payload (``inferred_nodes`` / ``truncated`` / ``evicted``)."""
+        return self._causality.subgraph(pid, create_time, max_nodes=max_nodes)
+
+    def causality_stats(self) -> dict:
+        """Graph size / health, for the components + coverage surface."""
+        return self._causality.stats()
+
     def report_detection(self, det: Detection) -> Optional[str]:
         """Public entry for sensors that produce a fully-formed Detection (e.g.
         the ransomware shield) rather than raw telemetry. Flows through the same
@@ -308,6 +452,16 @@ class EdrEngine:
         return det.incident_id
 
     def _ingest_detection(self, det: Detection) -> None:
+        # Stamp the causality owner onto the detection before correlation, so
+        # "what started this?" travels with the detection into the incident,
+        # the timeline and the API instead of having to be recomputed later
+        # against a graph that may since have evicted the answer. Enrichment
+        # only: it changes no severity, no verdict and no correlation key, so a
+        # graph miss degrades to today's behaviour rather than breaking it.
+        try:
+            self._enrich_causality(det)
+        except Exception:
+            pass
         with self._corr_lock:
             existing = self._edr.find_open_incident(
                 entity=det.entity, category=det.category,
