@@ -111,18 +111,18 @@ jobs:
             powershell -NoProfile -EncodedCommand SQBFAFgAIAAnAGgAaQAnAA== 2>$null
             cmd /c "certutil -urlcache -f http://127.0.0.1/none.exe none.exe > nul 2>&1"
             Start-Sleep -Seconds 25
-            function Dump($u){ "==== $u ====" | Tee-Object tierb_transcript.log -Append
-              try { Invoke-RestMethod "http://127.0.0.1:8090$u" -TimeoutSec 8 | ConvertTo-Json -Depth 6 | Tee-Object tierb_transcript.log -Append }
-              catch { "ERR $($_.Exception.Message)" | Tee-Object tierb_transcript.log -Append } }
-            Dump "/api/edr/incidents"
-            Dump "/api/stats"
-            Dump "/api/events"
-            "==== ProgramData\Valkyrie listing ====" | Tee-Object tierb_transcript.log -Append
-            Get-ChildItem (Join-Path $env:ProgramData "Valkyrie") -Recurse -EA SilentlyContinue | ForEach-Object { $_.FullName } | Tee-Object tierb_transcript.log -Append
-            $lg = Join-Path $env:ProgramData "Valkyrie\valkyrie.log"
-            "==== valkyrie.log (tail 200) ====" | Tee-Object tierb_transcript.log -Append
-            if (Test-Path $lg) { Get-Content $lg -Tail 200 | Tee-Object tierb_transcript.log -Append } else { "NO valkyrie.log FILE" | Tee-Object tierb_transcript.log -Append }
-            "==== valkyrie_stdout.log (console / sensor init) ====" | Tee-Object tierb_transcript.log -Append
+            "==== /api/edr/incidents (PATIENT, 90s timeout) ====" | Tee-Object tierb_transcript.log -Append
+            try {
+              $inc = Invoke-RestMethod "http://127.0.0.1:8090/api/edr/incidents" -TimeoutSec 90
+              ("INCIDENT COUNT: " + (@($inc).Count)) | Tee-Object tierb_transcript.log -Append
+              ($inc | ConvertTo-Json -Depth 5) | Tee-Object tierb_transcript.log -Append
+            } catch { "ERR $($_.Exception.Message)" | Tee-Object tierb_transcript.log -Append }
+            "==== find + tail valkyrie.log (real data dir) ====" | Tee-Object tierb_transcript.log -Append
+            $log = Get-ChildItem -Path "D:\a" -Recurse -Filter valkyrie.log -EA SilentlyContinue | Select-Object -First 1
+            if ($log) { ("log at: " + $log.FullName) | Tee-Object tierb_transcript.log -Append
+                        Get-Content $log.FullName -Tail 150 | Tee-Object tierb_transcript.log -Append }
+            else { "no valkyrie.log found under D:\a" | Tee-Object tierb_transcript.log -Append }
+            "==== valkyrie_stdout.log (console) ====" | Tee-Object tierb_transcript.log -Append
             if (Test-Path valkyrie_stdout.log) { Get-Content valkyrie_stdout.log | Tee-Object tierb_transcript.log -Append }
           } finally {
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
