@@ -59,9 +59,14 @@ jobs:
         shell: pwsh
         run: redteam\provision.ps1
 
-      - name: "Start Valkyrie (loopback-only: no DNS/firewall/TLS interception)"
+      - name: "Run Tier B (start Valkyrie + real Atomic Red Team, one step)"
         shell: pwsh
         run: |
+          # Start Valkyrie AND run the eval in the SAME step. A background process
+          # started in a separate step does not reliably survive into the next one
+          # on the runner, so the eval script's own health check (line ~203) found
+          # a dead API even though the prior step confirmed it up. One step keeps
+          # the agent alive for the whole battery.
           $p = Start-Process -FilePath python `
             -ArgumentList "-m", "valkyrie", "--web", "--web-port", "8090", `
               "--no-dns", "--no-firewall", "--no-unbound", "--no-tls", "--no-sysmon-setup" `
@@ -70,29 +75,32 @@ jobs:
             -PassThru -WindowStyle Hidden
           $p.Id | Out-File valkyrie.pid
 
-          $deadline = (Get-Date).AddSeconds(60)
+          $deadline = (Get-Date).AddSeconds(90); $up = $false
           do {
             Start-Sleep -Seconds 2
             try {
               Invoke-RestMethod -Uri "http://127.0.0.1:8090/api/health" -TimeoutSec 3 | Out-Null
-              Write-Host "Valkyrie API is answering."
-              exit 0
+              $up = $true; break
             } catch {}
           } while ((Get-Date) -lt $deadline)
-          Write-Error "Valkyrie API never answered on :8090 within 60s"
-          Get-Content valkyrie_stdout.log, valkyrie_stderr.log -ErrorAction SilentlyContinue
-          exit 1
+          if (-not $up) {
+            Write-Error "Valkyrie API never answered on :8090 within 90s"
+            Get-Content valkyrie_stdout.log, valkyrie_stderr.log -ErrorAction SilentlyContinue
+            exit 1
+          }
+          Write-Host "Valkyrie API is answering (pid $($p.Id)). Running Tier B..."
 
-      - name: Run Tier B (real Atomic Red Team against the real running agent)
-        shell: pwsh
-        run: |
           if ("${{ github.event_name }}" -eq "workflow_dispatch") {
             $skip = "${{ inputs.skip_destructive }}" -eq "true"
           } else {
             $skip = $true    # push-triggered auto-run: safe subset only
           }
-          redteam\evaluation\run_live_evaluation.ps1 -SkipDestructive:$skip *>&1 |
-            Tee-Object -FilePath tierb_transcript.log
+          try {
+            redteam\evaluation\run_live_evaluation.ps1 -SkipDestructive:$skip -ApiBase "http://127.0.0.1:8090" *>&1 |
+              Tee-Object -FilePath tierb_transcript.log
+          } finally {
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Stop Valkyrie
         if: always()
