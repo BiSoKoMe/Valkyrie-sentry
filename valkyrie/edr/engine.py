@@ -629,7 +629,12 @@ class EdrEngine:
             process_pid=det.process_pid,
             technique=seq["technique"],
             details={"sequence": seq, "reason": seq["explanation"],
-                     "confidence": seq["score"], "labels": ["attack_sequence"]},
+                     "confidence": seq["score"], "labels": ["attack_sequence"],
+                     # The individual techniques that built a breadth step
+                     # (e.g. reconnaissance-burst's T1082/T1057/T1018 trio) —
+                     # real, distinct detections that contributed to this
+                     # incident, not just the sequence's own named technique.
+                     "all_techniques": seq.get("contributing_techniques") or []},
         )
         self._ingest_detection(seq_det)
 

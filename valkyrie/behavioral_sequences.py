@@ -321,12 +321,22 @@ class SequenceEngine:
                     if key:
                         p.distinct.add(key)
                     if len(p.distinct) >= step.min_distinct:
+                        # Snapshot BEFORE the reset below empties it — this is
+                        # the only record of WHICH distinct techniques actually
+                        # satisfied a breadth step (e.g. reconnaissance-burst's
+                        # T1082/T1057/T1018 trio), and _complete() needs it to
+                        # report per-contributor credit, not just the sequence's
+                        # own culminating technique.
+                        contributing = set(p.distinct)
                         p.step_index += 1
                         p.distinct = set()
+                    else:
+                        contributing = None
                 else:
                     p.step_index += 1
+                    contributing = None
                 if p.step_index >= len(p.rule.steps):
-                    completed = self._complete(p, root)
+                    completed = self._complete(p, root, contributing)
                     continue          # completed — do not keep as an open partial
             kept.append(p)
         partials = kept
@@ -343,11 +353,13 @@ class SequenceEngine:
                 continue
             p = _Partial(rule=rule, step_index=0, first_ts=ts, last_ts=ts,
                         pids=[pid] if pid else [])
+            new_contributing = None
             if step0.min_distinct > 1:
                 key = step0.match_key(tid, lset, act)
                 if key:
                     p.distinct.add(key)
                 if len(p.distinct) >= step0.min_distinct:
+                    new_contributing = set(p.distinct)
                     p.step_index = 1
                     p.distinct = set()
             else:
@@ -358,7 +370,7 @@ class SequenceEngine:
             # no existing rule has fewer than 2 steps, so this is new behaviour
             # only for reconnaissance-burst-shaped rules, never a regression.
             if p.step_index >= len(rule.steps):
-                completed = self._complete(p, root)
+                completed = self._complete(p, root, new_contributing)
                 continue
             partials.append(p)
 
@@ -368,14 +380,27 @@ class SequenceEngine:
             self._partials.pop(root, None)
         return completed
 
-    def _complete(self, p: _Partial, root: str) -> dict:
+    def _complete(self, p: _Partial, root: str,
+                  contributing: Optional[set] = None) -> dict:
         rule = p.rule
         score = {"critical": 0.95, "high": 0.85, "medium": 0.70}.get(rule.severity, 0.85)
+        # contributing holds match_key() strings ('t:T1082', 'l:label', 'a:act')
+        # from the breadth step that just completed (see min_distinct in
+        # Step) — only the 't:' (technique) ones name a specific ATT&CK id.
+        # Exposing these lets a consumer (analyst UI, the live-eval scorer)
+        # credit each contributing technique individually instead of only the
+        # sequence's own culminating technique — e.g. reconnaissance-burst
+        # names ONE technique (T1087.001) but the 3+ discovery techniques that
+        # actually built the breadth (T1082/T1057/T1018/...) were real,
+        # distinct detections and deserve to be visible, not folded away.
+        contributing_techniques = sorted(
+            k[2:] for k in (contributing or ()) if k.startswith("t:"))
         return {
             "rule_id": rule.id,
             "name": rule.name,
             "severity": rule.severity,
             "technique": rule.technique,
+            "contributing_techniques": contributing_techniques,
             "reason": rule.reason,
             "root": root,
             "actor": self._name.get(p.pids[0], "") if p.pids else root.split(":", 1)[-1],

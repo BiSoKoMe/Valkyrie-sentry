@@ -87,8 +87,10 @@ $VettedAtomics = @{
     "cred-lsass-procdump"       = @{ Attack = "T1003.001"; Tests = "1" }
     "evasion-defender-disable"  = @{ Attack = "T1562.001"; Tests = "1"; Destructive = $true }
     "impact-shadow-delete"      = @{ Attack = "T1490";     Tests = "1"; Destructive = $true }
-    "evasion-process-injection" = @{ Attack = "T1055";     Tests = "1" }
     "disc-whoami-priv"          = @{ Attack = "T1033";     Tests = "1" }
+    # evasion-process-injection intentionally NOT delegated to ART -- Test #1
+    # drifted onto an Office-dependent variant (see the "sysmon_eid8" probe
+    # case below). catalog.py's own probe="sysmon_eid8" now drives it.
 }
 
 # ---------------------------------------------------------------------------
@@ -275,6 +277,51 @@ foreach ($t in $Techniques) {
                             -Headers @{ "X-Valkyrie-Token" = $env:VALKYRIE_TOKEN } -TimeoutSec 15 | Out-Null
                         $attackExecuted = $true
                     } catch { $executionError = $_.Exception.Message }
+                }
+                "sysmon_eid8" {
+                    # Real CreateRemoteThread injection -- deliberately NOT
+                    # delegated to Atomic Red Team's numbered content. T1055
+                    # Test #1 drifted onto a VBA/Office-automation variant
+                    # (Red Canary content changes over time; ART content isn't
+                    # pinned) and failed outright on a runner with no Office
+                    # installed. This is self-contained and dependency-free:
+                    # spawn a target, inject a remote thread that calls
+                    # LoadLibraryA("kernel32.dll") -- kernel32 is already
+                    # loaded in every process, so this is inert (no payload,
+                    # no real DLL load) while still performing the genuine
+                    # OpenProcess -> VirtualAllocEx -> WriteProcessMemory ->
+                    # CreateRemoteThread sequence Sysmon EID8 watches for.
+                    $target = $null
+                    try {
+                        $target = Start-Process notepad.exe -PassThru
+                        Start-Sleep -Milliseconds 800
+                        if (-not ("ValkyrieEval.Inject" -as [type])) {
+                            Add-Type -Namespace ValkyrieEval -Name Inject -MemberDefinition @'
+[DllImport("kernel32.dll")] public static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+[DllImport("kernel32.dll")] public static extern IntPtr VirtualAllocEx(IntPtr hProc, IntPtr addr, uint size, uint allocType, uint protect);
+[DllImport("kernel32.dll")] public static extern bool WriteProcessMemory(IntPtr hProc, IntPtr addr, byte[] buf, uint size, out int written);
+[DllImport("kernel32.dll", CharSet = CharSet.Ansi)] public static extern IntPtr GetProcAddress(IntPtr hModule, string name);
+[DllImport("kernel32.dll", CharSet = CharSet.Ansi)] public static extern IntPtr GetModuleHandle(string name);
+[DllImport("kernel32.dll")] public static extern IntPtr CreateRemoteThread(IntPtr hProc, IntPtr sa, uint stackSize, IntPtr startAddr, IntPtr param, uint flags, out IntPtr threadId);
+'@
+                        }
+                        $hProc = [ValkyrieEval.Inject]::OpenProcess(0x1FFFFF, $false, $target.Id)
+                        if ($hProc -ne [IntPtr]::Zero) {
+                            $dllBytes = [System.Text.Encoding]::ASCII.GetBytes("kernel32.dll`0")
+                            $addr = [ValkyrieEval.Inject]::VirtualAllocEx($hProc, [IntPtr]::Zero, [uint32]$dllBytes.Length, 0x3000, 0x40)
+                            $written = 0
+                            [ValkyrieEval.Inject]::WriteProcessMemory($hProc, $addr, $dllBytes, [uint32]$dllBytes.Length, [ref]$written) | Out-Null
+                            $loadLibAddr = [ValkyrieEval.Inject]::GetProcAddress([ValkyrieEval.Inject]::GetModuleHandle("kernel32.dll"), "LoadLibraryA")
+                            $threadId = [IntPtr]::Zero
+                            [ValkyrieEval.Inject]::CreateRemoteThread($hProc, [IntPtr]::Zero, 0, $loadLibAddr, $addr, 0, [ref]$threadId) | Out-Null
+                        }
+                        Start-Sleep -Milliseconds 500
+                        $attackExecuted = $true
+                    } catch {
+                        $executionError = $_.Exception.Message
+                    } finally {
+                        if ($target) { Stop-Process -Id $target.Id -Force -ErrorAction SilentlyContinue }
+                    }
                 }
                 "persistence" {
                     # Write the artifact directly per probe_input.activity --

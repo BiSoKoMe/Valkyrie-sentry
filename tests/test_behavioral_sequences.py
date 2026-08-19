@@ -165,6 +165,12 @@ def main() -> int:
                      ts=3.0, pid=70, ppid=1)
     _check("3rd DISTINCT discovery technique fires reconnaissance-burst",
            f3 is not None and f3["rule_id"] == "reconnaissance-burst")
+    _check("completion reports the 3 CONTRIBUTING technique ids, not just the "
+           "sequence's own culminating technique — so a consumer (the live-eval "
+           "scorer, an analyst UI) can credit T1082/T1057/T1018 individually "
+           "instead of only T1087.001",
+           f3 is not None
+           and sorted(f3.get("contributing_techniques", [])) == ["T1018", "T1057", "T1082"])
 
     print("\n[10b] Repeating the SAME technique does NOT satisfy breadth")
     eng = SequenceEngine()

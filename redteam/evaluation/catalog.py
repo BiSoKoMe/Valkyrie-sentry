@@ -280,16 +280,26 @@ EXECUTION = [
     Technique(
         id="exec-wmic-process-call", technique_id="T1047",
         technique_name="Windows Management Instrumentation (local process create)",
-        tactic="Execution", art_test_ref="T1047 Test #1 (wmic process call create)",
+        tactic="Execution", art_test_ref="T1047 (WMI process creation)",
         destructive=False, live_vm_safe=True,
         delivery=DELIVERY_REALTIME_ETW,
-        detector_path="valkyrie/behavioral_rules.py: wmic-process-call rule",
+        detector_path="valkyrie/behavioral_rules.py: wmi-cim-process-create rule",
         predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
         probe="ioa_rule", probe_input={
-            "image": "wmic.exe", "parent": "cmd.exe",
-            "cmdline": 'wmic.exe process call create "cmd.exe /c calc.exe"',
+            "image": "powershell.exe", "parent": "cmd.exe",
+            "cmdline": "powershell.exe -NoProfile -Command "
+                       "\"Invoke-CimMethod -ClassName Win32_Process -MethodName "
+                       "Create -Arguments @{CommandLine='cmd.exe /c calc.exe'}\"",
             "path": ""},
-        notes="wmic.exe exits almost instantly. Same wiring gap.",
+        notes="wmic.exe was REMOVED from this runner's Windows image (Microsoft "
+              "has been deprecating/removing it) -- 'wmic' is not recognized' "
+              "confirmed live 2026-08-19, a genuine tool-failure, not a Valkyrie "
+              "gap. Since wmic.exe is disappearing from real Windows too, real "
+              "T1047 attacks are shifting to the identical PowerShell CIM cmdlet "
+              "path -- switched the simulated command to match, which is both "
+              "MORE representative of current real-world T1047 and exercises the "
+              "wmi-cim-process-create rule added earlier this session specifically "
+              "for this shift.",
     ),
     Technique(
         id="exec-lure-doubleext", technique_id="T1204.002",
