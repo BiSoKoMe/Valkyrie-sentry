@@ -6,7 +6,7 @@ per-technique polling is flaky. The database at rest is ground truth.
 
 Usage: python db_coverage.py <path-to-valkyrie.db>
 """
-# retrigger: 2nd data point on T1003.001 (overnight loop cycle 2)
+# retrigger: cycle 4, stability read after best-of-night 18-tech run
 import sqlite3
 import sys
 
