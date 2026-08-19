@@ -139,6 +139,22 @@ jobs:
           Write-Host "==================== AUTHORITATIVE LIVE COVERAGE ===================="
           python redteam\evaluation\db_coverage.py $db.FullName
 
+          # DIAGNOSTIC (temporary): T1003.001 missed 2/2 destructive runs. Prove
+          # whether Sysmon EID10 (ProcessAccess->lsass.exe) fired at all for the
+          # Dumpert atomic (direct-syscall LSASS read, T1003.001-3) — Sysmon
+          # service outlives Valkyrie so this is readable after stop.
+          Write-Host "==================== SYSMON EID10->lsass.exe RAW COUNT ===================="
+          try {
+            $ev = Get-WinEvent -FilterHashtable @{ LogName='Microsoft-Windows-Sysmon/Operational'; Id=10 } -ErrorAction Stop |
+                  Where-Object { $_.Message -match 'lsass\.exe' }
+            Write-Host ("EID10->lsass.exe events found: " + (@($ev).Count))
+            $ev | Select-Object -First 5 | ForEach-Object {
+              $ga = if ($_.Message -match 'GrantedAccess:\s*(\S+)') { $Matches[1] } else { '?' }
+              $src = if ($_.Message -match 'SourceImage:\s*(\S+)') { $Matches[1] } else { '?' }
+              Write-Host ("  EID10 SourceImage=$src GrantedAccess=$ga")
+            }
+          } catch { Write-Host ("EID10 query error: " + $_.Exception.Message) }
+
       - name: Print results to the run log (artifact-independent)
         if: always()
         shell: pwsh
