@@ -95,7 +95,12 @@ jobs:
           if ("${{ github.event_name }}" -eq "workflow_dispatch") {
             $skip = "${{ inputs.skip_destructive }}" -eq "true"
           } else {
-            $skip = $true    # push-triggered auto-run: safe subset only
+            # Destructive battery ON — the runner is a disposable VM (exactly the
+            # "throwaway snapshot" the eval header requires), so run the full,
+            # aggressive set: LSASS dumping, ransomware canaries, Defender-disable,
+            # shadow-copy deletion, service-stop, account creation. This is where
+            # the impact / defense-evasion / credential-access rules get tested.
+            $skip = $false
           }
           try {
             # Root cause fixed: the scorer polled the FULL incidents endpoint
