@@ -102,8 +102,23 @@ jobs:
             Stop-Process -Id (Get-Content valkyrie.pid) -Force -ErrorAction SilentlyContinue
           }
 
+      - name: Print results to the run log (artifact-independent)
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "==================== TIER B TRANSCRIPT (tail) ===================="
+          if (Test-Path tierb_transcript.log) { Get-Content tierb_transcript.log -Tail 160 }
+          else { Write-Host "(no transcript — run step did not produce one)" }
+          Write-Host "==================== RESULTS JSON ===================="
+          $r = Get-ChildItem redteam/evaluation/results/*.json -ErrorAction SilentlyContinue
+          if ($r) { $r | ForEach-Object { Write-Host "----- $($_.Name) -----"; Get-Content $_.FullName } }
+          else { Write-Host "(no results json)" }
+          Write-Host "==================== VALKYRIE STDERR (tail) ===================="
+          if (Test-Path valkyrie_stderr.log) { Get-Content valkyrie_stderr.log -Tail 50 }
+
       - name: Upload Tier B evidence
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: tier-b-results

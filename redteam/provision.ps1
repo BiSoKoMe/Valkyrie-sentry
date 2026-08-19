@@ -68,9 +68,15 @@ Info "Script Block Logging enabled."
 if (-not $SkipAtomics) {
     Info "Installing Invoke-AtomicRedTeam (Red Canary) + atomics..."
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null
-    Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
-    Install-Module -Name Invoke-AtomicRedTeam -Scope CurrentUser -Force -ErrorAction Stop
+    # The classic NuGet package-provider bootstrap is flaky under PowerShell 7
+    # (it threw and aborted provisioning on the GitHub runner) and is NOT required
+    # there for Install-Module. Make it strictly best-effort; PSResourceGet /
+    # PowerShellGet in pwsh handles the download without it.
+    try {
+        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction Stop | Out-Null
+    } catch { Warn "NuGet provider bootstrap skipped (not needed on pwsh): $($_.Exception.Message)" }
+    try { Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction Stop } catch {}
+    Install-Module -Name Invoke-AtomicRedTeam -Scope CurrentUser -Force -AllowClobber -SkipPublisherCheck -ErrorAction Stop
     Import-Module Invoke-AtomicRedTeam -Force
     # Fetch the atomics content (the actual test definitions) next to the module.
     IEX (IWR "https://raw.githubusercontent.com/redcanaryco/invoke-atomicredteam/master/install-atomicredteam.ps1" -UseBasicParsing)
