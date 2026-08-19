@@ -183,11 +183,15 @@ function Get-FileEvidence([string[]]$WatchDirs) {
 # Incident helpers
 # ---------------------------------------------------------------------------
 function Get-Incidents {
-    try { return @(Invoke-CurlGet -Uri "$ApiBase/api/edr/incidents" -TimeoutSec 10) }
+    # brief=true -> the FAST incident list (raw rows, no per-incident impact
+    # assessment / explanation). The full view is O(incidents) and times out
+    # under polling — that is what scored every real detection as MISS. The
+    # brief view returns in well under the detect window.
+    try { return @(Invoke-CurlGet -Uri "$ApiBase/api/edr/incidents?brief=true" -TimeoutSec 30) }
     catch { return @() }
 }
 function Get-IncidentDetail([string]$id) {
-    try { return Invoke-CurlGet -Uri "$ApiBase/api/edr/incidents/$id" -TimeoutSec 10 }
+    try { return Invoke-CurlGet -Uri "$ApiBase/api/edr/incidents/$id" -TimeoutSec 20 }
     catch { return $null }
 }
 

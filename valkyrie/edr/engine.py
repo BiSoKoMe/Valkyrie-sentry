@@ -650,9 +650,18 @@ class EdrEngine:
     # Facade — incidents
     # ------------------------------------------------------------------
 
-    def list_incidents(self, status=None, severity=None, limit=100) -> list[dict]:
-        return [_inc_wire(i) for i in
-                self._edr.list_incidents(status=status, severity=severity, limit=limit)]
+    def list_incidents(self, status=None, severity=None, limit=100,
+                       brief=False) -> list[dict]:
+        incs = self._edr.list_incidents(status=status, severity=severity, limit=limit)
+        # brief: raw incident rows only (id/technique/severity/timestamps). Skips
+        # the per-incident _incident_explanation() + NIST impact assessment that
+        # make _inc_wire O(incidents) heavy — under live-eval polling the full
+        # view times out (the scorer's 10s poll returned empty and every real
+        # detection scored MISS). The scorer only needs technique + created_at to
+        # match and measure latency; the dashboard still gets the rich view.
+        if brief:
+            return [i.to_dict() for i in incs]
+        return [_inc_wire(i) for i in incs]
 
     def get_incident(self, inc_id: str) -> Optional[dict]:
         inc = self._edr.get_incident(inc_id)

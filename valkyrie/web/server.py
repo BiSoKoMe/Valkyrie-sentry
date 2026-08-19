@@ -993,7 +993,8 @@ def create_app(ctx: Optional[AppContext] = None):
 
     @app.get("/api/edr/incidents")
     async def edr_incidents(status: Optional[str] = None,
-                            severity: Optional[str] = None):
+                            severity: Optional[str] = None,
+                            brief: bool = False):
         if state.edr is None:
             return JSONResponse({"error": "EDR not enabled"}, status_code=503)
         # Off the event loop: list_incidents is a synchronous SQLite read (opens a
@@ -1002,7 +1003,8 @@ def create_app(ctx: Optional[AppContext] = None):
         # duration, which under eval/dashboard polling load is exactly how the
         # server declared ITSELF "web_dashboard unhealthy" in a tight loop.
         return await run_in_threadpool(
-            state.edr.list_incidents, status=status, severity=severity, limit=200)
+            state.edr.list_incidents, status=status, severity=severity,
+            limit=200, brief=brief)
 
     @app.get("/api/edr/metrics/mttd-mttr")
     async def edr_mttd_mttr():
