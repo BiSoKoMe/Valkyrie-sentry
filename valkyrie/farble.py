@@ -143,16 +143,40 @@ function mk(n){
 }
 function pick(r, arr){ return arr[Math.floor(r() * arr.length) % arr.length]; }
 
-/* Make a patched function indistinguishable from a native one. */
+/* Make a patched function indistinguishable from a native one.
+   A per-function OWN 'toString' is not enough on its own: a tracker checks for
+   hooks via Function.prototype.toString.call(fn) (or ('' + fn)) using the
+   ORIGINAL toString, which bypasses the own property and exposes our source --
+   and a detectable hook is itself a durable "this is a Valkyrie user"
+   fingerprint, the exact thing this module exists to remove. So we patch the
+   one real Function.prototype.toString to report native code for exactly the
+   functions we cloak (tracked in a WeakMap), and register the patch itself so
+   it cannot give itself away. Anything we do NOT cloak falls through to the
+   real source unchanged, so nothing a page legitimately relies on is altered. */
+var _cloaked = (function(){ try{ return new WeakMap(); }catch(e){ return null; } })();
+try{
+  if(_cloaked){
+    var _realFPTS = Function.prototype.toString;
+    var _fakeFPTS = function toString(){
+      try{ var nm = _cloaked.get(this);
+           if(nm !== undefined) return 'function ' + nm + '() { [native code] }'; }
+      catch(e){}
+      return _realFPTS.apply(this, arguments);
+    };
+    Function.prototype.toString = _fakeFPTS;
+    _cloaked.set(_fakeFPTS, 'toString');        /* the patch hides itself too */
+  }
+}catch(e){}
+
 function cloak(patched, original, name){
   try{
     Object.defineProperty(patched, 'name', {value: name, configurable: true});
     Object.defineProperty(patched, 'length',
       {value: original.length, configurable: true});
-    Object.defineProperty(patched, 'toString', {
+    if(_cloaked) _cloaked.set(patched, name);
+    else Object.defineProperty(patched, 'toString', {   /* fallback: own prop */
       value: function(){ return 'function ' + name + '() { [native code] }'; },
-      writable: true, configurable: true
-    });
+      writable: true, configurable: true });
   }catch(e){}
   return patched;
 }
@@ -217,6 +241,38 @@ try{
   }, _tb, 'toBlob');
 }catch(e){}
 
+/* ---- 1b. OffscreenCanvas -----------------------------------------------
+   The identical 2D-canvas fingerprint, one API over. OffscreenCanvas readback
+   is used precisely because it slips past on-screen canvas hooks; if we do not
+   perturb it too, it is a clean bypass of everything above. Same noise table,
+   so on-screen and offscreen readings of the same pixels stay consistent. */
+try{
+  if(typeof OffscreenCanvasRenderingContext2D !== 'undefined' &&
+     OffscreenCanvasRenderingContext2D.prototype.getImageData){
+    var _ogid = OffscreenCanvasRenderingContext2D.prototype.getImageData;
+    OffscreenCanvasRenderingContext2D.prototype.getImageData = cloak(function(){
+      var r = _ogid.apply(this, arguments);
+      try{ farbleImageData(r.data); }catch(e){}
+      return r;
+    }, _ogid, 'getImageData');
+  }
+}catch(e){}
+try{
+  if(typeof OffscreenCanvas !== 'undefined' && OffscreenCanvas.prototype.convertToBlob){
+    var _octb = OffscreenCanvas.prototype.convertToBlob;
+    OffscreenCanvas.prototype.convertToBlob = cloak(function(){
+      try{
+        var ctx = this.getContext('2d');
+        if(ctx && this.width && this.height){
+          var img = ctx.getImageData(0, 0, this.width, this.height);
+          ctx.putImageData(img, 0, 0);   /* already farbled by the hook above */
+        }
+      }catch(e){}
+      return _octb.apply(this, arguments);
+    }, _octb, 'convertToBlob');
+  }
+}catch(e){}
+
 /* ---- 2. WebGL ----------------------------------------------------------
    UNMASKED_VENDOR_WEBGL / UNMASKED_RENDERER_WEBGL are among the highest-
    entropy values a page can read. Report a real-looking pair, chosen per
@@ -240,6 +296,26 @@ function patchGL(proto){
       if(p === 37446) return GPU[1];   /* UNMASKED_RENDERER_WEBGL */
       return _gp.apply(this, arguments);
     }, _gp, 'getParameter');
+  }catch(e){}
+  /* WebGL-canvas fingerprinting reads the rendered pixels straight back with
+     readPixels -- a separate vector from 2D getImageData that the vendor spoof
+     above does nothing about. Perturb the byte readback with the SAME noise
+     table, so a GL fingerprint is broken exactly like the 2D one. Only 8-bit
+     views (the fingerprinting path) are touched; float/other readbacks used
+     for real GPGPU compute are left exact. */
+  try{
+    if(proto.readPixels){
+      var _rp = proto.readPixels;
+      proto.readPixels = cloak(function(x, y, w, h, fmt, type, pixels){
+        var ret = _rp.apply(this, arguments);
+        try{
+          if(pixels && (pixels instanceof Uint8Array ||
+                        pixels instanceof Uint8ClampedArray))
+            farbleImageData(pixels);
+        }catch(e){}
+        return ret;
+      }, _rp, 'readPixels');
+    }
   }catch(e){}
 }
 try{ patchGL(window.WebGLRenderingContext  && WebGLRenderingContext.prototype); }catch(e){}

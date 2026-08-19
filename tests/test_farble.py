@@ -117,6 +117,15 @@ def main() -> int:
             b"[native code]" in script)
     c.check("covers canvas readback", b"getImageData" in script)
     c.check("covers WebGL vendor/renderer", b"37445" in script and b"37446" in script)
+    c.check("covers WebGL readPixels (GL-canvas fingerprint, not just 2D)",
+            b"readPixels" in script)
+    c.check("covers OffscreenCanvas (the worker-free 2D-canvas bypass)",
+            b"OffscreenCanvas" in script and b"convertToBlob" in script)
+    # A hook detectable via Function.prototype.toString.call() is itself a
+    # durable fingerprint; the cloak must patch the SHARED toString (WeakMap),
+    # not only each function's own property, or ('' + fn) / FPT.call(fn) leak.
+    c.check("cloak hardens the shared Function.prototype.toString",
+            b"Function.prototype.toString" in script and b"WeakMap" in script)
     c.check("covers audio", b"getChannelData" in script)
     c.check("covers font metrics", b"measureText" in script)
     c.check("keeps the analytics no-ops", b"window.fbq" in script)
