@@ -127,6 +127,9 @@ def main() -> int:
     c.check("cloak hardens the shared Function.prototype.toString",
             b"Function.prototype.toString" in script and b"WeakMap" in script)
     c.check("covers audio", b"getChannelData" in script)
+    c.check("covers all audio readbacks (byte + time-domain, not just float freq)",
+            b"getByteFrequencyData" in script and b"getByteTimeDomainData" in script
+            and b"getFloatTimeDomainData" in script)
     c.check("covers font metrics", b"measureText" in script)
     c.check("keeps the analytics no-ops", b"window.fbq" in script)
     c.check("no unsubstituted template placeholder", b"%SEED%" not in script)

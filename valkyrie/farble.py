@@ -344,6 +344,35 @@ try{
     _gffd.apply(this, arguments); farbleFloats(a);
   }, _gffd, 'getFloatFrequencyData');
 }catch(e){}
+/* The same audio signal can be read back four other ways -- float/byte,
+   frequency/time-domain. Covering only getChannelData + getFloatFrequencyData
+   leaves those as clean bypasses, so perturb them all with the SAME per-origin
+   noise (a +/-1 byte, or 1e-7 float, is inaudible and unmeasurable in use). */
+function farbleBytes(arr){
+  try{ for(var k=0;k<arr.length;k++){
+    var d = AN[k & 511] > 0 ? 1 : (AN[k & 511] < 0 ? -1 : 0);
+    if(d){ var v = arr[k] + d; arr[k] = v < 0 ? 0 : (v > 255 ? 255 : v); }
+  } }catch(e){}
+  return arr;
+}
+try{
+  var _gftdd = AnalyserNode.prototype.getFloatTimeDomainData;
+  AnalyserNode.prototype.getFloatTimeDomainData = cloak(function(a){
+    _gftdd.apply(this, arguments); farbleFloats(a);
+  }, _gftdd, 'getFloatTimeDomainData');
+}catch(e){}
+try{
+  var _gbfd = AnalyserNode.prototype.getByteFrequencyData;
+  AnalyserNode.prototype.getByteFrequencyData = cloak(function(a){
+    _gbfd.apply(this, arguments); farbleBytes(a);
+  }, _gbfd, 'getByteFrequencyData');
+}catch(e){}
+try{
+  var _gbtdd = AnalyserNode.prototype.getByteTimeDomainData;
+  AnalyserNode.prototype.getByteTimeDomainData = cloak(function(a){
+    _gbtdd.apply(this, arguments); farbleBytes(a);
+  }, _gbtdd, 'getByteTimeDomainData');
+}catch(e){}
 
 /* ---- 4. Font metrics ---------------------------------------------------
    Font enumeration measures text width to millimetre precision to infer the
