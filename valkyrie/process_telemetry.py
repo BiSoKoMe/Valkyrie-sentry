@@ -205,6 +205,15 @@ _DISCOVERY_SOLO_BINS = {
     # label that FEEDS the recon-burst sequence; it never alerts alone, keeping
     # this name-based entry an honest supplement, not a standalone list-detector.
     "adfind.exe":     "T1087.002 — Account Discovery: Domain Account",
+    # Round-2 (Akira/Medusa probe): built-in AD / session / network enumerators
+    # every hands-on-keyboard intrusion reaches for. All read-only discovery, so
+    # solo-bin INFO labels that feed the recon-burst, never standalone alerts.
+    "dsquery.exe":    "T1087.002 — Account Discovery: Domain Account",
+    "dsget.exe":      "T1087.002 — Account Discovery: Domain Account",
+    "quser.exe":      "T1033 — System Owner/User Discovery",
+    "qwinsta.exe":    "T1033 — System Owner/User Discovery",
+    "arp.exe":        "T1016 — System Network Configuration Discovery",
+    "route.exe":      "T1016 — System Network Configuration Discovery",
 }
 
 # reg.exe / sc.exe (added alongside the solo bins above) are NOT solo bins:
@@ -267,6 +276,19 @@ def _discovery_cmdline_technique(n: str, candidates: tuple) -> str:
                        for v in _SC_MUTATING_VERBS)
         if query and not mutating:
             return "T1007 — System Service Discovery"
+    elif n in ("powershell.exe", "pwsh.exe"):
+        # RSAT ActiveDirectory-module recon cmdlets — the PowerShell equivalent
+        # of dsquery/adfind (APT29, ransomware crews). Read-only enumeration, so
+        # discovery labels that feed the recon-burst rather than alert alone.
+        if any("get-adcomputer" in c for c in candidates):
+            return "T1018 — Remote System Discovery"
+        if any(g in c for c in candidates for g in
+               ("get-aduser", "get-adgroup", "get-adgroupmember",
+                "get-adobject", "get-adprincipalgroupmembership")):
+            return "T1087.002 — Account Discovery: Domain Account"
+        if any(g in c for c in candidates
+               for g in ("get-addomain", "get-adtrust", "get-adforest")):
+            return "T1482 — Domain Trust Discovery"
     return ""
 
 

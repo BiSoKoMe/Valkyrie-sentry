@@ -58,6 +58,8 @@ TECHNIQUE_TACTIC: dict[str, str] = {
     "T1047":     "execution",            # WMI
     "T1053":     "persistence",          # Scheduled Task/Job
     "T1053.005": "persistence",          # Scheduled Task
+    "T1037":     "persistence",          # Boot or Logon Initialization Scripts
+    "T1037.001": "persistence",          # Logon Script (Windows)
     "T1543":     "persistence",          # Create/Modify System Process
     "T1543.003": "persistence",          # Windows Service
     "T1546.003": "persistence",          # WMI Event Subscription
@@ -116,6 +118,8 @@ TECHNIQUE_TACTIC: dict[str, str] = {
     "T1036.002": "defense-evasion",      # Right-to-Left Override
     "T1036.005": "defense-evasion",      # Match Legitimate Name or Location
     "T1036.007": "defense-evasion",      # Double File Extension
+    "T1222":     "defense-evasion",      # File/Directory Permissions Modification
+    "T1222.001": "defense-evasion",      # Windows File/Dir Permissions Mod
     "T1003":     "credential-access",    # OS Credential Dumping
     "T1003.001": "credential-access",    # LSASS Memory
     "T1003.002": "credential-access",    # Security Account Manager

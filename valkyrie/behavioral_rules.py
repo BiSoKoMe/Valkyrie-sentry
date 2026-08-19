@@ -187,7 +187,12 @@ RULES: tuple = (
          "defender_tamper", "Microsoft Defender protection disabled",
          cmd_any=("disablerealtimemonitoring", "set-mppreference -disable",
                   "sc stop windefend", "sc.exe stop windefend",
-                  "add-mppreference -exclusionpath")),
+                  "add-mppreference -exclusionpath",
+                  # Weakening expressed as "set value to the insecure number"
+                  # rather than a -Disable* flag: cloud protection off, never
+                  # submit samples. Generalizes past the -Disable vocabulary.
+                  "mapsreporting 0", "mapsreporting:0", "-mapsreporting 0",
+                  "submitsamplesconsent 2", "submitsamplesconsent:2")),
     Rule("amsi-bypass", "T1562.001 — Impair Defenses: AMSI", SEV_HIGH,
          "amsi_bypass", "In-memory AMSI bypass pattern",
          cmd_any=("amsiinitfailed", "amsiutils", "[ref].assembly.gettype('system.management.automation.amsi")),
@@ -589,11 +594,19 @@ RULES: tuple = (
     # Ordinary taskkill of a normal app never matches — the watched-name list is.
     Rule("kill-security-process", "T1562.001 — Impair Defenses: Kill Security Tool", SEV_HIGH,
          "defender_tamper", "A security product's process was force-killed",
-         cmd_any=("taskkill", "stop-process", "kill "),
-         cmd_any2=("msmpeng", "windefend", "securityhealthservice", "mssense", "sense.exe",
-                   "csfalcon", "csagent", "carbonblack", "cb.exe", "cylancesvc", "cyoptics",
-                   "sentinelagent", "sentinelone", "sophos", "mcshield", "avp.exe", "ekrn",
-                   "bdagent", "wrsa", "sysmon", "sysmon64", "procmon", "wireshark", "elastic-agent")),
+         # Kill MECHANISM is generalized: taskkill, PowerShell Stop-Process, WMI
+         # (process where … delete / call terminate), and the classic ntsd -c q /
+         # pskill / pssuspend — so switching the tool used to kill does not evade.
+         cmd_any=("taskkill", "stop-process", "kill ", "/im ", "process where",
+                  "call terminate", "process delete", "ntsd", "pskill",
+                  "pssuspend"),
+         cmd_any2=("msmpeng", "nissrv", "windefend", "securityhealthservice",
+                   "mssense", "sense.exe", "senseir", "sensecncproxy",
+                   "csfalcon", "csagent", "carbonblack", "cb.exe", "cylancesvc",
+                   "cyoptics", "sentinelagent", "sentinelone", "sophos",
+                   "savservice", "mcshield", "avp.exe", "ekrn", "bdagent",
+                   "bdservicehost", "wrsa", "xagt", "sysmon", "sysmon64",
+                   "procmon", "wireshark", "elastic-agent", "elastic-endpoint")),
     # Exfiltration: an HTTP client uploading a local file (-InFile / -Method Post
     # with a body file). A plain GET to fetch data (no upload) stays clear.
     Rule("exfil-http-upload", "T1041 — Exfiltration Over C2 Channel", SEV_HIGH,
@@ -863,13 +876,14 @@ RULES: tuple = (
          cmd_any2=("add", "setx", "set-itemproperty", "new-itemproperty",
                    "/d ", ".dll", "{", "clsid")),
     # Boot-configuration tamper that weakens code-integrity: enabling test-signing
-    # or disabling integrity checks lets unsigned/malicious drivers load; safeboot
-    # forces a minimal environment where AV/EDR services don't start.
+    # or disabling integrity checks lets unsigned/malicious drivers load. (safeboot
+    # is a DIFFERENT technique — see the safe-mode rule in the threat-informed
+    # block below — so it is deliberately NOT bundled here anymore.)
     Rule("bcdedit-boot-tamper", "T1553.006 — Code Signing Policy Modification (bcdedit)", SEV_HIGH,
-         "boot_tamper", "Boot config was altered to weaken code integrity / force safe mode",
+         "boot_tamper", "Boot config was altered to weaken code integrity",
          images=("bcdedit.exe",),
          cmd_any=("testsigning", "nointegritychecks", "disable_integrity_checks",
-                  "loadoptions", "safeboot")),
+                  "loadoptions")),
     # PowerShell v2 downgrade — v2 predates AMSI and Script-Block logging, so
     # `-version 2` is run specifically to execute unlogged, un-scanned script.
     Rule("powershell-v2-downgrade", "T1562.001 — Impair Defenses: PowerShell downgrade", SEV_MEDIUM,
@@ -1166,6 +1180,165 @@ RULES: tuple = (
          cmd_any2=("mega:", "b2:", "s3:", "drive:", "gdrive:", "dropbox:",
                    "remote:", "sftp:", "ftp:", "onedrive:", "pcloud:",
                    "--config", "--transfers", "--max-age")),
+
+    # From the Akira/Medusa/Snatch advisories (CISA AA24-109A, AA25-071A) +
+    # Huntress reporting, via a round-2 real-command probe.
+    #
+    # T1562.009 — reboot into Safe Mode so third-party AV/EDR services never
+    # start, then run the encryptor "blind." Snatch/AvosLocker pioneered it,
+    # Akira adopted it in 2025. `bcdedit ... safeboot` is the on-disk tell.
+    Rule("bcdedit-safe-mode-boot",
+         "T1562.009 — Impair Defenses: Safe Mode Boot", SEV_HIGH,
+         "safe_mode_boot",
+         "Boot configured for Safe Mode (starts the host without security services)",
+         images=("bcdedit.exe",),
+         cmd_any=("safeboot", "safebootalternateshell")),
+
+    # T1021.001 — enable inbound RDP by flipping fDenyTSConnections to 0 (Medusa
+    # and most hands-on-keyboard ransomware, to move laterally / re-enter). The
+    # /d 0 value is the enabling direction; disabling RDP writes 1, so this stays
+    # off legitimate "turn RDP off" administration. MEDIUM (admins do enable RDP).
+    Rule("rdp-enable-registry",
+         "T1021.001 — Remote Services: RDP (enabled via registry)", SEV_MEDIUM,
+         "rdp_enabled", "Inbound RDP enabled via the fDenyTSConnections registry value",
+         images=("reg.exe", "powershell.exe", "pwsh.exe"),
+         cmd_all=("fdenytsconnections",),
+         cmd_any=("/d 0", "value 0", "value:0", "-value 0", " 0 -force")),
+
+    # T1485 — SysInternals sdelete used to securely wipe (free space / recursive):
+    # anti-forensics and, on a share, destruction. sdelete is a legitimate tool,
+    # so MEDIUM and gated on the wipe flags (-z zero free space, -c clean, -s
+    # recurse, -p passes) rather than any invocation.
+    Rule("sdelete-secure-wipe",
+         "T1485 — Data Destruction (secure delete)", SEV_MEDIUM,
+         "secure_wipe", "Secure/overwrite deletion via sdelete",
+         images=("sdelete.exe", "sdelete64.exe"),
+         cmd_any=(" -z", " -c", " -s", " -p", "/z", "/s")),
+
+    # T1222.001 — mass take-ownership / ACL grant across a tree, the "make every
+    # file writable so the encryptor can touch it" step (and a way to lock the
+    # owner out). Recursive takeown, or icacls granting broad rights over a tree.
+    # MEDIUM: admins run these too, so it informs/sequences rather than blocks.
+    Rule("mass-acl-takeover",
+         "T1222.001 — File and Directory Permissions Modification", SEV_MEDIUM,
+         "mass_acl_change", "Recursive ownership/permission change over a file tree",
+         images=("takeown.exe", "icacls.exe"),
+         cmd_any=(" /r", "/grant"),
+         cmd_any2=(" /r", " /t", "everyone", ":f", "grant")),
+
+    # ── Adaptive-hardening: LSASS credential-theft behavioral class ──────────
+    # An adversarial variant sweep of "obtain lsass memory" (17 implementations)
+    # found 3 evasions with ONE root cause: the prior rules key on specific
+    # tools/verbs (procdump, -ma, comsvcs, artifact names), so a dump INTENT
+    # phrased with an un-enumerated vocabulary slipped. This generalizes the
+    # intent — LSASS as the named target AND any member of a broad memory-dump
+    # verb family, tool-agnostic. FP-safe by requiring BOTH: 'tasklist lsass'
+    # (no verb) and 'procdump -ma notepad' (no lsass) both stay clear. Novel
+    # tools that target lsass purely by PID with novel wording carry no cmdline
+    # tell and are caught at RUNTIME by the Sysmon EID10 ProcessAccess→lsass
+    # sensor (etw/sysmon.py) — the true tool-agnostic backstop for this class.
+    Rule("lsass-memory-dump-generic",
+         "T1003.001 — LSASS Memory (generic dump intent)", SEV_CRITICAL,
+         "lsass_dump", "A command expresses a memory dump targeting LSASS",
+         cmd_all=("lsass",),
+         cmd_any=("dump", "-ma ", "fullmemdmp", "comsvcs", "writeprocessmemory",
+                  "readprocessmemory", "minidumpwritedump", "createdump",
+                  "-w ", "procexp")),
+
+    # rdrleakdiag.exe (signed MS LOLBin) doing a FULL memory dump — its
+    # LOLBAS-documented abuse is dumping lsass BY PID, so its command line
+    # carries no 'lsass' string. Keyed on the tool + the full-dump flag: the
+    # behavioral tell the other rules cannot see.
+    Rule("rdrleakdiag-memory-dump",
+         "T1003.001 — LSASS Memory (rdrleakdiag full dump)", SEV_HIGH,
+         "lsass_dump", "rdrleakdiag full-memory dump (process-memory theft LOLBin)",
+         images=("rdrleakdiag.exe",),
+         cmd_any=("/fullmemdmp", "/memdmp", "fullmemdmp")),
+
+    # ── Adaptive-hardening: download-cradle behavioral class (T1105) ─────────
+    # A variant sweep of "fetch a remote payload" found 2 evasions with one root
+    # cause: the per-tool rules (certutil/bitsadmin/curl/…) key on tool NAME and
+    # a fixed verb set, so a RENAMED tool (cu.exe -urlcache) and a novel download
+    # METHOD (WebClient.DownloadData) slipped. This generalizes on the *shape*:
+    # a download METHOD (any of a broad family) AND an executable/script payload
+    # extension in the arguments — independent of the tool's name. FP-safe
+    # because it requires BOTH: fetching a .json/.html (no exe ext) and hashing
+    # a local a.exe ('certutil -hashfile', no download verb) both stay clear.
+    # A renamed curl/wget using only a bare '-o URL' carries no distinctive verb
+    # and is caught at RUNTIME by the network-connection layer (Sysmon EID3 /
+    # network_score) — the tool-agnostic backstop for this class.
+    Rule("remote-fetch-executable-generic",
+         "T1105 — Ingress Tool Transfer (generic download cradle)", SEV_HIGH,
+         "download_cradle",
+         "A download method fetched an executable/script payload (tool-agnostic)",
+         cmd_any=("urlcache", "-outfile", "downloadfile", "downloaddata",
+                  "downloadstring", "downloadfileasync", "openread",
+                  "/transfer ", "invoke-webrequest", "iwr ",
+                  "start-bitstransfer", "urldownloadtofile"),
+         # NB: '.js' is deliberately excluded — as a bare substring it collides
+         # with '.json' (a benign IWR target). '.jse'/'.wsf' keep JScript-family
+         # payload coverage without the false positive. (Caught by the benign
+         # 'Invoke-WebRequest ...releases.json' control — precision > recall.)
+         cmd_any2=(".exe", ".dll", ".ps1", ".psm1", ".scr", ".bat", ".cmd",
+                   ".hta", ".vbs", ".vbe", ".jse", ".wsf", ".msi",
+                   ".sct", ".jar")),
+
+    # ── Adaptive-hardening: impair-defenses class (T1562.001) ───────────────
+    # Disabling a security service via the REGISTRY (Start=4 = disabled) rather
+    # than 'sc config … start= disabled' — bypasses the string-based 'disabled'
+    # match. Generalized on the shape: a Services\<name> key + the Start value +
+    # 4, gated to the security-service family so ordinary service config is clear.
+    Rule("service-disable-registry-start",
+         "T1562.001 — Impair Defenses: Disable Service (registry Start=4)", SEV_HIGH,
+         "security_service_stop",
+         "A security service was disabled via its registry Start value (=4)",
+         images=("reg.exe", "powershell.exe", "pwsh.exe"),
+         cmd_all=("\\services\\", "start"),
+         cmd_any=_SECURITY_SERVICES,
+         cmd_any2=("/d 4", "/d 0x4", " 4 /f", "value 4", "-value 4",
+                   "start' -value 4", "start\" 4")),
+
+    # ── Adaptive-hardening: persistence class (T1547/T1037/T1546) ────────────
+    # The per-mechanism rules key on the `reg add` WRITE tool, so writing the
+    # same autostart value via PowerShell (Set-/New-ItemProperty) evaded. These
+    # generalize on the autostart LOCATION + any registry-write mechanism, so
+    # switching the writing tool no longer bypasses. 'reg query'/'Get-Item…'
+    # (reads) carry no write verb and stay clear.
+    Rule("persistence-runkey-generic",
+         "T1547.001 — Registry Run Keys / Startup (any write tool)", SEV_HIGH,
+         "persistence_runkey",
+         "A Run/RunOnce autostart key was written (tool-agnostic)",
+         cmd_all=("currentversion\\run",),
+         cmd_any=("reg add", "set-itemproperty", "new-itemproperty", "set-item ",
+                  "reg import")),
+    Rule("persistence-winlogon-generic",
+         "T1547.004 — Winlogon Helper (Shell/Userinit, any write tool)", SEV_HIGH,
+         "persistence_winlogon",
+         "Winlogon Shell/Userinit autostart modified (tool-agnostic)",
+         cmd_all=("\\winlogon",),
+         cmd_any=("reg add", "set-itemproperty", "new-itemproperty", "set-item "),
+         cmd_any2=("shell", "userinit", "taskman")),
+    Rule("persistence-logon-script",
+         "T1037.001 — Boot or Logon Init Scripts (logon script)", SEV_HIGH,
+         "persistence_logon_script",
+         "Logon-script persistence via UserInitMprLogonScript",
+         cmd_all=("userinitmprlogonscript",),
+         cmd_any=("reg add", "set-itemproperty", "new-itemproperty", "/d ",
+                  "-value")),
+    Rule("persistence-powershell-profile",
+         "T1546.013 — Event Triggered Execution: PowerShell Profile", SEV_HIGH,
+         "persistence_ps_profile",
+         "Persistence written into a PowerShell profile",
+         cmd_any=("add-content", "set-content", "out-file", "tee-object",
+                  ">>"),
+         cmd_any2=("$profile", "_profile.ps1", "windowspowershell\\profile")),
+    Rule("persistence-silent-process-exit",
+         "T1546.012 — Image File Execution Options (SilentProcessExit)", SEV_HIGH,
+         "persistence_ifeo",
+         "SilentProcessExit monitor-process persistence",
+         cmd_all=("silentprocessexit",),
+         cmd_any=("reg add", "set-itemproperty", "new-itemproperty",
+                  "monitorprocess", "/d ")),
 )
 
 

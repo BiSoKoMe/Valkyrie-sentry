@@ -25,6 +25,15 @@ on:
         description: "Skip the genuinely destructive atomics (Defender/firewall disable, shadow-copy delete, event-log clear, service stop, account create)"
         type: boolean
         default: true
+  # Auto-run when this evaluation setup itself changes on the working branch, so
+  # a live Tier B pass fires without needing the manual button (which GitHub only
+  # exposes once the workflow reaches the default branch). The push-triggered run
+  # ALWAYS skips destructive atomics — the safe subset — regardless of inputs.
+  push:
+    branches: [feat/efficacy-etw-coverage]
+    paths:
+      - ".github/workflows/redteam-tierb.yml"
+      - "redteam/**"
 
 jobs:
   tier-b:
@@ -50,7 +59,7 @@ jobs:
         shell: pwsh
         run: redteam\provision.ps1
 
-      - name: Start Valkyrie (loopback-only: no DNS/firewall/TLS interception)
+      - name: "Start Valkyrie (loopback-only: no DNS/firewall/TLS interception)"
         shell: pwsh
         run: |
           $p = Start-Process -FilePath python `
@@ -77,7 +86,11 @@ jobs:
       - name: Run Tier B (real Atomic Red Team against the real running agent)
         shell: pwsh
         run: |
-          $skip = "${{ inputs.skip_destructive }}" -eq "true"
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $skip = "${{ inputs.skip_destructive }}" -eq "true"
+          } else {
+            $skip = $true    # push-triggered auto-run: safe subset only
+          }
           redteam\evaluation\run_live_evaluation.ps1 -SkipDestructive:$skip *>&1 |
             Tee-Object -FilePath tierb_transcript.log
 
