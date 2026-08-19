@@ -96,8 +96,30 @@ jobs:
             $skip = $true    # push-triggered auto-run: safe subset only
           }
           try {
-            redteam\evaluation\run_live_evaluation.ps1 -SkipDestructive:$skip -ApiBase "http://127.0.0.1:8090" *>&1 |
-              Tee-Object -FilePath tierb_transcript.log
+            # === FAST PIPELINE DIAGNOSTIC (temporary) ===================
+            # The full battery returned 0/33 with the environment healthy
+            # (elevated, Sysmon running + readable). Localise WHERE the live
+            # pipeline goes dark: fire unmistakable attacks, then ask Valkyrie
+            # directly what it ingested and which sensors are alive.
+            "=== firing probe attacks ===" | Tee-Object tierb_transcript.log
+            cmd /c "whoami /priv > nul 2>&1"
+            cmd /c "systeminfo > nul 2>&1"
+            cmd /c "tasklist > nul 2>&1"
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v vlkdiag /d "c:\evil.exe" /f | Out-Null
+            powershell -NoProfile -EncodedCommand SQBFAFgAIAAnAGgAaQAnAA== 2>$null
+            cmd /c "certutil -urlcache -f http://127.0.0.1/none.exe none.exe > nul 2>&1"
+            Start-Sleep -Seconds 25
+            function Dump($u){ "==== $u ====" | Tee-Object tierb_transcript.log -Append
+              try { Invoke-RestMethod "http://127.0.0.1:8090$u" -TimeoutSec 8 | ConvertTo-Json -Depth 6 | Tee-Object tierb_transcript.log -Append }
+              catch { "ERR $($_.Exception.Message)" | Tee-Object tierb_transcript.log -Append } }
+            Dump "/api/telemetry/status"
+            Dump "/api/stats"
+            Dump "/api/events"
+            "==== valkyrie.log (tail 150) ====" | Tee-Object tierb_transcript.log -Append
+            $lg = Join-Path $env:ProgramData "Valkyrie\valkyrie.log"
+            if (Test-Path $lg) { Get-Content $lg -Tail 150 | Tee-Object tierb_transcript.log -Append }
+            else { "no log at $lg — dir listing:" | Tee-Object tierb_transcript.log -Append
+                   Get-ChildItem (Join-Path $env:ProgramData "Valkyrie") -Recurse -EA SilentlyContinue | Select-Object FullName | Tee-Object tierb_transcript.log -Append }
           } finally {
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
           }
