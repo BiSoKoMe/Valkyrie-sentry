@@ -6,9 +6,16 @@ per-technique polling is flaky. The database at rest is ground truth.
 
 Usage: python db_coverage.py <path-to-valkyrie.db>
 """
-# retrigger: cycle 4, stability read after best-of-night 18-tech run
+import re
 import sqlite3
 import sys
+
+# A technique field may hold ONE id ("T1059"), an id + label
+# ("T1059 — Command..."), or several ids joined ("T1003.001; T1055"). Extract
+# every real ATT&CK id and dedupe, so "T1059" and "T1059;" are not counted as
+# two distinct techniques (they were), and a multi-technique incident credits
+# BOTH techniques it actually detected instead of only the first token.
+_TID = re.compile(r"T\d{4}(?:\.\d{3})?")
 
 
 def main() -> None:
@@ -28,10 +35,12 @@ def main() -> None:
         return cols.index(name) if name in cols else None
 
     ti, si, tli = idx("technique"), idx("severity"), idx("title")
-    techs = sorted({
-        (r[ti] or "").split(" ")[0]
-        for r in rows if ti is not None and r[ti]
-    })
+    techs = set()
+    if ti is not None:
+        for r in rows:
+            if r[ti]:
+                techs.update(_TID.findall(str(r[ti])))
+    techs = sorted(techs)
     print("TOTAL INCIDENTS:", len(rows))
     print("DISTINCT ATT&CK TECHNIQUES DETECTED:", len(techs))
     for t in techs:
