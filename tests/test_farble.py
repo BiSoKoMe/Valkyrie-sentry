@@ -167,6 +167,41 @@ def main() -> int:
                 s_fb is not None)
         c.check("lxml path differs per origin", s_fb is not None and s_fb != s_gg)
 
+    # ── EXECUTION-BASED: attack the farbled surfaces for real ───────────────
+    # The checks above prove the hooks EXIST (string presence). This proves they
+    # WORK: run the injected script in a mock browser (Node) and attack it like a
+    # real fingerprinting/anti-tamper probe would — every hook must be
+    # undetectable via Function.prototype.toString / '' + fn / String(fn), canvas
+    # /WebGL/OffscreenCanvas/audio readbacks must be perturbed, and normal code
+    # must NOT be made to look fake (overreach guard). Skips cleanly if Node is
+    # absent, exactly like the lxml path above.
+    print("\n[9] execution-based: the farbling actually defeats the attack")
+    import shutil
+    import subprocess
+    import tempfile
+    node = shutil.which("node")
+    harness = Path(__file__).resolve().parent / "farble_attack.js"
+    if node is None:
+        c.skip("execution-based attack", "node not installed on this host")
+    elif not harness.exists():
+        c.skip("execution-based attack", "farble_attack.js missing")
+    else:
+        tmp = tempfile.NamedTemporaryFile("wb", suffix=".html", delete=False)
+        try:
+            tmp.write(farble.script_for("https://attack-test.example"))
+            tmp.close()
+            proc = subprocess.run([node, str(harness), tmp.name],
+                                  capture_output=True, text=True, timeout=60)
+            print(proc.stdout.rstrip())
+            c.check("every simulated fingerprint attack is defeated (node)",
+                    proc.returncode == 0)
+        finally:
+            try:
+                import os as _os
+                _os.unlink(tmp.name)
+            except OSError:
+                pass
+
     return c.finish()
 
 
