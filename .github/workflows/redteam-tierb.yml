@@ -110,6 +110,18 @@ jobs:
             # scorer polls it. Run the real battery and read the true number.
             redteam\evaluation\run_live_evaluation.ps1 -SkipDestructive:$skip -ApiBase "http://127.0.0.1:8090" -DetectWindowSeconds 12 *>&1 |
               Tee-Object -FilePath tierb_transcript.log
+            # Coverage varies 5-18 techs across identical battery runs. Hypothesis:
+            # SensorManager's bounded-backpressure queue (etw/framework.py, deque
+            # maxlen, deliberately drops the OLDEST event under overload rather than
+            # growing unbounded) is dropping real events during the burst of near-
+            # simultaneous destructive atomics. The drop counters already exist and
+            # are already exposed at /api/sensors/status — just read them, once,
+            # before stopping, for direct evidence instead of inferring from variance.
+            "==== /api/sensors/status (backpressure/dedup drop evidence) ====" | Tee-Object tierb_transcript.log -Append
+            try {
+              $ss = Invoke-RestMethod "http://127.0.0.1:8090/api/sensors/status" -TimeoutSec 30
+              ($ss | ConvertTo-Json -Depth 6) | Tee-Object tierb_transcript.log -Append
+            } catch { "ERR sensors/status: $($_.Exception.Message)" | Tee-Object tierb_transcript.log -Append }
             # Coverage is read AFTER Valkyrie stops, straight from the SQLite
             # incident store (the 'Authoritative coverage' step below). The live
             # API is unreliable under battery load — even the brief read times
