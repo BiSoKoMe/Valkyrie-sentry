@@ -103,7 +103,7 @@ jobs:
             # so under load every poll returned empty and every real detection
             # scored MISS. The engine now serves a brief=true fast path and the
             # scorer polls it. Run the real battery and read the true number.
-            redteam\evaluation\run_live_evaluation.ps1 -SkipDestructive:$skip -ApiBase "http://127.0.0.1:8090" -DetectWindowSeconds 45 *>&1 |
+            redteam\evaluation\run_live_evaluation.ps1 -SkipDestructive:$skip -ApiBase "http://127.0.0.1:8090" -DetectWindowSeconds 18 *>&1 |
               Tee-Object -FilePath tierb_transcript.log
           } finally {
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
