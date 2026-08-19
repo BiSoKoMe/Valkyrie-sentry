@@ -105,21 +105,11 @@ jobs:
             # scorer polls it. Run the real battery and read the true number.
             redteam\evaluation\run_live_evaluation.ps1 -SkipDestructive:$skip -ApiBase "http://127.0.0.1:8090" -DetectWindowSeconds 12 *>&1 |
               Tee-Object -FilePath tierb_transcript.log
-            # AUTHORITATIVE coverage. The per-technique poll races a load-slowed
-            # API and scores flakily (6 detects one run, 1 the next). The incident
-            # STORE is ground truth: after the whole battery, read it ONCE,
-            # patiently, and count the distinct ATT&CK techniques that raised an
-            # incident. This is the trustworthy number, decoupled from polling.
-            "==== AUTHORITATIVE incident coverage (read once, post-battery) ====" | Tee-Object tierb_transcript.log -Append
-            try {
-              $all = Invoke-RestMethod "http://127.0.0.1:8090/api/edr/incidents?brief=true" -TimeoutSec 150
-              ("TOTAL INCIDENTS: " + (@($all).Count)) | Tee-Object tierb_transcript.log -Append
-              $techs = @($all) | ForEach-Object { $_.technique } | Where-Object { $_ } | ForEach-Object { ($_ -split ' ')[0] } | Sort-Object -Unique
-              ("DISTINCT ATT&CK TECHNIQUES DETECTED: " + (@($techs).Count)) | Tee-Object tierb_transcript.log -Append
-              @($techs) | ForEach-Object { "  DETECTED-TECH: $_" } | Tee-Object tierb_transcript.log -Append
-              "---- incident titles (what fired) ----" | Tee-Object tierb_transcript.log -Append
-              @($all) | ForEach-Object { "  * [" + $_.severity + "] " + $_.technique + " :: " + $_.title } | Select-Object -First 60 | Tee-Object tierb_transcript.log -Append
-            } catch { "ERR authoritative read: $($_.Exception.Message)" | Tee-Object tierb_transcript.log -Append }
+            # Coverage is read AFTER Valkyrie stops, straight from the SQLite
+            # incident store (the 'Authoritative coverage' step below). The live
+            # API is unreliable under battery load — even the brief read times
+            # out while the engine drains its ingestion backlog — so we do not
+            # ask the API at all; we read ground truth from the DB at rest.
           } finally {
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
           }
@@ -131,6 +121,18 @@ jobs:
           if (Test-Path valkyrie.pid) {
             Stop-Process -Id (Get-Content valkyrie.pid) -Force -ErrorAction SilentlyContinue
           }
+
+      - name: Authoritative coverage (read incident DB at rest)
+        if: always()
+        shell: pwsh
+        run: |
+          Start-Sleep -Seconds 6   # let the stopped engine's SQLite settle
+          $db = Get-ChildItem -Path "D:\a" -Recurse -Filter valkyrie.db -EA SilentlyContinue |
+                Select-Object -First 1
+          if (-not $db) { Write-Host "NO valkyrie.db found under D:\a"; exit 0 }
+          Write-Host ("DB: " + $db.FullName)
+          Write-Host "==================== AUTHORITATIVE LIVE COVERAGE ===================="
+          python redteam\evaluation\db_coverage.py $db.FullName
 
       - name: Print results to the run log (artifact-independent)
         if: always()
