@@ -121,8 +121,15 @@ jobs:
           $r = Get-ChildItem redteam/evaluation/results/*.json -ErrorAction SilentlyContinue
           if ($r) { $r | ForEach-Object { Write-Host "----- $($_.Name) -----"; Get-Content $_.FullName } }
           else { Write-Host "(no results json)" }
+          Write-Host "==================== VALKYRIE STDOUT (sensor init) ===================="
+          if (Test-Path valkyrie_stdout.log) { Get-Content valkyrie_stdout.log }
+          else { Write-Host "(no stdout)" }
           Write-Host "==================== VALKYRIE STDERR (tail) ===================="
-          if (Test-Path valkyrie_stderr.log) { Get-Content valkyrie_stderr.log -Tail 50 }
+          if (Test-Path valkyrie_stderr.log) { Get-Content valkyrie_stderr.log -Tail 60 }
+          Write-Host "==================== SENSOR / INTEGRITY PROBE ===================="
+          Write-Host ("elevated=" + ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator))
+          try { $s = Get-Service Sysmon64 -ErrorAction Stop; Write-Host ("Sysmon64 service: " + $s.Status) } catch { try { $s = Get-Service Sysmon -ErrorAction Stop; Write-Host ("Sysmon service: " + $s.Status) } catch { Write-Host "Sysmon service: NOT FOUND" } }
+          try { $n = (Get-WinEvent -LogName 'Microsoft-Windows-Sysmon/Operational' -MaxEvents 1 -ErrorAction Stop); Write-Host ("Sysmon log readable: YES (latest EID " + $n.Id + ")") } catch { Write-Host ("Sysmon log readable: NO -- " + $_.Exception.Message) }
 
       - name: Upload Tier B evidence
         if: always()
