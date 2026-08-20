@@ -85,7 +85,11 @@ $VettedAtomics = @{
     "exec-regsvr32-squiblydoo"  = @{ Attack = "T1218.010"; Tests = "1" }
     "cred-lsass-comsvcs"        = @{ Attack = "T1003.001"; Tests = "3" }
     "cred-lsass-procdump"       = @{ Attack = "T1003.001"; Tests = "1" }
-    "evasion-defender-disable"  = @{ Attack = "T1562.001"; Tests = "1"; Destructive = $true }
+    # evasion-defender-disable: intentionally NOT mapped to an ART atomic. The
+    # T1562.001 atomic yaml is missing on the GitHub runner image (errored every
+    # run), so fall through to the literal Set-MpPreference command line from the
+    # catalog probe instead — which fires the defender_tamper rule (verified via
+    # match_process). Real detection, no dependency on a missing atomic file.
     "impact-shadow-delete"      = @{ Attack = "T1490";     Tests = "1"; Destructive = $true }
     "disc-whoami-priv"          = @{ Attack = "T1033";     Tests = "1" }
     # evasion-process-injection intentionally NOT delegated to ART -- Test #1

