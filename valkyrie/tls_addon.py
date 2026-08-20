@@ -37,7 +37,7 @@ from .config import (
     TRACKING_QUERY_PARAMS,
     TRACKING_SCRIPT_DOMAINS,
 )
-from . import farble
+from . import farble, nyx
 from .store import DnsEvent, Store
 
 # 1x1 transparent PNG — returned for suppressed tracking pixels
@@ -274,9 +274,33 @@ class ValkyrieAddon:
                              category="exfil")
                 return
 
+        # 8.5 Nyx — SEE & REPORT (observe-only). Read the raw request and note
+        # any personal data (device ID, location, contact, fingerprint bundle)
+        # crossing to a third party. This never touches the flow and never
+        # blocks — it only records what left, so the user can be told. Blocking
+        # or lying on outbound theft is a deliberate later slice.
+        self._nyx_observe(flow, domain, url, proc)
+
         # 9. Allowed — strip tracking params and log
         self._strip_params(flow)
         self._log(domain, url, proc, "allowed", "", category="https")
+
+    def _nyx_observe(self, flow, domain: str, url: str, proc: str) -> None:
+        """Log Nyx's outbound-data observations. Fully guarded: a parser bug
+        here must never break browsing nor derail the request pipeline."""
+        try:
+            req = flow.request
+            observations = nyx.inspect_outbound(
+                method=req.method,
+                url=url,
+                headers=dict(req.headers),
+                body=req.raw_content or b"",
+            )
+            for ob in observations:
+                self._log(domain, url, proc, "flagged", ob.sentence,
+                          category="nyx_leak")
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Response processors

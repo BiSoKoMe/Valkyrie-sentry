@@ -213,6 +213,49 @@ def _build_components() -> dict:
             "components": reg.snapshot()}
 
 
+# Request verdicts that count as "a tracker was stopped" for Nyx's defended
+# tally — the acted-on outcomes already produced by the addon/DNS pipeline.
+_NYX_BLOCK_CATS = {
+    "blocked", "tracker_pixel", "tracker_js", "fingerprint",
+    "threat_intel_url", "behavioral", "rule_block", "exfil",
+}
+
+
+def _build_nyx() -> dict:
+    """Roll up Nyx's report from the event store: the personal-data leaks it
+    SAW crossing to third parties (observe-only), plus the defenses that
+    already ACTED (pages cleaned, trackers blocked, beacons fed fake data)."""
+    store  = state.store
+    events = store.recent_events(limit=1000)
+
+    leaks: list[dict] = []
+    defended = {"pages_cleaned": 0, "trackers_blocked": 0, "fake_data_served": 0}
+    for e in events:
+        rc  = e.get("raw_category", "") or ""
+        dec = e.get("decision", "") or ""
+        if rc == "nyx_leak":
+            leaks.append({
+                "when":     e.get("timestamp", ""),
+                "host":     e.get("domain", ""),
+                "sentence": e.get("reason", ""),
+            })
+        elif rc == "page_clean":
+            defended["pages_cleaned"] += 1
+        elif dec == "deceived":
+            defended["fake_data_served"] += 1
+        elif dec in ("blocked", "behavioral") or rc in _NYX_BLOCK_CATS:
+            defended["trackers_blocked"] += 1
+
+    s = store.stats()
+    return {
+        "watched_24h": s.get("total_24h", 0),
+        "leak_count":  len(leaks),
+        "leaks":       leaks[:50],     # most recent first (recent_events is DESC)
+        "defended":    defended,
+        "observe_only": True,          # this slice reports; it does not yet act on leaks
+    }
+
+
 def _build_stats() -> dict:
     from ..service_manager import is_running_as_service
 
@@ -469,6 +512,14 @@ def create_app(ctx: Optional[AppContext] = None):
         return await _cached(
             "events", lambda: _fmt_events(state.store.recent_events(limit=200)),
             TTL_EVENTS)
+
+    @app.get("/api/nyx")
+    async def get_nyx():
+        """Nyx's plain-language report: what personal data it saw leaving to
+        third parties (observe-only), plus the defenses that already fired."""
+        if state.store is None:
+            return JSONResponse({"error": "store not ready"}, status_code=503)
+        return await _cached("nyx", _build_nyx, TTL_EVENTS)
 
     @app.get("/api/telemetry/status")
     async def telemetry_status():
