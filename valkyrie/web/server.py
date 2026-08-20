@@ -260,15 +260,27 @@ def _build_nyx() -> dict:
     except ImportError:
         acting = False
 
+    # Correlation brain: connect a tracker's sightings across sites, channels and
+    # hostnames so the report can show WHO is following you and how far they reach.
+    try:
+        from ..nyx_graph import build_from_events
+        graph = build_from_events(events)
+        trackers = graph.top_trackers(8)
+        tracker_summary = graph.summary()
+    except Exception:
+        trackers, tracker_summary = [], {}
+
     s = store.stats()
     return {
-        "watched_24h": s.get("total_24h", 0),
-        "mode":        "acting" if acting else "watching",
-        "leak_count":  len(leaks),
-        "leaks":       leaks[:50],     # most recent first (recent_events is DESC)
-        "fake_count":  len(faked),
-        "faked":       faked[:50],     # leaks Nyx actively fed fake data to
-        "defended":    defended,
+        "watched_24h":     s.get("total_24h", 0),
+        "mode":            "acting" if acting else "watching",
+        "leak_count":      len(leaks),
+        "leaks":           leaks[:50],   # most recent first (recent_events is DESC)
+        "fake_count":      len(faked),
+        "faked":           faked[:50],   # leaks Nyx actively fed fake data to
+        "defended":        defended,
+        "trackers":        trackers,        # top trackers by cross-site reach
+        "tracker_summary": tracker_summary,
     }
 
 

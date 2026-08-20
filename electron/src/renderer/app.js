@@ -469,7 +469,9 @@ PAGES.nyx = {
         ${statCard('nyx_blocked', 'Trackers Stopped', 'shield', 'accent-green')}
       </div>
       ${sectionHead('What crossed to third parties', 'Each line is one thing Nyx caught leaving')}
-      <div class="feed" id="nyxFeed"><div class="empty">Waiting for Nyx…</div></div>`;
+      <div class="feed" id="nyxFeed"><div class="empty">Waiting for Nyx…</div></div>
+      ${sectionHead('Who is following you', 'Each tracker unmasked — how many of your sites it rides, and how many disguises it wears')}
+      <div class="feed" id="nyxTrackers"><div class="empty">Correlating…</div></div>`;
   },
   interval: 3000,
   async poll() {
@@ -487,6 +489,28 @@ PAGES.nyx = {
     if (modeEl) modeEl.textContent = !up ? '' : (acting
       ? 'Nyx is ACTIVE — feeding trackers fake data, not just watching.'
       : 'Nyx is watching and reporting — it never changes your traffic, so it can’t break a page.');
+
+    // The correlation brain: who is following you, unmasked.
+    const tb = $('nyxTrackers');
+    if (tb) {
+      const trk = (up && d.trackers) ? d.trackers : [];
+      if (!trk.length) {
+        tb.innerHTML = stateBlock('empty', 'No trackers correlated yet',
+          'As you browse, Nyx links each tracker across your sites here.');
+      } else {
+        tb.innerHTML = '';
+        trk.forEach((t) => {
+          const cats = (t.categories || []).join(', ');
+          const meta = `across ${t.reach} of your site${t.reach === 1 ? '' : 's'} · `
+            + `${t.masks} mask${t.masks === 1 ? '' : 's'}`
+            + (t.cross_channel ? ' · many surfaces' : '')
+            + (cats ? ' · wants your ' + cats : '');
+          tb.appendChild(el('div', 'feed-row',
+            `<span class="fdot ${t.cross_channel ? 'flag' : 'allow'}"></span><span class="fname">${escapeHtml(t.tracker)}</span>
+             <span class="fmeta">${escapeHtml(meta)}</span>`));
+        });
+      }
+    }
 
     if (!up) {
       feed.innerHTML = stateBlock('offline', 'Nyx is offline',
