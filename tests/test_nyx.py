@@ -33,7 +33,7 @@ def _cats(obs):
 
 
 def main() -> int:
-    c = Checks("nyx", expect_min=31)
+    c = Checks("nyx", expect_min=33)
 
     # ── IT MUST SEE: each category, crossing to a third party ────────────────
     print("\n[1] sees personal data leaving to a THIRD party")
@@ -60,6 +60,9 @@ def main() -> int:
 
     card = nyx.inspect_outbound("POST", THIRD, HDR, b"cc=4111111111111111")
     c.check("payment card (Luhn-valid) caught", nyx.CAT_FINANCIAL in _cats(card))
+
+    cook = nyx.inspect_outbound("GET", THIRD, {"Referer": FP, "Cookie": "id=a1b2c3d4e5f6g7h8i9j0"})
+    c.check("persistent third-party tracking cookie caught", nyx.CAT_COOKIE in _cats(cook))
 
     # Same signals also readable from a JSON body and from the URL query.
     js = nyx.inspect_outbound(
@@ -101,6 +104,11 @@ def main() -> int:
     non_luhn = nyx.inspect_outbound("POST", THIRD, HDR, b"session=1234567890123456")
     c.check("a non-Luhn 16-digit id is NOT flagged as a card",
             nyx.CAT_FINANCIAL not in _cats(non_luhn))
+
+    # A short functional cookie is not a tracking id.
+    func_cook = nyx.inspect_outbound("GET", THIRD, {"Referer": FP, "Cookie": "lang=en; theme=dark; s=1"})
+    c.check("a short functional cookie is NOT flagged as tracking",
+            nyx.CAT_COOKIE not in _cats(func_cook))
 
     # ── The report is human and does not leak the raw value ──────────────────
     print("\n[3] the observation is human-readable and never stores the raw value")

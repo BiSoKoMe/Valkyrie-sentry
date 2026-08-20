@@ -47,6 +47,7 @@ CAT_LOCATION    = "location"       # GPS / coarse geo coordinates
 CAT_CONTACT     = "contact"        # email / phone number
 CAT_FINGERPRINT = "fingerprint"    # a bundle of device-fingerprint surfaces
 CAT_FINANCIAL   = "financial"      # a payment-card number (Luhn-valid)
+CAT_COOKIE      = "cookie"         # a persistent third-party tracking cookie
 
 # Human label per category — used to build the sentence the user reads.
 _LABEL = {
@@ -55,7 +56,27 @@ _LABEL = {
     CAT_CONTACT:     "contact details",
     CAT_FINGERPRINT: "browser fingerprint",
     CAT_FINANCIAL:   "payment card",
+    CAT_COOKIE:      "tracking cookie",
 }
+
+
+def _tracking_cookie(headers_lower: dict) -> bool:
+    """True if the request carries a persistent, high-entropy cookie value — the
+    shape of a cross-site tracking id, not a short functional flag. Only ever
+    consulted on THIRD-party requests (see the gate in inspect_outbound), where
+    a durable id cookie is the oldest tracking trick there is."""
+    ck = headers_lower.get("cookie", "")
+    if not ck:
+        return False
+    for part in ck.split(";"):
+        _, _, val = part.strip().partition("=")
+        val = val.strip()
+        if len(val) < 16 or not re.fullmatch(r"[A-Za-z0-9_\-]+", val):
+            continue
+        mixed = any(c.isdigit() for c in val) and any(c.isalpha() for c in val)
+        if mixed or len(val) >= 24:      # entropy proxy: not a plain word/flag
+            return True
+    return False
 
 # ── data-shape signals (generalising, not a domain list) ────────────────────
 _ID_KEY = re.compile(
@@ -317,6 +338,12 @@ def inspect_outbound(method: str, url: str, headers=None, body=None,
     card = _find_card(blob)
     if card:
         add(CAT_FINANCIAL, card)
+
+    # 6) Persistent third-party tracking cookie — the oldest cross-site id.
+    #    Observe-only: NOT added to the act/rewrite path, because blanking a
+    #    third-party cookie can break a legitimately logged-in embed (SSO).
+    if _tracking_cookie(h):
+        add(CAT_COOKIE, "cross-site cookie")
 
     return out
 
