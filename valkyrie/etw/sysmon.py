@@ -50,8 +50,26 @@ _EVENT_IDS = (1, 3, 6, 7, 8, 10, 11, 12, 13, 25)
 _DRIVER_DROP_DIRS = ("\\appdata\\", "\\temp\\", "\\downloads\\",
                      "\\users\\public\\", "\\programdata\\", "\\$recycle")
 
-# LSASS-read access masks that indicate credential dumping (Mimikatz-style).
+# Known LSASS-read access masks that indicate credential dumping (Mimikatz-
+# style) — a fast path of the common values, NOT the only signal (see below).
 _LSASS_READ_MASKS = {"0x1010", "0x1410", "0x1438", "0x143a", "0x1fffff", "0x1010h"}
+
+# The one access right EVERY lsass memory read needs, whatever the tool: reading
+# another process's memory requires PROCESS_VM_READ (0x10). Keying on this BIT
+# generalises past the fixed list above — a novel dumper with an unseen mask
+# (0x1018, 0x0410, custom syscall combos) is still caught as long as it opened
+# lsass to READ it — while a benign query-only open (e.g. 0x1000
+# QUERY_LIMITED_INFORMATION, no VM_READ) does NOT fire, which is the FP boundary.
+_PROCESS_VM_READ = 0x10
+
+
+def _mask_reads_memory(granted: str) -> bool:
+    """True if a GrantedAccess mask includes PROCESS_VM_READ — i.e. it can read
+    the target's memory. Robust to the '0x' prefix and Sysmon's trailing 'h'."""
+    try:
+        return bool(int(granted.strip().rstrip("h"), 16) & _PROCESS_VM_READ)
+    except (ValueError, TypeError, AttributeError):
+        return False
 
 
 def parse_hashes(s: str) -> dict:
@@ -322,7 +340,12 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
         if target != "lsass.exe":
             return None
         granted = (d.get("GrantedAccess", "") or "").lower()
-        sev = SEV_HIGH if granted in _LSASS_READ_MASKS else SEV_MEDIUM
+        # Generalised: HIGH when the mask is a known dump mask OR simply includes
+        # PROCESS_VM_READ (reads lsass memory) — so an unseen variant is caught,
+        # not just the six enumerated masks. Query-only opens stay MEDIUM.
+        sev = (SEV_HIGH if (granted in _LSASS_READ_MASKS
+                            or _mask_reads_memory(granted))
+               else SEV_MEDIUM)
         return {
             "category": CAT_PROCESS, "activity": "process_access",
             "actor_pid": int(d.get("SourceProcessId", 0) or 0),
