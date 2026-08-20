@@ -45,6 +45,44 @@ def main() -> None:
     print("DISTINCT ATT&CK TECHNIQUES DETECTED:", len(techs))
     for t in techs:
         print("  DETECTED-TECH:", t)
+
+    # ---- AIMED miss list: diff the detected set against the technique catalog
+    # so every run turns "we caught N" into "here are the exact techniques that
+    # missed, and what the catalog PREDICTED for each." A miss whose prediction
+    # is DETECT is a measurement/harness gap (the code is believed correct); a
+    # MISS/CONDITIONAL prediction is a known rule gap. That distinction is what
+    # makes the next strike aimed instead of sprayed.
+    try:
+        import os
+        _here = os.path.dirname(os.path.abspath(__file__))
+        if _here not in sys.path:
+            sys.path.insert(0, _here)
+        import catalog as _cat
+        from catalog import Technique as _Tech
+        in_scope = {}
+        for _nm in dir(_cat):
+            _v = getattr(_cat, _nm)
+            if isinstance(_v, list) and _v and all(isinstance(x, _Tech) for x in _v):
+                for _t in _v:
+                    if _t.in_scope():
+                        in_scope.setdefault(_t.technique_id, _t)
+        det = set(techs)
+        _base = lambda x: x.split(".")[0]
+        # A catalog sub-technique counts as covered when its exact id OR its base
+        # (a coarser incident tag, e.g. "T1059" for "T1059.001") was detected.
+        covered = lambda tid: tid in det or _base(tid) in det
+        ids = sorted(in_scope)
+        missed = [i for i in ids if not covered(i)]
+        print("---- AIMED COVERAGE vs CATALOG ----")
+        print("IN-SCOPE: %d   DETECTED: %d   MISSED: %d"
+              % (len(ids), len(ids) - len(missed), len(missed)))
+        for tid in missed:
+            t = in_scope[tid]
+            print("  MISS  %-11s [%-11s] %-18s %s"
+                  % (tid, t.predicted_tier_b, t.tactic, t.technique_name[:44]))
+    except Exception as e:
+        print("(aimed miss list unavailable: %s)" % e)
+
     print("---- incidents (first 80) ----")
     for r in rows[:80]:
         sev = r[si] if si is not None else "?"
