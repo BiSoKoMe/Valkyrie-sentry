@@ -33,7 +33,7 @@ def _cats(obs):
 
 
 def main() -> int:
-    c = Checks("nyx", expect_min=34)
+    c = Checks("nyx", expect_min=37)
 
     # ── IT MUST SEE: each category, crossing to a third party ────────────────
     print("\n[1] sees personal data leaving to a THIRD party")
@@ -258,6 +258,16 @@ def main() -> int:
                 any(getattr(e, "raw_category", "") == "nyx_leak" for e in addon2.store.events))
     finally:
         _cfg.NYX_ACT = _saved
+
+    # ── self-test: the live demo runs the whole pipeline end to end ─────────
+    print("\n[7] self-test runs the whole guard on synthetic leaks")
+    st = nyx.self_test()
+    c.check("self-test catches every synthetic leak",
+            st["caught"] == st["total"] and st["total"] >= 5)
+    c.check("self-test fakes the actionable categories", st["faked"] >= 4)
+    c.check("self-test shows the card actually changing (before != after)",
+            any(r["case"] == "payment card" and r["before"] != r["after"]
+                for r in st["cases"]))
 
     return c.finish()
 

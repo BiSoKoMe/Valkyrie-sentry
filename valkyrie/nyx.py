@@ -550,3 +550,47 @@ def fake_outbound(method, url, headers=None, body=None, persona=None,
         else:
             new_body = _apply_repl(str(body), repl)
     return new_url, new_body, faked
+
+
+# ── SELF-TEST: prove the guard live, on demand ──────────────────────────────
+def self_test() -> dict:
+    """Run a fixed set of SYNTHETIC third-party leaks through the real observe +
+    act pipeline and report what Nyx caught and what it faked. Uses only made-up
+    values (a test card, a fake email), so it is safe to expose as a live demo /
+    health check — it proves the data guard works without needing a real tracker
+    to show up. This is the 'watch it happen' button."""
+    fp = "https://demo.example/"
+    third = "https://tracker.example/collect"
+    hdr = {"Referer": fp, "Content-Type": "application/x-www-form-urlencoded"}
+    cases = [
+        ("device ID",     b"adid=550e8400-e29b-41d4-a716-446655440000&n=1"),
+        ("location",      b"latitude=40.7128&longitude=-74.0060"),
+        ("email",         b"e=alice%40example.com"),
+        ("payment card",  b"cc=4242424242424242"),
+        ("fingerprint",   b"screen=2560x1440&timezone=America/New_York&lang=en-US&cores=16"),
+    ]
+    try:
+        from .persona import current_persona
+        persona = current_persona()
+    except Exception:
+        persona = None
+
+    out = []
+    for name, body in cases:
+        obs = inspect_outbound("POST", third, hdr, body)
+        _u, faked_body, faked = fake_outbound("POST", third, hdr, body, persona)
+        after = (faked_body.decode("utf-8", "replace")
+                 if isinstance(faked_body, bytes) else str(faked_body))
+        out.append({
+            "case":   name,
+            "caught": len(obs) > 0,
+            "faked":  bool(faked),
+            "before": body.decode("utf-8", "replace"),
+            "after":  after,
+        })
+    return {
+        "cases":  out,
+        "caught": sum(1 for r in out if r["caught"]),
+        "faked":  sum(1 for r in out if r["faked"]),
+        "total":  len(out),
+    }

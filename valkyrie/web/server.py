@@ -549,6 +549,13 @@ def create_app(ctx: Optional[AppContext] = None):
             return JSONResponse({"error": "store not ready"}, status_code=503)
         return await _cached("nyx", _build_nyx, TTL_EVENTS)
 
+    @app.get("/api/nyx/self-test")
+    async def nyx_self_test():
+        """Run Nyx's data guard against synthetic leaks and return what it caught
+        and faked — the live 'watch it happen' demo, no real tracker needed."""
+        from ..nyx import self_test
+        return self_test()
+
     @app.get("/api/telemetry/status")
     async def telemetry_status():
         from ..telemetry_killer import TelemetryKiller
