@@ -20,7 +20,7 @@ from valkyrie import nyx_graph
 
 
 def main() -> int:
-    c = Checks("nyx_graph", expect_min=14)
+    c = Checks("nyx_graph", expect_min=18)
 
     # ── correlation by registrable domain ───────────────────────────────────
     print("\n[1] one tracker, many masks and sites, is recognised as ONE")
@@ -82,6 +82,20 @@ def main() -> int:
             rb and rb["cross_channel"] is True)
     c.check("benign/garbage rows are skipped, not crashed on",
             all(r["tracker"] != "self.example" for r in gb.top_trackers()))
+
+    # ── persistent memory: how long a tracker has been following you ────────
+    print("\n[6] memory — span between first and last sighting")
+    gt = nyx_graph.TrackerGraph()
+    gt.observe("t.tracker.example", first_party="a.example", channel="data-leak",
+               ts="2026-08-18T10:00:00")
+    gt.observe("t.tracker.example", first_party="b.example", channel="data-leak",
+               ts="2026-08-20T10:00:00")
+    rowt = gt.top_trackers()[0]
+    c.check("first_seen is the earliest sighting", rowt["first_seen"] == "2026-08-18T10:00:00")
+    c.check("last_seen is the latest sighting", rowt["last_seen"] == "2026-08-20T10:00:00")
+    c.check("span is ~48 hours", 47.0 <= rowt["span_hours"] <= 49.0)
+    c.check("summary reports the longest-following span",
+            gt.summary()["longest_following_hours"] >= 47.0)
 
     return c.finish()
 

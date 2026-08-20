@@ -501,9 +501,12 @@ PAGES.nyx = {
         tb.innerHTML = '';
         trk.forEach((t) => {
           const cats = (t.categories || []).join(', ');
+          const sh = t.span_hours || 0;
+          const span = sh >= 1 ? ` · following you ${sh >= 48 ? Math.round(sh / 24) + 'd' : Math.round(sh) + 'h'}` : '';
           const meta = `across ${t.reach} of your site${t.reach === 1 ? '' : 's'} · `
             + `${t.masks} mask${t.masks === 1 ? '' : 's'}`
             + (t.cross_channel ? ' · many surfaces' : '')
+            + span
             + (cats ? ' · wants your ' + cats : '');
           tb.appendChild(el('div', 'feed-row',
             `<span class="fdot ${t.cross_channel ? 'flag' : 'allow'}"></span><span class="fname">${escapeHtml(t.tracker)}</span>
