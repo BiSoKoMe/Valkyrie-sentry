@@ -340,6 +340,41 @@ foreach ($t in $Techniques) {
                     }
                     $attackExecuted = $true
                 }
+                "recon_burst" {
+                    # The reconnaissance-burst sequence IOA fires on >=3 DISTINCT
+                    # discovery commands from ONE process lineage within 120s.
+                    # Running only this technique's single command (which the old
+                    # STALE export mislabelled ioa_rule, and the per-technique loop
+                    # spaces ~70s apart) can NEVER complete the burst -- so every
+                    # burst-covered Discovery technique scored MISS for a harness
+                    # reason, not a detection reason. Run the command AND its
+                    # catalogued co-occurring discovery commands back-to-back from
+                    # ONE cmd.exe, exactly how a real recon script behaves and what
+                    # the detector is built to catch.
+                    $cmds = @([string]$t.probe_input.cmdline)
+                    foreach ($co in @($t.probe_input.co_occurring)) { $cmds += [string]$co[1] }
+                    $joined = ($cmds -join " & ")
+                    Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $joined `
+                        -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
+                    $attackExecuted = $true
+                }
+                "cred_store_watch" {
+                    # browser_cred_watch.py raises HIGH when a NON-browser process
+                    # holds a known browser credential-store file open. Simulate it
+                    # faithfully: ensure the catalogued store path exists, then open
+                    # it with a read handle from THIS (non-browser) process and hold
+                    # past the 5s poll interval so the watcher can observe it.
+                    $p = [string]$t.probe_input.path
+                    try {
+                        $dir = Split-Path $p -Parent
+                        if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+                        if (-not (Test-Path $p)) { Set-Content -Path $p -Value "eval-credstore" -ErrorAction SilentlyContinue }
+                        $fs = [System.IO.File]::Open($p, 'Open', 'Read', 'ReadWrite')
+                        Start-Sleep -Seconds 7
+                        $fs.Close()
+                    } catch { $executionError = $_.Exception.Message }
+                    $attackExecuted = $true
+                }
                 default {
                     # ioa_rule / cmdline / behavior_score / process_relationship /
                     # powershell probes all carry a literal, real command line.
