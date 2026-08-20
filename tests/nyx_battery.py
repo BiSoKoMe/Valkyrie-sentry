@@ -174,6 +174,20 @@ def main() -> int:
         obs = nyx.inspect_outbound("POST", THIRD, H, body)
         defend(f"exfil: {name}", len(obs) > 0)
 
+    # ── G2. ACT: the leak is not just watched, it is FED A LIE ──────────────
+    print("\n[G2] Nyx ACTS — the tracker gets consistent persona fakes, not your data")
+    from valkyrie.persona import current_persona as _cp
+    _p = _cp()
+    act_cases = {
+        "device id": (b"adid=550e8400-e29b-41d4-a716-446655440000",
+                      b"550e8400-e29b-41d4-a716-446655440000"),
+        "location":  (b"latitude=40.71&longitude=-74.00", b"40.71"),
+        "email":     (b"e=alice%40example.com", b"alice"),
+    }
+    for name, (payload, real) in act_cases.items():
+        _u, nb, fk = nyx.fake_outbound("POST", THIRD, H, payload, _p)
+        defend(f"act: {name} replaced with a persona fake", bool(fk) and real not in nb)
+
     # ── H. Fingerprint spoofing actually defeats an execution attack ────────
     print("\n[H] fingerprint spoofing defeats a real execution-based attack")
     node = shutil.which("node")
@@ -208,6 +222,12 @@ def main() -> int:
     fp_post = nyx.inspect_outbound(
         "POST", "https://news.example/login", H, b"e=alice%40example.com")
     benign("first-party login not flagged as exfil", fp_post == [])
+    # The ACT path must respect the same first-party boundary — never rewrite
+    # your own data to the site you are actually on.
+    _u, afb, aff = nyx.fake_outbound(
+        "POST", "https://news.example/login", H, b"e=alice%40example.com", _p)
+    benign("act: first-party data is NOT faked",
+           aff == [] and afb == b"e=alice%40example.com")
     # Legit CDNs / sites are not uncloaked as trackers.
     for legit in ["www.github.com", "cdn.jsdelivr.net", "fonts.googleapis.com",
                   "api.stripe.com", "www.wikipedia.org"]:

@@ -33,7 +33,7 @@ def _cats(obs):
 
 
 def main() -> int:
-    c = Checks("nyx", expect_min=18)
+    c = Checks("nyx", expect_min=28)
 
     # ── IT MUST SEE: each category, crossing to a third party ────────────────
     print("\n[1] sees personal data leaving to a THIRD party")
@@ -150,6 +150,87 @@ def main() -> int:
             flow.response is None)
     c.check("the request still went through the normal 'allowed' path",
             any(getattr(e, "raw_category", "") == "https" for e in store.events))
+
+    # ── ACT MODE: feed fake data, keep the request working, never touch benign ─
+    print("\n[5] ACT mode: rewrites third-party leaks into consistent persona fakes")
+    from valkyrie.persona import current_persona
+    persona = current_persona()
+
+    u, bdy, faked = nyx.fake_outbound(
+        "POST", THIRD, HDR, b"adid=550e8400-e29b-41d4-a716-446655440000&x=1", persona)
+    c.check("identifier is rewritten (real id gone, persona id in)",
+            b"550e8400-e29b-41d4-a716-446655440000" not in bdy
+            and persona.advertising_id.encode() in bdy)
+    c.check("request still well-formed after faking (x=1 preserved)", b"x=1" in bdy)
+
+    u, bdy, faked = nyx.fake_outbound(
+        "POST", THIRD, HDR, b"latitude=40.71&longitude=-74.00", persona)
+    c.check("location rewritten to persona coordinates",
+            str(persona.lat).encode() in bdy and b"40.71" not in bdy)
+
+    u, bdy, faked = nyx.fake_outbound("POST", THIRD, HDR, b"e=alice%40example.com", persona)
+    c.check("contact email rewritten to a consistent persona fake",
+            b"alice" not in bdy and b"gmail.com" in bdy)
+
+    # Consistency: the SAME persona value across two different requests (the tell
+    # a sloppy spoof would fail — two requests must not disagree about the user).
+    _, b1, _ = nyx.fake_outbound("POST", THIRD, HDR, b"adid=550e8400-e29b-41d4-a716-446655440000", persona)
+    _, b2, _ = nyx.fake_outbound("POST", "https://other.tracker.example/x", HDR,
+                                 b"deviceid=550e8400-e29b-41d4-a716-446655440000", persona)
+    c.check("the lie is CONSISTENT across requests (same persona id both times)",
+            persona.advertising_id.encode() in b1 and persona.advertising_id.encode() in b2)
+
+    # FP guards for the act path: your own data and benign traffic are untouched.
+    _, bfp, ffp = nyx.fake_outbound("POST", "https://news.example/login", HDR,
+                                    b"e=alice%40example.com", persona)
+    c.check("act: first-party data is NOT faked", ffp == [] and bfp == b"e=alice%40example.com")
+    _, bbn, fbn = nyx.fake_outbound("POST", THIRD, HDR, b"page=3&sort=asc", persona)
+    c.check("act: benign request is NOT touched", fbn == [] and bbn == b"page=3&sort=asc")
+
+    # Wired through the addon: ACT rewrites the live flow; OBSERVE leaves it alone.
+    print("\n[6] wired: NYX_ACT rewrites the flow; observe mode leaves it untouched")
+    import valkyrie.config as _cfg
+    from valkyrie.tls_addon import ValkyrieAddon as _Addon
+
+    class _S:
+        def __init__(self): self.events = []
+        def log(self, e): self.events.append(e)
+
+    class _R:
+        method = "POST"
+        def __init__(self):
+            self.url = THIRD
+            self.headers = {"Referer": FP, "Content-Type": "application/x-www-form-urlencoded"}
+            self.raw_content = b"adid=550e8400-e29b-41d4-a716-446655440000&x=1"
+        def set_content(self, b): self.raw_content = b
+
+    class _F:
+        def __init__(self): self.request = _R(); self.response = None
+
+    _saved = _cfg.NYX_ACT
+    try:
+        addon2 = _Addon.__new__(_Addon)
+        addon2.store = _S()
+        # ACT on
+        _cfg.NYX_ACT = True
+        f = _F()
+        addon2._nyx_observe(f, "collector.tracker.example", THIRD, "test")
+        c.check("ACT: flow body was rewritten (real id removed)",
+                b"550e8400-e29b-41d4-a716-446655440000" not in f.request.raw_content)
+        c.check("ACT: a 'deceived' nyx_fake event was logged",
+                any(getattr(e, "raw_category", "") == "nyx_fake"
+                    and e.decision == "deceived" for e in addon2.store.events))
+        # ACT off (observe)
+        _cfg.NYX_ACT = False
+        addon2.store = _S()
+        f2 = _F()
+        addon2._nyx_observe(f2, "collector.tracker.example", THIRD, "test")
+        c.check("OBSERVE: flow body is left UNTOUCHED",
+                f2.request.raw_content == b"adid=550e8400-e29b-41d4-a716-446655440000&x=1")
+        c.check("OBSERVE: a 'flagged' nyx_leak event was logged",
+                any(getattr(e, "raw_category", "") == "nyx_leak" for e in addon2.store.events))
+    finally:
+        _cfg.NYX_ACT = _saved
 
     return c.finish()
 

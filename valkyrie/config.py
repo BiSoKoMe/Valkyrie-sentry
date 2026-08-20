@@ -630,6 +630,14 @@ TRACKING_QUERY_PARAMS = [
 ]
 EXFIL_BODY_SIZE_BYTES = 1024   # POST body larger than this to a tracker domain → flagged
 
+# Nyx data-guard response mode. False = OBSERVE (watch outbound personal-data
+# leaks and report them; never alter traffic). True = ACT — rewrite the leaking
+# values into consistent persona ("John") fakes so the tracker/app receives
+# believable-but-false data and the request STILL COMPLETES (deception, not
+# blocking, so it cannot break a page). Default off: Nyx never changes your
+# traffic until you turn this on.
+NYX_ACT = False
+
 # ---------------------------------------------------------------------------
 # Telemetry killer
 # ---------------------------------------------------------------------------
