@@ -460,16 +460,15 @@ PAGES.nyx = {
       <div class="page-intro">Nyx is Valkyrie's data guard. It watches every request leaving your machine and,
       reading the raw data itself, catches when a piece of <em>you</em> — a device ID, your location,
       your contact details, a browser fingerprint — is being handed to a third party you didn't mean to talk to.
-      <b>Right now Nyx is in watch-and-report mode: it tells you what it sees and never blocks or changes your
-      traffic</b>, so it can't break a page or an app.</div>
+      <b id="nyxMode"></b></div>
       ${sectionHead('What Nyx saw', 'Live · updates every 3s')}
       <div class="grid">
         ${statCard('nyx_watched', 'Requests Watched (24h)', 'network', 'accent-blue')}
         ${statCard('nyx_leaks', 'Data Leaks Caught', 'alert')}
-        ${statCard('nyx_lied', 'Beacons Fed Fake Data', 'lock', 'accent-green')}
+        ${statCard('nyx_faked', 'Fed Fake Data', 'lock', 'accent-green')}
         ${statCard('nyx_blocked', 'Trackers Stopped', 'shield', 'accent-green')}
       </div>
-      ${sectionHead('Your data caught leaving to third parties', 'Each line is one thing Nyx watched leave — observed, not blocked')}
+      ${sectionHead('What crossed to third parties', 'Each line is one thing Nyx caught leaving')}
       <div class="feed" id="nyxFeed"><div class="empty">Waiting for Nyx…</div></div>`;
   },
   interval: 3000,
@@ -478,26 +477,34 @@ PAGES.nyx = {
     const data = await safe(() => V.api.get('/api/nyx'), null);
     const up = !!data && !data.error;
     const d = data || {}, def = d.defended || {};
+    const acting = d.mode === 'acting';
     animateNumber($('card-nyx_watched'), statVal(up, d.watched_24h));
     animateNumber($('card-nyx_leaks'),   statVal(up, d.leak_count));
-    animateNumber($('card-nyx_lied'),    statVal(up, def.fake_data_served));
+    animateNumber($('card-nyx_faked'),   statVal(up, def.fake_data_served));
     animateNumber($('card-nyx_blocked'), statVal(up, def.trackers_blocked));
+
+    const modeEl = $('nyxMode');
+    if (modeEl) modeEl.textContent = !up ? '' : (acting
+      ? 'Nyx is ACTIVE — feeding trackers fake data, not just watching.'
+      : 'Nyx is watching and reporting — it never changes your traffic, so it can’t break a page.');
 
     if (!up) {
       feed.innerHTML = stateBlock('offline', 'Nyx is offline',
         'Turn protection on and Nyx will start watching your data.');
       return;
     }
-    const leaks = d.leaks || [];
-    if (!leaks.length) {
-      feed.innerHTML = stateBlock('empty', 'No data leaks caught',
+    // When acting, lead with what Nyx actually fed fake; otherwise the raw leaks.
+    const items = (acting && (d.faked || []).length) ? d.faked : (d.leaks || []);
+    if (!items.length) {
+      feed.innerHTML = stateBlock('empty',
+        acting ? 'Nothing to fake yet' : 'No data leaks caught',
         'Nyx is watching. Nothing has tried to take your data yet.');
       return;
     }
     feed.innerHTML = '';
-    leaks.forEach((l) => {
+    items.forEach((l) => {
       feed.appendChild(el('div', 'feed-row',
-        `<span class="fdot flag"></span><span class="fname">${escapeHtml(l.sentence)}</span>
+        `<span class="fdot ${acting ? 'allow' : 'flag'}"></span><span class="fname">${escapeHtml(l.sentence)}</span>
          <span class="fmeta">${escapeHtml(l.host || '')}</span>`));
     });
   },

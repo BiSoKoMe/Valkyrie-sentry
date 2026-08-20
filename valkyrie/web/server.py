@@ -229,6 +229,7 @@ def _build_nyx() -> dict:
     events = store.recent_events(limit=1000)
 
     leaks: list[dict] = []
+    faked: list[dict] = []
     defended = {"pages_cleaned": 0, "trackers_blocked": 0, "fake_data_served": 0}
     for e in events:
         rc  = e.get("raw_category", "") or ""
@@ -239,6 +240,13 @@ def _build_nyx() -> dict:
                 "host":     e.get("domain", ""),
                 "sentence": e.get("reason", ""),
             })
+        elif rc == "nyx_fake":          # Nyx ACTED — fed the tracker fake data
+            faked.append({
+                "when":     e.get("timestamp", ""),
+                "host":     e.get("domain", ""),
+                "sentence": e.get("reason", ""),
+            })
+            defended["fake_data_served"] += 1
         elif rc == "page_clean":
             defended["pages_cleaned"] += 1
         elif dec == "deceived":
@@ -246,13 +254,21 @@ def _build_nyx() -> dict:
         elif dec in ("blocked", "behavioral") or rc in _NYX_BLOCK_CATS:
             defended["trackers_blocked"] += 1
 
+    try:
+        from ..config import NYX_ACT
+        acting = bool(NYX_ACT)
+    except ImportError:
+        acting = False
+
     s = store.stats()
     return {
         "watched_24h": s.get("total_24h", 0),
+        "mode":        "acting" if acting else "watching",
         "leak_count":  len(leaks),
         "leaks":       leaks[:50],     # most recent first (recent_events is DESC)
+        "fake_count":  len(faked),
+        "faked":       faked[:50],     # leaks Nyx actively fed fake data to
         "defended":    defended,
-        "observe_only": True,          # this slice reports; it does not yet act on leaks
     }
 
 
