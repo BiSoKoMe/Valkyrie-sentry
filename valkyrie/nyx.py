@@ -46,6 +46,7 @@ CAT_IDENTIFIER  = "identifier"     # advertising / device ID
 CAT_LOCATION    = "location"       # GPS / coarse geo coordinates
 CAT_CONTACT     = "contact"        # email / phone number
 CAT_FINGERPRINT = "fingerprint"    # a bundle of device-fingerprint surfaces
+CAT_FINANCIAL   = "financial"      # a payment-card number (Luhn-valid)
 
 # Human label per category — used to build the sentence the user reads.
 _LABEL = {
@@ -53,6 +54,7 @@ _LABEL = {
     CAT_LOCATION:    "location",
     CAT_CONTACT:     "contact details",
     CAT_FINGERPRINT: "browser fingerprint",
+    CAT_FINANCIAL:   "payment card",
 }
 
 # ── data-shape signals (generalising, not a domain list) ────────────────────
@@ -79,6 +81,34 @@ _LATLON_PAIR = re.compile(
 
 _EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 _PHONE = re.compile(r"(?<!\d)\+\d{9,15}(?!\d)")   # E.164 only (leading + required)
+
+# A payment-card-shaped run of 13–19 digits, optionally split by spaces/dashes.
+# Card detection is gated on a LUHN check (below), so a random 16-digit session
+# id or order number does NOT trip it — Luhn is the precision boundary that
+# separates "a card number" from "sixteen digits".
+_CARD = re.compile(r"(?<![\d.])(?:\d[ -]?){12,18}\d(?![\d.])")
+
+
+def _luhn_ok(number: str) -> bool:
+    ds = [int(c) for c in number if c.isdigit()]
+    if not (13 <= len(ds) <= 19):
+        return False
+    total, alt = 0, False
+    for d in reversed(ds):
+        if alt:
+            d *= 2
+            if d > 9:
+                d -= 9
+        total += d
+        alt = not alt
+    return total % 10 == 0
+
+
+def _find_card(blob: str) -> str | None:
+    for m in _CARD.finditer(blob):
+        if _luhn_ok(m.group(0)):
+            return m.group(0)
+    return None
 
 # Fingerprint-bundle surfaces — each contributes ONE signal; >=3 together in a
 # single third-party request is the tell.
@@ -283,6 +313,11 @@ def inspect_outbound(method: str, url: str, headers=None, body=None,
     if signals >= 3:
         add(CAT_FINGERPRINT, f"{signals} surfaces")
 
+    # 5) Payment card — a Luhn-valid card number crossing to a third party.
+    card = _find_card(blob)
+    if card:
+        add(CAT_FINANCIAL, card)
+
     return out
 
 
@@ -362,6 +397,10 @@ def _personal_values(url, headers, body, first_party_origin=None):
         ph = _PHONE.search(blob)
         if ph:
             found.append((CAT_CONTACT, "phone", ph.group(0)))
+    # payment card
+    card = _find_card(blob)
+    if card:
+        found.append((CAT_FINANCIAL, "card", card))
     return found
 
 
@@ -384,6 +423,8 @@ def _fake_for(category: str, raw: str, kind: str, persona):
             return getattr(persona, "lon", None)
     if category == CAT_CONTACT:
         return _fake_email(persona) if "@" in raw else "+10000000000"
+    if category == CAT_FINANCIAL:
+        return "4111111111111111"   # a standard Luhn-valid test-card number
     return None
 
 

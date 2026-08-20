@@ -33,7 +33,7 @@ def _cats(obs):
 
 
 def main() -> int:
-    c = Checks("nyx", expect_min=28)
+    c = Checks("nyx", expect_min=31)
 
     # ── IT MUST SEE: each category, crossing to a third party ────────────────
     print("\n[1] sees personal data leaving to a THIRD party")
@@ -57,6 +57,9 @@ def main() -> int:
         "POST", THIRD, HDR,
         b"screen=1920x1080&timezone=America/New_York&lang=en-US&cores=8")
     c.check("fingerprint bundle (>=3 surfaces) caught", nyx.CAT_FINGERPRINT in _cats(fp))
+
+    card = nyx.inspect_outbound("POST", THIRD, HDR, b"cc=4111111111111111")
+    c.check("payment card (Luhn-valid) caught", nyx.CAT_FINANCIAL in _cats(card))
 
     # Same signals also readable from a JSON body and from the URL query.
     js = nyx.inspect_outbound(
@@ -93,6 +96,11 @@ def main() -> int:
     # One fingerprint surface alone is not a bundle.
     one_fp = nyx.inspect_outbound("POST", THIRD, HDR, b"lang=en-US")
     c.check("a single surface is not a fingerprint bundle", nyx.CAT_FINGERPRINT not in _cats(one_fp))
+
+    # A random 16-digit id is not a card — Luhn is the precision boundary.
+    non_luhn = nyx.inspect_outbound("POST", THIRD, HDR, b"session=1234567890123456")
+    c.check("a non-Luhn 16-digit id is NOT flagged as a card",
+            nyx.CAT_FINANCIAL not in _cats(non_luhn))
 
     # ── The report is human and does not leak the raw value ──────────────────
     print("\n[3] the observation is human-readable and never stores the raw value")
@@ -171,6 +179,10 @@ def main() -> int:
     u, bdy, faked = nyx.fake_outbound("POST", THIRD, HDR, b"e=alice%40example.com", persona)
     c.check("contact email rewritten to a consistent persona fake",
             b"alice" not in bdy and b"gmail.com" in bdy)
+
+    u, bdy, faked = nyx.fake_outbound("POST", THIRD, HDR, b"cc=4242424242424242", persona)
+    c.check("payment card rewritten to a fake (real card gone)",
+            b"4242424242424242" not in bdy and b"4111111111111111" in bdy)
 
     # Consistency: the SAME persona value across two different requests (the tell
     # a sloppy spoof would fail — two requests must not disagree about the user).
