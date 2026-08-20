@@ -40,6 +40,33 @@ def main() -> None:
         for r in rows:
             if r[ti]:
                 techs.update(_TID.findall(str(r[ti])))
+
+    # Also mine the DETECTION rows. A correlation/sequence detection (e.g. the
+    # reconnaissance-burst IOA) records EVERY contributing technique in its
+    # details JSON under "all_techniques" -- but the incident it folds into has
+    # only ONE `technique` column, so reading incidents alone credits just the
+    # first of a burst and scores the rest as missed even though Valkyrie
+    # genuinely detected them. Read the detections and their all_techniques so a
+    # burst that named T1082/T1057/T1018 is credited for all three, not one.
+    # Precise, not greedy: only the detection's own `technique` and its
+    # all_techniques list -- never free-text prose -- so nothing is over-counted.
+    import json as _json
+    try:
+        for dtech, ddetails in c.execute(
+                "SELECT technique, details FROM edr_detections"):
+            if dtech:
+                techs.update(_TID.findall(str(dtech)))
+            if ddetails:
+                try:
+                    dd = _json.loads(ddetails)
+                except (ValueError, TypeError):
+                    dd = None
+                if isinstance(dd, dict):
+                    for a in dd.get("all_techniques") or []:
+                        techs.update(_TID.findall(str(a)))
+    except sqlite3.Error:
+        pass    # older DB without edr_detections -- incident count still valid
+
     techs = sorted(techs)
     print("TOTAL INCIDENTS:", len(rows))
     print("DISTINCT ATT&CK TECHNIQUES DETECTED:", len(techs))
