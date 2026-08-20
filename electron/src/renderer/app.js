@@ -499,6 +499,17 @@ PAGES.nyx = {
           'As you browse, Nyx links each tracker across your sites here.');
       } else {
         tb.innerHTML = '';
+        const sm = d.tracker_summary || {};
+        if (sm.distinct_trackers) {
+          const lf = sm.longest_following_hours || 0;
+          const lfTxt = lf >= 48 ? `${Math.round(lf / 24)}d` : (lf >= 1 ? `${Math.round(lf)}h` : '');
+          const hdr = `${sm.distinct_trackers} tracker${sm.distinct_trackers === 1 ? '' : 's'} trying to follow you`
+            + (sm.widest_reach ? ` · widest reaches ${sm.widest_reach} of your sites` : '')
+            + (lfTxt ? ` · longest ${lfTxt}` : '');
+          tb.appendChild(el('div', 'feed-row',
+            `<span class="fdot flag"></span><span class="fname">${escapeHtml(hdr)}</span>
+             <span class="fmeta">correlated on your machine — no cloud</span>`));
+        }
         trk.forEach((t) => {
           const cats = (t.categories || []).join(', ');
           const sh = t.span_hours || 0;
