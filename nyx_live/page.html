@@ -31,8 +31,15 @@ function hash(s) { let h = 0; for (let i = 0; i < s.length; i++) { h = (h * 31 +
   document.getElementById('canvas-fp').textContent = 'CANVAS:' + ch;
 
   const tracker = new URLSearchParams(location.search).get('tracker') || '';
-  const id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
-             : ('' + Date.now() + Math.random());
+  // A proper UUID-v4 string, generated without crypto.randomUUID (which needs a
+  // secure context that plain HTTP is not) so it matches Nyx's real detection.
+  function uuid() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+      const r = Math.random() * 16 | 0;
+      return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+    });
+  }
+  const id = uuid();
   window.__beaconId = id;
   if (!tracker) { document.getElementById('beacon-status').textContent = 'BEACON:no-tracker'; return; }
   const body = 'adid=' + id
@@ -40,8 +47,11 @@ function hash(s) { let h = 0; for (let i = 0; i < s.length; i++) { h = (h * 31 +
     + '&timezone=' + (Intl.DateTimeFormat().resolvedOptions().timeZone || 'x')
     + '&lang=' + navigator.language
     + '&cores=' + (navigator.hardwareConcurrency || 0);
+  // Beacon to a NON-tracker path (/api/ingest) so it reaches Nyx's act layer
+  // rather than being blocked at the tracker-beacon-path rule (which /collect,
+  // /track, /pixel etc. correctly are). This measures the FAKING, not blocking.
   try {
-    await fetch(tracker + '/collect', {
+    await fetch(tracker + '/api/ingest', {
       method: 'POST', mode: 'no-cors',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body,

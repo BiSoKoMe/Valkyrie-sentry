@@ -128,7 +128,15 @@ def main() -> int:
               if (e.get("raw_category") or "") in ("nyx_leak", "nyx_fake")
               and "tracker.test" in (e.get("domain") or "")]
     faked_ev = [e for e in nyx_ev if (e.get("raw_category") == "nyx_fake")]
-    tracker_bodies = [r["body"] for r in RECEIVED if "collect" in r["path"]]
+    tracker_bodies = [r["body"] for r in RECEIVED]     # every POST the endpoint got
+
+    from collections import Counter
+    print("received request paths:", [r["path"] for r in RECEIVED])
+    print("nyx event categories seen:",
+          dict(Counter((e.get("raw_category") or "") for e in events
+                       if (e.get("raw_category") or "").startswith("nyx"))))
+    print("all event categories seen:",
+          dict(Counter((e.get("raw_category") or "?") for e in events)))
 
     caught = len(nyx_ev) > 0
     real_leaked = any(any(rid in b for rid in real_ids) for b in tracker_bodies)
