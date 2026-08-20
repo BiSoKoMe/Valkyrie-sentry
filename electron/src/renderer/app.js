@@ -461,6 +461,8 @@ PAGES.nyx = {
       reading the raw data itself, catches when a piece of <em>you</em> — a device ID, your location,
       your contact details, a browser fingerprint — is being handed to a third party you didn't mean to talk to.
       <b id="nyxMode"></b></div>
+      <div class="btn-row"><button class="btn primary" id="nyxSelfTest">${ICON.activity || ''}<span>Show me Nyx working</span></button></div>
+      <div class="feed" id="nyxSelfTestOut"></div>
       ${sectionHead('What Nyx saw', 'Live · updates every 3s')}
       <div class="grid">
         ${statCard('nyx_watched', 'Requests Watched (24h)', 'network', 'accent-blue')}
@@ -472,6 +474,24 @@ PAGES.nyx = {
       <div class="feed" id="nyxFeed"><div class="empty">Waiting for Nyx…</div></div>
       ${sectionHead('Who is following you', 'Each tracker unmasked — how many of your sites it rides, and how many disguises it wears')}
       <div class="feed" id="nyxTrackers"><div class="empty">Correlating…</div></div>`;
+    const stBtn = $('nyxSelfTest');
+    if (stBtn) stBtn.onclick = async () => {
+      const out = $('nyxSelfTestOut');
+      out.innerHTML = '<div class="empty">Running Nyx against synthetic trackers…</div>';
+      const r = await safe(() => V.api.get('/api/nyx/self-test'), null);
+      if (!r || !r.cases) {
+        out.innerHTML = stateBlock('error', 'Self-test unavailable', 'Start protection and try again.');
+        return;
+      }
+      out.innerHTML = '';
+      r.cases.forEach((cse) => {
+        const changed = cse.before !== cse.after;
+        const verb = changed ? '→ fed a fake' : (cse.caught ? '→ caught' : '→ missed');
+        out.appendChild(el('div', 'feed-row',
+          `<span class="fdot ${changed ? 'allow' : (cse.caught ? 'flag' : 'block')}"></span><span class="fname">your ${escapeHtml(cse.case)} ${verb}</span>
+           <span class="fmeta">${escapeHtml(cse.after)}</span>`));
+      });
+    };
   },
   interval: 3000,
   async poll() {
