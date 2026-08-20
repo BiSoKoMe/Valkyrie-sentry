@@ -120,8 +120,22 @@ def _strip_tracking_params(url: str) -> str:
 
 
 def _is_tracker_path(path: str) -> bool:
-    lower = path.lower()
-    return any(p in lower for p in TRACKER_URL_PATTERNS)
+    # Segment-exact, NOT substring. A bare `p in path` match blocked ordinary
+    # content paths whose word merely *contains* a pattern — e.g. "/collections/
+    # shoes" matched "/collect" and every e-commerce category page got blocked
+    # as a beacon (a real false positive found by the Nyx privacy battery). A
+    # pattern now hits only when it is a whole path segment, or that segment plus
+    # a file extension ("/pixel.gif") — never just a prefix of a longer word.
+    # Strictly more precise than the old check, so it can only REMOVE false
+    # matches, never add one. Query string is dropped first.
+    lower = (path or "/").split("?", 1)[0].lower()
+    segments = lower.split("/")
+    for pat in TRACKER_URL_PATTERNS:
+        core = pat.strip("/")
+        for seg in segments:
+            if seg == core or seg.startswith(core + "."):
+                return True
+    return False
 
 
 def _is_fingerprint_path(path: str) -> bool:

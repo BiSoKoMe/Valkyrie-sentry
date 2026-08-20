@@ -607,9 +607,21 @@ TLS_MITMPROXY_CONF_DIR = DATA_DIR / "mitmproxy"
 TRACKER_URL_PATTERNS = [
     "/pixel", "/track", "/beacon", "/collect", "/analytics",
     "/telemetry", "/ping",
+    # Matched segment-exact (see tls_addon._is_tracker_path), so these specific
+    # beacon segments cannot collide with ordinary words. Deliberately NOT added:
+    # "/tr" (Facebook pixel) — "/tr/" is the standard Turkish-locale path and
+    # would false-positive whole non-English sites; it is caught by the
+    # facebook.net domain rule instead. "/batch", "/ss" — too generic (ordinary
+    # API endpoints), would break real apps.
+    "/adsct",   # Twitter/X conversion beacon (/i/adsct)
+    "/pagead",  # Google AdSense/ad beacons (/pagead/...)
 ]
 FINGERPRINT_URL_PATTERNS = [
-    "fingerprintjs", "evercookie", "fp.js", "fpjs", "canvas-fingerprint",
+    # Generalised: any script whose path contains "fingerprint" is a
+    # fingerprinting library (FingerprintJS v2/v3, canvas-fingerprint, etc.) —
+    # one signal instead of enumerating each library name. fp.js/fpjs/clientjs
+    # don't contain the word, so they stay explicit.
+    "fingerprint", "evercookie", "fp.js", "fpjs", "clientjs",
 ]
 TRACKING_QUERY_PARAMS = [
     "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
@@ -655,6 +667,11 @@ TRACKING_SCRIPT_DOMAINS: list[str] = [
     "scorecardresearch.com", "quantserve.com",
     "moatads.com", "taboola.com", "outbrain.com",
     "criteo.com",
+    # Well-known trackers found missing by the Nyx privacy battery.
+    "mxpnl.com",              # Mixpanel CDN (mixpanel.com above is the API host)
+    "analytics.tiktok.com",   # TikTok pixel
+    "lfeeder.com",            # Leadfeeder
+    "marketo.net",            # Marketo Munchkin tracking
 ]
 
 STRIP_PARAMS: list[str] = [
