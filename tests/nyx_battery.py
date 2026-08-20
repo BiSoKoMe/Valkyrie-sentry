@@ -188,6 +188,18 @@ def main() -> int:
         _u, nb, fk = nyx.fake_outbound("POST", THIRD, H, payload, _p)
         defend(f"act: {name} replaced with a persona fake", bool(fk) and real not in nb)
 
+    # ── G3. expanded categories: payment cards + persistent cookies ─────────
+    print("\n[G3] expanded coverage — payment cards and third-party tracking cookies")
+    defend("card: a Luhn-valid card to a tracker is caught",
+           any(o.category == nyx.CAT_FINANCIAL
+               for o in nyx.inspect_outbound("POST", THIRD, H, b"cc=4111111111111111")))
+    _u, cnb, cfk = nyx.fake_outbound("POST", THIRD, H, b"cc=4242424242424242", _p)
+    defend("card: is rewritten to a fake in act mode", b"4242424242424242" not in cnb)
+    defend("cookie: a persistent third-party cookie is caught",
+           any(o.category == nyx.CAT_COOKIE
+               for o in nyx.inspect_outbound(
+                   "GET", THIRD, {"Referer": FP_ORIGIN, "Cookie": "uid=a1b2c3d4e5f6g7h8i9j0"}, None)))
+
     # ── H. Fingerprint spoofing actually defeats an execution attack ────────
     print("\n[H] fingerprint spoofing defeats a real execution-based attack")
     node = shutil.which("node")
@@ -228,6 +240,14 @@ def main() -> int:
         "POST", "https://news.example/login", H, b"e=alice%40example.com", _p)
     benign("act: first-party data is NOT faked",
            aff == [] and afb == b"e=alice%40example.com")
+    # A random 16-digit id is not a card (Luhn boundary); a short cookie is not tracking.
+    benign("non-Luhn 16-digit id not flagged as a card",
+           not any(o.category == nyx.CAT_FINANCIAL
+                   for o in nyx.inspect_outbound("POST", THIRD, H, b"order=1234567890123456")))
+    benign("short functional cookie not flagged as tracking",
+           not any(o.category == nyx.CAT_COOKIE
+                   for o in nyx.inspect_outbound(
+                       "GET", THIRD, {"Referer": FP_ORIGIN, "Cookie": "lang=en; s=1"}, None)))
     # Legit CDNs / sites are not uncloaked as trackers.
     for legit in ["www.github.com", "cdn.jsdelivr.net", "fonts.googleapis.com",
                   "api.stripe.com", "www.wikipedia.org"]:
