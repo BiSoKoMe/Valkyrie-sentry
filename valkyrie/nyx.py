@@ -41,6 +41,15 @@ from urllib.parse import parse_qsl, quote, urlsplit
 
 from .dns_tunnel import registrable_base
 
+# Nyx runs on EVERY outbound request, so it must stay fast. Personal-data leaks
+# live in small beacon / analytics payloads (a real tracker POST is 1–8 KB); a
+# multi-MB POST is a file upload, not a tracking beacon. Scan only the first
+# 16 KB of a body so a huge upload can never add browsing latency — bounds Nyx
+# to a few ms even on a giant body, and <1 ms on a real beacon. Honest tradeoff:
+# a leak past the first 16 KB of a large body is not seen (rare — beacons are
+# small). Paired with length-bounded regexes so no single scan can go O(n^2).
+_MAX_SCAN_BYTES = 16 * 1024
+
 # ── categories ──────────────────────────────────────────────────────────────
 CAT_IDENTIFIER  = "identifier"     # advertising / device ID
 CAT_LOCATION    = "location"       # GPS / coarse geo coordinates
@@ -100,7 +109,10 @@ _LATLON_PAIR = re.compile(
     r"(?<![\d.])[-+]?\d{1,2}\.\d{3,}\s*[,;]\s*[-+]?\d{1,3}\.\d{3,}(?![\d.])"
 )
 
-_EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+# Length-bounded on purpose: an unbounded [chars]+ chasing an '@' that may not
+# exist backtracks O(n^2) over a long run of letters — a request with a big
+# text body would hang Nyx. Real emails fit these bounds (local<=64, domain<=255).
+_EMAIL = re.compile(r"[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]{1,255}\.[A-Za-z]{2,24}")
 _PHONE = re.compile(r"(?<!\d)\+\d{9,15}(?!\d)")   # E.164 only (leading + required)
 
 # A payment-card-shaped run of 13–19 digits, optionally split by spaces/dashes.
@@ -155,7 +167,7 @@ def _fp_signals(blob: str, body_text: str) -> int:
 _FP_SCREEN = re.compile(r"(screen|resolution|avail(width|height)|\bsw\b|\bsh\b)", re.I)
 _FP_WXH    = re.compile(r"\b\d{3,4}\s*[x×]\s*\d{3,4}\b")
 _FP_TZ     = re.compile(r"(timezone|\btz\b|utc[_-]?offset)", re.I)
-_FP_TZVAL  = re.compile(r"[A-Za-z]+/[A-Za-z_]+")   # America/New_York shape
+_FP_TZVAL  = re.compile(r"[A-Za-z]{2,40}/[A-Za-z_]{2,40}")   # America/New_York; bounded (O(n^2) otherwise)
 _FP_LANG   = re.compile(r"(language|\blang\b|\blocale\b)", re.I)
 _FP_CORES  = re.compile(r"(hardwareconcurrency|\bcores\b|\bcpu\b|devicememory)", re.I)
 _FP_GPU    = re.compile(r"(canvas|webgl|\brenderer\b|\bgpu\b)", re.I)
@@ -218,13 +230,17 @@ def _decode_body(body, content_type: str) -> tuple[list[tuple[str, str]], str]:
     malformed body yields empty pairs, never an exception."""
     if not body:
         return [], ""
-    if isinstance(body, bytes):
+    if isinstance(body, (bytes, bytearray)):
+        if len(body) > _MAX_SCAN_BYTES:          # bound latency on huge uploads
+            body = body[:_MAX_SCAN_BYTES]
         try:
-            text = body.decode("utf-8", "replace")
+            text = bytes(body).decode("utf-8", "replace")
         except Exception:
             return [], ""
     else:
         text = str(body)
+        if len(text) > _MAX_SCAN_BYTES:
+            text = text[:_MAX_SCAN_BYTES]
 
     ct = (content_type or "").lower()
     pairs: list[tuple[str, str]] = []

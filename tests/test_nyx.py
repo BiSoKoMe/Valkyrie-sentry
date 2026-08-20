@@ -33,7 +33,7 @@ def _cats(obs):
 
 
 def main() -> int:
-    c = Checks("nyx", expect_min=38)
+    c = Checks("nyx", expect_min=40)
 
     # ── IT MUST SEE: each category, crossing to a third party ────────────────
     print("\n[1] sees personal data leaving to a THIRD party")
@@ -289,6 +289,25 @@ def main() -> int:
         except Exception:
             crashes += 1
     c.check("inspect_outbound + fake_outbound never crash on edge input", crashes == 0)
+
+    # ── PERFORMANCE: a huge body must be BOUNDED, never a hang ──────────────
+    # Nyx is on the request hot path; without a scan cap + length-bounded
+    # regexes a big upload took 13 seconds (O(n^2) backtracking) — a stall on
+    # the user's own browsing. This guards the fix stays in.
+    print("\n[9] a huge body is bounded, not a hang")
+    import time as _time
+    huge = b"x" * 5_000_000
+    _t0 = _time.perf_counter()
+    nyx.inspect_outbound("POST", THIRD, HDR, huge)
+    nyx.fake_outbound("POST", THIRD, HDR, huge)
+    _elapsed = _time.perf_counter() - _t0
+    c.check(f"5MB body handled in well under 200ms (got {_elapsed*1000:.0f}ms)",
+            _elapsed < 0.2)
+    lead = nyx.inspect_outbound(
+        "POST", THIRD, HDR,
+        b"adid=550e8400-e29b-41d4-a716-446655440000&" + b"p=1&" * 50000)
+    c.check("a leak in the first 16KB is still caught under the cap",
+            nyx.CAT_IDENTIFIER in _cats(lead))
 
     return c.finish()
 
