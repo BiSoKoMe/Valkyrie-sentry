@@ -33,7 +33,7 @@ def _cats(obs):
 
 
 def main() -> int:
-    c = Checks("nyx", expect_min=37)
+    c = Checks("nyx", expect_min=38)
 
     # ── IT MUST SEE: each category, crossing to a third party ────────────────
     print("\n[1] sees personal data leaving to a THIRD party")
@@ -268,6 +268,27 @@ def main() -> int:
     c.check("self-test shows the card actually changing (before != after)",
             any(r["case"] == "payment card" and r["before"] != r["after"]
                 for r in st["cases"]))
+
+    # ── ROBUSTNESS: a component in front of ALL traffic must never crash ────
+    print("\n[8] never crashes on malformed / hostile input")
+    _edge = [
+        ("POST", THIRD, HDR, None),
+        ("POST", THIRD, None, b"adid=x"),
+        ("POST", THIRD, HDR, bytes(range(256))),
+        ("POST", "not a url", HDR, b"x"),
+        ("POST", THIRD, {"Referer": FP, "Content-Type": "application/json"}, b"{bad json"),
+        ("POST", THIRD, [("Referer", FP)], b"x"),   # non-dict headers
+        ("", "", "", ""),
+        ("POST", THIRD, HDR, "ключ=значение&emoji=🎭".encode()),
+    ]
+    crashes = 0
+    for args in _edge:
+        try:
+            nyx.inspect_outbound(*args)
+            nyx.fake_outbound(*args)
+        except Exception:
+            crashes += 1
+    c.check("inspect_outbound + fake_outbound never crash on edge input", crashes == 0)
 
     return c.finish()
 
