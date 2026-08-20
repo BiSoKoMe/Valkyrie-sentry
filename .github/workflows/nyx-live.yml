@@ -1,0 +1,42 @@
+name: Nyx Live (real browser through the real proxy)
+
+# The reliable Nyx test: a REAL headless Chromium driven through Valkyrie's REAL
+# mitmproxy + Nyx addon, measuring what actually reaches a tracker's endpoint —
+# not offline synthetic strings. The Nyx equivalent of the EDR's live Tier B.
+# Linux runner: Nyx / farble / the proxy are cross-platform (no Sysmon needed).
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/efficacy-etw-coverage]
+    paths:
+      - ".github/workflows/nyx-live.yml"
+      - "nyx_live/**"
+      - "valkyrie/nyx.py"
+      - "valkyrie/nyx_graph.py"
+      - "valkyrie/farble.py"
+      - "valkyrie/tls_addon.py"
+      - "valkyrie/tls_inspector.py"
+
+jobs:
+  nyx-live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Valkyrie + mitmproxy + Playwright
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements_modular.txt
+          python -m pip install mitmproxy playwright
+          python -m playwright install --with-deps chromium
+      - name: Resolve the test hostnames to loopback
+        run: echo "127.0.0.1 firstparty.test other.test tracker.test" | sudo tee -a /etc/hosts
+      - name: Run the live Nyx test
+        env:
+          PYTHONUNBUFFERED: "1"
+          VALKYRIE_ALLOW_EXPOSED_CA_KEY: "1"   # throwaway CI runner; lets the proxy start on Linux
+        run: python nyx_live/nyx_live_test.py
