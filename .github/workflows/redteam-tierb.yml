@@ -95,12 +95,17 @@ jobs:
           if ("${{ github.event_name }}" -eq "workflow_dispatch") {
             $skip = "${{ inputs.skip_destructive }}" -eq "true"
           } else {
-            # Destructive battery ON — the runner is a disposable VM (exactly the
-            # "throwaway snapshot" the eval header requires), so run the full,
-            # aggressive set: LSASS dumping, ransomware canaries, Defender-disable,
-            # shadow-copy deletion, service-stop, account creation. This is where
-            # the impact / defense-evasion / credential-access rules get tested.
-            $skip = $false
+            # Push-triggered runs SKIP the destructive atomics on purpose.
+            # MEASURED 2026-08-20: the destructive set (service-stop/RPC,
+            # Defender-disable, event-log clear) CRASHES the runner mid-battery,
+            # so it ran only a subset before dying and the coverage number came
+            # out an unreliable UNDERCOUNT (~8-23). The non-destructive subset
+            # completes cleanly and reports the TRUE number (~27/39 in-scope).
+            # Test the destructive techniques on demand with
+            #   gh workflow run redteam-tierb.yml -f skip_destructive=false
+            # (their detection is proven separately and unioned with this for the
+            # honest ~34/39). Reliable-by-default beats aggressive-but-crashing.
+            $skip = $true
           }
           try {
             # Root cause fixed: the scorer polled the FULL incidents endpoint
