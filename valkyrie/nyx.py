@@ -331,6 +331,16 @@ def inspect_outbound(method: str, url: str, headers=None, body=None,
         m = _UUID.search(blob)
         if m:
             add(CAT_IDENTIFIER, m.group(0))
+    # ...and in an id-ish request HEADER (a tracker SDK's "X-Device-Id: <uuid>").
+    # Precise: only a header whose NAME is id-shaped carrying a UUID/long token,
+    # so an ordinary per-request trace header (X-Request-Id) is not flagged.
+    if CAT_IDENTIFIER not in seen:
+        for hk, hv in h.items():
+            if hk in ("referer", "origin", "cookie", "authorization", "host"):
+                continue
+            if _ID_KEY.search(hk) and (_UUID.search(hv) or _LONG_TOKEN.match(hv.strip())):
+                add(CAT_IDENTIFIER, hv)
+                break
 
     # 2) Location — a latitude AND a longitude value, or a lat,lon pair.
     lat = lon = False

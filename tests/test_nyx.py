@@ -33,7 +33,7 @@ def _cats(obs):
 
 
 def main() -> int:
-    c = Checks("nyx", expect_min=40)
+    c = Checks("nyx", expect_min=42)
 
     # ── IT MUST SEE: each category, crossing to a third party ────────────────
     print("\n[1] sees personal data leaving to a THIRD party")
@@ -63,6 +63,11 @@ def main() -> int:
 
     cook = nyx.inspect_outbound("GET", THIRD, {"Referer": FP, "Cookie": "id=a1b2c3d4e5f6g7h8i9j0"})
     c.check("persistent third-party tracking cookie caught", nyx.CAT_COOKIE in _cats(cook))
+
+    hdr_id = nyx.inspect_outbound(
+        "GET", THIRD, {"Referer": FP, "X-Device-Id": "550e8400-e29b-41d4-a716-446655440000"})
+    c.check("device ID in a request header (X-Device-Id) caught",
+            nyx.CAT_IDENTIFIER in _cats(hdr_id))
 
     # Same signals also readable from a JSON body and from the URL query.
     js = nyx.inspect_outbound(
@@ -109,6 +114,12 @@ def main() -> int:
     func_cook = nyx.inspect_outbound("GET", THIRD, {"Referer": FP, "Cookie": "lang=en; theme=dark; s=1"})
     c.check("a short functional cookie is NOT flagged as tracking",
             nyx.CAT_COOKIE not in _cats(func_cook))
+
+    # A per-request trace header (name not id-ish) is not a device ID.
+    trace_hdr = nyx.inspect_outbound(
+        "GET", THIRD, {"Referer": FP, "X-Request-Id": "550e8400-e29b-41d4-a716-446655440000"})
+    c.check("a per-request trace header (X-Request-Id) is NOT flagged",
+            nyx.CAT_IDENTIFIER not in _cats(trace_hdr))
 
     # ── The report is human and does not leak the raw value ──────────────────
     print("\n[3] the observation is human-readable and never stores the raw value")
