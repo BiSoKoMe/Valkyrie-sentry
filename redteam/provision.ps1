@@ -47,6 +47,39 @@ if (-not $SkipSysmon) {
         $cfg = Join-Path $WorkDir "sysmonconfig.xml"
         Invoke-WebRequest "https://raw.githubusercontent.com/SwiftOnSecurity/sysmon-config/master/sysmonconfig-export.xml" `
             -OutFile $cfg -UseBasicParsing
+        # The SwiftOnSecurity config keeps ProcessAccess (EID 10) minimal because
+        # it is noisy — but EID10->lsass.exe is EXACTLY the signal Valkyrie's
+        # credential-theft (T1003.001) detection consumes. Without it the LSASS
+        # atomics run and Sysmon logs NOTHING, so the technique scores MISS for a
+        # blind-sensor reason, not a rule reason (confirmed by a live run: EID10
+        # count = 0 during the destructive battery). Add an explicit, additive
+        # ProcessAccess include RuleGroup for lsass.exe so the sensor emits what
+        # the detector needs. Additive (Sysmon ORs RuleGroups), and fully
+        # best-effort: any failure falls back to the stock config so provisioning
+        # — and the whole run — can never be broken by this patch.
+        try {
+            [xml]$sx = Get-Content $cfg -Raw
+            $filtering = $sx.Sysmon.EventFiltering
+            if ($filtering) {
+                $rg = $sx.CreateElement("RuleGroup")
+                $rg.SetAttribute("name", "valkyrie-lsass-access")
+                $rg.SetAttribute("groupRelation", "or")
+                $pa = $sx.CreateElement("ProcessAccess")
+                $pa.SetAttribute("onmatch", "include")
+                $ti = $sx.CreateElement("TargetImage")
+                $ti.SetAttribute("condition", "image")
+                $ti.InnerText = "lsass.exe"
+                $pa.AppendChild($ti) | Out-Null
+                $rg.AppendChild($pa) | Out-Null
+                $filtering.AppendChild($rg) | Out-Null
+                $sx.Save($cfg)
+                Info "Patched Sysmon config: ProcessAccess->lsass.exe (EID 10) explicitly ON."
+            } else {
+                Warn "Sysmon config had no EventFiltering node — using stock config."
+            }
+        } catch {
+            Warn "Could not patch Sysmon config for lsass EID10 (using stock): $($_.Exception.Message)"
+        }
         Info "Installing Sysmon..."
         & (Join-Path $sysDir "Sysmon64.exe") -accepteula -i $cfg
         Info "Sysmon installed."
