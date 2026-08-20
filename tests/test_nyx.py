@@ -33,7 +33,7 @@ def _cats(obs):
 
 
 def main() -> int:
-    c = Checks("nyx", expect_min=42)
+    c = Checks("nyx", expect_min=45)
 
     # ── IT MUST SEE: each category, crossing to a third party ────────────────
     print("\n[1] sees personal data leaving to a THIRD party")
@@ -319,6 +319,52 @@ def main() -> int:
         b"adid=550e8400-e29b-41d4-a716-446655440000&" + b"p=1&" * 50000)
     c.check("a leak in the first 16KB is still caught under the cap",
             nyx.CAT_IDENTIFIER in _cats(lead))
+
+    # ── END-TO-END: ACT through the REAL _handle_request pipeline ────────────
+    # Unit tests prove the pieces; this proves the whole request path in ACT
+    # mode — the decision steps run, Nyx rewrites the body IN PLACE, the request
+    # is NOT blocked, and it proceeds. Catches wiring bugs between the pipeline
+    # and _nyx_observe that isolated tests miss.
+    print("\n[10] end-to-end: ACT through the real request pipeline")
+    import valkyrie.config as _cfg2
+    from valkyrie.tls_addon import ValkyrieAddon as _A
+
+    class _S2:
+        def __init__(self): self.events = []
+        def log(self, e): self.events.append(e)
+
+    class _R2:
+        def __init__(self):
+            self.method = "POST"
+            self.pretty_host = "collector.tracker.example"
+            self.path = "/api/submit"
+            self.url = "https://collector.tracker.example/api/submit"
+            self.pretty_url = self.url
+            self.headers = {"Referer": FP, "Content-Type": "application/x-www-form-urlencoded"}
+            self.raw_content = b"adid=550e8400-e29b-41d4-a716-446655440000&n=1"
+        def set_content(self, b): self.raw_content = b
+
+    class _C2:
+        peername = ("10.0.0.9", 40000)
+
+    class _F2:
+        def __init__(self):
+            self.request = _R2(); self.response = None; self.client_conn = _C2()
+
+    _sv = _cfg2.NYX_ACT
+    try:
+        _cfg2.NYX_ACT = True
+        a = _A(_S2(), blocklist=None, behavioral=None, rules=None, threat_intel=None)
+        f = _F2()
+        a._handle_request(f)
+        c.check("e2e ACT: body rewritten in the real pipeline (real id gone)",
+                b"550e8400-e29b-41d4-a716-446655440000" not in f.request.raw_content)
+        c.check("e2e ACT: request was NOT blocked (response stays None)",
+                f.response is None)
+        c.check("e2e ACT: a nyx_fake deception event was logged",
+                any(getattr(e, "raw_category", "") == "nyx_fake" for e in a.store.events))
+    finally:
+        _cfg2.NYX_ACT = _sv
 
     return c.finish()
 
