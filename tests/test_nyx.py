@@ -33,7 +33,7 @@ def _cats(obs):
 
 
 def main() -> int:
-    c = Checks("nyx", expect_min=33)
+    c = Checks("nyx", expect_min=34)
 
     # ── IT MUST SEE: each category, crossing to a third party ────────────────
     print("\n[1] sees personal data leaving to a THIRD party")
@@ -191,6 +191,13 @@ def main() -> int:
     u, bdy, faked = nyx.fake_outbound("POST", THIRD, HDR, b"cc=4242424242424242", persona)
     c.check("payment card rewritten to a fake (real card gone)",
             b"4242424242424242" not in bdy and b"4111111111111111" in bdy)
+
+    u, bdy, faked = nyx.fake_outbound(
+        "POST", THIRD, HDR,
+        b"screen=2560x1440&timezone=America/New_York&lang=en-US&cores=16", persona)
+    c.check("fingerprint bundle rewritten to consistent persona device values",
+            b"2560x1440" not in bdy
+            and f"{persona.screen_width}x{persona.screen_height}".encode() in bdy)
 
     # Consistency: the SAME persona value across two different requests (the tell
     # a sloppy spoof would fail — two requests must not disagree about the user).

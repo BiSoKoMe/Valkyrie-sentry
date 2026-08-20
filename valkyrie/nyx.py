@@ -131,6 +131,25 @@ def _find_card(blob: str) -> str | None:
             return m.group(0)
     return None
 
+
+def _fp_signals(blob: str, body_text: str) -> int:
+    """Count distinct device-fingerprint surfaces present. Shared by the observe
+    gate and the act path so both agree on 'is this a fingerprint bundle'."""
+    n = 0
+    if _FP_SCREEN.search(blob) or _FP_WXH.search(blob):
+        n += 1
+    if _FP_TZ.search(blob) or _FP_TZVAL.search(body_text):
+        n += 1
+    if _FP_LANG.search(blob):
+        n += 1
+    if _FP_CORES.search(blob):
+        n += 1
+    if _FP_GPU.search(blob):
+        n += 1
+    if _FP_UA.search(body_text):
+        n += 1
+    return n
+
 # Fingerprint-bundle surfaces — each contributes ONE signal; >=3 together in a
 # single third-party request is the tell.
 _FP_SCREEN = re.compile(r"(screen|resolution|avail(width|height)|\bsw\b|\bsh\b)", re.I)
@@ -428,6 +447,23 @@ def _personal_values(url, headers, body, first_party_origin=None):
     card = _find_card(blob)
     if card:
         found.append((CAT_FINANCIAL, "card", card))
+    # fingerprint bundle → rewrite each recognised device field to a persona
+    # value. Gated on the FULL bundle (>=3 surfaces) so a lone benign field
+    # (a single 'lang') is never touched. Matters most for native apps, where
+    # farble's browser-side spoofing does not reach.
+    if _fp_signals(blob, body_text) >= 3:
+        for k, v in pairs:
+            vs = v.strip()
+            if not vs:
+                continue
+            if _FP_WXH.fullmatch(vs) or _FP_SCREEN.search(k):
+                found.append((CAT_FINGERPRINT, "screen", vs))
+            elif _FP_TZ.search(k) or _FP_TZVAL.fullmatch(vs):
+                found.append((CAT_FINGERPRINT, "tz", vs))
+            elif _FP_LANG.search(k):
+                found.append((CAT_FINGERPRINT, "lang", vs))
+            elif _FP_CORES.search(k):
+                found.append((CAT_FINGERPRINT, "cores", vs))
     return found
 
 
@@ -452,6 +488,15 @@ def _fake_for(category: str, raw: str, kind: str, persona):
         return _fake_email(persona) if "@" in raw else "+10000000000"
     if category == CAT_FINANCIAL:
         return "4111111111111111"   # a standard Luhn-valid test-card number
+    if category == CAT_FINGERPRINT:
+        if kind == "screen":
+            return f"{getattr(persona, 'screen_width', 1920)}x{getattr(persona, 'screen_height', 1080)}"
+        if kind == "tz":
+            return getattr(persona, "timezone", None)
+        if kind == "lang":
+            return getattr(persona, "locale", None)
+        if kind == "cores":
+            return str(getattr(persona, "hardware_concurrency", ""))
     return None
 
 
