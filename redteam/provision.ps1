@@ -96,6 +96,25 @@ New-ItemProperty -Path $psKey -Name EnableScriptBlockLogging -Value 1 -PropertyT
 Info "Script Block Logging enabled."
 
 # ---------------------------------------------------------------------------
+# 2b. Seed a Chrome credential-store file for the T1555 watcher
+# ---------------------------------------------------------------------------
+# The runner has no Chrome profile, so browser_cred_watch.credential_store_paths()
+# would be EMPTY and the watcher (which snapshots its watch-paths at start())
+# would watch nothing — T1555 could never fire, however good the detector is.
+# Create a dummy Login Data file under the CURRENT user's real profile BEFORE
+# Valkyrie starts so the watcher picks it up; the eval then opens it from a
+# non-browser process to trigger the detection honestly.
+try {
+    $chromeDir = Join-Path $env:LOCALAPPDATA "Google\Chrome\User Data\Default"
+    New-Item -ItemType Directory -Force -Path $chromeDir | Out-Null
+    $loginData = Join-Path $chromeDir "Login Data"
+    if (-not (Test-Path $loginData)) {
+        Set-Content -Path $loginData -Value "SQLite format 3 (eval credential-store decoy)" -ErrorAction SilentlyContinue
+    }
+    Info "Seeded Chrome Login Data decoy for the T1555 watcher: $loginData"
+} catch { Warn "Could not seed the T1555 credential-store decoy: $($_.Exception.Message)" }
+
+# ---------------------------------------------------------------------------
 # 3. Invoke-AtomicRedTeam + atomics
 # ---------------------------------------------------------------------------
 if (-not $SkipAtomics) {

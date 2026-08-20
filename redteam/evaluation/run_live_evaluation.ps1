@@ -364,17 +364,19 @@ foreach ($t in $Techniques) {
                 }
                 "cred_store_watch" {
                     # browser_cred_watch.py raises HIGH when a NON-browser process
-                    # holds a known browser credential-store file open. Simulate it
-                    # faithfully: ensure the catalogued store path exists, then open
-                    # it with a read handle from THIS (non-browser) process and hold
-                    # past the 5s poll interval so the watcher can observe it.
-                    $p = [string]$t.probe_input.path
+                    # holds a known browser credential-store file open. It watches
+                    # the CURRENT USER's real Chrome path (credential_store_paths()),
+                    # snapshotted at start() -- NOT the catalog's fictional 'alice'
+                    # path, which is why this used to miss. provision.ps1 seeds the
+                    # real file before Valkyrie starts; here we just open that exact
+                    # path from this (non-browser) process and hold past the 5s poll.
+                    $p = Join-Path $env:LOCALAPPDATA "Google\Chrome\User Data\Default\Login Data"
                     try {
                         $dir = Split-Path $p -Parent
-                        if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+                        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
                         if (-not (Test-Path $p)) { Set-Content -Path $p -Value "eval-credstore" -ErrorAction SilentlyContinue }
                         $fs = [System.IO.File]::Open($p, 'Open', 'Read', 'ReadWrite')
-                        Start-Sleep -Seconds 7
+                        Start-Sleep -Seconds 8
                         $fs.Close()
                     } catch { $executionError = $_.Exception.Message }
                     $attackExecuted = $true
