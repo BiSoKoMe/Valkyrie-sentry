@@ -752,7 +752,15 @@ RAM_DB_URI                = "file::memory:?cache=shared"
 # Intelligence layer (self-learning threat detection)
 # ---------------------------------------------------------------------------
 INTELLIGENCE_MODE       = True    # master switch for the learning pipeline
-LEARNING_PERIOD_DAYS    = 7       # baseline learning window after first start
+LEARNING_PERIOD_DAYS    = 7       # (legacy display hint only; readiness is data-based below)
+# Baseline readiness is gated on DATA, not the calendar: the novelty signals
+# ("never seen this domain from this process") switch on once the machine has
+# revealed enough of its OWN normal — this many distinct process->domain pairs.
+# So it learns whenever the computer is on and is "trained" by observation, not
+# by days elapsed. A busy machine is ready in hours; an idle one takes longer —
+# which is correct. The baseline persists in SQLite, so this accumulates across
+# reboots and never restarts.
+BASELINE_READY_PAIRS    = 200
 ANOMALY_BLOCK_THRESHOLD = 0.7     # classifier score at/above which we block
 ANOMALY_FLAG_THRESHOLD  = 0.4     # classifier score at/above which we flag
 

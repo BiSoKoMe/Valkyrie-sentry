@@ -22,6 +22,7 @@ from datetime import datetime
 from typing import Optional
 
 from ..config import (
+    BASELINE_READY_PAIRS,
     INTEL_FLUSH_INTERVAL,
     INTEL_HISTORY_SAMPLES,
     LEARNING_PERIOD_DAYS,
@@ -52,9 +53,18 @@ class _PairProfile:
 class BaselineLearner:
     """Per-machine behavioural baseline, persisted in the Store's SQLite DB."""
 
-    def __init__(self, store, learning_days: float = LEARNING_PERIOD_DAYS) -> None:
+    def __init__(self, store, learning_days: float = LEARNING_PERIOD_DAYS,
+                 ready_pairs: int = BASELINE_READY_PAIRS) -> None:
         self._store = store
-        self._learning_days = learning_days
+        self._learning_days = learning_days      # legacy display hint only
+        # Readiness is data-based now, but `learning_days=0` has always been the
+        # way a caller says "no learning period — be authoritative immediately"
+        # (the intel-only harness and the classifier tests both rely on it).
+        # Honour that contract explicitly: silently ignoring it left a fresh
+        # store PERMANENTLY in learning mode, which damps every anomaly-only
+        # block down to a flag — i.e. the detector stops blocking and nothing
+        # says why.
+        self._ready_pairs = 0 if float(learning_days) == 0 else max(1, int(ready_pairs))
         self._profiles: dict[tuple[str, str], _PairProfile] = {}
         self._lock = threading.RLock()
         self._learning_started: float = 0.0
@@ -163,18 +173,34 @@ class BaselineLearner:
                 p.payloads.append(payload_size)
             p.dirty = True
 
+    def observed_pairs(self) -> int:
+        """Distinct process->domain behaviours learned so far — the breadth of
+        this machine's normal. Grows only while the computer is on and observing;
+        persists in SQLite across reboots; never restarts."""
+        with self._lock:
+            return len(self._profiles)
+
+    def learning_progress(self) -> float:
+        """0.0 .. 1.0 — how much of the baseline is learned, measured by DATA."""
+        if self._ready_pairs <= 0:
+            return 1.0          # learning explicitly disabled -> fully ready
+        return min(1.0, self.observed_pairs() / self._ready_pairs)
+
     def is_learning(self) -> bool:
-        """True during the initial learning window after first ever start."""
-        if self._learning_started == 0.0:
-            return True
-        return (time.time() - self._learning_started) < self._learning_days * 86_400
+        """True until enough of THIS machine's normal has been observed to make
+        the novelty signals reliable — gated on DATA seen, not days elapsed.
+
+        The rule engine, the behavioural nose, and the kill-chain are live from
+        second zero regardless; only the 'never seen on this host' novelty
+        signals wait for this, because 'novel' is meaningless with no baseline.
+        A busy machine is ready in hours, an idle one takes longer — correct
+        either way, and it accumulates whenever the machine is on."""
+        return self.observed_pairs() < self._ready_pairs
 
     def learning_day(self) -> int:
-        """1-based day of the learning period (clamped to the period length)."""
-        if self._learning_started == 0.0:
-            return 1
-        day = int((time.time() - self._learning_started) // 86_400) + 1
-        return min(day, int(self._learning_days))
+        """Back-compat shim (the display now shows observed/target, not a
+        calendar day): returns distinct behaviours observed so far."""
+        return self.observed_pairs()
 
     def get_baseline(self, process: str) -> dict:
         """Normal domains, frequencies, and timing for one process."""

@@ -284,6 +284,25 @@ def _build_nyx() -> dict:
     }
 
 
+def _dns_active() -> bool:
+    """True only if the DNS interceptor is registered AND reporting healthy.
+
+    Conservative by design: any missing registry, missing component, or probe
+    error yields False. For a security product, "I cannot confirm protection"
+    must never render as "protected".
+    """
+    try:
+        reg = state.registry
+        if reg is None:
+            return False
+        comp = reg.get("dns_interceptor")
+        if comp is None:
+            return False
+        return comp.snapshot()["health"]["state"] == "up"
+    except Exception:
+        return False
+
+
 def _build_stats() -> dict:
     from ..service_manager import is_running_as_service
 
@@ -317,6 +336,14 @@ def _build_stats() -> dict:
         "top_blocked":        top,
         "uptime_seconds":     int(time.time() - state.start_time),
         "dns_port":           state.dns_port,
+        # Ground truth for "is DNS interception actually running right now".
+        # The desktop shell previously inferred protection SOLELY from the
+        # presence of valkyrie_dns_adapter.txt, a marker that survives a crash,
+        # a reboot or a stopped service — so a two-week-old file made the app
+        # report "Protected / All clear" while nothing was intercepting. The
+        # registry knows whether the interceptor is wired AND healthy, so the
+        # engine states it plainly rather than letting the UI guess.
+        "dns_active":         _dns_active(),
         "web_port":           state.web_port,
         "protection_healthy": healthy,
         "meeting_active":     meeting.get("active", False),

@@ -254,8 +254,9 @@ def build_status_rows(
         _ist = intelligence.status()
         if _ist["learning"]:
             rows.append(("Intelligence", True,
-                         f"learning (day {_ist['learning_day']} of "
-                         f"{_ist['learning_days_total']})"))
+                         f"learning ({_ist['learning_observed']}/"
+                         f"{_ist['learning_target']} behaviours, "
+                         f"{_ist['learning_percent']}%)"))
         else:
             rows.append(("Intelligence", True,
                          f"active — {_ist['threats_learned']:,} threats learned"))
@@ -475,7 +476,8 @@ def main() -> None:
                 console.print(f"  Safe patterns   : {len(data['safe']):,}")
             else:
                 st = intel.status()
-                mode = (f"LEARNING (day {st['learning_day']} of {st['learning_days_total']})"
+                mode = (f"LEARNING ({st['learning_observed']}/{st['learning_target']} "
+                        f"behaviours, {st['learning_percent']}%)"
                         if st["learning"] else "ACTIVE")
                 console.print(f"[bold]Intelligence mode  :[/bold] {mode}")
                 console.print(f"  Threats learned  : {st['threats_learned']:,}")
@@ -942,8 +944,8 @@ def main() -> None:
         intelligence.start()
         _st = intelligence.status()
         if _st["learning"]:
-            _tick(f"Intelligence learning (day {_st['learning_day']} of "
-                  f"{_st['learning_days_total']})", _t)
+            _tick(f"Intelligence learning ({_st['learning_observed']}/"
+                  f"{_st['learning_target']} behaviours, {_st['learning_percent']}%)", _t)
         else:
             _tick(f"Intelligence active ({_st['threats_learned']:,} threats learned)", _t)
     elif args.debug:

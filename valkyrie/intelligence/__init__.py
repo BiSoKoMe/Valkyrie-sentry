@@ -139,8 +139,9 @@ class Intelligence:
     def print_signal_health(self) -> None:
         """Print a single ACTIVE/DISABLED audit line per signal at startup."""
         learning = self.baseline.is_learning()
-        mode = (f"learning day {self.baseline.learning_day()}/"
-                f"{int(self.baseline._learning_days)}" if learning else "active")
+        mode = (f"learning {self.baseline.observed_pairs()}/{self.baseline._ready_pairs} "
+                f"behaviours ({int(self.baseline.learning_progress() * 100)}%)"
+                if learning else "active")
         print(f"[intelligence] signal health "
               f"(intelligence-only baseline, mode={mode}):")
         for r in self.signal_health():
@@ -229,8 +230,11 @@ class Intelligence:
         return {
             "mode":               "learning" if learning else "active",
             "learning":           learning,
-            "learning_day":       self.baseline.learning_day(),
-            "learning_days_total": int(self.baseline._learning_days),
+            "learning_observed":  self.baseline.observed_pairs(),
+            "learning_target":    self.baseline._ready_pairs,
+            "learning_percent":   int(self.baseline.learning_progress() * 100),
+            "learning_day":       self.baseline.learning_day(),        # back-compat
+            "learning_days_total": int(self.baseline._learning_days),  # back-compat
             "threats_learned":    mem["threats_learned"],
             "safe_patterns":      mem["safe_patterns"],
             "baseline_processes": self.baseline.coverage(),
