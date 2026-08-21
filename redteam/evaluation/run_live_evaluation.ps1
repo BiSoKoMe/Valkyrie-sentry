@@ -57,6 +57,14 @@ param(
     # 30s clears 15s + poll jitter + ingest with margin.
     [int]$DetectWindowSeconds = 30,
     [int]$PollIntervalSeconds = 2,
+    # Drain gap between techniques. The detection loop EXITS EARLY on success,
+    # so fast-detecting techniques used to chain back-to-back with no gap --
+    # exactly the burst that overflows SensorManager's bounded queue, which
+    # deliberately evicts the OLDEST event under overload. A few seconds of
+    # quiet lets the pipeline drain so the NEXT technique is not measured
+    # against a saturated sensor. ~3s x 39 techniques is ~2 minutes against a
+    # 90-minute budget -- cheap insurance for a number we want to trust.
+    [int]$SettleSeconds = 3,
     [switch]$SkipDestructive,
     [string]$RepoRoot = (Resolve-Path "$PSScriptRoot\..\..").Path
 )
@@ -188,6 +196,20 @@ function Get-FileEvidence([string[]]$WatchDirs) {
 # ---------------------------------------------------------------------------
 # Incident helpers
 # ---------------------------------------------------------------------------
+function Get-SensorDrops {
+    # Backpressure/dedup counters, so a MISS can be told apart from a
+    # NEVER-DELIVERED. Returns $null when the endpoint is unavailable rather
+    # than zeroes -- "unknown" must never be reported as "nothing dropped".
+    try {
+        $r = Invoke-CurlGet "$ApiBase/api/sensors/status" 8
+        if (-not $r -or -not $r.enabled) { return $null }
+        return @{ backpressure = [int]$r.dropped_backpressure
+                  dedup        = [int]$r.dropped_dedup
+                  submitted    = [int]$r.submitted
+                  emitted      = [int]$r.emitted }
+    } catch { return $null }
+}
+
 function Get-Incidents {
     # brief=true -> the FAST incident list (raw rows, no per-incident impact
     # assessment / explanation). The full view is O(incidents) and times out
@@ -244,6 +266,7 @@ foreach ($t in $Techniques) {
 
     Info "-- $($t.id)  [$($t.technique_id)]  $($t.technique_name)"
     $beforeIds = @(Get-Incidents | ForEach-Object { $_.id })
+    $dropsBefore = Get-SensorDrops
     $beforeProc = Get-ProcessEvidence
     # Time-anchor the scoring. Valkyrie CORRELATES related detections into one
     # incident per actor-lineage, so a detection for this technique may fold
@@ -491,6 +514,17 @@ foreach ($t in $Techniques) {
         if (-not ($techs | Where-Object { $_ -like "*$tid*" })) { $falsePositiveIds += $id }
     }
 
+    $dropsAfter = Get-SensorDrops
+    $dropDeltaBp = $null; $dropDeltaDd = $null
+    $dropNote = "sensor metrics unavailable"
+    if ($dropsBefore -and $dropsAfter) {
+        $dropDeltaBp = [Math]::Max(0, $dropsAfter.backpressure - $dropsBefore.backpressure)
+        $dropDeltaDd = [Math]::Max(0, $dropsAfter.dedup        - $dropsBefore.dedup)
+        $dropNote = if ($dropDeltaBp -gt 0) {
+            "WARNING: $dropDeltaBp event(s) dropped by backpressure during this technique - a miss here may be a blind sensor, not a rule gap"
+        } else { "no backpressure drops during this technique" }
+    }
+
     $record = [ordered]@{
         schema = "valkyrie-redteam-evaluation/1"
         tier = "B_live"
@@ -534,6 +568,13 @@ foreach ($t in $Techniques) {
         confidence_score = $matchedConfidence
         confidence_note = "as recorded on the matching incident"
 
+        # Sensor delivery during THIS technique. A miss with a non-zero
+        # backpressure delta is a BLIND SENSOR, not a failed rule -- the two
+        # must never be conflated when reading coverage.
+        sensor_dropped_backpressure = $dropDeltaBp
+        sensor_dropped_dedup        = $dropDeltaDd
+        sensor_delivery_note        = $dropNote
+
         false_positives_generated = $falsePositiveIds.Count
         false_positives_note = "count of NEW incidents in the settle window not attributable to this technique"
 
@@ -570,6 +611,11 @@ foreach ($t in $Techniques) {
     if ($t.probe -eq "persistence" -and $t.probe_input.activity -eq "run_key") {
         Remove-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "ValkyrieEvalTest" -ErrorAction SilentlyContinue
     }
+
+    # Let the sensor pipeline drain before the next technique fires (see
+    # -SettleSeconds). Without this the battery is one long burst and the
+    # bounded queue evicts real events.
+    if ($SettleSeconds -gt 0) { Start-Sleep -Seconds $SettleSeconds }
 }
 
 # ---------------------------------------------------------------------------

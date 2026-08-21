@@ -100,8 +100,12 @@ def collect(paths: list[str]) -> tuple[dict, dict, list[str]]:
                 "outcomes": set(),
                 "attempts": 0,
                 "matched_source": None,
+                "max_backpressure_drops": 0,
             })
             slot["attempts"] += 1
+            bp = rec.get("sensor_dropped_backpressure")
+            if isinstance(bp, int) and bp > slot["max_backpressure_drops"]:
+                slot["max_backpressure_drops"] = bp
             if outcome:
                 slot["outcomes"].add(outcome)
             # First proof wins and is never downgraded — a later run that
@@ -186,7 +190,17 @@ def main() -> int:
             for v in sorted(by_tactic[tactic], key=lambda x: x["id"]):
                 outs = ", ".join(sorted(v["outcomes"])) or "no outcome recorded"
                 print(f"      - {v['id']:<34} {v['technique_id']:<12} [{outs}]")
+                if v["max_backpressure_drops"]:
+                    print(f"        ^ BLIND SENSOR, not necessarily a rule gap: "
+                          f"{v['max_backpressure_drops']} event(s) dropped by "
+                          f"backpressure during this technique")
         print()
+        blind = [v for v in union.values()
+                 if not v["detected"] and v["max_backpressure_drops"]]
+        if blind:
+            print(f"  {len(blind)} of those ran while the sensor queue was "
+                  f"dropping events -- re-run before calling them detection gaps.")
+            print()
     return 0
 
 
