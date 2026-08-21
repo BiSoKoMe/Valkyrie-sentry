@@ -78,28 +78,43 @@ jobs:
           # on the runner, so the eval script's own health check (line ~203) found
           # a dead API even though the prior step confirmed it up. One step keeps
           # the agent alive for the whole battery.
-          $p = Start-Process -FilePath python `
-            -ArgumentList "-m", "valkyrie", "--web", "--web-port", "8090", `
-              "--no-dns", "--no-firewall", "--no-unbound", "--no-tls", "--no-sysmon-setup", `
-              "--no-download-lists" `
-            -RedirectStandardOutput "valkyrie_stdout.log" `
-            -RedirectStandardError "valkyrie_stderr.log" `
-            -PassThru -WindowStyle Hidden
-          $p.Id | Out-File valkyrie.pid
-
-          $deadline = (Get-Date).AddSeconds(90); $up = $false
-          do {
-            Start-Sleep -Seconds 2
-            try {
-              Invoke-RestMethod -Uri "http://127.0.0.1:8090/api/health" -TimeoutSec 3 | Out-Null
-              $up = $true; break
-            } catch {}
-          } while ((Get-Date) -lt $deadline)
-          if (-not $up) {
-            Write-Error "Valkyrie API never answered on :8090 within 90s"
+          # A hung engine is RECOVERABLE, so stop forfeiting the whole job to it.
+          # Three of six Tier B runs this session were lost before a single
+          # technique ran: the process came up and answered the probe below, then
+          # stopped answering entirely and the readiness gate timed out (run
+          # 32447515475: 24 attempts, ZERO health checks, empty stderr -- no
+          # crash, just deaf). The run that passed used the SAME commit and the
+          # same flags, so this is runner variance, not a code path.
+          # Restarting the engine costs ~1 minute; losing the run costs ~40.
+          function Start-Engine {
+            $proc = Start-Process -FilePath python `
+              -ArgumentList "-m", "valkyrie", "--web", "--web-port", "8090", `
+                "--no-dns", "--no-firewall", "--no-unbound", "--no-tls", "--no-sysmon-setup", `
+                "--no-download-lists" `
+              -RedirectStandardOutput "valkyrie_stdout.log" `
+              -RedirectStandardError "valkyrie_stderr.log" `
+              -PassThru -WindowStyle Hidden
+            $proc.Id | Out-File valkyrie.pid
+            $dl = (Get-Date).AddSeconds(90)
+            do {
+              Start-Sleep -Seconds 2
+              try {
+                Invoke-RestMethod -Uri "http://127.0.0.1:8090/api/health" -TimeoutSec 3 | Out-Null
+                return $proc
+              } catch {}
+            } while ((Get-Date) -lt $dl)
+            Write-Host "Engine never answered on :8090 within 90s."
             Get-Content valkyrie_stdout.log, valkyrie_stderr.log -ErrorAction SilentlyContinue
-            exit 1
+            try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+            return $null
           }
+
+          $p = Start-Engine
+          if (-not $p) {
+            Write-Host "First engine start failed outright -- retrying once."
+            $p = Start-Engine
+          }
+          if (-not $p) { Write-Error "Valkyrie API never answered on :8090 (2 attempts)"; exit 1 }
           # NOTE: this only proves the process came up and bound the port. It is
           # NOT a readiness signal -- the engine still has heavy startup work to
           # do (parsing a ~360k-domain blocklist, threat intel, intelligence
@@ -130,8 +145,23 @@ jobs:
             # so under load every poll returned empty and every real detection
             # scored MISS. The engine now serves a brief=true fast path and the
             # scorer polls it. Run the real battery and read the true number.
-            redteam\evaluation\run_live_evaluation.ps1 -SkipDestructive:$skip -ApiBase "http://127.0.0.1:8090" -DetectWindowSeconds 12 *>&1 |
-              Tee-Object -FilePath tierb_transcript.log
+            # If the eval throws at its readiness gate, the engine went deaf
+            # AFTER answering the probe above -- a hung engine, not a bad
+            # detector. Restart it and run the battery once more rather than
+            # forfeiting the job; a lost run tells us nothing at all.
+            $evalOk = $false
+            foreach ($attempt in 1..2) {
+              redteam\evaluation\run_live_evaluation.ps1 -SkipDestructive:$skip -ApiBase "http://127.0.0.1:8090" -DetectWindowSeconds 12 *>&1 |
+                Tee-Object -FilePath tierb_transcript.log -Append
+              if ($?) { $evalOk = $true; break }
+              if ($attempt -eq 2) { break }
+              Write-Host "Battery did not start (attempt $attempt). Restarting the engine and retrying once..."
+              try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {}
+              Start-Sleep -Seconds 5
+              $p = Start-Engine
+              if (-not $p) { Write-Host "Engine would not come back; giving up."; break }
+            }
+            if (-not $evalOk) { Write-Host "Tier B battery did not complete after 2 attempts." }
             # Coverage varies 5-18 techs across identical battery runs. Hypothesis:
             # SensorManager's bounded-backpressure queue (etw/framework.py, deque
             # maxlen, deliberately drops the OLDEST event under overload rather than
