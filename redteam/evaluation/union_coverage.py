@@ -27,6 +27,20 @@ USAGE
   python redteam/evaluation/union_coverage.py                       # all results/
   python redteam/evaluation/union_coverage.py path/to/*.json ...    # explicit
   python redteam/evaluation/union_coverage.py --json                # machine-readable
+
+UNIONING REAL CI RUNS
+  Each CI run uploads its own `tier-b-results` artifact, so the cross-run union
+  has to be assembled locally. Pull several runs and point this at all of them:
+
+      gh run list --workflow=redteam-tierb.yml --limit 10
+      for id in <run-id> <run-id> <run-id>; do
+          gh run download $id -n tier-b-results -D ci/$id
+      done
+      python redteam/evaluation/union_coverage.py ci/*/redteam/evaluation/results/*
+
+  A run whose battery CRASHED still contributes: its `.partial.jsonl` is
+  uploaded alongside the aggregate JSON precisely so its proven techniques are
+  not lost with the job.
 """
 from __future__ import annotations
 
