@@ -48,11 +48,31 @@ import argparse
 import glob
 import json
 import os
+import re
 import sys
 from collections import defaultdict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RESULTS = os.path.join(HERE, "results")
+
+_DETECTED_TECH = re.compile(r"DETECTED-TECH:\s*(T\d{4}(?:\.\d{3})?)")
+
+
+def read_db_coverage(path: str) -> set[str]:
+    """ATT&CK ids from a saved db_coverage.py run.
+
+    db_coverage reads the incident store at rest, so it is the ONLY evidence
+    left by a battery that died before writing any record -- which is exactly
+    what the old (pre-streaming) script did on every crash. Folding it in means
+    no run is ever a total loss.
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return set(_DETECTED_TECH.findall(fh.read()))
+    except OSError as exc:
+        print(f"  ! skipping db-coverage {os.path.basename(path)}: {exc}",
+              file=sys.stderr)
+        return set()
 
 
 def _iter_records(path: str):
@@ -141,6 +161,10 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("paths", nargs="*", help="result files (default: all Tier B in results/)")
     ap.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    ap.add_argument("--db-coverage", action="append", default=[], metavar="FILE",
+                    help="saved db_coverage.py output; folds a crashed run's "
+                         "incident-store ground truth into the union "
+                         "(repeatable)")
     args = ap.parse_args()
 
     paths = args.paths
@@ -153,6 +177,41 @@ def main() -> int:
         return 2
 
     union, per_run, read = collect(paths)
+
+    # Fold in incident-store ground truth. Matching is on ATT&CK id, not the
+    # catalog's test id, so a technique already present from a JSON record is
+    # CREDITED, never counted a second time.
+    db_techs: set[str] = set()
+    for dbfile in args.db_coverage:
+        found = read_db_coverage(dbfile)
+        if not found:
+            continue
+        db_techs |= found
+        per_run[f"(db) {os.path.basename(dbfile)}"] = {
+            "detected": len(found), "seen": len(found)}
+        read.append(f"(db) {os.path.basename(dbfile)}")
+    if db_techs:
+        by_tid: dict[str, list] = defaultdict(list)
+        for v in union.values():
+            by_tid[v["technique_id"]].append(v)
+        for tid in sorted(db_techs):
+            if tid in by_tid:
+                for v in by_tid[tid]:
+                    if not v["detected"]:
+                        v["detected"] = True
+                        v["proven_by"] = "incident-store"
+            else:
+                # Proven live but absent from every record file -- the battery
+                # died before it could write this one down.
+                union[tid] = {
+                    "id": tid, "technique_id": tid, "technique_name": "",
+                    "tactic": "(from incident store)", "destructive": False,
+                    "detected": True, "proven_by": "incident-store",
+                    "outcomes": {"detected"}, "attempts": 1,
+                    "matched_source": "incident-store",
+                    "max_backpressure_drops": 0,
+                }
+
     if not union:
         print("No usable records in the given files.", file=sys.stderr)
         return 2
@@ -208,6 +267,16 @@ def main() -> int:
                     print(f"        ^ BLIND SENSOR, not necessarily a rule gap: "
                           f"{v['max_backpressure_drops']} event(s) dropped by "
                           f"backpressure during this technique")
+                # Credit is granted on an EXACT ATT&CK id, so a catalog entry
+                # written as the parent (T1555) is not auto-credited by a
+                # detection recorded against a sub-technique (T1555.003).
+                # Under-crediting keeps the floor honest, but silently listing
+                # it as unproven would be misleading -- so say so.
+                kin = sorted(t for t in db_techs
+                             if t.startswith(v["technique_id"] + "."))
+                if kin:
+                    print(f"        ^ sub-technique(s) {', '.join(kin)} WERE "
+                          f"proven; the parent id is not auto-credited")
         print()
         blind = [v for v in union.values()
                  if not v["detected"] and v["max_backpressure_drops"]]
