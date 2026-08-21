@@ -65,6 +65,10 @@ param(
     # against a saturated sensor. ~3s x 39 techniques is ~2 minutes against a
     # 90-minute budget -- cheap insurance for a number we want to trust.
     [int]$SettleSeconds = 3,
+    # How long to wait for the engine to become STABLE before measuring it, and
+    # how many consecutive health checks count as stable.
+    [int]$ReadyTimeoutSeconds = 420,
+    [int]$ReadyStreak = 3,
     [switch]$SkipDestructive,
     [string]$RepoRoot = (Resolve-Path "$PSScriptRoot\..\..").Path
 )
@@ -226,13 +230,49 @@ function Get-IncidentDetail([string]$id) {
 # ---------------------------------------------------------------------------
 # Liveness
 # ---------------------------------------------------------------------------
+# The old gate allowed 5 attempts x (8s timeout + 3s sleep) ~= 55 seconds and
+# accepted a SINGLE success. Both were wrong, and it cost a whole run:
+# the workflow's own probe saw the API answer, then 56s later this gate failed
+# five times with curl exit 28 (timeout) and the battery never started.
+#
+# The engine legitimately goes deaf for a while during startup -- it parses a
+# ~360k-domain blocklist, loads threat intel and warms the intelligence layer,
+# and that work blocks the event loop. "Answered once" therefore does not mean
+# "ready to be measured": it means the engine happened to reply between two
+# pieces of heavy lifting.
+#
+# So: wait far longer, and require CONSECUTIVE successes so a battery is never
+# started during a lull in a stall. Also say WHICH failure it is -- a refused
+# connection (not listening yet) and a timeout (listening but too busy) call
+# for completely different fixes, and a bare "not reachable" hid that.
 $HealthOk = $false
 $LastErr = $null
-for ($i = 1; $i -le 5; $i++) {
-    try { Invoke-CurlGet -Uri "$ApiBase/api/health" -TimeoutSec 8 | Out-Null; $HealthOk = $true; break }
-    catch { $LastErr = $_; Start-Sleep -Seconds 3 }
+$consecutive = 0
+$deadline = (Get-Date).AddSeconds($ReadyTimeoutSeconds)
+$attempt = 0
+Info "Waiting for a STABLE engine at $ApiBase (need $ReadyStreak consecutive OK, up to ${ReadyTimeoutSeconds}s)..."
+while ((Get-Date) -lt $deadline) {
+    $attempt++
+    try {
+        Invoke-CurlGet -Uri "$ApiBase/api/health" -TimeoutSec 15 | Out-Null
+        $consecutive++
+        if ($consecutive -ge $ReadyStreak) { $HealthOk = $true; break }
+        Info "  health OK ($consecutive/$ReadyStreak consecutive)"
+    } catch {
+        $LastErr = $_
+        if ($consecutive -gt 0) {
+            Warn "  engine went deaf again after $consecutive OK -- restarting the streak (attempt $attempt)"
+        }
+        $consecutive = 0     # a stall resets the streak; near-misses do not count
+    }
+    Start-Sleep -Seconds 3
 }
-if (-not $HealthOk) { throw "Valkyrie API not reachable at $ApiBase after 5 attempts -- $($LastErr.Exception.Message)" }
+if (-not $HealthOk) {
+    $why = if ($LastErr) { $LastErr.Exception.Message } else { "no attempt succeeded" }
+    throw ("Valkyrie API never became STABLE at $ApiBase within ${ReadyTimeoutSeconds}s " +
+           "($attempt attempts, longest streak short of $ReadyStreak) -- $why")
+}
+Info "Engine is stable ($ReadyStreak consecutive health checks). Starting the battery."
 $HaveAtomics = [bool](Get-Module -ListAvailable -Name Invoke-AtomicRedTeam)
 if ($HaveAtomics) { Import-Module Invoke-AtomicRedTeam -Force }
 else { Warn "Invoke-AtomicRedTeam not installed -- vetted-ART techniques will be SKIPPED, not faked. Run provision.ps1 first for full coverage." }

@@ -90,7 +90,14 @@ jobs:
             Get-Content valkyrie_stdout.log, valkyrie_stderr.log -ErrorAction SilentlyContinue
             exit 1
           }
-          Write-Host "Valkyrie API is answering (pid $($p.Id)). Running Tier B..."
+          # NOTE: this only proves the process came up and bound the port. It is
+          # NOT a readiness signal -- the engine still has heavy startup work to
+          # do (parsing a ~360k-domain blocklist, threat intel, intelligence
+          # warm-up) during which it stops answering. A run was lost to exactly
+          # that: this probe said "answering", then the eval script's gate timed
+          # out five times 56s later. run_live_evaluation.ps1 owns real
+          # readiness now (-ReadyStreak consecutive OK within -ReadyTimeoutSeconds).
+          Write-Host "Valkyrie process is up and bound (pid $($p.Id)). Handing over to the eval script, which waits for a STABLE engine..."
 
           if ("${{ github.event_name }}" -eq "workflow_dispatch") {
             $skip = "${{ inputs.skip_destructive }}" -eq "true"
