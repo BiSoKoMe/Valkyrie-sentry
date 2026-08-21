@@ -327,11 +327,23 @@ async function waitUntilReady(onTick, { attempts = 60, intervalMs = 1000 } = {})
 // Snapshot for the dashboard: stats + recent events, tolerant of partial
 // availability so a half-warmed engine still renders something real.
 async function telemetry() {
-  const out = { ok: false, protected: isProtected(), stats: null, events: [] };
+  const marker = isProtected();
+  const out = { ok: false, protected: marker, stats: null, events: [] };
   try { out.stats = await apiGet('/api/stats', 6000); out.ok = true; }
   catch (err) { console.error('[engine.telemetry] GET /api/stats failed:', err && err.stack || err); }
   try { out.events = await apiGet('/api/events', 6000); }
   catch (err) { console.error('[engine.telemetry] GET /api/events failed:', err && err.stack || err); }
+
+  // The adapter marker alone is NOT proof of protection: it is a file that
+  // outlives a crash, a reboot or a stopped service. Seen live — a marker from
+  // two weeks earlier made the dashboard read "Protected / All clear" while
+  // ValkyrieShield was STOPPED. So when the engine is reachable and states
+  // whether DNS interception is actually running, that answer wins.
+  // `dns_active` absent (older engine) -> fall back to the marker rather than
+  // wrongly reporting unprotected.
+  if (out.ok && out.stats && typeof out.stats.dns_active === 'boolean') {
+    out.protected = marker && out.stats.dns_active;
+  }
   return out;
 }
 

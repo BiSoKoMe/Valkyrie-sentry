@@ -9,6 +9,18 @@
 //     window is ever shown).
 // ---------------------------------------------------------------------------
 
+// Valkyrie is a windowless GUI app (ADR 0001) — there is no console attached,
+// so process.stdout/stderr are frequently a broken/absent pipe. Node's
+// console.log/error normally swallow that, but on Windows a write to a
+// closed pipe can throw EPIPE synchronously; uncaught inside a timer
+// callback (e.g. the telemetry poll below), that took down the ENTIRE main
+// process — reproduced live: "Error: EPIPE: broken pipe, write" at
+// engine.js telemetry() -> console.error(), thrown from main.js's poll
+// Timeout.tick. Must be registered before anything else can log.
+for (const stream of [process.stdout, process.stderr]) {
+  if (stream) stream.on('error', (err) => { if (err && err.code !== 'EPIPE') throw err; });
+}
+
 const { app, BrowserWindow, ipcMain, shell, dialog, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const engine = require('./engine');
@@ -137,8 +149,15 @@ function startPolling() {
   if (pollTimer) return;
   const tick = async () => {
     if (!win) return;
-    const data = await engine.telemetry();
-    if (win) win.webContents.send('telemetry', data);
+    // A background poller must never be able to take the whole app down —
+    // one bad tick (network hiccup, a logging call that itself throws) just
+    // gets skipped; the next tick 1.5s later tries again.
+    try {
+      const data = await engine.telemetry();
+      if (win) win.webContents.send('telemetry', data);
+    } catch (err) {
+      console.error('[main.startPolling] tick failed (will retry):', err && err.stack || err);
+    }
   };
   tick();
   pollTimer = setInterval(tick, 1500);
