@@ -64,6 +64,15 @@ jobs:
         env:
           PYTHONUNBUFFERED: "1"
         run: |
+          # --no-download-lists: Tier B measures EDR/behavioural ATT&CK detection,
+          # NOT DNS blocklist matching (DNS is already off via --no-dns). Fetching
+          # and parsing ~360k blocklist domains at startup is therefore pure
+          # overhead here -- and it is not harmless: that work blocks the event
+          # loop, which is why the engine goes deaf during startup. Run
+          # 32445499669 died on exactly that: the readiness gate got 2 consecutive
+          # health checks, the engine went deaf again, and after 25 attempts over
+          # 420s it never managed 3 in a row, so the battery never ran at all.
+          #
           # Start Valkyrie AND run the eval in the SAME step. A background process
           # started in a separate step does not reliably survive into the next one
           # on the runner, so the eval script's own health check (line ~203) found
@@ -71,7 +80,8 @@ jobs:
           # the agent alive for the whole battery.
           $p = Start-Process -FilePath python `
             -ArgumentList "-m", "valkyrie", "--web", "--web-port", "8090", `
-              "--no-dns", "--no-firewall", "--no-unbound", "--no-tls", "--no-sysmon-setup" `
+              "--no-dns", "--no-firewall", "--no-unbound", "--no-tls", "--no-sysmon-setup", `
+              "--no-download-lists" `
             -RedirectStandardOutput "valkyrie_stdout.log" `
             -RedirectStandardError "valkyrie_stderr.log" `
             -PassThru -WindowStyle Hidden
