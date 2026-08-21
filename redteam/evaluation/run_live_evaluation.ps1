@@ -221,6 +221,21 @@ $WatchDirs = @("$env:USERPROFILE\Documents", "$env:USERPROFILE\Desktop",
 $Records = @()
 $RunTs = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
 
+# CRASH-PROOF RESULTS. The battery used to write its JSON exactly once, after
+# the final technique -- so any run that died mid-battery (the destructive
+# atomics genuinely crash the GitHub runner; the job can also hit its timeout)
+# threw away every technique it had already PROVEN. That is the single biggest
+# reason the live number was untrustworthy: a run reporting 4/39 was usually a
+# run that died at technique 5, not a detector that failed 35 times.
+# Each record is now appended to a JSONL the instant it is known, so a crashed
+# run still yields everything it got to. The final aggregate JSON is still
+# written on a clean finish, for score.py.
+$ResultsDir = Join-Path $PSScriptRoot "results"
+New-Item -ItemType Directory -Path $ResultsDir -Force | Out-Null
+$PartialPath = Join-Path $ResultsDir "$RunTs`__tierB.partial.jsonl"
+Set-Content -Path $PartialPath -Value "" -Encoding UTF8
+Info "Streaming per-technique results to $(Split-Path -Leaf $PartialPath) (survives a crash)."
+
 foreach ($t in $Techniques) {
     if ($t.destructive -and $SkipDestructive) {
         Warn "SKIP (destructive, -SkipDestructive set): $($t.id) [$($t.technique_id)]"
@@ -537,6 +552,11 @@ foreach ($t in $Techniques) {
         notes = $t.notes
     }
     $Records += $record
+    # Persist immediately (one JSON object per line). Best-effort: a failure to
+    # write the progress file must never abort the battery itself.
+    try {
+        ($record | ConvertTo-Json -Depth 10 -Compress) | Add-Content -Path $PartialPath -Encoding UTF8
+    } catch { Warn "could not append partial result for $($t.id): $($_.Exception.Message)" }
 
     $glyph = if ($detected) { "[DETECT]" } elseif ($detectionCategory -eq "user_rule") { "[EXCLUDED]" } else { "[MISS]" }
     Write-Host "   $glyph  fp=$($falsePositiveIds.Count)  latency=$latency" `
@@ -556,8 +576,6 @@ foreach ($t in $Techniques) {
 # Write results in the SAME schema replay_harness.py emits, so score.py
 # works unmodified on either tier's output.
 # ---------------------------------------------------------------------------
-$ResultsDir = Join-Path $PSScriptRoot "results"
-New-Item -ItemType Directory -Path $ResultsDir -Force | Out-Null
 $OutPath = Join-Path $ResultsDir "$RunTs`__tierB.json"
 @{ tier = "B_live"; catalog_version = $CatalogVersion; generated_at = $RunTs; records = $Records } |
     ConvertTo-Json -Depth 10 | Set-Content -Path $OutPath -Encoding UTF8

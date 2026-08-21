@@ -193,6 +193,21 @@ jobs:
           try { $s = Get-Service Sysmon64 -ErrorAction Stop; Write-Host ("Sysmon64 service: " + $s.Status) } catch { try { $s = Get-Service Sysmon -ErrorAction Stop; Write-Host ("Sysmon service: " + $s.Status) } catch { Write-Host "Sysmon service: NOT FOUND" } }
           try { $n = (Get-WinEvent -LogName 'Microsoft-Windows-Sysmon/Operational' -MaxEvents 1 -ErrorAction Stop); Write-Host ("Sysmon log readable: YES (latest EID " + $n.Id + ")") } catch { Write-Host ("Sysmon log readable: NO -- " + $_.Exception.Message) }
 
+      - name: Union coverage (survives a crashed battery)
+        if: always()
+        shell: pwsh
+        run: |
+          # The battery streams each technique's record to a .partial.jsonl the
+          # instant it is known, so a run that died mid-way still has data even
+          # though the aggregate JSON was never written. Read whatever exists.
+          # Within one CI run this is a single run's floor; download several
+          # runs' artifacts and point this at all of them for the real union.
+          $files = @(Get-ChildItem redteam/evaluation/results/*tierB.json,
+                                   redteam/evaluation/results/*tierB.partial.jsonl `
+                     -ErrorAction SilentlyContinue | Select-Object -Expand FullName)
+          if (-not $files) { Write-Host "(no Tier B result files produced)"; exit 0 }
+          python redteam/evaluation/union_coverage.py @files
+
       - name: Upload Tier B evidence
         if: always()
         continue-on-error: true
@@ -204,6 +219,7 @@ jobs:
             valkyrie_stdout.log
             valkyrie_stderr.log
             redteam/evaluation/results/*.json
+            redteam/evaluation/results/*.partial.jsonl
             redteam/evaluation/catalog_export.json
           if-no-files-found: warn
           retention-days: 30
