@@ -75,6 +75,33 @@ def read_db_coverage(path: str) -> set[str]:
         return set()
 
 
+def catalog_techniques() -> tuple[set[str], dict[str, str]]:
+    """In-scope ATT&CK ids from the catalog, plus id -> out_of_scope_reason.
+
+    Without this the denominator is whatever happened to be observed, so a
+    db-coverage-only union prints "31/31 = 100%" -- which reads as full
+    coverage and is badly misleading. The catalog is the real denominator.
+    """
+    path = os.path.join(HERE, "catalog_export.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            blob = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return set(), {}
+    entries = blob if isinstance(blob, list) else blob.get("techniques", [])
+    in_scope, reasons = set(), {}
+    for e in entries:
+        tid = e.get("technique_id")
+        if not tid:
+            continue
+        reason = e.get("out_of_scope_reason")
+        if reason:
+            reasons[tid] = reason
+        else:
+            in_scope.add(tid)
+    return in_scope, reasons
+
+
 def _iter_records(path: str):
     """Yield records from either an aggregate .json or a .partial.jsonl stream."""
     try:
@@ -177,9 +204,12 @@ def main() -> int:
     if not paths:
         paths = (glob.glob(os.path.join(RESULTS, "*tierB.json"))
                  + glob.glob(os.path.join(RESULTS, "*tierB.partial.jsonl")))
-    if not paths:
-        print("No Tier B result files found. Run the workflow first, or pass paths.",
-              file=sys.stderr)
+    # --db-coverage alone is a legitimate invocation: a battery that crashed
+    # before writing any record leaves its evidence ONLY in the incident store,
+    # which is exactly the case this flag exists for.
+    if not paths and not args.db_coverage:
+        print("No Tier B result files found. Run the workflow first, pass paths, "
+              "or supply --db-coverage.", file=sys.stderr)
         return 2
 
     union, per_run, read, pacing = collect(paths)
@@ -224,8 +254,30 @@ def main() -> int:
 
     detected = sorted(k for k, v in union.items() if v["detected"])
     missed = sorted(k for k, v in union.items() if not v["detected"])
-    total = len(union)
-    pct = (100.0 * len(detected) / total) if total else 0.0
+
+    # Denominator: the CATALOG, not "whatever this invocation happened to see".
+    # Falling back to len(union) would let a db-coverage-only run print 100%.
+    in_scope, oos_reasons = catalog_techniques()
+    proven_tids = {union[k]["technique_id"] for k in detected}
+    if in_scope:
+        total = len(in_scope)
+        # A catalog entry written as a PARENT (T1555) is satisfied by a proven
+        # SUB-technique (T1555.003) -- the sub-technique is an instance of it.
+        # The reverse is NOT true: detecting the parent T1059 does not prove
+        # the specific sub-technique T1059.003, so that never auto-credits.
+        credited = set(proven_tids & in_scope)
+        for tid in in_scope - credited:
+            if any(p.startswith(tid + ".") for p in proven_tids):
+                credited.add(tid)
+        covered = len(credited)
+        denom_note = "catalog in-scope techniques"
+        unproven_tids = sorted(in_scope - credited)
+    else:
+        total = len(union)
+        covered = len(detected)
+        denom_note = "techniques observed in these files (catalog unavailable)"
+        unproven_tids = []
+    pct = (100.0 * covered / total) if total else 0.0
 
     if args.json:
         out = {
@@ -251,8 +303,8 @@ def main() -> int:
         r = per_run[base]
         print(f"    {r['detected']:>3}/{r['seen']:<3} detected   {base}")
     print()
-    print(f"  UNION: {len(detected)}/{total} techniques proven detectable live "
-          f"({pct:.1f}%)")
+    print(f"  UNION: {covered}/{total} techniques proven detectable live "
+          f"({pct:.1f}%)   [denominator: {denom_note}]")
     print()
     if len(set(pacing.values())) > 1:
         print("  !! MIXED PACING -- these runs did not measure the same thing:")
@@ -266,6 +318,28 @@ def main() -> int:
           "(runner crash,\n  job timeout, sensor-queue drop) undercounts and "
           "none can overcount.")
     print()
+    if in_scope and not any(not v["detected"] for v in union.values()):
+        # Incident-store evidence says what WAS detected; it cannot say what was
+        # attempted. Destructive atomics are skipped by default, so an unproven
+        # technique below may simply never have been run.
+        print("  NOTE: built from incident-store evidence only, which records what was")
+        print("  DETECTED, not what was ATTEMPTED. An unproven technique below may")
+        print("  never have been executed (destructive atomics are skipped by default).")
+        print()
+    if unproven_tids:
+        print(f"  CATALOG TECHNIQUES NOT PROVEN ({len(unproven_tids)}):")
+        for tid in unproven_tids:
+            parent = tid.split(".")[0]
+            note = ""
+            if parent != tid and parent in proven_tids:
+                note = (f"   [parent {parent} was proven, but that does not "
+                        f"prove this sub-technique]")
+            print(f"    - {tid}{note}")
+        print()
+    bonus = sorted(proven_tids - in_scope) if in_scope else []
+    if bonus:
+        print(f"  Also detected, outside the catalog ({len(bonus)}): {', '.join(bonus)}")
+        print()
 
     by_tactic: dict[str, list] = defaultdict(list)
     for ident in missed:
