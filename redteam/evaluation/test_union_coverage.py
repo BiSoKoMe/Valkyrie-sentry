@@ -61,7 +61,7 @@ def _write_jsonl(d: Path, name: str, records: list[dict], truncate: bool = False
 
 
 def main() -> int:
-    c = Checks("redteam union coverage", expect_min=12)
+    c = Checks("redteam union coverage", expect_min=14)
 
     with tempfile.TemporaryDirectory() as td:
         d = Path(td)
@@ -75,7 +75,7 @@ def main() -> int:
             _rec("cred-lsass", "T1003.001", False),   # same technique, dropped here
             _rec("browser-creds", "T1555", True),     # proved here instead
         ])
-        union, per_run, read = collect([a, b])
+        union, per_run, read, _pacing = collect([a, b])
         c.check("both runs were read", len(read) == 2)
         c.check("a technique proved in run A stays proved when run B misses it",
                 union["cred-lsass"]["detected"] is True)
@@ -94,7 +94,7 @@ def main() -> int:
             _rec("impair-defender", "T1562.001", True),
             _rec("disc-whoami", "T1033", True),
         ], truncate=True)
-        union2, _, read2 = collect([crashed])
+        union2, _, read2, _ = collect([crashed])
         c.check("the partial stream was read at all", len(read2) == 1)
         c.check("every complete record survives a truncated final line",
                 sum(1 for v in union2.values() if v["detected"]) == 2)
@@ -107,7 +107,7 @@ def main() -> int:
             _rec("c2-dns", "T1071.004", False, drops=0),
             _rec("lateral-rdp", "T1021.002", False, outcome="not_executed_no_command"),
         ])
-        union3, _, _ = collect([blind])
+        union3, _, _, _ = collect([blind])
         c.check("a miss during backpressure carries the drop count",
                 union3["inject-hollow"]["max_backpressure_drops"] == 114)
         c.check("a clean miss carries no drops (a REAL gap)",
@@ -116,10 +116,22 @@ def main() -> int:
                 "not misread as a detector failure",
                 "not_executed_no_command" in union3["lateral-rdp"]["outcomes"])
 
-        print("[4] rubbish in does not take the tool down")
+        print("[4] pacing is tracked, because it changes what a run measures")
+        fast = _write_json(d, "20260106T000000Z__tierB.json",
+                           [dict(_rec("disc-whoami", "T1033", True), settle_seconds=0)])
+        slow = _write_json(d, "20260107T000000Z__tierB.json",
+                           [dict(_rec("disc-whoami", "T1033", False), settle_seconds=3)])
+        _u, _p, _r, pacing = collect([fast, slow])
+        c.check("each run's pacing is recorded against it",
+                pacing[Path(fast).name] == 0 and pacing[Path(slow).name] == 3)
+        c.check("differing pacing is detectable, so paced and unpaced runs are "
+                "never silently merged as comparable",
+                len(set(pacing.values())) > 1)
+
+        print("[5] rubbish in does not take the tool down")
         junk = d / "20260105T000000Z__tierB.json"
         junk.write_text("{ not json at all", encoding="utf-8")
-        union4, _, read4 = collect([str(junk)])
+        union4, _, read4, _ = collect([str(junk)])
         c.check("an unparseable file is skipped, not fatal",
                 union4 == {} and read4 == [])
 

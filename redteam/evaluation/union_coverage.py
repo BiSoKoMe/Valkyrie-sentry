@@ -99,11 +99,14 @@ def _iter_records(path: str):
         print(f"  ! skipping {os.path.basename(path)}: {exc}", file=sys.stderr)
 
 
-def collect(paths: list[str]) -> tuple[dict, dict, list[str]]:
-    """-> (per-technique union state, per-run summary, files actually read)"""
+def collect(paths: list[str]) -> tuple[dict, dict, list[str], dict]:
+    """-> (union state, per-run summary, files read, per-run pacing)"""
     union: dict[str, dict] = {}
     per_run: dict[str, dict] = {}
     read: list[str] = []
+    # Pacing changes what a run measures, so runs paced differently are not
+    # directly comparable and must not be silently merged into one figure.
+    pacing: dict[str, int] = {}
 
     for path in sorted(paths):
         base = os.path.basename(path)
@@ -137,6 +140,9 @@ def collect(paths: list[str]) -> tuple[dict, dict, list[str]]:
                 "max_backpressure_drops": 0,
             })
             slot["attempts"] += 1
+            settle = rec.get("settle_seconds")
+            if settle is not None:
+                pacing.setdefault(base, settle)
             bp = rec.get("sensor_dropped_backpressure")
             if isinstance(bp, int) and bp > slot["max_backpressure_drops"]:
                 slot["max_backpressure_drops"] = bp
@@ -153,7 +159,7 @@ def collect(paths: list[str]) -> tuple[dict, dict, list[str]]:
             read.append(base)
             per_run[base] = {"detected": len(run_detected), "seen": len(run_seen)}
 
-    return union, per_run, read
+    return union, per_run, read, pacing
 
 
 def main() -> int:
@@ -176,7 +182,7 @@ def main() -> int:
               file=sys.stderr)
         return 2
 
-    union, per_run, read = collect(paths)
+    union, per_run, read, pacing = collect(paths)
 
     # Fold in incident-store ground truth. Matching is on ATT&CK id, not the
     # catalog's test id, so a technique already present from a JSON record is
@@ -248,6 +254,14 @@ def main() -> int:
     print(f"  UNION: {len(detected)}/{total} techniques proven detectable live "
           f"({pct:.1f}%)")
     print()
+    if len(set(pacing.values())) > 1:
+        print("  !! MIXED PACING -- these runs did not measure the same thing:")
+        for base, sec in sorted(pacing.items()):
+            print(f"       {base}: settle={sec}s")
+        print("     Correlation/burst detections only fire when atomics run")
+        print("     back-to-back, so a paced run and an unpaced one are not")
+        print("     comparable. Union with care.")
+        print()
     print("  This is a FLOOR, not an average: every rig failure mode "
           "(runner crash,\n  job timeout, sensor-queue drop) undercounts and "
           "none can overcount.")

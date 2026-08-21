@@ -57,14 +57,29 @@ param(
     # 30s clears 15s + poll jitter + ingest with margin.
     [int]$DetectWindowSeconds = 30,
     [int]$PollIntervalSeconds = 2,
-    # Drain gap between techniques. The detection loop EXITS EARLY on success,
-    # so fast-detecting techniques used to chain back-to-back with no gap --
-    # exactly the burst that overflows SensorManager's bounded queue, which
-    # deliberately evicts the OLDEST event under overload. A few seconds of
-    # quiet lets the pipeline drain so the NEXT technique is not measured
-    # against a saturated sensor. ~3s x 39 techniques is ~2 minutes against a
-    # 90-minute budget -- cheap insurance for a number we want to trust.
-    [int]$SettleSeconds = 3,
+    # Drain gap between techniques. DEFAULT 0 -- ON PURPOSE.
+    #
+    # This was briefly defaulted to 3s to stop the battery saturating
+    # SensorManager's bounded queue. That silently changed WHAT IS BEING
+    # MEASURED, and the effect was not small: run 32440735442 (settle=0)
+    # recorded 27 distinct techniques in the incident store, while run
+    # 32441713709 (settle=3, plus two per-technique API reads) recorded 4 --
+    # on a BYTE-IDENTICAL engine, with only this harness changed.
+    #
+    # The mechanism is visible in run 32440735442's own detections: 4
+    # edr.sequence and 4 edr.killchain hits, with "burst"/"reconnaissance"
+    # all over the reasons. db_coverage.py credits EVERY technique named in a
+    # correlation detection's all_techniques list, so a single reconnaissance
+    # burst credits the whole discovery cluster at once. Those bursts only
+    # form because the harness fires atomics back-to-back. Spread them out and
+    # the correlation windows never fill.
+    #
+    # So pacing is a MEASUREMENT PARAMETER, not a tuning knob, and it is
+    # recorded in the results. 0 keeps the historical, comparable number.
+    # A non-zero value measures something different -- and arguably more
+    # honest, since no real adversary runs 39 techniques back-to-back -- but
+    # it is NOT comparable to any previously quoted figure.
+    [int]$SettleSeconds = 0,
     # How long to wait for the engine to become STABLE before measuring it, and
     # how many consecutive health checks count as stable.
     [int]$ReadyTimeoutSeconds = 420,
@@ -205,7 +220,12 @@ function Get-SensorDrops {
     # NEVER-DELIVERED. Returns $null when the endpoint is unavailable rather
     # than zeroes -- "unknown" must never be reported as "nothing dropped".
     try {
-        $r = Invoke-CurlGet "$ApiBase/api/sensors/status" 8
+        # Short timeout ON PURPOSE. This runs twice per technique, so a
+        # generous timeout would itself pace the battery -- and pacing
+        # measurably changes coverage (see -SettleSeconds). Diagnostics must
+        # never become part of what is being measured; if the endpoint is
+        # slow we give up and record "unknown" rather than distort the run.
+        $r = Invoke-CurlGet "$ApiBase/api/sensors/status" 3
         if (-not $r -or -not $r.enabled) { return $null }
         return @{ backpressure = [int]$r.dropped_backpressure
                   dedup        = [int]$r.dropped_dedup
@@ -569,6 +589,10 @@ foreach ($t in $Techniques) {
         schema = "valkyrie-redteam-evaluation/1"
         tier = "B_live"
         catalog_version = $CatalogVersion
+        # Pacing materially changes coverage (see -SettleSeconds), so every
+        # record carries it -- a result file must describe the conditions that
+        # produced it, or two runs get compared that never measured the same thing.
+        settle_seconds = $SettleSeconds
         id = $t.id
         technique_id = $t.technique_id
         technique_name = $t.technique_name
@@ -663,7 +687,9 @@ foreach ($t in $Techniques) {
 # works unmodified on either tier's output.
 # ---------------------------------------------------------------------------
 $OutPath = Join-Path $ResultsDir "$RunTs`__tierB.json"
-@{ tier = "B_live"; catalog_version = $CatalogVersion; generated_at = $RunTs; records = $Records } |
+@{ tier = "B_live"; catalog_version = $CatalogVersion; generated_at = $RunTs;
+   settle_seconds = $SettleSeconds; detect_window_seconds = $DetectWindowSeconds;
+   records = $Records } |
     ConvertTo-Json -Depth 10 | Set-Content -Path $OutPath -Encoding UTF8
 
 Write-Host "`n======================================================================"
