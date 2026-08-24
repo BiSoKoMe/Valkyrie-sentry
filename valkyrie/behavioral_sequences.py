@@ -1,22 +1,22 @@
-"""Behavioral sequence IOAs — CrowdStrike-style Event Stream Processing.
+"""Behavioral sequence IOAs - CrowdStrike-style Event Stream Processing.
 
 The kill-chain correlator (killchain.py) scores an actor GENERICALLY: three or
 more distinct ATT&CK tactics on one lineage = an attack chain. That catches
 "a lot is happening here," but it doesn't recognise a *specific* attack pattern.
 
-CrowdStrike's signature capability is different and complementary — Event Stream
+CrowdStrike's signature capability is different and complementary - Event Stream
 Processing (ESP) IOAs: hold only the *relevant* prior behaviours in memory and,
 when a later behaviour completes a known **ordered sequence** on the same
-process lineage, fire ONE named, high-confidence indicator — "credential theft
+process lineage, fire ONE named, high-confidence indicator - "credential theft
 from a reflectively-injected module in PowerShell," regardless of the tools
 used. It is stateful, single-pass, and tool-agnostic: it keys on the *shape* of
-the sequence (inject → read LSASS), never on a specific binary.
+the sequence (inject -> read LSASS), never on a specific binary.
 
 This module is that engine, kept to Valkyrie's honest, testable style:
 
   * A `SequenceRule` is an ORDERED list of `Step` behaviour-predicates plus a
     time window. A step matches a behaviour by ATT&CK technique, by label, or by
-    activity — never by tool name, so a brand-new tool that performs the same
+    activity - never by tool name, so a brand-new tool that performs the same
     behaviour still advances the sequence.
   * `SequenceEngine.observe()` is the ESP core: it holds partial matches per
     process-lineage root, advances them as matching behaviours arrive in order
@@ -25,7 +25,7 @@ This module is that engine, kept to Valkyrie's honest, testable style:
     when cmd.exe appears, check its parent"): a child process's behaviour
     advances its parent's sequence via the ppid edge.
 
-It complements — does not replace — the generic kill-chain: a completed sequence
+It complements - does not replace - the generic kill-chain: a completed sequence
 is a specific, higher-confidence claim ("this IS credential-dump-then-exfil"),
 where the kill-chain says "many tactics, probably an intrusion." Pure and
 deterministic given timestamps, so it is unit-tested independently of the engine.
@@ -48,17 +48,17 @@ def _tid(technique: str) -> str:
 
 @dataclass(frozen=True)
 class Step:
-    """One behaviour in a sequence. Matches on ANY of technique/label/activity —
+    """One behaviour in a sequence. Matches on ANY of technique/label/activity -
     all tool-agnostic. `techniques` match by prefix so a base id (T1003) also
     matches its sub-techniques (T1003.001).
 
-    `min_distinct` (default 1 — today's behaviour, unchanged): how many
+    `min_distinct` (default 1 - today's behaviour, unchanged): how many
     DISTINCT matching signals must be observed before this step is satisfied.
     A step with min_distinct > 1 does not advance on the first match; it
     accumulates distinct hits (by technique id, or by whichever label/activity
     matched) until enough have been seen. This is how a "breadth, not order"
-    rule — several different weak signals rather than two specific ones in
-    sequence — is expressed inside an otherwise strictly-ordered engine (see
+    rule - several different weak signals rather than two specific ones in
+    sequence - is expressed inside an otherwise strictly-ordered engine (see
     the single-step 'reconnaissance-burst' rule below)."""
     label: str
     techniques: tuple = ()
@@ -78,7 +78,7 @@ class Step:
         return False
 
     def match_key(self, tid: str, labels: frozenset, activity: str) -> str:
-        """A key identifying WHAT matched, for min_distinct counting — prefers
+        """A key identifying WHAT matched, for min_distinct counting - prefers
         the technique id (most specific), then whichever label matched, then
         the activity. Only meaningful when matches() is already True."""
         if self.techniques and tid and any(
@@ -100,15 +100,15 @@ class SequenceRule:
     severity: str            # 'medium' | 'high' | 'critical'
     technique: str           # culminating ATT&CK id (for tactic mapping)
     window: float            # seconds; the whole sequence must complete within
-    steps: tuple             # ordered tuple[Step, ...] — usually len >= 2; a
+    steps: tuple             # ordered tuple[Step, ...] - usually len >= 2; a
                               # single step with min_distinct > 1 expresses
                               # "breadth" (several distinct signals) instead
                               # of "order" (see reconnaissance-burst below)
     reason: str
 
 
-# ── The shipped named sequences (ESP-style behavioural IOAs) ─────────────────
-# Each is a SPECIFIC, ordered attack pattern — the thing a generic tactic count
+# --- The shipped named sequences (ESP-style behavioural IOAs) ---
+# Each is a SPECIFIC, ordered attack pattern - the thing a generic tactic count
 # can't name. Extend by appending; steps key on behaviour shape, never tooling.
 SEQUENCES: tuple = (
     # The CrowdStrike worked example: inject into a process, then read creds.
@@ -142,7 +142,7 @@ SEQUENCES: tuple = (
         # Step 1 keys ONLY on the document-parent label, never on bare T1059:
         # T1059 is "any script interpreter ran," which every benign powershell
         # session satisfies. Requiring the office_child_shell discriminator (emitted
-        # only when a real Office/document process spawns a shell — process_telemetry
+        # only when a real Office/document process spawns a shell - process_telemetry
         # `par in _OFFICE and n in _SHELLS`) is what makes this the *dropper* chain
         # and not "powershell exists, then powershell made a network call."
         (Step("document/browser spawned an interpreter",
@@ -181,10 +181,10 @@ SEQUENCES: tuple = (
         "A tool was fetched from the network and the same lineage then wrote an "
         "autostart/persistence mechanism."),
 
-    # Reconnaissance burst — BREADTH, not order. whoami/systeminfo/tasklist/
+    # Reconnaissance burst - BREADTH, not order. whoami/systeminfo/tasklist/
     # net view/net user are each individually indistinguishable from routine
     # administration (found the hard way: redteam/evaluation's disc-* findings
-    # — Discovery is architecturally the tactic where firing on a single
+    # - Discovery is architecturally the tactic where firing on a single
     # command is a guaranteed false-positive generator). The tell is several
     # DIFFERENT discovery techniques from the same actor close together, which
     # is why this is a single step with min_distinct=3 rather than an ordered
@@ -192,12 +192,22 @@ SEQUENCES: tuple = (
     # script) happens to reach for them, not a fixed A-then-B shape.
     SequenceRule(
         "reconnaissance-burst", "Reconnaissance burst (multiple discovery techniques)",
-        "medium", "T1087.001 — Account Discovery: Local Account", 120.0,
+        # Window widened 120s -> 300s on 2026-08-24 after a live Tier B run
+        # (run 32681983369) MISSED all 6 discovery techniques it fired. Root
+        # cause: they executed ~77s apart, so a 120s window never held the 3
+        # distinct techniques min_distinct needs (2*77=154s > 120) - the burst
+        # could not physically complete. This was not a detection weakness; the
+        # window was tuned for the tight offline live_safe cluster and was too
+        # small for realistic pacing. 300s also HARDENS against a real attacker
+        # who deliberately paces recon to slip under a short window - the very
+        # evasion a 120s budget invited. The FP guard is unchanged and remains
+        # min_distinct=3 (three DIFFERENT techniques), not the window.
+        "medium", "T1087.001 — Account Discovery: Local Account", 300.0,
         (Step("distinct discovery technique",
               # T1016/T1049/T1012/T1007 added 2026-08-05 alongside
               # process_telemetry.classify_discovery's ipconfig/netstat/
               # reg-query/sc-query labels (redteam/evaluation/live_safe.py
-              # RUN A closed gaps) — without listing them here too, Step.
+              # RUN A closed gaps) - without listing them here too, Step.
               # matches() would silently never count them (found the hard
               # way: a technique's classify_discovery label alone does NOT
               # feed this rule unless its id is also in this tuple).
@@ -239,22 +249,22 @@ class SequenceEngine:
 
     # -- lineage -----------------------------------------------------------
     def _root_key(self, pid: int, actor: str, parent_name: str = "") -> str:
-        """Resolve a process to its oldest tracked ancestor — so a child's
+        """Resolve a process to its oldest tracked ancestor - so a child's
         behaviour advances its parent's sequence (the ESP parent-pid match).
 
         Falls back to grouping by PARENT NAME when no numeric lineage is
-        resolvable but a parent name is known — the Security-log 4688 path
+        resolvable but a parent name is known - the Security-log 4688 path
         (native_process sensor, no Sysmon) has no ParentProcessId field at
         all, only ParentProcessName, so `ppid` is always 0 for events from
         that source. Without this fallback every process from that source
-        resolves to `pid:<its own pid>` — a root key unique to itself — so
+        resolves to `pid:<its own pid>` - a root key unique to itself - so
         no two commands can ever be recognised as the same actor and a
         sequence like reconnaissance-burst (min_distinct=3 on one actor) can
         never complete on a non-Sysmon host, no matter how many discovery
         commands run together (found 2026-08-05, ADR 0048 Part 2 RUN A: 0/12
-        captured). Coarser than real pid-based lineage — two unrelated
+        captured). Coarser than real pid-based lineage - two unrelated
         processes that happen to share a same-named parent (two different
-        cmd.exe sessions, say) will incorrectly merge — but that is a real
+        cmd.exe sessions, say) will incorrectly merge - but that is a real
         signal in the wrong bucket, not silence pretending to be absence.
         """
         if not pid:
@@ -268,7 +278,7 @@ class SequenceEngine:
             seen.add(cur)
             parent = self._ppid[cur]
             if parent not in self._ppid and parent not in self._name:
-                break                             # parent not tracked → stop here
+                break                             # parent not tracked -> stop here
             cur = parent
             depth += 1
         if cur == pid and parent_name:
@@ -321,7 +331,7 @@ class SequenceEngine:
                     if key:
                         p.distinct.add(key)
                     if len(p.distinct) >= step.min_distinct:
-                        # Snapshot BEFORE the reset below empties it — this is
+                        # Snapshot BEFORE the reset below empties it - this is
                         # the only record of WHICH distinct techniques actually
                         # satisfied a breadth step (e.g. reconnaissance-burst's
                         # T1082/T1057/T1018 trio), and _complete() needs it to
@@ -337,11 +347,11 @@ class SequenceEngine:
                     contributing = None
                 if p.step_index >= len(p.rule.steps):
                     completed = self._complete(p, root, contributing)
-                    continue          # completed — do not keep as an open partial
+                    continue          # completed - do not keep as an open partial
             kept.append(p)
         partials = kept
 
-        # 3. Start new partials whose FIRST step matches — but not for a rule
+        # 3. Start new partials whose FIRST step matches - but not for a rule
         #    that already has an active partial on this root (no duplicate
         #    explosions), and never advanced by the same event that started it.
         active_rules = {p.rule.id for p in partials}
@@ -366,7 +376,7 @@ class SequenceEngine:
                 p.step_index = 1
             # A single-step rule (min_distinct==1, len(steps)==1) or a
             # min_distinct>1 step satisfied on its very first observation both
-            # complete immediately rather than sitting in partials forever —
+            # complete immediately rather than sitting in partials forever -
             # no existing rule has fewer than 2 steps, so this is new behaviour
             # only for reconnaissance-burst-shaped rules, never a regression.
             if p.step_index >= len(rule.steps):
@@ -386,10 +396,10 @@ class SequenceEngine:
         score = {"critical": 0.95, "high": 0.85, "medium": 0.70}.get(rule.severity, 0.85)
         # contributing holds match_key() strings ('t:T1082', 'l:label', 'a:act')
         # from the breadth step that just completed (see min_distinct in
-        # Step) — only the 't:' (technique) ones name a specific ATT&CK id.
+        # Step) - only the 't:' (technique) ones name a specific ATT&CK id.
         # Exposing these lets a consumer (analyst UI, the live-eval scorer)
         # credit each contributing technique individually instead of only the
-        # sequence's own culminating technique — e.g. reconnaissance-burst
+        # sequence's own culminating technique - e.g. reconnaissance-burst
         # names ONE technique (T1087.001) but the 3+ discovery techniques that
         # actually built the breadth (T1082/T1057/T1018/...) were real,
         # distinct detections and deserve to be visible, not folded away.

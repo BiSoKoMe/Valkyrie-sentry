@@ -11,7 +11,7 @@ import sqlite3
 import sys
 
 # A technique field may hold ONE id ("T1059"), an id + label
-# ("T1059 — Command..."), or several ids joined ("T1003.001; T1055"). Extract
+# ("T1059 - Command..."), or several ids joined ("T1003.001; T1055"). Extract
 # every real ATT&CK id and dedupe, so "T1059" and "T1059;" are not counted as
 # two distinct techniques (they were), and a multi-technique incident credits
 # BOTH techniques it actually detected instead of only the first token.
@@ -69,9 +69,21 @@ def main() -> None:
 
     techs = sorted(techs)
     print("TOTAL INCIDENTS:", len(rows))
-    print("DISTINCT ATT&CK TECHNIQUES DETECTED:", len(techs))
+    # HONESTY (2026-08-24): this counts every technique that appears on ANY
+    # incident in the store. It is an UPPER BOUND, not a detection count: an
+    # incident here is NOT proven to be linked to an executed attack, so engine
+    # self-activity, correlation spillover, or a stale row all inflate it. On
+    # run 32681983369 this read 18 while union_coverage.py (which requires the
+    # detection to be attributed to an executed technique within its window)
+    # read 9-10. The execution-linked number is the authoritative one; THIS is
+    # the ceiling. Labelled accordingly so it can never again be quoted as "N
+    # detected end-to-end".
+    print("TECHNIQUES WITH AN INCIDENT IN THE STORE "
+          "(UPPER BOUND, not execution-linked):", len(techs))
+    print("  -> authoritative execution-linked count: see union_coverage.py / "
+          "the evidence librarian (evidence.py). This number is a ceiling.")
     for t in techs:
-        print("  DETECTED-TECH:", t)
+        print("  INCIDENT-TECH:", t)
 
     # ---- AIMED miss list: diff the detected set against the technique catalog
     # so every run turns "we caught N" into "here are the exact techniques that
@@ -99,13 +111,30 @@ def main() -> None:
         # (a coarser incident tag, e.g. "T1059" for "T1059.001") was detected.
         covered = lambda tid: tid in det or _base(tid) in det
         ids = sorted(in_scope)
-        missed = [i for i in ids if not covered(i)]
-        print("---- AIMED COVERAGE vs CATALOG ----")
-        print("IN-SCOPE: %d   DETECTED: %d   MISSED: %d"
-              % (len(ids), len(ids) - len(missed), len(missed)))
-        for tid in missed:
+        no_incident = [i for i in ids if not covered(i)]
+        # HONESTY (2026-08-24): a catalog technique with no incident is NOT
+        # necessarily "MISSED". Reading the DB at rest cannot tell whether that
+        # technique was executed at all. It may be:
+        #   - NOT_TESTED  (skipped destructive, or no runnable command), or
+        #   - INCONCLUSIVE (its sensor was off by config, e.g. --no-dns /
+        #                   --no-firewall turn off the DNS/network path), or
+        #   - a genuine MISS (executed, engine up, sensor live, not caught).
+        # db_coverage has no execution facts, so it MUST NOT collapse these into
+        # one "MISSED" number. It lists "no incident in store" and defers the
+        # classification to the evidence librarian, which has the execution
+        # chain. Calling all of these "missed" is exactly the dishonest
+        # denominator (run 32681983369 read "MISSED: 24" when 7 never executed
+        # and 3 had their sensor off).
+        print("---- CATALOG TECHNIQUES WITH NO INCIDENT IN THE STORE ----")
+        print("IN-SCOPE: %d   WITH-INCIDENT (ceiling): %d   NO-INCIDENT: %d"
+              % (len(ids), len(ids) - len(no_incident), len(no_incident)))
+        print("  NOTE: 'no incident' is NOT 'missed'. It conflates NOT_TESTED "
+              "(skipped / no command), INCONCLUSIVE (sensor off by config), and "
+              "genuine MISS. Classify with evidence.py, which has execution "
+              "facts; do NOT compute a detection rate from this list.")
+        for tid in no_incident:
             t = in_scope[tid]
-            print("  MISS  %-11s [%-11s] %-18s %s"
+            print("  NO-INCIDENT  %-11s [predicts %-11s] %-18s %s"
                   % (tid, t.predicted_tier_b, t.tactic, t.technique_name[:44]))
     except Exception as e:
         print("(aimed miss list unavailable: %s)" % e)
