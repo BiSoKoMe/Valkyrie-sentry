@@ -220,7 +220,7 @@ class PersistenceCollector:
     """Polls ASEP locations and emits a TelemetryEvent per newly-created entry."""
 
     def __init__(self, emit: Callable[[TelemetryEvent], None], interval: float = 15.0,
-                 snapshot_budget: float = 8.0) -> None:
+                 snapshot_budget: float = 4.0) -> None:
         self._emit = emit
         self._interval = max(2.0, float(interval))
         self._last: Optional[dict] = None      # {activity: {identity: value}}
@@ -231,6 +231,9 @@ class PersistenceCollector:
         # snapshot() docstring). Truncated sections are recorded here.
         self._snapshot_budget = max(1.0, float(snapshot_budget))
         self._truncated: list[str] = []
+        # Seconds to wait before the first baseline snapshot, keeping the engine's
+        # startup + readiness window clear of the heavy enumeration.
+        self._startup_grace = 45.0
 
     def available(self) -> bool:
         return os.name == "nt" and _WINREG
@@ -372,7 +375,13 @@ class PersistenceCollector:
     def start(self) -> None:
         if self._running or not self.available():
             return
-        self._last = self.snapshot()     # silent baseline
+        # The baseline snapshot is NOT taken here any more. On a slow host it can
+        # hold the thread for many seconds, and start() runs on the engine's
+        # startup path - blocking it (and, via the GIL, the web loop) exactly
+        # when the readiness gate is trying to confirm the engine is alive. The
+        # background thread takes the first (silent) baseline after a short grace
+        # delay, so startup and the readiness window stay clear of it.
+        self._last = None
         self._running = True
         self._thread = threading.Thread(target=self._loop, daemon=True, name="persistence-collector")
         self._thread.start()
@@ -384,6 +393,16 @@ class PersistenceCollector:
         return bool(self._thread and self._thread.is_alive())
 
     def _loop(self) -> None:
+        # Grace delay before the FIRST snapshot so the engine can finish starting
+        # and the readiness gate can confirm it live during a persistence-quiet
+        # window. Capped so it never delays real detection by much.
+        grace = min(self._startup_grace, self._interval * 3)
+        waited = 0.0
+        while self._running and waited < grace:
+            time.sleep(0.5)
+            waited += 0.5
+        if self._running and self._last is None:
+            self._last = self.snapshot()     # silent baseline, on THIS thread
         while self._running:
             time.sleep(self._interval)
             if not self._running:

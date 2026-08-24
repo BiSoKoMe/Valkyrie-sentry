@@ -84,6 +84,10 @@ param(
     # how many consecutive health checks count as stable.
     [int]$ReadyTimeoutSeconds = 420,
     [int]$ReadyStreak = 3,
+    # Minimum seconds the engine must stay alive (answering health, gaps allowed)
+    # after its first OK before the battery starts - proves startup has settled
+    # while tolerating the transient GIL stalls the single-loop API suffers.
+    [int]$ReadyMinWarmupSeconds = 30,
     [switch]$SkipDestructive,
     [string]$RepoRoot = (Resolve-Path "$PSScriptRoot\..\..").Path
 )
@@ -93,7 +97,7 @@ function Info($m)  { Write-Host "[eval] $m" -ForegroundColor Cyan }
 function Warn($m)  { Write-Host "[eval] $m" -ForegroundColor Yellow }
 function Bad($m)   { Write-Host "[eval] $m" -ForegroundColor Red }
 
-# ── 0. Export the catalog from the single source of truth (catalog.py) ──────
+# --- 0. Export the catalog from the single source of truth (catalog.py) ---
 $CatalogJson = Join-Path $PSScriptRoot "catalog_export.json"
 Info "Exporting technique catalog from catalog.py (single source of truth)..."
 & python (Join-Path $PSScriptRoot "catalog.py") --export $CatalogJson
@@ -115,7 +119,7 @@ $VettedAtomics = @{
     # evasion-defender-disable: intentionally NOT mapped to an ART atomic. The
     # T1562.001 atomic yaml is missing on the GitHub runner image (errored every
     # run), so fall through to the literal Set-MpPreference command line from the
-    # catalog probe instead — which fires the defender_tamper rule (verified via
+    # catalog probe instead - which fires the defender_tamper rule (verified via
     # match_process). Real detection, no dependency on a missing atomic file.
     "impact-shadow-delete"      = @{ Attack = "T1490";     Tests = "1"; Destructive = $true }
     "disc-whoami-priv"          = @{ Attack = "T1033";     Tests = "1" }
@@ -237,7 +241,7 @@ function Get-SensorDrops {
 function Get-Incidents {
     # brief=true -> the FAST incident list (raw rows, no per-incident impact
     # assessment / explanation). The full view is O(incidents) and times out
-    # under polling — that is what scored every real detection as MISS. The
+    # under polling - that is what scored every real detection as MISS. The
     # brief view returns in well under the detect window.
     try { return @(Invoke-CurlGet -Uri "$ApiBase/api/edr/incidents?brief=true" -TimeoutSec 30) }
     catch { return @() }
@@ -265,34 +269,58 @@ function Get-IncidentDetail([string]$id) {
 # started during a lull in a stall. Also say WHICH failure it is -- a refused
 # connection (not listening yet) and a timeout (listening but too busy) call
 # for completely different fixes, and a bare "not reachable" hid that.
+# READINESS GATE - tolerant of GIL stalls, by design (rewritten 2026-08-24).
+#
+# The old gate required $ReadyStreak CONSECUTIVE health OKs. That is the wrong
+# test for THIS engine: its web API is one asyncio loop that GIL-heavy startup
+# threads transiently stall for several seconds (persistence snapshot, etc.),
+# so /api/health flaps - and 3-in-a-row 3s-apart probes almost never all land in
+# a clean window. Every deaf-engine Tier B failure died here, at the GATE, before
+# a single technique fired.
+#
+# The key fact that makes a tolerant gate CORRECT, not a cheat: detections are
+# written to the SQLite incident store by the engine's sensor/rule THREADS,
+# independent of the uvicorn API loop, and authoritative coverage is read from
+# that DB AT REST after the engine stops (the 'Authoritative coverage' step /
+# db_coverage.py). So transient API deafness cannot lose a detection - it only
+# affects whether we're allowed to START. The gate therefore only needs to
+# confirm the engine is genuinely ALIVE and past its heavy startup, not that its
+# API is flawlessly stable.
+#
+# New definition of ready: the engine answered health at least $ReadyStreak
+# times (gaps allowed) AND stayed alive across at least $ReadyMinWarmupSeconds
+# since its first OK - proof it is up and startup has settled, while tolerating
+# the stalls. A single OK followed by death still fails (it never clears warmup).
 $HealthOk = $false
 $LastErr = $null
-$consecutive = 0
+$oks = 0
+$firstOk = $null
 $deadline = (Get-Date).AddSeconds($ReadyTimeoutSeconds)
 $attempt = 0
-Info "Waiting for a STABLE engine at $ApiBase (need $ReadyStreak consecutive OK, up to ${ReadyTimeoutSeconds}s)..."
+Info "Waiting for a LIVE engine at $ApiBase (>= $ReadyStreak health OKs across >= ${ReadyMinWarmupSeconds}s, stalls tolerated, up to ${ReadyTimeoutSeconds}s)..."
 while ((Get-Date) -lt $deadline) {
     $attempt++
     try {
         Invoke-CurlGet -Uri "$ApiBase/api/health" -TimeoutSec 15 | Out-Null
-        $consecutive++
-        if ($consecutive -ge $ReadyStreak) { $HealthOk = $true; break }
-        Info "  health OK ($consecutive/$ReadyStreak consecutive)"
+        $oks++
+        if (-not $firstOk) { $firstOk = Get-Date }
+        $warm = ((Get-Date) - $firstOk).TotalSeconds
+        Info ("  health OK ({0} total, {1:N0}s since first OK)" -f $oks, $warm)
+        if ($oks -ge $ReadyStreak -and $warm -ge $ReadyMinWarmupSeconds) {
+            $HealthOk = $true; break
+        }
     } catch {
         $LastErr = $_
-        if ($consecutive -gt 0) {
-            Warn "  engine went deaf again after $consecutive OK -- restarting the streak (attempt $attempt)"
-        }
-        $consecutive = 0     # a stall resets the streak; near-misses do not count
+        Warn "  health probe failed (transient - engine likely busy under startup GIL load); tolerating and continuing"
     }
     Start-Sleep -Seconds 3
 }
 if (-not $HealthOk) {
     $why = if ($LastErr) { $LastErr.Exception.Message } else { "no attempt succeeded" }
-    throw ("Valkyrie API never became STABLE at $ApiBase within ${ReadyTimeoutSeconds}s " +
-           "($attempt attempts, longest streak short of $ReadyStreak) -- $why")
+    throw ("Valkyrie API never became LIVE at $ApiBase within ${ReadyTimeoutSeconds}s " +
+           "($attempt attempts, $oks health OKs total) -- $why")
 }
-Info "Engine is stable ($ReadyStreak consecutive health checks). Starting the battery."
+Info "Engine is live ($oks health OKs across the warm-up). Starting the battery."
 $HaveAtomics = [bool](Get-Module -ListAvailable -Name Invoke-AtomicRedTeam)
 if ($HaveAtomics) { Import-Module Invoke-AtomicRedTeam -Force }
 else { Warn "Invoke-AtomicRedTeam not installed -- vetted-ART techniques will be SKIPPED, not faked. Run provision.ps1 first for full coverage." }
@@ -499,7 +527,7 @@ foreach ($t in $Techniques) {
         Warn "   execution raised: $executionError"
     }
 
-    # ── Condition-based, correlation-robust detection wait ───────────────────
+    # --- Condition-based, correlation-robust detection wait ---
     # Poll until a matching DETECTION (not just a new incident) appears or the
     # window expires. A detection matches when its technique fits this technique
     # AND its own timestamp is at/after $execStartUtc -- so a detection that
