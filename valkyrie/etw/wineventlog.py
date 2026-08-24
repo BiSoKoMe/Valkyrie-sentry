@@ -36,13 +36,35 @@ def record_id_of(xml: str) -> int:
     return int(m.group(1)) if m else 0
 
 
+def _int_or(text, default: int = 0) -> int:
+    """Best-effort int from event XML text. Never raises.
+
+    Every numeric field here comes from a rendered event, and an event's fields
+    are attacker-influenced: a process can write a malformed record, and a
+    provider can emit a non-numeric EventID. `int()` on that text raises
+    ValueError, which escaped the `except ET.ParseError` below and crashed the
+    caller — the exact shape of the CrowdStrike channel-file failure, where a
+    trusted-path parser assumed its input's shape. Found by fuzzing
+    (tests/test_fuzz_parsers.py); the docstring already promised it could not
+    happen.
+    """
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return default
+
+
 def parse_event_xml(xml: str) -> dict:
     """Parse a rendered Windows event XML into a flat dict:
     {event_id, record_id, time, computer, process_id, thread_id, user_sid,
      provider, data:{Name->value}}. Never raises — returns {} on bad input."""
     try:
-        root = ET.fromstring(_XMLNS.sub("", xml))
+        root = ET.fromstring(_XMLNS.sub("", xml or ""))
     except ET.ParseError:
+        return {}
+    except (ValueError, TypeError):
+        # Entity-expansion and encoding-declaration failures surface as
+        # ValueError rather than ParseError on some inputs.
         return {}
     out: dict = {"data": {}}
     system = root.find("System")
@@ -50,8 +72,8 @@ def parse_event_xml(xml: str) -> dict:
         def _txt(tag):
             el = system.find(tag)
             return el.text if el is not None else None
-        out["event_id"] = int((_txt("EventID") or "0") or 0)
-        out["record_id"] = int((_txt("EventRecordID") or "0") or 0)
+        out["event_id"] = _int_or(_txt("EventID"))
+        out["record_id"] = _int_or(_txt("EventRecordID"))
         out["computer"] = _txt("Computer") or ""
         prov = system.find("Provider")
         out["provider"] = prov.get("Name") if prov is not None else ""
@@ -59,8 +81,8 @@ def parse_event_xml(xml: str) -> dict:
         out["time"] = tc.get("SystemTime") if tc is not None else ""
         exe = system.find("Execution")
         if exe is not None:
-            out["process_id"] = int(exe.get("ProcessID") or 0)
-            out["thread_id"] = int(exe.get("ThreadID") or 0)
+            out["process_id"] = _int_or(exe.get("ProcessID"))
+            out["thread_id"] = _int_or(exe.get("ThreadID"))
         sec = system.find("Security")
         out["user_sid"] = sec.get("UserID") if sec is not None else ""
     # EventData: <Data Name="X">val</Data>  (also handle unnamed <Data>)

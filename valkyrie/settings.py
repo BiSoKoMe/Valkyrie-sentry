@@ -113,9 +113,13 @@ SPECS: list[Spec] = [
     Spec("WEB_HOST", "str", "Dashboard bind address (127.0.0.1 = loopback-only)"),
     Spec("WEB_PORT", **_PORT, help="Dashboard port"),
     # ── Fleet control plane ──────────────────────────────────────────────
-    Spec("FLEET_SERVER_PORT", **_PORT, help="Fleet control-plane port"),
-    Spec("FLEET_HEARTBEAT_INTERVAL", "int", "Seconds between agent heartbeats", minv=1, maxv=3600),
-    Spec("FLEET_OFFLINE_AFTER", "int", "Seconds without heartbeat before 'offline'", minv=1, maxv=86400),
+    # FLEET_* specs removed 2026-08-04: the fleet control plane moved to
+    # experimental/ (ADR 0044). Leaving a user-settable knob for a subsystem
+    # that no longer loads is a SILENT NO-OP — the operator sets it, validation
+    # accepts it, and nothing happens. That is precisely the failure mode this
+    # project's no-silent-success rule exists to prevent. The underlying
+    # constants remain in config.py because experimental/fleet still imports
+    # them; restoring these specs is part of the unfreeze checklist.
     # ── Behavioral heuristics ────────────────────────────────────────────
     Spec("ENTROPY_THRESHOLD", "float", "Domain entropy above which it is suspicious", minv=0.0, maxv=8.0),
     Spec("RATE_WINDOW_SECONDS", "int", "Sliding window for per-process query rate", minv=1, maxv=3600),

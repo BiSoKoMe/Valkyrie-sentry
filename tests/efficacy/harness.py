@@ -107,6 +107,69 @@ def _fires(case: Case, ctx: dict) -> bool:
         res = scanner.analyze(case.inp, "chrome.exe")
         return res.decision in ("block", "flag")
 
+    if d == "tunnel":
+        # inp = tuple of hostnames — a query STREAM, because tunnelling is an
+        # aggregate shape no single query shows. Fresh scanner per case so the
+        # flood window is isolated and cases stay order-independent. Fires
+        # only if the stream produced an outright BLOCK (flag is not enough
+        # for a malicious tunnel case to count as caught).
+        from valkyrie.site_scanner import SiteScanner
+        scanner = SiteScanner(store=None)
+        return any(scanner.analyze(dm, "powershell.exe").decision == "block"
+                   for dm in case.inp)
+
+    if d == "behavior":
+        # inp = (image, parent, cmdline, path). "Fires" = a behavioral IOA rule
+        # matched. Pure content check against the real rule engine.
+        from valkyrie.behavioral_rules import match_process
+        image, parent, cmd, path = case.inp
+        return len(match_process(image, parent, cmd, path)) > 0
+
+    if d == "sequence":
+        # inp = (actor, [(technique, [labels]), ...]) — a behaviour STREAM on one
+        # actor. "Fires" = the ESP engine completed a NAMED sequence (a specific
+        # ordered attack pattern), which the generic tactic-count correlator does
+        # not name. Fresh engine per case; deterministic ts.
+        from valkyrie.behavioral_sequences import SequenceEngine
+        se = SequenceEngine()
+        actor, steps = case.inp
+        fired = False
+        for i, (tech, labels) in enumerate(steps):
+            if se.observe(actor, tech, labels, "", ts=1000.0 + i,
+                          pid=777, ppid=1) is not None:
+                fired = True
+        return fired
+
+    if d == "cname":
+        # inp = a CNAME target hostname. "Fires" = uncloaking recognises it as a
+        # known cloaked-tracker apex — the part that catches trackers general
+        # blocklists miss because they only ever appear as a CNAME target.
+        from valkyrie.cname_uncloak import matches_cname_tracker
+        return matches_cname_tracker(case.inp) is not None
+
+    if d == "anomaly":
+        # inp = (image, parent, cmdline, path). "Fires" = the behavioral anomaly
+        # scorer (the generalizing nose) crossed its firing threshold. This is
+        # the layer that catches intrinsic malicious scent no rule was written
+        # for, so the malicious cases here are deliberately NOT rule-matched.
+        from valkyrie.behavior_score import score_process
+        image, parent, cmd, path = case.inp
+        return score_process(image, parent, cmd, path).fired()
+
+    if d == "killchain":
+        # inp = (actor, [(technique, title), ...]) — a sequence of detections
+        # on ONE actor. "Fires" = the correlator raised a multi-stage chain,
+        # which is exactly the escalation the base same-category correlator
+        # could not produce. Deterministic ts, fresh correlator per case.
+        from valkyrie.edr.killchain import KillChainCorrelator
+        kc = KillChainCorrelator()
+        actor, steps = case.inp
+        fired = False
+        for i, (tech, title) in enumerate(steps):
+            if kc.observe(actor, tech, title, ts=1000.0 + i) is not None:
+                fired = True
+        return fired
+
     raise ValueError(f"unknown detector: {case.detector}")
 
 

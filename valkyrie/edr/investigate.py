@@ -67,6 +67,33 @@ _MEANING = {
                     "on a threat-intelligence blocklist — a strong command-and-"
                     "control signal that DNS filtering alone cannot see because "
                     "the destination was reached by hard-coded IP.",
+    "tunnel":       "A process streamed many unique, machine-generated subdomains "
+                    "under one base in a short window — the shape of DNS tunnelling "
+                    "used to exfiltrate data or carry C2 over DNS (T1048.003), a "
+                    "pattern no single DNS query reveals.",
+    "dyndns":       "A process resolved a generated-looking hostname on a wildcard "
+                    "IP-echo DNS provider (e.g. nip.io) — a way to hide traffic "
+                    "under a legitimate base domain that ordinary reputation checks "
+                    "can't see (T1568 — Dynamic Resolution).",
+    "attack_chain": "One actor crossed MULTIPLE independent ATT&CK tactics in a "
+                    "short window (e.g. execution → command-and-control → "
+                    "persistence) — the correlated shape of a real intrusion. This "
+                    "incident is more than the sum of its parts: confidence is high "
+                    "precisely because several independent detectors agree on the "
+                    "same process.",
+    "malware":      "The operating system's antimalware provider CONVICTED this "
+                    "content through AMSI — this is not a Valkyrie heuristic but "
+                    "an external engine's verdict on the actual bytes, carrying a "
+                    "signature corpus Valkyrie does not have. Treat it as the "
+                    "strongest single-event evidence available on this endpoint. "
+                    "Note the converse does not hold: content the provider did "
+                    "not convict is not thereby clean.",
+    "attack_sequence": "One lineage completed a SPECIFIC, named attack pattern in "
+                    "order (e.g. process injection → credential access, or recovery "
+                    "inhibition → mass encryption) within a short window — a stateful "
+                    "event-stream IOA. Unlike the generic multi-tactic chain, this "
+                    "names the exact tradecraft observed, tool-agnostically, so "
+                    "confidence is high and the response is specific.",
 }
 
 # Category -> which response actions the analyst recommends, in priority order.
@@ -86,6 +113,17 @@ _RECOMMEND = {
     "process":      ["isolate_host", "kill_process"],
     "persistence":  ["kill_process", "isolate_host"],
     "network":      ["isolate_host", "kill_process"],
+    "tunnel":       ["block_domain", "isolate_host"],
+    "dyndns":       ["block_domain"],
+    # A provider conviction is the highest-confidence endpoint evidence there
+    # is: stop the process running the content, then contain the host.
+    "malware":      ["kill_process", "isolate_host"],
+    # A confirmed multi-stage chain is the strongest reason to contain the
+    # host outright, then stop the offending process.
+    "attack_chain": ["isolate_host", "kill_process", "block_domain"],
+    # A named behavioural sequence is a specific, high-confidence attack —
+    # contain the host and kill the offending process.
+    "attack_sequence": ["isolate_host", "kill_process", "block_domain"],
 }
 
 # The canonical set of categories an incident can carry — the single source of
@@ -97,6 +135,7 @@ _RECOMMEND = {
 KNOWN_INCIDENT_CATEGORIES = frozenset({
     "firewall_ip", "intelligence", "behavioral", "dga", "doh_bypass",
     "anomaly", "tracker", "process", "persistence", "network",
+    "tunnel", "dyndns", "attack_chain", "attack_sequence", "malware",
 })
 
 

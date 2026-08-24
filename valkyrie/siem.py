@@ -115,7 +115,10 @@ def incident_record(payload: dict) -> Optional[dict]:
     anything else. Updates to an existing incident export too (severity may
     have escalated), distinguished by ``valkyrieNew``.
     """
-    if payload.get("type") != "incident":
+    # A non-dict payload returns None rather than raising: this is invoked from
+    # an event-bus subscriber, and an exception there propagates into the
+    # publisher's thread rather than staying local to the exporter.
+    if not isinstance(payload, dict) or payload.get("type") != "incident":
         return None
     inc = payload.get("incident") or {}
     return {
@@ -139,6 +142,8 @@ def dns_block_record(msg: dict) -> Optional[dict]:
     Exports only blocked/flagged decisions — never allowed traffic — because
     this is the one exporter path that carries domains off the machine.
     """
+    if not isinstance(msg, dict):
+        return None
     ev = msg.get("event") or {}
     if ev.get("decision") not in ("blocked", "behavioral", "flagged"):
         return None

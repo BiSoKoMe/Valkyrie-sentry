@@ -74,6 +74,28 @@ class Intelligence:
         self.baseline.start()
         self.graph.start()
         self.memory.start()
+        # Un-poison: any tracker the old duplicate-block bug learned as a THREAT
+        # is purged from memory (memory.start) AND from the infrastructure graph
+        # here, so trackers stop hard-blocking (deception is restored) and legit
+        # sites stop "sharing infrastructure" with them. No manual cleanup.
+        try:
+            purged = self.graph.forget(getattr(self.memory, "purged_trackers", []))
+            purged_pop = len(getattr(self.graph, "purged_popular", []) or [])
+            # print(), not logging: this module has no logging.basicConfig
+            # anywhere in the app, so a bare logging.getLogger().info() call is
+            # silently dropped by the default WARNING-level root logger —
+            # verified missing from a real run. print() is what the rest of this
+            # file already uses for startup diagnostics (see print_signal_health
+            # below); nssm redirects stdout to service_stdout.log, so this is
+            # how an operator actually sees it.
+            if purged:
+                print(f"[intelligence] un-poisoned {purged} tracker(s) "
+                      f"wrongly learned as threats")
+            if purged_pop:
+                print(f"[intelligence] un-poisoned {purged_pop} popular "
+                      f"domain(s) wrongly recorded in the threat graph")
+        except Exception:
+            pass
         self.print_signal_health()
 
     # ------------------------------------------------------------------
@@ -117,8 +139,9 @@ class Intelligence:
     def print_signal_health(self) -> None:
         """Print a single ACTIVE/DISABLED audit line per signal at startup."""
         learning = self.baseline.is_learning()
-        mode = (f"learning day {self.baseline.learning_day()}/"
-                f"{int(self.baseline._learning_days)}" if learning else "active")
+        mode = (f"learning {self.baseline.observed_pairs()}/{self.baseline._ready_pairs} "
+                f"behaviours ({int(self.baseline.learning_progress() * 100)}%)"
+                if learning else "active")
         print(f"[intelligence] signal health "
               f"(intelligence-only baseline, mode={mode}):")
         for r in self.signal_health():
@@ -178,8 +201,18 @@ class Intelligence:
         return result
 
     def remember_block(self, domain: str, reason: str, ip: str = "") -> None:
-        """Steps 5–6: a block happened — remember it and grow the graph."""
+        """Steps 5–6: a block happened — remember it and grow the graph.
+
+        A tracker/telemetry domain is NEVER learned as a threat: it is a privacy
+        nuisance handled by the scanner + DECEIVE policy, and treating it as a
+        threat both hard-blocks it forever (breaking deception) and makes legit
+        sites 'share infrastructure' with it. Callers that hard-block a tracker
+        (strict profiles) still get the block; it just isn't *remembered*.
+        """
         try:
+            from ..decision import reason_denotes_deceivable
+            if reason_denotes_deceivable(reason):
+                return
             self.memory.remember_bad(domain, ip, reason)
             self.graph.record_threat(domain, ip)
         except Exception:
@@ -197,8 +230,11 @@ class Intelligence:
         return {
             "mode":               "learning" if learning else "active",
             "learning":           learning,
-            "learning_day":       self.baseline.learning_day(),
-            "learning_days_total": int(self.baseline._learning_days),
+            "learning_observed":  self.baseline.observed_pairs(),
+            "learning_target":    self.baseline._ready_pairs,
+            "learning_percent":   int(self.baseline.learning_progress() * 100),
+            "learning_day":       self.baseline.learning_day(),        # back-compat
+            "learning_days_total": int(self.baseline._learning_days),  # back-compat
             "threats_learned":    mem["threats_learned"],
             "safe_patterns":      mem["safe_patterns"],
             "baseline_processes": self.baseline.coverage(),

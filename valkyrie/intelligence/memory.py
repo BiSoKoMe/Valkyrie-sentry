@@ -11,6 +11,9 @@ Verdict rules:
   - ``remember_good`` never overwrites a "bad" verdict.
   - a domain is also considered bad when a parent domain was remembered
     bad (bad "example.com" covers "cdn.example.com").
+  - a reserved RFC 2606 test/documentation domain (example.com/.net/.org,
+    .test, .invalid, .example) can never be learned "good" — see
+    popular_domains.is_reserved_test_domain.
 """
 
 from __future__ import annotations
@@ -18,6 +21,20 @@ from __future__ import annotations
 import threading
 from datetime import datetime
 from typing import Optional
+
+from ..popular_domains import is_popular, is_reserved_test_domain
+
+# Substrings marking a stored reason as a tracker/telemetry class — a privacy
+# nuisance handled by the scanner + DECEIVE policy, never a hard THREAT. Kept
+# local so this leaf module has no cross-package import (mirrors
+# decision.reason_denotes_deceivable). Deliberately excludes "beacon": a C2
+# beacon is real malware and must stay a learned threat, not be purged as noise.
+_TRACKER_REASON_MARKERS = ("tracker", "analytics", "advertising", "telemetry")
+
+
+def _reason_denotes_tracker(reason: str) -> bool:
+    r = (reason or "").lower()
+    return any(m in r for m in _TRACKER_REASON_MARKERS)
 
 
 class IntelligenceMemory:
@@ -28,6 +45,10 @@ class IntelligenceMemory:
         self._lock = threading.RLock()
         self._bad:  dict[str, str] = {}     # domain -> reason
         self._good: set[str] = set()
+        # Domains purged at startup because they were a tracker wrongly learned
+        # as a THREAT (the old duplicate-block bug). Exposed so the caller can
+        # also drop them from the threat graph. Populated by start().
+        self.purged_trackers: list[str] = []
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -52,13 +73,49 @@ class IntelligenceMemory:
             rows = conn.execute(
                 "SELECT domain, verdict, reason FROM intel_memory"
             ).fetchall()
+            # SELF-HEAL: a popular legitimate domain must never carry a learned
+            # 'bad' verdict. Older builds' behavioural heuristics (query burst,
+            # never-seen-from-process) wrongly learned domains like microsoft.com
+            # / paypal.com as bad and persisted them, sinkholing real sites on
+            # every launch. Purge them from the DB at startup so the fix takes
+            # effect the moment this build runs — no manual cleanup needed.
+            stale_bad = [d for (d, v, _r) in rows if v == "bad" and is_popular(d)]
+            # SELF-HEAL: a reserved RFC 2606 test/documentation domain
+            # (example.com, .test, .invalid, ...) must never carry a learned
+            # 'good' verdict either. An earlier build could durably whitelist
+            # one of these purely from N clean-looking queries in a row (see
+            # is_reserved_test_domain) — exactly the shape of a red-team test
+            # lookup like "malware-c2-test.example.com". Purge at startup so
+            # the fix takes effect immediately, no manual cleanup needed.
+            stale_good = [d for (d, v, _r) in rows if v == "good" and is_reserved_test_domain(d)]
+            # SELF-HEAL: a TRACKER/telemetry domain must never carry a learned
+            # 'bad' verdict. A tracker is a privacy nuisance handled by the
+            # scanner + DECEIVE policy — not a THREAT. The old duplicate-block
+            # bug (a tracker logged 'deceived' AND 'blocked' in the same ms)
+            # learned trackers like adnxs.com into this memory at suspicion 1.0,
+            # so the fast path hard-BLOCKED them and deception never ran again.
+            # Purge them at startup so deception is restored with no manual step.
+            stale_tracker = [d for (d, v, r) in rows
+                             if v == "bad" and _reason_denotes_tracker(r)]
+            stale = stale_bad + stale_good + stale_tracker
+            if stale:
+                conn.executemany("DELETE FROM intel_memory WHERE domain=?",
+                                 [(d,) for d in stale])
+                conn.commit()
         finally:
             conn.close()
+        self.purged_trackers = list(dict.fromkeys(stale_tracker))
         with self._lock:
             for domain, verdict, reason in rows:
                 if verdict == "bad":
+                    if is_popular(domain):
+                        continue          # never load a popular domain as bad
+                    if _reason_denotes_tracker(reason):
+                        continue          # never load a tracker as a learned threat
                     self._bad[domain] = reason
                 else:
+                    if is_reserved_test_domain(domain):
+                        continue          # never load a reserved test domain as good
                     self._good.add(domain)
 
     # ------------------------------------------------------------------
@@ -69,6 +126,12 @@ class IntelligenceMemory:
         domain = domain.lower().rstrip(".")
         if not domain:
             return
+        # Never learn a popular legitimate domain as bad — the weak behavioural
+        # signals that reach here (query burst, never-seen) false-positive on
+        # exactly these high-traffic domains. Explicit user/threat-intel blocks
+        # and the tracker blocklist are separate paths and are unaffected.
+        if is_popular(domain):
+            return
         with self._lock:
             self._good.discard(domain)
             self._bad[domain] = reason
@@ -77,6 +140,13 @@ class IntelligenceMemory:
     def remember_good(self, domain: str, process: str = "") -> None:
         domain = domain.lower().rstrip(".")
         if not domain:
+            return
+        # Never learn a reserved RFC 2606 test/documentation domain as good —
+        # see is_reserved_test_domain. These are guaranteed non-real, so "N
+        # clean queries in a row" is not evidence of legitimacy the way it is
+        # for an actual site; it is exactly what a red-team test lookup or a
+        # patient C2 domain would also produce.
+        if is_reserved_test_domain(domain):
             return
         with self._lock:
             if domain in self._bad:
@@ -90,15 +160,31 @@ class IntelligenceMemory:
     def check(self, domain: str, ip: str = "") -> Optional[str]:
         """Fast path: 'bad' / 'good' if already decided, else None."""
         domain = domain.lower().rstrip(".")
+        # Defense in depth: a popular legitimate domain is never served 'bad'
+        # from memory, even if an older verdict lingers (the tracker blocklist
+        # still blocks its tracker subdomains via a separate path).
+        #
+        # The guard covers the 'bad' answers ONLY. It previously returned None
+        # for popular domains outright, which also threw away a legitimate
+        # 'good' verdict and left the fast path permanently dead for exactly the
+        # highest-traffic domains — every lookup re-ran the full pipeline. Not a
+        # safety hole (the failure was toward more analysis, never less), but it
+        # silently negated the cache where it mattered most.
+        popular = is_popular(domain)
         with self._lock:
-            if domain in self._bad:
-                return "bad"
-            # Parent-domain match: bad example.com covers sub.example.com
-            parts = domain.split(".")
-            for i in range(1, len(parts) - 1):
-                if ".".join(parts[i:]) in self._bad:
+            if not popular:
+                if domain in self._bad:
                     return "bad"
-            if domain in self._good:
+                # Parent-domain match: bad example.com covers sub.example.com
+                parts = domain.split(".")
+                for i in range(1, len(parts) - 1):
+                    if ".".join(parts[i:]) in self._bad:
+                        return "bad"
+            # Defense in depth, mirroring the 'bad' guard above: a reserved
+            # test domain is never served 'good' from memory even if a stale
+            # verdict somehow lingers (remember_good and the start() self-heal
+            # already refuse to write one, this is belt-and-suspenders).
+            if domain in self._good and not is_reserved_test_domain(domain):
                 return "good"
         return None
 

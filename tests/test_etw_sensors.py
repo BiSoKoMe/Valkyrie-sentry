@@ -198,6 +198,35 @@ def test_sysmon_ignores_non_lsass_access():
                                 "GrantedAccess": "0x1410"}) is None
 
 
+# ── Generalisation: HELD-OUT masks not in the enumerated list ───────────────
+# The detector used to key on an exact set of six masks. These masks are NOT in
+# that set, so under the old code they would have scored only MEDIUM and slipped
+# under the alert bar — the exact "attacker changes one flag and evades" gap. A
+# novel dumper still needs PROCESS_VM_READ (0x10) to read lsass memory, so the
+# generalised check must catch all of them at HIGH.
+def test_sysmon_lsass_heldout_masks_still_high():
+    for novel in ("0x1018", "0x0410", "0x0010", "0x1418", "0x143b"):
+        args = classify_sysmon(10, {
+            "SourceImage": r"C:\Temp\newtool.exe",
+            "TargetImage": r"C:\Windows\System32\lsass.exe",
+            "GrantedAccess": novel})
+        assert args is not None, novel
+        assert args["severity"] == SEV_HIGH, f"{novel} should be HIGH (has VM_READ)"
+
+
+# FP boundary: a query-only open of lsass (no VM_READ — cannot read memory) must
+# NOT be escalated to HIGH. This is how the generalisation stays precise:
+# "reads lsass memory" is credential theft, "queries lsass info" is routine.
+def test_sysmon_lsass_query_only_not_escalated():
+    for benign in ("0x1000", "0x0400", "0x1400"):   # QUERY_* without 0x10
+        args = classify_sysmon(10, {
+            "SourceImage": r"C:\Windows\System32\svchost.exe",
+            "TargetImage": r"C:\Windows\System32\lsass.exe",
+            "GrantedAccess": benign})
+        assert args is not None
+        assert args["severity"] != SEV_HIGH, f"{benign} has no VM_READ, must not be HIGH"
+
+
 def test_sysmon_remote_thread_injection_high():
     args = classify_sysmon(8, {"SourceProcessId": "5", "SourceImage": r"C:\a.exe",
                                "TargetProcessId": "9", "TargetImage": r"C:\b.exe"})
@@ -220,6 +249,35 @@ def test_sysmon_process_emits_only_when_suspicious_with_context():
     assert args["context"]["sha256"] == "abcdef"
     assert args["context"]["integrity_level"] == "High"
     assert "WINWORD.EXE" in args["context"]["parent_image"]
+
+
+def test_sysmon_eid1_emits_discovery_labels_for_the_burst_combiner():
+    """Discovery commands must survive EID 1's severity gate.
+
+    They are INFO by design (a lone `whoami` must never alert), so the gate
+    would normally drop them — but the reconnaissance-burst sequence IOA can
+    only fire if it SEES several of them, and these commands exit in
+    milliseconds, so Sysmon EID 1 / Security 4688 is the only source that
+    reliably catches them at all. The 2s poller loses the race. If EID 1
+    dropped them, the burst detector would be dead on every Sysmon host.
+    """
+    for image, cmdline, tid in (
+            (r"C:\Windows\System32\systeminfo.exe", "systeminfo.exe", "T1082"),
+            (r"C:\Windows\System32\tasklist.exe", "tasklist.exe /v", "T1057"),
+            (r"C:\Windows\System32\net.exe", "net view /all", "T1018")):
+        args = classify_sysmon(1, {
+            "ProcessId": "77", "Image": image, "CommandLine": cmdline,
+            "ParentImage": r"C:\Windows\System32\cmd.exe"})
+        assert args is not None, f"{cmdline} was dropped by the EID 1 gate"
+        assert "discovery_command" in args["labels"]
+        assert tid in args["technique"]
+        # Still INFO — this must not become a standalone alert.
+        assert args["severity"] == SEV_INFO
+
+    # A benign non-discovery process is still dropped (gate unchanged).
+    assert classify_sysmon(1, {"ProcessId": "1",
+                               "Image": r"C:\Windows\System32\notepad.exe",
+                               "ParentImage": r"C:\Windows\explorer.exe"}) is None
 
 
 def test_sysmon_unsigned_image_load():

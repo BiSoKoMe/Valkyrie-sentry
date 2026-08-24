@@ -42,23 +42,25 @@ Playbook file (``data/playbooks.yaml``):
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from ..config import DATA_DIR
+from ..config import DEFAULT_PLAYBOOKS_PATH, PLAYBOOKS_PATH
 from .schema import severity_rank
 
-PLAYBOOKS_PATH = DATA_DIR / "playbooks.yaml"
+log = logging.getLogger("valkyrie.playbooks")
+
 _DEFAULT_COOLDOWN = 300.0
 
 
 @dataclass
 class PlaybookAction:
     action: str
-    target_from: str = "entity"     # entity | process_name | literal
+    target_from: str = "entity"     # entity | process_name | process_pid | literal
     target: str = ""                # used when target_from == "literal"
 
 
@@ -93,7 +95,7 @@ def _parse_playbook(raw: dict) -> Playbook:
         if not act:
             raise ValueError(f"{pb_id}: action entry missing 'action'")
         tf = str(a.get("target_from", "entity"))
-        if tf not in ("entity", "process_name", "literal"):
+        if tf not in ("entity", "process_name", "process_pid", "literal"):
             raise ValueError(f"{pb_id}: bad target_from {tf!r}")
         actions.append(PlaybookAction(action=act, target_from=tf,
                                       target=str(a.get("target", ""))))
@@ -129,12 +131,21 @@ class PlaybookEngine:
     # ------------------------------------------------------------------
 
     def load(self) -> int:
-        """(Re)load the playbook file. Returns count. Never raises."""
+        """(Re)load the playbook file. Returns count. Never raises.
+
+        Reads the user's editable copy; if that is absent (first launch on a
+        read-only volume where config's seed-copy could not write) it falls
+        back to the bundled read-only default, so shipped auto-response is
+        active out of the box rather than depending on the copy succeeding.
+        """
+        path = self._path
+        if not path.exists() and DEFAULT_PLAYBOOKS_PATH.exists():
+            path = DEFAULT_PLAYBOOKS_PATH
         playbooks: list[Playbook] = []
         errors: list[str] = []
         try:
             import yaml
-            raw = yaml.safe_load(self._path.read_text(encoding="utf-8")) or {}
+            raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
             for entry in raw.get("playbooks") or []:
                 try:
                     playbooks.append(_parse_playbook(entry))
@@ -192,7 +203,13 @@ class PlaybookEngine:
                 if pb.matches(incident):
                     self._run_playbook(pb, incident)
         except Exception:
-            pass   # a playbook bug must never break incident correlation
+            # A playbook bug must never break incident correlation — but it
+            # must not vanish either. This used to be a bare `pass`, which
+            # made a real failure here indistinguishable from "no playbook
+            # matched": both looked like "nothing happened," with nothing
+            # to grep for afterward.
+            log.exception("playbook evaluation failed for incident %s",
+                          (payload.get("incident") or {}).get("id", "?"))
 
     def _run_playbook(self, pb: Playbook, incident: dict) -> None:
         now = time.monotonic()
@@ -219,4 +236,5 @@ class PlaybookEngine:
                 dry_run=(pb.mode != "enforce"),
                 operator=f"playbook:{pb.id}",
                 incident_id=incident.get("id", ""),
+                severity=incident.get("severity", ""),
             )

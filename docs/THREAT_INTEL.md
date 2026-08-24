@@ -50,8 +50,12 @@ deliberately not shipped.)
 
 ## Privacy analysis
 
-- Downloads obey the global opt-in (`USE_EXTERNAL_LISTS` /
-  `--download-lists`); default posture is offline, cache-only.
+- Downloads obey the global switch (`USE_EXTERNAL_LISTS` /
+  `--download-lists` / `--no-download-lists`); default posture (as of
+  2026-08) is **on** — a security product with live threat intel off by
+  default understated real-world detection. Opt out per-run with
+  `--no-download-lists`, or permanently by setting `USE_EXTERNAL_LISTS =
+  False` in `config.py`.
 - The fetch sends no identifiers beyond a static User-Agent
   (`Valkyrie-ThreatIntel/1.0`); feeds are fetched whole, so the operator
   learns nothing about what this machine queries.
@@ -73,7 +77,7 @@ deliberately not shipped.)
   checked every 6 h; `valkyrie --update` also refreshes feeds.
 - Cache: `data/threat_intel/<feed>.txt` (+ `.meta.json`); delete the
   directory to reset.
-- Rollback: run without `--download-lists` and delete the cache dir, or
+- Rollback: run with `--no-download-lists` and delete the cache dir, or
   unwire `threat_intel` in `__main__.py` — every consumer is `Optional`.
 
 ## Extension points (honest boundaries)

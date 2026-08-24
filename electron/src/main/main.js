@@ -9,13 +9,27 @@
 //     window is ever shown).
 // ---------------------------------------------------------------------------
 
-const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
+// Valkyrie is a windowless GUI app (ADR 0001) — there is no console attached,
+// so process.stdout/stderr are frequently a broken/absent pipe. Node's
+// console.log/error normally swallow that, but on Windows a write to a
+// closed pipe can throw EPIPE synchronously; uncaught inside a timer
+// callback (e.g. the telemetry poll below), that took down the ENTIRE main
+// process — reproduced live: "Error: EPIPE: broken pipe, write" at
+// engine.js telemetry() -> console.error(), thrown from main.js's poll
+// Timeout.tick. Must be registered before anything else can log.
+for (const stream of [process.stdout, process.stderr]) {
+  if (stream) stream.on('error', (err) => { if (err && err.code !== 'EPIPE') throw err; });
+}
+
+const { app, BrowserWindow, ipcMain, shell, dialog, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const engine = require('./engine');
 const lifecycle = require('./lifecycle');
 
 const isDev = process.argv.includes('--dev');
 let win = null;
+let tray = null;
+let isQuitting = false;      // true only when the user really quits (tray menu)
 let pollTimer = null;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -24,9 +38,39 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
-    if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
-  });
+  app.on('second-instance', () => { showApp(); });
+}
+
+// Bring the window up from the tray / a second launch. Recreates it if it was
+// destroyed. Never replays the splash: the window is only ever HIDDEN, not
+// reloaded, so its renderer (and the already-finished splash) stay as they were.
+function showApp() {
+  if (!win) { createWindow(); return; }
+  if (!win.isVisible()) win.show();
+  if (win.isMinimized()) win.restore();
+  win.focus();
+}
+
+// Live in the Windows tray (the hidden-icons area). Click = show the app menu;
+// right-click = a small menu with a real Quit. Closing the window only hides it
+// here, so protection + privacy keep running in the background.
+function createTray() {
+  if (tray) return;
+  let icon = nativeImage.createEmpty();
+  try {
+    const p = path.join(__dirname, process.platform === 'win32' ? 'tray.ico' : 'tray.png');
+    const img = nativeImage.createFromPath(p);
+    if (!img.isEmpty()) icon = img;
+  } catch { /* fall back to an empty image; tray still functions */ }
+  tray = new Tray(icon);
+  tray.setToolTip('Valkyrie');
+  tray.on('click', showApp);
+  tray.on('double-click', showApp);
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Open Valkyrie', click: showApp },
+    { type: 'separator' },
+    { label: 'Quit Valkyrie', click: () => { isQuitting = true; app.quit(); } },
+  ]));
 }
 
 function createWindow() {
@@ -85,6 +129,14 @@ function createWindow() {
 
   win.on('maximize', () => win.webContents.send('window:state', { maximized: true }));
   win.on('unmaximize', () => win.webContents.send('window:state', { maximized: false }));
+
+  // Closing hides Valkyrie to the tray instead of quitting: it keeps running
+  // (protection + privacy stay on) and reopening from the tray shows THIS same
+  // window — so the "hi, I am Valkyrie" splash never replays. A real quit
+  // (tray → Quit) sets isQuitting and lets the close through.
+  win.on('close', (e) => {
+    if (!isQuitting) { e.preventDefault(); win.hide(); }
+  });
   win.on('closed', () => { win = null; });
 }
 
@@ -97,8 +149,15 @@ function startPolling() {
   if (pollTimer) return;
   const tick = async () => {
     if (!win) return;
-    const data = await engine.telemetry();
-    if (win) win.webContents.send('telemetry', data);
+    // A background poller must never be able to take the whole app down —
+    // one bad tick (network hiccup, a logging call that itself throws) just
+    // gets skipped; the next tick 1.5s later tries again.
+    try {
+      const data = await engine.telemetry();
+      if (win) win.webContents.send('telemetry', data);
+    } catch (err) {
+      console.error('[main.startPolling] tick failed (will retry):', err && err.stack || err);
+    }
   };
   tick();
   pollTimer = setInterval(tick, 1500);
@@ -232,7 +291,9 @@ function registerIpc() {
     if (!win) return;
     win.isMaximized() ? win.unmaximize() : win.maximize();
   });
-  ipcMain.on('window:close', () => win && win.close());
+  // The title-bar close button hides to the tray (same as the OS close). Quit
+  // is only ever explicit, via the tray menu.
+  ipcMain.on('window:close', () => win && win.hide());
 
   ipcMain.handle('open-logs', async () => {
     // Logs live with the rest of the writable state (%ProgramData%\Valkyrie for
@@ -274,13 +335,17 @@ function registerIpc() {
 app.whenReady().then(() => {
   registerIpc();
   createWindow();
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
+  createTray();
+  app.on('activate', () => { showApp(); });
 });
 
+// Real quit path (tray → Quit, or OS shutdown): let windows actually close.
+app.on('before-quit', () => { isQuitting = true; });
+
 app.on('window-all-closed', () => {
+  // Normal window close only HIDES to tray, so this fires only on a real quit.
   stopPolling();
+  if (tray) { try { tray.destroy(); } catch { /* ignore */ } tray = null; }
   // A portable build owns its engine child, so stop it with the window; an
   // installed build leaves the ValkyrieShield service running independently.
   if (lifecycle.mode() === 'portable') engine.stopPortableEngine();

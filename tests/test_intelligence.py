@@ -157,6 +157,48 @@ def test_threat_graph() -> None:
           graph2.is_related("analytics.acme.com") >= 0.4)
     store.stop()
 
+    # Regression: a popular domain's own subdomain being "confirmed" must NEVER
+    # poison its own base — live bug where a Microsoft delivery-optimization
+    # host (array508.prod.do.dsp.mp.microsoft.com — "dsp" reads as ad-tech) got
+    # recorded, and every subsequent microsoft.com query then "shared
+    # infrastructure" with its own sibling subdomain and got flagged.
+    print("\n[4b] a popular domain's subdomain must never self-poison its base")
+    store3 = _store("graph_popular")
+    graph3 = ThreatGraph(store3)
+    graph3.start()
+    graph3.record_threat("array508.prod.do.dsp.mp.microsoft.com", "20.1.2.3")
+    check("record_threat refuses a popular-domain subdomain",
+          graph3.is_related("array508.prod.do.dsp.mp.microsoft.com") == 0.0)
+    check("microsoft.com itself does not 'share infrastructure' with itself",
+          graph3.is_related("microsoft.com") == 0.0)
+    check("a different microsoft.com subdomain is not flagged either",
+          graph3.is_related("update.microsoft.com") == 0.0)
+    # A REAL threat under a non-popular base still works normally (the guard
+    # is popularity-specific, not a blanket "subdomains never relate").
+    graph3.record_threat("telemetry.acme.com")
+    check("a genuine non-popular threat still populates the base bucket",
+          graph3.is_related("analytics.acme.com") >= 0.4)
+    store3.stop()
+
+    # Self-heal: an ALREADY-poisoned row (written by an older build, before this
+    # guard existed) must be purged the moment a build with the fix starts.
+    print("\n[4c] startup self-heal purges an already-poisoned popular domain")
+    store4 = _store("graph_selfheal")
+    ThreatGraph(store4).start()      # create the intel_threats schema only
+    conn = store4.connection()
+    conn.execute(
+        "INSERT INTO intel_threats (domain, ip, base_domain, prefix, added) "
+        "VALUES ('array508.prod.do.dsp.mp.microsoft.com', '', 'microsoft.com', '', '2026-01-01')"
+    )
+    conn.commit(); conn.close()
+    graph4 = ThreatGraph(store4)     # simulates the NEXT (fixed-build) restart
+    graph4.start()
+    check("poisoned row purged on startup",
+          "array508.prod.do.dsp.mp.microsoft.com" in graph4.purged_popular)
+    check("microsoft.com is clean after self-heal",
+          graph4.is_related("microsoft.com") == 0.0)
+    store4.stop()
+
 
 # ---------------------------------------------------------------------------
 # 5. Memory persists across simulated restart

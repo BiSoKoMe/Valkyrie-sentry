@@ -20,16 +20,41 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+from .network_score import ConnFacts, classify_connection_anomaly
+from .process_telemetry import _SUSPICIOUS_PATHS
+from .resolution_log import was_resolved
 from .telemetry import (
     ACT_FLAGGED, ACT_OBSERVED, CAT_NETWORK,
-    SEV_HIGH, SEV_INFO, TelemetryEvent,
+    SEV_HIGH, SEV_INFO, TelemetryEvent, severity_rank,
 )
+from .trust import is_trusted_os_path
 
 try:
     import psutil
     _PSUTIL = True
 except ImportError:
     _PSUTIL = False
+
+
+class NetworkBaseline:
+    """Per-process-image count of prior outbound connections (S4's baseline).
+
+    Pure in-memory, like behavior_score.AncestryBaseline — the caller decides
+    persistence. No warmup gate: unlike ancestry-pair rarity (which needs
+    enough history to know what's normal FOR THIS HOST), "this binary has
+    connected before" is unambiguous from the very first observation.
+    """
+
+    def __init__(self) -> None:
+        self._counts: dict[str, int] = {}
+
+    def history_for(self, name: str) -> int:
+        """Connections observed for this image BEFORE this call."""
+        return self._counts.get((name or "").lower(), 0)
+
+    def observe(self, name: str) -> None:
+        key = (name or "").lower()
+        self._counts[key] = self._counts.get(key, 0) + 1
 
 
 def classify_connection(ip: str, port: int,
@@ -51,13 +76,22 @@ class ConnInfo:
     name: str
     raddr_ip: str
     raddr_port: int
+    path: str = ""
 
     def key(self) -> tuple[int, str, int]:
         return (self.pid, self.raddr_ip, self.raddr_port)
 
-    def to_event(self, blocked: bool) -> TelemetryEvent:
+    def to_event(self, blocked: bool, anomaly: Optional[dict] = None) -> TelemetryEvent:
+        """Build the telemetry event. `anomaly` (network_score's list-free
+        verdict, if it fired) is additive to the list-based `blocked` check —
+        either can raise severity/labels, neither can suppress the other."""
         severity, labels, reason = classify_connection(
             self.raddr_ip, self.raddr_port, blocked)
+        if anomaly is not None:
+            if severity_rank(anomaly["severity"]) > severity_rank(severity):
+                severity = anomaly["severity"]
+            labels = list(dict.fromkeys(labels + anomaly["labels"]))
+            reason = "; ".join(r for r in (reason, anomaly["reason"]) if r)
         action = ACT_FLAGGED if labels else ACT_OBSERVED
         return TelemetryEvent(
             category=CAT_NETWORK, activity="connect", action=action,
@@ -84,11 +118,16 @@ class NetworkCollector:
 
     def __init__(self, emit: Callable[[TelemetryEvent], None],
                  ip_reputation: Optional[Callable[[str], bool]] = None,
-                 interval: float = 3.0, emit_all: bool = False) -> None:
+                 interval: float = 3.0, emit_all: bool = False,
+                 baseline: Optional["NetworkBaseline"] = None) -> None:
         self._emit = emit
         self._rep = ip_reputation or (lambda _ip: False)
         self._interval = max(0.5, float(interval))
         self._emit_all = emit_all
+        # Caller-injectable so a test (or a future persistence layer) can
+        # supply its own; defaults to a fresh in-memory one, same pattern as
+        # behavior_score.AncestryBaseline.
+        self._baseline = baseline if baseline is not None else NetworkBaseline()
         # None = no baseline yet. Using a sentinel (not truthiness) means an
         # empty snapshot is a valid baseline — otherwise an empty first poll
         # would keep re-seeding and never diff.
@@ -108,6 +147,7 @@ class NetworkCollector:
         except Exception:
             return out   # access denied / unsupported -> disabled, no raise
         names: dict[int, str] = {}
+        paths: dict[int, str] = {}
         for c in conns:
             try:
                 if not c.raddr or c.pid is None:
@@ -117,16 +157,49 @@ class NetworkCollector:
                     continue
                 pid = int(c.pid)
                 if pid not in names:
+                    proc = None
                     try:
-                        names[pid] = psutil.Process(pid).name()
+                        proc = psutil.Process(pid)
+                        names[pid] = proc.name()
                     except Exception:
                         names[pid] = ""
-                ci = ConnInfo(pid=pid, name=names.get(pid, ""),
+                    try:
+                        # Best-effort: AccessDenied on many system processes
+                        # from a non-elevated context. Missing path just means
+                        # network_score treats actor_trusted as unknown (None),
+                        # never as untrusted — an access failure must not read
+                        # as a signal.
+                        paths[pid] = proc.exe() if proc is not None else ""
+                    except Exception:
+                        paths[pid] = ""
+                ci = ConnInfo(pid=pid, name=names.get(pid, ""), path=paths.get(pid, ""),
                               raddr_ip=c.raddr.ip, raddr_port=int(c.raddr.port))
                 out[ci.key()] = ci
             except Exception:
                 continue
         return out
+
+    def _score(self, ci: ConnInfo) -> Optional[dict]:
+        """The list-free verdict for one new connection (network_score.py).
+
+        Reads the baseline BEFORE observing this connection (a binary's very
+        first connection must report history=0, not 1) and always observes
+        exactly once per fresh connection regardless of the outcome, so the
+        baseline reflects real traffic whether or not anything fired.
+        """
+        history = self._baseline.history_for(ci.name)
+        self._baseline.observe(ci.name)
+        p = (ci.path or "").lower().replace("\\", "/")
+        facts = ConnFacts(
+            process_name=ci.name, process_path=ci.path,
+            raddr_ip=ci.raddr_ip, raddr_port=ci.raddr_port,
+            resolved=was_resolved(ci.raddr_ip),
+            actor_trusted=(is_trusted_os_path(ci.path) if ci.path else None),
+            actor_low_trust_path=bool(p) and any(f in p for f in _SUSPICIOUS_PATHS),
+            process_net_history=history,
+            intel_hit=bool(self._rep(ci.raddr_ip)),
+        )
+        return classify_connection_anomaly(facts)
 
     def poll_once(self) -> int:
         new = self.snapshot()
@@ -141,10 +214,14 @@ class NetworkCollector:
                 blocked = bool(self._rep(ci.raddr_ip))
             except Exception:
                 blocked = False
-            if not blocked and not self._emit_all:
+            try:
+                anomaly = self._score(ci)
+            except Exception:
+                anomaly = None
+            if not blocked and anomaly is None and not self._emit_all:
                 continue
             try:
-                self._emit(ci.to_event(blocked))
+                self._emit(ci.to_event(blocked, anomaly))
                 emitted += 1
             except Exception:
                 pass

@@ -18,15 +18,35 @@ Usage:
 
 Integration tests are skipped by default (not failed): a missing resolver is an
 environment condition, not a code defect, and must never turn CI red.
+
+**Outcomes are four, not two.** This runner previously judged solely on exit
+code, which made a test that asserted *nothing* indistinguishable from one that
+passed — three files were silently doing that, covering the telemetry killer,
+the TLS path, and the Rust accelerator with zero assertions apiece. Now:
+
+    PASS     asserted something, and it held
+    FAIL     asserted something, and it did not hold
+    SKIP     declined to run here (exit 77) — reported as absent coverage,
+             never folded into "passed"
+    VOID     exited 0 without asserting anything — treated as a FAILURE,
+             because absent coverage wearing a green badge is worse than red
+
+Files built on ``tests/harness.py`` report their counts directly; legacy files
+are judged by whether their output shows any evidence a check ran.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
+import re
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from harness import EXIT_SKIP, parse_result_line   # noqa: E402
 
 _TESTS_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _TESTS_DIR.parent
@@ -56,23 +76,75 @@ def _category(path: Path) -> str:
     return "integration" if path.name in _INTEGRATION else "unit"
 
 
-def _run_one(path: Path, timeout: int) -> tuple[bool, float, str]:
-    """Run one test file as a subprocess. Returns (passed, seconds, tail)."""
+# A test that exits 0 having asserted nothing is the failure mode this runner
+# used to be blind to. Files using tests/harness.py say so explicitly via the
+# VALKYRIE-RESULT line; for legacy files we look for any sign that a check
+# actually executed. If a file exits 0 and shows none of these, it ran nothing.
+_PRODUCTIVE = re.compile(r"\[\+\]|PASS|\bpassed\b|^\s*ok\s", re.M)
+
+OUTCOME_PASS    = "pass"
+OUTCOME_FAIL    = "fail"
+OUTCOME_SKIP    = "skip"
+OUTCOME_VACUOUS = "vacuous"
+
+
+def _classify(returncode: int, out: str) -> tuple[str, str]:
+    """Map a finished test to (outcome, note).
+
+    Exit code alone is not enough — that is precisely the bug this replaces.
+    """
+    if returncode == EXIT_SKIP:
+        res = parse_result_line(out)
+        n = res.get("skipped", 0) if res else 0
+        return (OUTCOME_SKIP, f"skipped{f' ({n} check(s))' if n else ''} — not a pass")
+    if returncode != 0:
+        return (OUTCOME_FAIL, "")
+
+    # Exited 0. Did it actually assert anything?
+    res = parse_result_line(out)
+    if res is not None:                      # harness-based: authoritative
+        if res.get("checks", 0) == 0:
+            return (OUTCOME_VACUOUS, "harness reported zero checks")
+        return (OUTCOME_PASS, f"{res.get('checks', 0)} checks")
+    if not _PRODUCTIVE.search(out):           # legacy: heuristic
+        return (OUTCOME_VACUOUS,
+                "exited 0 but printed no evidence any check ran")
+    return (OUTCOME_PASS, "")
+
+
+def _run_one(path: Path, timeout: int) -> tuple[str, float, str, str]:
+    """Run one test file as a subprocess. Returns (outcome, seconds, note, output)."""
     cmd = [sys.executable, str(path)]
     if path.name in _ACCEPTS_QUICK:
         cmd.append("--quick")
+    # Force UTF-8 in the child. Windows consoles default to cp1252, and these
+    # tests print arrows and box-drawing characters — without this, 7 suites die
+    # with UnicodeEncodeError partway through and report a failure that has
+    # nothing to do with the code under test. That was being worked around by
+    # hand (`PYTHONUTF8=1 python tests/...`), which meant the documented
+    # invocation `python tests/run_tests.py` did not actually work.
+    env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
     start = time.monotonic()
     try:
         proc = subprocess.run(
-            cmd, cwd=str(_REPO_ROOT), capture_output=True, text=True, timeout=timeout
+            cmd, cwd=str(_REPO_ROOT), capture_output=True, text=True,
+            timeout=timeout, env=env, encoding="utf-8", errors="replace"
         )
     except subprocess.TimeoutExpired:
-        return (False, time.monotonic() - start, f"TIMEOUT after {timeout}s")
+        return (OUTCOME_FAIL, time.monotonic() - start,
+                f"TIMEOUT after {timeout}s", "")
     elapsed = time.monotonic() - start
-    if proc.returncode == 0:
-        return (True, elapsed, "")
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-8:])
-    return (False, elapsed, tail)
+    combined = proc.stdout + proc.stderr
+    outcome, note = _classify(proc.returncode, combined)
+    if outcome in (OUTCOME_PASS, OUTCOME_SKIP):
+        return (outcome, elapsed, note, "")
+    # Full output, not just a tail: these files print one line per check, so
+    # an 8-line tail routinely cut off the actual failing check whenever a
+    # test earlier in the file printed enough PASS lines to push it out —
+    # which is exactly what happened with test_endpoint_telemetry.py and
+    # test_playbooks.py in CI: "10/11 passed" with no way to tell which
+    # check, or why, because the one line that said so was already gone.
+    return (outcome, elapsed, note, combined.strip())
 
 
 def main() -> int:
@@ -103,6 +175,7 @@ def main() -> int:
     passed: list[str] = []
     failed: list[tuple[str, str]] = []
     skipped: list[str] = []
+    vacuous: list[tuple[str, str]] = []
 
     print(f"Valkyrie test runner — {len(tests)} discovered "
           f"({'incl. integration' if args.all else 'unit only'})\n")
@@ -112,26 +185,43 @@ def main() -> int:
             print(f"  SKIP  {t.name}  (integration — use --all)")
             skipped.append(t.name)
             continue
-        ok, secs, tail = _run_one(t, args.timeout)
-        if ok:
-            print(f"  PASS  {t.name}  ({secs:.1f}s)")
+        outcome, secs, note, out = _run_one(t, args.timeout)
+        suffix = f"  [{note}]" if note else ""
+        if outcome == OUTCOME_PASS:
+            print(f"  PASS  {t.name}  ({secs:.1f}s){suffix}")
             passed.append(t.name)
+        elif outcome == OUTCOME_SKIP:
+            print(f"  SKIP  {t.name}  ({secs:.1f}s){suffix}")
+            skipped.append(t.name)
+        elif outcome == OUTCOME_VACUOUS:
+            # Counted as a failure on purpose: a file that asserts nothing is
+            # absent coverage wearing a green badge.
+            print(f"  VOID  {t.name}  ({secs:.1f}s)  — {note}")
+            vacuous.append((t.name, note))
         else:
             print(f"  FAIL  {t.name}  ({secs:.1f}s)")
-            if tail:
-                for line in tail.splitlines():
+            if out:
+                for line in out.splitlines():
                     print(f"        │ {line}")
-            failed.append((t.name, tail))
+            failed.append((t.name, out))
 
     print("\n" + "=" * 56)
-    print(f"  {len(passed)} passed · {len(failed)} failed · {len(skipped)} skipped")
+    print(f"  {len(passed)} passed · {len(failed)} failed · "
+          f"{len(skipped)} skipped · {len(vacuous)} vacuous")
     print("=" * 56)
+    if skipped:
+        print("\nSkipped (NOT passes — these subsystems went untested here):")
+        for name in skipped:
+            print(f"  - {name}")
+    if vacuous:
+        print("\nVacuous (exited 0 without asserting anything):")
+        for name, why in vacuous:
+            print(f"  - {name}: {why}")
     if failed:
         print("\nFailed tests:")
         for name, _ in failed:
             print(f"  - {name}")
-        return 1
-    return 0
+    return 1 if (failed or vacuous) else 0
 
 
 if __name__ == "__main__":

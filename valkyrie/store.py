@@ -11,6 +11,7 @@ thread drains that queue and commits in batches.
 from __future__ import annotations
 
 import json
+import logging
 import queue
 import sqlite3
 import threading
@@ -28,6 +29,8 @@ from .config import (
     STORE_FLUSH_EVERY,
     STORE_QUEUE_SIZE,
 )
+
+log = logging.getLogger("valkyrie.store")
 from .eventbus import EventBus
 
 
@@ -40,7 +43,13 @@ class DnsEvent:
     """One DNS resolution decision."""
     timestamp:    str
     domain:       str
-    decision:     str           # "blocked" | "allowed" | "flagged" | "behavioral"
+    # The FULL verdict vocabulary of dns_interceptor._decide. "deceived" was
+    # added later and this comment was not updated — the same staleness that
+    # made test_scanner_accuracy under-report recall by 60 points. Pinned by
+    # tests/test_verdict_vocabulary.py.
+    decision:     str           # "allowed" | "blocked" | "flagged"
+                                # | "deceived" (decoy sinkhole, acted-on)
+                                # | "behavioral" (legacy fallback block)
     process_name: str
     process_pid:  int
     process_path: str
@@ -96,6 +105,13 @@ class Store:
             if ram_uri else None
         )
         self._queue: queue.Queue = queue.Queue(maxsize=STORE_QUEUE_SIZE)
+        # Rows the writer could not persist. A gap in the audit trail must be
+        # countable, not invisible.
+        self._write_errors = 0
+        # Set when a performance index could not be created (read-only or
+        # locked database). Non-fatal, but never silent — see
+        # _init_optional_indexes.
+        self.last_index_error: str = ""
         self._writer_thread = threading.Thread(
             target=self._writer_loop, daemon=True, name="store-writer"
         )
@@ -207,6 +223,72 @@ class Store:
             ).fetchone()
         return row[0] or 0
 
+    def deception_stats(self) -> dict:
+        """Deception-engine counters for the UI: how many beacons were answered
+        with a fabricated persona instead of hard-failed, and how many
+        distinct trackers that covers. "deceived" is dns_interceptor's own
+        decision label (see DnsEvent.decision) — this reads it, it does not
+        redefine it, so it can never drift from what actually happened on the
+        wire.
+        """
+        since = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+        with self._session() as conn:
+            total_24h = conn.execute(
+                "SELECT COUNT(*) FROM events WHERE timestamp >= ? AND decision = 'deceived'",
+                (since,),
+            ).fetchone()[0]
+            trackers_24h = conn.execute(
+                "SELECT COUNT(DISTINCT domain) FROM events "
+                "WHERE timestamp >= ? AND decision = 'deceived'",
+                (since,),
+            ).fetchone()[0]
+            trackers_total = conn.execute(
+                "SELECT COUNT(DISTINCT domain) FROM events WHERE decision = 'deceived'"
+            ).fetchone()[0]
+            total_all = conn.execute(
+                "SELECT COUNT(*) FROM events WHERE decision = 'deceived'"
+            ).fetchone()[0]
+        return {
+            "beacons_deceived_24h":  total_24h,
+            "trackers_deceived_24h": trackers_24h,
+            "trackers_deceived_total": trackers_total,
+            "beacons_deceived_total": total_all,
+        }
+
+    def doh_bypass_stats(self) -> dict:
+        """DoH-bypass counters for the UI: a process resolving DNS-over-HTTPS
+        straight to a public resolver's IP is routing around Valkyrie's DNS
+        interception entirely — the same "escape the blocker" story as a
+        deceived tracker, one layer down the stack. "doh_bypass" is
+        doh_detector.py's own raw_category label (see DoHDetector._scan) —
+        this reads it, it does not redefine it.
+        """
+        since = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+        with self._session() as conn:
+            total_24h = conn.execute(
+                "SELECT COUNT(*) FROM events WHERE timestamp >= ? AND raw_category = 'doh_bypass'",
+                (since,),
+            ).fetchone()[0]
+            processes_24h = conn.execute(
+                "SELECT COUNT(DISTINCT process_name) FROM events "
+                "WHERE timestamp >= ? AND raw_category = 'doh_bypass'",
+                (since,),
+            ).fetchone()[0]
+            total_all = conn.execute(
+                "SELECT COUNT(*) FROM events WHERE raw_category = 'doh_bypass'"
+            ).fetchone()[0]
+            recent_row = conn.execute(
+                "SELECT timestamp, process_name, domain FROM events "
+                "WHERE raw_category = 'doh_bypass' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        return {
+            "bypass_attempts_24h":   total_24h,
+            "bypass_processes_24h":  processes_24h,
+            "bypass_attempts_total": total_all,
+            "most_recent": ({"timestamp": recent_row[0], "process_name": recent_row[1],
+                            "resolver_ip": recent_row[2]} if recent_row else None),
+        }
+
     # ------------------------------------------------------------------
     # Scan cache (site_scanner.py results)
     # ------------------------------------------------------------------
@@ -302,6 +384,13 @@ class Store:
 
     def is_anomaly(self, process_name: str, domain: str) -> bool:
         """Return True if domain is not in process baseline."""
+        # Reverse-DNS / local-resolution names are not domains a process
+        # "reached" — they are PTR lookups the OS does constantly, and treating
+        # an unseen one as anomalous produced a wall of false positives on real
+        # hardware. They can never be a baseline anomaly.
+        from .popular_domains import is_infrastructure_domain
+        if is_infrastructure_domain(domain):
+            return False
         baseline = self.get_baseline(process_name)
         if baseline is None:
             return False    # no baseline yet — can't flag
@@ -324,6 +413,31 @@ class Store:
     def is_writing(self) -> bool:
         """True while the background event writer thread is alive."""
         return self._writer_thread.is_alive()
+
+    def write_errors(self) -> int:
+        """Rows the writer could not persist (malformed data, SQLite errors).
+
+        Non-zero means the audit trail has gaps. Surfaced rather than hidden:
+        silently dropping events is exactly what this counter exists to make
+        impossible to do unnoticed.
+        """
+        return self._write_errors
+
+    def restart_writer(self) -> bool:
+        """Bring the writer thread back after it has died.
+
+        The self-healing watchdog registered `store_writer` with a health check
+        and NO recovery action, so it could detect a dead writer and do nothing
+        about it. This is that missing action. A Thread cannot be restarted, so
+        a fresh one is created; the queue is untouched, so anything still
+        pending is written by the new thread.
+        """
+        if self._writer_thread.is_alive():
+            return False
+        self._writer_thread = threading.Thread(
+            target=self._writer_loop, daemon=True, name="store-writer")
+        self._writer_thread.start()
+        return True
 
     def db_size_bytes(self) -> int:
         """Size of the on-disk database in bytes (0 in RAM mode)."""
@@ -362,8 +476,23 @@ class Store:
         if self._ram_uri:
             conn = sqlite3.connect(self._ram_uri, uri=True, check_same_thread=False)
         else:
-            conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
+            # timeout: block up to 5s for a competing writer instead of raising
+            # "database is locked" the instant the file is held.
+            conn = sqlite3.connect(str(self._db_path), check_same_thread=False, timeout=5.0)
         conn.row_factory = sqlite3.Row
+        # Concurrency hardening. Several engine threads (DNS interceptor, site
+        # scanner, EDR) each open short-lived connections against the same file.
+        # Without these, a concurrent writer raised sqlite3.OperationalError:
+        # "database is locked" — which surfaced as duplicate/failed DNS decisions.
+        # WAL lets readers run alongside the single writer; busy_timeout makes a
+        # contending writer WAIT for the lock rather than error out immediately.
+        try:
+            conn.execute("PRAGMA busy_timeout=5000")
+            if not self._ram_uri:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+        except sqlite3.Error:
+            pass
         return conn
 
     def _init_schema(self) -> None:
@@ -410,6 +539,52 @@ class Store:
             if "url" not in cols:
                 conn.execute("ALTER TABLE events ADD COLUMN url TEXT NOT NULL DEFAULT ''")
                 conn.commit()
+            self._init_optional_indexes(conn)
+
+    # Performance-only indexes. Deliberately SEPARATE from the schema above,
+    # and deliberately non-fatal.
+    #
+    # On an already-populated database every statement in _init_schema is a
+    # no-op (IF NOT EXISTS, all satisfied), so SQLite never needs a write lock
+    # and the whole call succeeds even when the process can only READ the file.
+    # Adding two genuinely new CREATE INDEX statements made schema init the
+    # first WRITE it had ever attempted there -- and on a host where the DB is
+    # not writable by this process that turned a silent condition into
+    #
+    #     sqlite3.OperationalError: attempt to write a readonly database
+    #
+    # thrown out of store.start(), i.e. an unhandled-exception dialog and no
+    # engine at all. A missing index is a slower query; it is never a reason to
+    # refuse to start.
+    #
+    # The underlying read-only condition is NOT swallowed: it is reported by
+    # last_index_error and by is_writing()/the store_writer watchdog, which is
+    # where "this engine cannot record anything" belongs -- that IS fatal to
+    # the audit trail and must stay visible.
+    _OPTIONAL_INDEXES = (
+        # cleaned_count() filters raw_category with no time bound, so without
+        # this it full-scans the events table on every /api/stats poll.
+        # Measured on the live 75MB DB (44,544 rows): 11.8ms -> 0.1ms.
+        ("idx_events_rawcat",
+         "CREATE INDEX IF NOT EXISTS idx_events_rawcat ON events(raw_category)"),
+        # decision is filtered by stats(), top_blocked_domains(),
+        # deception_stats() and doh_bypass_stats(). Same DB:
+        # top_blocked_domains 26.1ms -> 4.9ms.
+        ("idx_events_decision",
+         "CREATE INDEX IF NOT EXISTS idx_events_decision ON events(decision)"),
+    )
+
+    def _init_optional_indexes(self, conn) -> None:
+        for name, sql in self._OPTIONAL_INDEXES:
+            try:
+                conn.execute(sql)
+                conn.commit()
+            except sqlite3.Error as exc:
+                self.last_index_error = f"{name}: {exc}"
+                log.warning(
+                    "optional index %s could not be created (%s) — queries "
+                    "that use it stay slow; the engine continues", name, exc)
+                break     # a readonly/locked DB fails the next one identically
 
     def _writer_loop(self) -> None:
         """Background thread: drain queue, batch-commit to SQLite."""
@@ -418,22 +593,46 @@ class Store:
             "(timestamp,domain,decision,process_name,process_pid,process_path,reason,suspicion,raw_category,url)"
             " VALUES (?,?,?,?,?,?,?,?,?,?)"
         )
-        if self._ram_uri:
-            conn = sqlite3.connect(self._ram_uri, uri=True, check_same_thread=False)
-        else:
-            conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
+        # Same pragmas as every other connection (WAL + busy_timeout): the writer
+        # is the one connection that must never lose a race for the lock.
+        conn = self._connect()
         pending: list[DnsEvent] = []
 
         def flush():
             if not pending:
                 return
-            conn.executemany(INSERT, [
+            rows = [
                 (e.timestamp, e.domain, e.decision, e.process_name,
                  e.process_pid, e.process_path, e.reason, e.suspicion, e.raw_category, e.url)
                 for e in pending
-            ])
-            conn.commit()
+            ]
             evts = list(pending)
+            try:
+                conn.executemany(INSERT, rows)
+                conn.commit()
+            except Exception:
+                # ONE malformed row must not cost the whole batch, and must not
+                # kill this thread. executemany is all-or-nothing, so fall back
+                # to row-at-a-time and drop only what genuinely cannot be
+                # written. Verified failure mode: a single event carrying an
+                # unbindable value (sqlite3.ProgrammingError) previously killed
+                # the writer outright, and EVERY subsequent event — every DNS
+                # decision, detection and response — was silently never
+                # recorded for the rest of the run, while the product carried
+                # on looking healthy.
+                written = []
+                for row, evt in zip(rows, evts):
+                    try:
+                        conn.execute(INSERT, row)
+                        written.append(evt)
+                    except Exception:
+                        self._write_errors += 1
+                try:
+                    conn.commit()
+                except Exception:
+                    self._write_errors += 1
+                    written = []
+                evts = written
             pending.clear()
 
             # Fan out committed events to live subscribers over the bus. Skip the
@@ -497,5 +696,16 @@ class Store:
                         flush()
             except queue.Empty:
                 flush()
+            except BaseException:
+                # The writer must never die. Only queue.Empty was caught here,
+                # so any SQLite error (locked database, disk full, a scan-cache
+                # write that fails) escaped the loop, killed this thread AND
+                # skipped conn.close() below. Every event after that point --
+                # every DNS decision, detection and response -- was silently
+                # never recorded, while the rest of the product carried on
+                # looking perfectly healthy. For a security product, losing the
+                # audit trail without saying so is close to the worst quiet
+                # failure available.
+                self._write_errors += 1
 
         conn.close()

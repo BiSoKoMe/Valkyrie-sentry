@@ -34,6 +34,12 @@ from .config import (
     TRACKER_SLDS,
 )
 from .dga import classify_dga
+from .dns_tunnel import (
+    SubdomainFloodDetector,
+    effective_label,
+    embedded_private_ip,
+    is_dyndns_root,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +90,7 @@ class SiteScanner:
     def __init__(self, store=None) -> None:
         self._store = store
         self._rate  = RateLimiter()
+        self._tunnel = SubdomainFloodDetector()
 
     # ------------------------------------------------------------------
     # Public API
@@ -93,18 +100,26 @@ class SiteScanner:
         domain  = domain.lower().rstrip(".")
         process = (process or "").lower()
 
-        # Cache read (domain-only key; rate signal always runs live)
+        # Cache read (domain-only key; rate + flood signals always run live —
+        # both score the query *stream*, which a per-domain cache can't see)
         if self._store is not None:
             cached = self._store.get_cached_scan(domain)
             if cached is not None:
                 r = ScanResult(**cached)
                 object.__setattr__(r, "_from_cache", True)
                 r_score, r_reason = self._rate.record_and_score(process)
-                if r_score > 0 and r.decision == "allow":
-                    r.reasons.append(r_reason)
-                    if r.confidence + r_score >= SCANNER_BLOCK_THRESHOLD:
+                t_score, t_reason = self._tunnel.record_and_score(domain)
+                live = r_score + t_score
+                if live > 0 and r.decision == "allow":
+                    if r_reason:
+                        r.reasons.append(r_reason)
+                    if t_reason:
+                        r.reasons.append(t_reason)
+                    if r.confidence + live >= SCANNER_BLOCK_THRESHOLD:
                         r.decision = "block"
-                    elif r.confidence + r_score >= SCANNER_FLAG_THRESHOLD:
+                        if t_score >= 0.75:
+                            r.category = "tunnel"
+                    elif r.confidence + live >= SCANNER_FLAG_THRESHOLD:
                         r.decision = "flag"
                 return r
 
@@ -220,11 +235,47 @@ class SiteScanner:
             score = max(score, dga.confidence)
             reasons.append(dga.reason)
 
+        # S8 — wildcard IP-echo DNS provider (nip.io family). The registrable
+        # base belongs to the provider, so S7's registrable-label analysis is
+        # structurally blind here; re-run DGA on the LEFTMOST label (the only
+        # slot an attacker controls) and add a combining signal for the
+        # provider itself. A hostname that embeds a loopback/private IP —
+        # publicly resolving into the caller's own network — adds more.
+        dyndns_fired = is_dyndns_root(domain)
+        if dyndns_fired:
+            score += 0.35
+            reasons.append(f"wildcard dynamic-DNS provider: {_root_domain(domain)}")
+            eff = effective_label(domain)
+            # Synthesize "<label>.com" so classify_dga treats the payload
+            # label as the registrable label it was built to judge.
+            eff_dga = classify_dga(f"{eff}.com")
+            if eff_dga.is_dga:
+                score = max(score, eff_dga.confidence)
+                reasons.append(f"generated payload label on wildcard DNS: {eff_dga.reason}")
+                dga = eff_dga
+            if embedded_private_ip(domain):
+                score += 0.2
+                reasons.append("loopback/private IP embedded in hostname")
+
+        # S9 — unique-subdomain flood (DNS tunnelling shape, T1048.003).
+        # Aggregate signal no single query can show: many never-seen
+        # machine-generated labels under one base inside the window. Runs
+        # live on every query, like S4 — never from cache.
+        t_score, t_reason = self._tunnel.record_and_score(domain)
+        tunnel_fired = t_score >= 0.75
+        if t_score > 0:
+            score += t_score
+            reasons.append(t_reason)
+
         score = min(1.0, score)
 
-        # Decision — default is ALLOW. A fired DGA verdict is categorised "dga"
-        # (its own MITRE technique / severity), otherwise a positive is a tracker.
-        threat_category = "dga" if dga.is_dga else "tracker"
+        # Decision — default is ALLOW. Category priority mirrors evidence
+        # strength: a flood verdict is "tunnel" (T1048.003), a DGA verdict
+        # "dga" (T1568.002), a wildcard-provider-driven verdict "dyndns"
+        # (T1568 — Dynamic Resolution), otherwise a positive is a "tracker".
+        threat_category = ("tunnel" if tunnel_fired
+                           else "dga" if dga.is_dga
+                           else "dyndns" if dyndns_fired else "tracker")
         if score >= SCANNER_BLOCK_THRESHOLD:
             decision = "block"
             category = threat_category

@@ -133,14 +133,22 @@ class BehavioralEngine:
         can trip the threshold without all axes firing.
         """
         e_score, e_reason = entropy_score(domain)
-        r_score, r_reason = self._rate.record_and_score(process_name)
+        # Per-process query RATE is still recorded (for the health/telemetry
+        # window) but DELIBERATELY NOT scored. It is a process-behaviour signal,
+        # not a domain-reputation one, and it false-positived catastrophically:
+        # a busy browser or svchost doing 80 lookups in 10s made EVERY legitimate
+        # domain in that window (microsoft.com, bing.com, capitalone.com) inherit
+        # a "query burst" and get sinkholed — the single largest false-positive
+        # class in live testing. Burst-of-RANDOM-domains C2 is caught by the
+        # entropy / DGA signals on the DOMAIN itself, which do not false-positive
+        # on popular sites, so nothing real is lost.
+        self._rate.record_and_score(process_name)
         t_score, t_reason = tld_reputation_score(domain)
 
-        # Weighted combination (entropy carries most weight)
-        combined = min(1.0, e_score * 0.5 + r_score * 0.35
-                       + t_score * SUSPICIOUS_TLD_WEIGHT)
+        # Weighted combination (entropy carries most weight). Query rate excluded.
+        combined = min(1.0, e_score * 0.5 + t_score * SUSPICIOUS_TLD_WEIGHT)
 
-        reasons = [r for r in (e_reason, r_reason, t_reason) if r]
+        reasons = [r for r in (e_reason, t_reason) if r]
         reason  = "; ".join(reasons) if reasons else ""
         return combined, reason
 

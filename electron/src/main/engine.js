@@ -13,7 +13,7 @@
 // only ever receives already-parsed JSON over IPC.
 // ---------------------------------------------------------------------------
 
-const http = require('http');
+const { net } = require('electron');
 const { spawn, execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -74,28 +74,59 @@ function stopPortableEngine() {
 }
 
 // ---------------------------------------------------------------------------
-// Low-level HTTP GET against the loopback API. Resolves parsed JSON, or rejects
-// on any transport/parse error (used both for health polling and telemetry).
+// Low-level HTTP against the loopback API — built on Electron's `net` module
+// (Chromium's network stack), NOT Node's built-in `http`. This is load-bearing:
+// on a machine running the Valkyrie engine's own traffic filtering, raw
+// Winsock connections (Node's http/net, curl, anything using plain sockets)
+// to 127.0.0.1:WEB_PORT get silently black-holed — TCP connects instantly,
+// the request is sent, and then nothing ever comes back, forever, until the
+// caller's own timeout fires. WinHTTP-based clients (PowerShell, .NET) are
+// unaffected and answer in well under a second. Electron's `net` module goes
+// through the same OS network stack those do and is equally unaffected, so it
+// is used here instead of `http`, not merely as a style preference.
 // ---------------------------------------------------------------------------
-function apiGet(pathname, timeoutMs = 1500) {
+function netGet(pathname, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const req = http.get(
-      { host: HOST, port: WEB_PORT, path: pathname, timeout: timeoutMs },
-      (res) => {
-        let body = '';
-        res.on('data', (c) => (body += c));
-        res.on('end', () => {
-          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-            try { resolve(JSON.parse(body)); }
-            catch (e) { reject(e); }
-          } else {
-            reject(new Error(`HTTP ${res.statusCode}`));
-          }
-        });
-      }
-    );
-    req.on('timeout', () => req.destroy(new Error('timeout')));
-    req.on('error', reject);
+    const req = net.request({ method: 'GET', protocol: 'http:', hostname: HOST, port: WEB_PORT, path: pathname });
+    let settled = false;
+    const finish = (fn, arg) => { if (settled) return; settled = true; clearTimeout(timer); fn(arg); };
+    // Abort alone is not enough: net.ClientRequest.abort() emits 'abort', and
+    // an 'error' only follows on some Electron versions. When it does not, no
+    // handler below ever runs, `finish` is never called, and this promise stays
+    // pending forever -- the caller's await never returns and the panel sits on
+    // its loading state permanently. Reject explicitly so a timeout is always a
+    // rejection, never a hang.
+    const timer = setTimeout(() => {
+      req.abort();
+      finish(reject, new Error(`timeout after ${timeoutMs}ms: ${pathname}`));
+    }, timeoutMs);
+    req.on('response', (res) => {
+      let body = '';
+      res.on('data', (c) => (body += c));
+      res.on('end', () => finish(resolve, { statusCode: res.statusCode, body }));
+      res.on('error', (e) => finish(reject, e));
+    });
+    req.on('error', (e) => finish(reject, e));
+    req.end();
+  });
+}
+
+// Resolves parsed JSON, or rejects on any transport/parse error (used both
+// for health polling and telemetry).
+// 6000ms, not 1500ms. Measured against a healthy engine on this machine:
+//   /api/stats 2110ms   /api/events 1970ms
+//   /api/components 2325ms   /api/controls/coverage 2758ms
+// The old 1500ms default was below the real latency of most endpoints the app
+// polls, so essentially every poll timed out and every panel reported "no
+// data" against a perfectly healthy engine. Note this is a floor, not a fix:
+// 2-3s for a loopback JSON call is itself a server-side defect (these routes
+// recompute per request instead of caching, the same class as the 34s
+// asset-inventory hang), and until that is fixed the poll interval can still
+// be shorter than the response time.
+function apiGet(pathname, timeoutMs = 6000) {
+  return netGet(pathname, timeoutMs).then(({ statusCode, body }) => {
+    if (statusCode && statusCode >= 200 && statusCode < 300) return JSON.parse(body);
+    throw new Error(`HTTP ${statusCode}`);
   });
 }
 
@@ -103,20 +134,9 @@ function apiGet(pathname, timeoutMs = 1500) {
 // (e.g. the compliance report's ?format=md), so apiGet's JSON.parse never
 // gets in the way of a body that was never meant to be JSON.
 function apiGetText(pathname, timeoutMs = 4000) {
-  return new Promise((resolve, reject) => {
-    const req = http.get(
-      { host: HOST, port: WEB_PORT, path: pathname, timeout: timeoutMs },
-      (res) => {
-        let body = '';
-        res.on('data', (c) => (body += c));
-        res.on('end', () => {
-          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) resolve(body);
-          else reject(new Error(`HTTP ${res.statusCode}`));
-        });
-      }
-    );
-    req.on('timeout', () => req.destroy(new Error('timeout')));
-    req.on('error', reject);
+  return netGet(pathname, timeoutMs).then(({ statusCode, body }) => {
+    if (statusCode && statusCode >= 200 && statusCode < 300) return body;
+    throw new Error(`HTTP ${statusCode}`);
   });
 }
 
@@ -132,37 +152,75 @@ function apiRequest(method, pathname, { token, body, timeoutMs = 4000 } = {}) {
       headers['Content-Length'] = Buffer.byteLength(data);
     }
     if (token) headers['x-valkyrie-token'] = token;
-    const req = http.request(
-      { host: HOST, port: WEB_PORT, path: pathname, method, headers, timeout: timeoutMs },
-      (res) => {
-        let b = '';
-        res.on('data', (c) => (b += c));
-        res.on('end', () => {
-          const ok = res.statusCode >= 200 && res.statusCode < 300;
-          let parsed = null;
-          try { parsed = b ? JSON.parse(b) : null; } catch {}
-          if (ok) resolve(parsed);
-          else reject(new Error((parsed && parsed.error) || `HTTP ${res.statusCode}`));
-        });
-      }
-    );
-    req.on('timeout', () => req.destroy(new Error('timeout')));
-    req.on('error', reject);
+    // net.request, not http.request — see the block comment above netGet().
+    const req = net.request({ method, protocol: 'http:', hostname: HOST, port: WEB_PORT, path: pathname });
+    for (const [k, v] of Object.entries(headers)) req.setHeader(k, v);
+    let settled = false;
+    const finish = (fn, arg) => { if (settled) return; settled = true; clearTimeout(timer); fn(arg); };
+    // Abort alone is not enough: net.ClientRequest.abort() emits 'abort', and
+    // an 'error' only follows on some Electron versions. When it does not, no
+    // handler below ever runs, `finish` is never called, and this promise stays
+    // pending forever -- the caller's await never returns and the panel sits on
+    // its loading state permanently. Reject explicitly so a timeout is always a
+    // rejection, never a hang.
+    const timer = setTimeout(() => {
+      req.abort();
+      finish(reject, new Error(`timeout after ${timeoutMs}ms: ${pathname}`));
+    }, timeoutMs);
+    req.on('response', (res) => {
+      let b = '';
+      res.on('data', (c) => (b += c));
+      res.on('end', () => {
+        const ok = res.statusCode >= 200 && res.statusCode < 300;
+        let parsed = null;
+        try { parsed = b ? JSON.parse(b) : null; } catch {}
+        if (ok) { finish(resolve, parsed); return; }
+        // .status is set explicitly (not left to string-matching the
+        // message) so callers — apiPost's retry below in particular —
+        // can tell "the token is stale" apart from every other failure
+        // mode without depending on the exact wording the backend chose
+        // for that error, which is exactly the kind of fragile parsing
+        // this audit pass was looking for.
+        const err = new Error((parsed && parsed.error) || `HTTP ${res.statusCode}`);
+        err.status = res.statusCode;
+        finish(reject, err);
+      });
+      res.on('error', (e) => finish(reject, e));
+    });
+    req.on('error', (e) => finish(reject, e));
     if (data) req.write(data);
     req.end();
   });
 }
 
+// Cached per Electron-process-lifetime, but the Python engine mints a FRESH
+// token on every launch (secrets.token_urlsafe(24) at module load — see
+// valkyrie/web/server.py). The engine can restart underneath a still-running
+// Electron shell — e.g. POST /api/system/restart, a component restart, or the
+// self-healing watchdog recovering a crash — at which point every cached
+// token silently stops matching. Found during an architecture audit: the
+// restart control itself would have been the one action that broke every
+// OTHER control afterward, with no visible error beyond an opaque 403 on the
+// next click, until the user relaunched the whole app. `force` lets a caller
+// that already knows the token is stale skip the (harmless but pointless)
+// reuse of a value it just learned is wrong.
 let _tokenCache = null;
-async function controlToken() {
-  if (_tokenCache) return _tokenCache;
+async function controlToken(force = false) {
+  if (_tokenCache && !force) return _tokenCache;
   const r = await apiGet('/api/system/token', 2000);
   _tokenCache = r && r.token;
   return _tokenCache;
 }
 async function apiPost(pathname, body) {
   const token = await controlToken().catch(() => null);
-  return apiRequest('POST', pathname, { token, body });
+  try {
+    return await apiRequest('POST', pathname, { token, body });
+  } catch (err) {
+    if (err.status !== 401 && err.status !== 403) throw err;
+    const fresh = await controlToken(true).catch(() => null);
+    if (!fresh || fresh === token) throw err;   // genuinely forbidden, not stale
+    return apiRequest('POST', pathname, { token: fresh, body });
+  }
 }
 
 // True when the engine's web API answers on loopback.
@@ -269,9 +327,23 @@ async function waitUntilReady(onTick, { attempts = 60, intervalMs = 1000 } = {})
 // Snapshot for the dashboard: stats + recent events, tolerant of partial
 // availability so a half-warmed engine still renders something real.
 async function telemetry() {
-  const out = { ok: false, protected: isProtected(), stats: null, events: [] };
-  try { out.stats = await apiGet('/api/stats', 1500); out.ok = true; } catch {}
-  try { out.events = await apiGet('/api/events', 1500); } catch {}
+  const marker = isProtected();
+  const out = { ok: false, protected: marker, stats: null, events: [] };
+  try { out.stats = await apiGet('/api/stats', 6000); out.ok = true; }
+  catch (err) { console.error('[engine.telemetry] GET /api/stats failed:', err && err.stack || err); }
+  try { out.events = await apiGet('/api/events', 6000); }
+  catch (err) { console.error('[engine.telemetry] GET /api/events failed:', err && err.stack || err); }
+
+  // The adapter marker alone is NOT proof of protection: it is a file that
+  // outlives a crash, a reboot or a stopped service. Seen live — a marker from
+  // two weeks earlier made the dashboard read "Protected / All clear" while
+  // ValkyrieShield was STOPPED. So when the engine is reachable and states
+  // whether DNS interception is actually running, that answer wins.
+  // `dns_active` absent (older engine) -> fall back to the marker rather than
+  // wrongly reporting unprotected.
+  if (out.ok && out.stats && typeof out.stats.dns_active === 'boolean') {
+    out.protected = marker && out.stats.dns_active;
+  }
   return out;
 }
 

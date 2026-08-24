@@ -25,6 +25,49 @@ from typing import Optional
 
 from .config import RULES_PATH
 
+
+def _sanitize(entries) -> list[dict]:
+    """Coerce a parsed YAML rule list into well-formed {domain, process} dicts.
+
+    The rules file is hand-edited and hot-reloaded, and its matcher runs on the
+    synchronous DNS path — so a malformed entry used to raise there and break
+    name resolution for the entire machine until the file was fixed. Verified
+    shapes that crashed: a null domain (``- domain:``), a numeric or list
+    domain, a bare-string entry, and a null entry.
+
+    Bad entries are DROPPED rather than guessed at, with one deliberate
+    exception: a bare string is treated as a domain. Writing
+
+        always_block:
+          - evil.com
+
+    instead of ``- domain: evil.com`` is the single most likely mistake a user
+    makes with this format, and honouring it does exactly what they meant.
+    Silently dropping their rule would be worse — they would believe a domain
+    was blocked when it was not.
+    """
+    out: list[dict] = []
+    if not isinstance(entries, (list, tuple)):
+        return out
+    for e in entries:
+        if isinstance(e, str):                    # `- evil.com` shorthand
+            dom, proc = e.strip(), ""
+        elif isinstance(e, dict):
+            raw = e.get("domain")
+            if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+                raw = str(raw)                    # `- domain: 12345`
+            if not isinstance(raw, str):
+                continue                          # null/list/other → unusable
+            dom = raw.strip()
+            proc = e.get("process")
+            proc = proc.strip() if isinstance(proc, str) else ""
+        else:
+            continue                              # None, list, … → unusable
+        if not dom:
+            continue
+        out.append({"domain": dom, "process": proc})
+    return out
+
 DEFAULT_RULES_YAML = """\
 # Valkyrie user rules — edit and save; changes take effect within 5 seconds.
 #
@@ -63,12 +106,29 @@ class RuleSet:
 
     @staticmethod
     def _matches(rules: list[dict], domain: str, process_name: str) -> bool:
+        # Defensive even though _sanitize() already normalised everything at
+        # load time: this runs on the synchronous DNS path, where one raise
+        # breaks name resolution for the whole machine. A rules file is
+        # hand-edited and hot-reloaded, so malformed entries are a matter of
+        # when, not if. Belt and braces is the right trade here.
+        dom = (domain or "").lower().rstrip(".")
+        proc_name = (process_name or "").lower()
         for rule in rules:
-            pattern = rule.get("domain", "")
-            proc    = rule.get("process", "")
-            if proc and proc.lower() not in process_name.lower():
-                continue    # rule is process-specific and doesn't match
-            if fnmatch.fnmatch(domain, pattern):
+            if not isinstance(rule, dict):
+                continue
+            pattern = rule.get("domain")
+            if not isinstance(pattern, str) or not pattern:
+                continue
+            proc = rule.get("process")
+            if isinstance(proc, str) and proc:
+                if proc.lower() not in proc_name:
+                    continue    # rule is process-specific and doesn't match
+            # fnmatchcase against pre-lowered values, NOT fnmatch: fnmatch
+            # applies os.path.normcase, which folds case on Windows and does
+            # not on Linux — so the same rules file silently behaved
+            # differently per platform. Domains are case-insensitive by
+            # definition, so both sides are lowered explicitly instead.
+            if fnmatch.fnmatchcase(dom, pattern.lower().rstrip(".")):
                 return True
         return False
 
@@ -118,8 +178,8 @@ class RulesLoader:
         try:
             text = self._path.read_text(encoding="utf-8")
             data = yaml.safe_load(text) or {}
-            allow = data.get("always_allow", []) or []
-            block = data.get("always_block", []) or []
+            allow = _sanitize(data.get("always_allow", []) or [])
+            block = _sanitize(data.get("always_block", []) or [])
             with self._lock:
                 self._ruleset = RuleSet(allow, block)
                 self._mtime   = self._path.stat().st_mtime

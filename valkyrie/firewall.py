@@ -598,6 +598,11 @@ class FirewallManager:
 
     def is_blocked_ip(self, ip: str) -> bool:
         """Return True if ip falls within any blocked range (in-process check)."""
+        # Public DNS resolvers (Google/Cloudflare/Quad9) are never blocked — an
+        # over-broad range must not knock out DNS or flag Valkyrie's own upstream.
+        from .trust import is_public_resolver_ip
+        if is_public_resolver_ip(ip):
+            return False
         return self._ipset.contains(ip)
 
     def count(self) -> int:

@@ -37,6 +37,7 @@ from .config import (
     TRACKING_QUERY_PARAMS,
     TRACKING_SCRIPT_DOMAINS,
 )
+from . import farble, nyx
 from .store import DnsEvent, Store
 
 # 1x1 transparent PNG — returned for suppressed tracking pixels
@@ -47,22 +48,13 @@ _TRANSPARENT_PNG = (
     b"\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
 )
 
-# Fingerprint-protection snippet injected at the start of every <head>
-_FP_PROTECTION_SCRIPT = b"""<script>
-(function(){
-  var _c=HTMLCanvasElement.prototype.toDataURL;
-  HTMLCanvasElement.prototype.toDataURL=function(t){
-    if(t==='image/png') return 'data:image/png,v';
-    return _c.apply(this,arguments);
-  };
-  Object.defineProperty(navigator,'plugins',{get:()=>[]});
-  Object.defineProperty(navigator,'languages',{get:()=>['en-US','en']});
-  Object.defineProperty(screen,'colorDepth',{get:()=>24});
-  window.fbq=function(){};
-  window.gtag=function(){};
-  window.ga=function(){};
-})();
-</script>"""
+# Fingerprint protection now comes from farble.py, which generates a DIFFERENT
+# script per origin per session. The constant-valued snippet that used to live
+# here was actively counterproductive: every user returned the same fake canvas
+# hash, the same empty plugin list, the same colour depth — values no real
+# browser reports, identical across every site and session, which is precisely
+# the durable cross-site identifier the feature exists to prevent. See the
+# module docstring in farble.py for the full reasoning.
 
 # Inline analytics keywords that trigger neutralisation
 _INLINE_TRACKERS = [
@@ -128,8 +120,22 @@ def _strip_tracking_params(url: str) -> str:
 
 
 def _is_tracker_path(path: str) -> bool:
-    lower = path.lower()
-    return any(p in lower for p in TRACKER_URL_PATTERNS)
+    # Segment-exact, NOT substring. A bare `p in path` match blocked ordinary
+    # content paths whose word merely *contains* a pattern — e.g. "/collections/
+    # shoes" matched "/collect" and every e-commerce category page got blocked
+    # as a beacon (a real false positive found by the Nyx privacy battery). A
+    # pattern now hits only when it is a whole path segment, or that segment plus
+    # a file extension ("/pixel.gif") — never just a prefix of a longer word.
+    # Strictly more precise than the old check, so it can only REMOVE false
+    # matches, never add one. Query string is dropped first.
+    lower = (path or "/").split("?", 1)[0].lower()
+    segments = lower.split("/")
+    for pat in TRACKER_URL_PATTERNS:
+        core = pat.strip("/")
+        for seg in segments:
+            if seg == core or seg.startswith(core + "."):
+                return True
+    return False
 
 
 def _is_fingerprint_path(path: str) -> bool:
@@ -140,11 +146,13 @@ def _is_fingerprint_path(path: str) -> bool:
 class ValkyrieAddon:
     """mitmproxy addon class — methods are mitmproxy event hooks."""
 
-    def __init__(self, store: Store, blocklist=None, behavioral=None, rules=None) -> None:
+    def __init__(self, store: Store, blocklist=None, behavioral=None, rules=None,
+                 threat_intel=None) -> None:
         self.store           = store
         self.blocklist       = blocklist
         self.behavioral      = behavioral
         self.rules           = rules
+        self.threat_intel    = threat_intel
         self.intercept_count = 0
         # response cache: url → (expiry_time, cleaned_bytes | None)
         self._resp_cache: dict[str, tuple[float, bytes | None]] = {}
@@ -231,29 +239,44 @@ class ValkyrieAddon:
             self._block(flow, domain, url, proc, "user rule: always_block", category="rule_block")
             return
 
-        # 3. Blocklist
+        # 3. Threat-intel FULL-URL match (path-level). Checked before the
+        # domain blocklist because it is the more specific verdict and the
+        # only one that can act on malware hosted at one path of an otherwise
+        # legitimate, compromised site — where blocking the whole domain
+        # would be the false positive. This seam exists only here: DNS never
+        # sees a path, so a URL indicator is unreachable without TLS
+        # inspection.
+        if self.threat_intel is not None:
+            hit = self.threat_intel.match_url(url)
+            if hit is not None:
+                self._block(flow, domain, url, proc,
+                            f"malware URL ({hit.feed}: {hit.category})",
+                            category="threat_intel_url")
+                return
+
+        # 4. Blocklist
         if self.blocklist is not None and self.blocklist.is_blocked(domain):
             self._block(flow, domain, url, proc, "domain on blocklist", category="blocked")
             return
 
-        # 4. Behavioral score
+        # 5. Behavioral score
         if self.behavioral is not None:
             should_block, score, reason = self.behavioral.should_block(domain, proc)
             if should_block and score >= BEHAVIORAL_BLOCK_SCORE:
                 self._block(flow, domain, url, proc, reason or "behavioral score", category="behavioral")
                 return
 
-        # 5. Tracking pixel / beacon paths
+        # 6. Tracking pixel / beacon paths
         if _is_tracker_path(path):
             self._block(flow, domain, url, proc, f"tracking pixel/beacon path: {path}", category="tracker_pixel")
             return
 
-        # 6. Fingerprinting scripts
+        # 7. Fingerprinting scripts
         if _is_fingerprint_path(path):
             self._block(flow, domain, url, proc, f"fingerprinting script: {path}", category="fingerprint")
             return
 
-        # 7. Data exfiltration heuristic — large POST body to a flagged domain
+        # 8. Data exfiltration heuristic — large POST body to a flagged domain
         if req.method == "POST":
             body_len = len(req.raw_content or b"")
             if body_len > EXFIL_BODY_SIZE_BYTES and (
@@ -265,9 +288,56 @@ class ValkyrieAddon:
                              category="exfil")
                 return
 
-        # 8. Allowed — strip tracking params and log
+        # 8.5 Nyx — SEE & REPORT (observe-only). Read the raw request and note
+        # any personal data (device ID, location, contact, fingerprint bundle)
+        # crossing to a third party. This never touches the flow and never
+        # blocks — it only records what left, so the user can be told. Blocking
+        # or lying on outbound theft is a deliberate later slice.
+        self._nyx_observe(flow, domain, url, proc)
+
+        # 9. Allowed — strip tracking params and log
         self._strip_params(flow)
         self._log(domain, url, proc, "allowed", "", category="https")
+
+    def _nyx_observe(self, flow, domain: str, url: str, proc: str) -> None:
+        """Nyx on one outbound request. OBSERVE mode logs the leak; ACT mode
+        (config.NYX_ACT) rewrites the personal data into consistent persona
+        fakes so the tracker gets believable-but-false data and the request
+        still completes. Fully guarded: a bug here must never break browsing
+        nor derail the request pipeline."""
+        try:
+            from .config import NYX_ACT
+            req = flow.request
+            headers = dict(req.headers)
+            body = req.raw_content or b""
+            observations = nyx.inspect_outbound(
+                method=req.method, url=url, headers=headers, body=body)
+            if not observations:
+                return
+
+            if NYX_ACT:
+                new_url, new_body, faked = nyx.fake_outbound(
+                    req.method, url, headers, body)
+                if faked:
+                    try:
+                        if new_url != url:
+                            req.url = new_url
+                        if new_body is not None and new_body != body:
+                            req.set_content(new_body if isinstance(new_body, bytes)
+                                            else str(new_body).encode("utf-8"))
+                        self._log(domain, url, proc, "deceived",
+                                  "Nyx fed fake data for your "
+                                  + ", ".join(faked) + f" to {domain}",
+                                  category="nyx_fake")
+                        return   # acted — do not also log an observe event
+                    except Exception:
+                        pass     # rewrite failed → fall through to observe log
+
+            for ob in observations:
+                self._log(domain, url, proc, "flagged", ob.sentence,
+                          category="nyx_leak")
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Response processors
@@ -278,16 +348,21 @@ class ValkyrieAddon:
         domain  = flow.request.pretty_host
         content = flow.response.content
         removed = 0
+        # The farbling script is derived per-ORIGIN, so the page's own origin
+        # has to reach the injectors. Two different sites must receive two
+        # different scripts — that difference is the entire mechanism that
+        # stops them correlating the same user (see farble.py).
+        origin = farble.origin_of(flow.request.pretty_url)
 
         try:
-            cleaned = self._clean_html_lxml(content)
+            cleaned = self._clean_html_lxml(content, origin)
             if cleaned is not None:
                 removed_count = cleaned[1]
                 body = cleaned[0]
             else:
-                body, removed_count = self._clean_html_regex(content, domain)
+                body, removed_count = self._clean_html_regex(content, domain, origin)
         except Exception:
-            body, removed_count = self._clean_html_regex(content, domain)
+            body, removed_count = self._clean_html_regex(content, domain, origin)
 
         removed = removed_count
 
@@ -298,7 +373,7 @@ class ValkyrieAddon:
                       "page_clean")
         return body
 
-    def _clean_html_lxml(self, content: bytes) -> tuple[bytes, int] | None:
+    def _clean_html_lxml(self, content: bytes, origin: str = "") -> tuple[bytes, int] | None:
         """Parse with lxml for precise element removal. Returns (body, count) or None."""
         try:
             from lxml import html as lhtml
@@ -351,12 +426,14 @@ class ValkyrieAddon:
                     if cleaned_url != val:
                         el.set(attr, cleaned_url)
 
-        # Inject fingerprint protection at start of <head>
+        # Inject fingerprint protection at start of <head>. Must be FIRST so
+        # it patches the surfaces before any page script can read them.
         if FINGERPRINT_PROTECTION:
             heads = tree.xpath('//head')
             if heads:
                 try:
-                    fp_el = lhtml.fragment_fromstring(_FP_PROTECTION_SCRIPT.decode())
+                    fp_el = lhtml.fragment_fromstring(
+                        farble.script_for(origin).decode())
                     heads[0].insert(0, fp_el)
                 except Exception:
                     pass
@@ -374,7 +451,8 @@ class ValkyrieAddon:
 
         return result, removed
 
-    def _clean_html_regex(self, content: bytes, domain: str) -> tuple[bytes, int]:
+    def _clean_html_regex(self, content: bytes, domain: str,
+                          origin: str = "") -> tuple[bytes, int]:
         """Regex fallback when lxml is unavailable."""
         body   = content
         removed = 0
@@ -430,9 +508,8 @@ class ValkyrieAddon:
 
         # Inject fingerprint protection after <head>
         if FINGERPRINT_PROTECTION:
-            body = _RE_HEAD_OPEN.sub(
-                lambda m: m.group(0) + _FP_PROTECTION_SCRIPT, body, count=1
-            )
+            fp = farble.script_for(origin)
+            body = _RE_HEAD_OPEN.sub(lambda m: m.group(0) + fp, body, count=1)
 
         # Add removal comment before </body>
         if removed > 0:

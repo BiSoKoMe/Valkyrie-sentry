@@ -42,9 +42,25 @@ if ($SkipEngine) {
     python -m pip install -r requirements_modular.txt pyinstaller
     python -m pip install cryptography httpx
     # AI investigation is vendor-neutral over httpx (installed above) — no AI SDK.
+
+    # See build_app.ps1's identical guard for why Test-Path alone is not
+    # enough: a stale exe left over from a previous build passes it even
+    # when THIS run's PyInstaller invocation hard-failed.
+    $preBuildTime = if (Test-Path $engineExe) { (Get-Item $engineExe).LastWriteTimeUtc } else { $null }
     python -m PyInstaller --clean --noconfirm valkyrie.spec
+    $pyinstallerExit = $LASTEXITCODE
+
+    if ($pyinstallerExit -ne 0) {
+        throw "Engine build failed - PyInstaller exited with code $pyinstallerExit (see log above)."
+    }
     if (-not (Test-Path $engineExe)) {
         throw "Engine build failed - dist\valkyrie.exe was not produced. Check the log above."
+    }
+    $postBuildTime = (Get-Item $engineExe).LastWriteTimeUtc
+    if ($preBuildTime -ne $null -and $postBuildTime -le $preBuildTime) {
+        throw ("Engine build did not actually run: dist\valkyrie.exe's timestamp " +
+               "($postBuildTime) is no newer than before this build started " +
+               "($preBuildTime) - aborting rather than packaging a stale binary.")
     }
 }
 

@@ -117,6 +117,70 @@ def test_persistence_collector_detects_new_run_key():
             pass
 
 
+# ── regression: HKEY_USERS enumeration (the LocalSystem-service blind spot) ──
+def test_run_key_specs_reads_via_hkey_users_not_just_hkcu():
+    """Valkyrie ships as a Windows service with no configured logon account, so
+    nssm runs it as LocalSystem. From that process, HKEY_CURRENT_USER is
+    LocalSystem's OWN hive — NOT the interactive desktop user's — so a Run-key
+    write via the interactive user's HKCU (the common, no-admin-required real
+    persistence path) was structurally invisible no matter how long the poller
+    waited. Found live on a VM re-test. The fix reads every LOADED user hive
+    via HKEY_USERS\\<SID> instead of trusting "current user" context — this
+    pins that HKEY_USERS enumeration actually surfaces a real interactive
+    user's SID and that _run_key_specs() includes an HKU entry for it."""
+    if not _WINDOWS:
+        print("  SKIP (non-Windows)")
+        return
+    from valkyrie.persistence_telemetry import _enum_loaded_user_sids, _run_key_specs
+    sids = _enum_loaded_user_sids()
+    assert sids, "no loaded S-1-5-21- user hive found under HKEY_USERS"
+    for sid in sids:
+        assert sid.startswith("S-1-5-21-") and not sid.endswith("_Classes")
+    specs = _run_key_specs()
+    hku_locs = [loc for _hive, subkey, loc in specs if subkey.startswith(sids[0])]
+    assert hku_locs, "_run_key_specs() produced no HKEY_USERS entry for the loaded SID"
+
+
+def test_persistence_collector_detects_run_key_via_hkey_users():
+    """The faithful regression: write to the SAME per-user Run key a
+    LocalSystem service would have to read via HKEY_USERS\\<SID> (not
+    HKEY_CURRENT_USER, which this test process could also see — but a real
+    LocalSystem service cannot). Confirms the collector's diff logic actually
+    detects a change surfaced only through the HKEY_USERS path."""
+    if not _WINDOWS:
+        print("  SKIP (non-Windows)")
+        return
+    import winreg
+    from valkyrie.persistence_telemetry import _enum_loaded_user_sids
+    sids = _enum_loaded_user_sids()
+    if not sids:
+        print("  SKIP (no loaded user SID on this box)")
+        return
+    sid = sids[0]
+    run = f"{sid}\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+    marker = "ValkyrieTest_HKU_DELETEME"
+    events = []
+    coll = PersistenceCollector(emit=events.append, interval=60)
+    coll._last = coll.snapshot()          # baseline (includes the HKU entries now)
+    key = winreg.OpenKey(winreg.HKEY_USERS, run, 0, winreg.KEY_SET_VALUE)
+    try:
+        winreg.SetValueEx(key, marker, 0, winreg.REG_SZ, r"C:\Program Files\App\app.exe")
+        winreg.CloseKey(key)
+        n = coll.poll_once()
+        assert n >= 1, "new HKEY_USERS Run value not detected"
+        persist = [e for e in events if e.category == CAT_PERSISTENCE]
+        ev = next((e for e in persist if marker in e.target.get("location", "")), None)
+        assert ev is not None, "no persistence event emitted for the HKEY_USERS Run value"
+        assert ev.activity == PERSIST_RUN_KEY
+    finally:
+        try:
+            k = winreg.OpenKey(winreg.HKEY_USERS, run, 0, winreg.KEY_SET_VALUE)
+            winreg.DeleteValue(k, marker)
+            winreg.CloseKey(k)
+        except OSError:
+            pass
+
+
 def test_persistence_collector_detects_startup_file(tmp_path=None):
     # Uses the collector's diff logic directly with a synthetic snapshot so it is
     # deterministic and cross-platform (no real startup folder writes).

@@ -161,6 +161,29 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     check("distinct category → separate incident",
           len(engine.list_incidents()) == 2)
 
+    # `technique` was captured per-Detection from day one (edr_detections has
+    # had the column since the start) but never copied onto the Incident it
+    # correlated into, so a real MITRE id like T1562.001 was computed and
+    # then discarded before it ever reached the incident list/API.
+    engine.report_detection(schema.Detection(
+        source="sensor_tamper_monitor", severity="critical", category="process",
+        title="sensor tamper", entity="sysmon", technique="T1562.001"))
+    tamper_incs = [i for i in engine.list_incidents() if i["entity"] == "sysmon"]
+    check("a new incident carries its detection's technique",
+          bool(tamper_incs) and tamper_incs[0]["technique"] == "T1562.001")
+    check("the wire format includes an 'explanation' field",
+          bool(tamper_incs) and bool(tamper_incs[0].get("explanation")))
+
+    # A second, technique-LESS detection folding into the same incident must
+    # not blank out the technique the first detection already established.
+    engine.report_detection(schema.Detection(
+        source="sensor_tamper_monitor", severity="critical", category="process",
+        title="sensor tamper again", entity="sysmon", technique=""))
+    tamper_incs2 = [i for i in engine.list_incidents() if i["entity"] == "sysmon"]
+    check("still ONE incident (correlated, not duplicated)", len(tamper_incs2) == 1)
+    check("a later technique-less detection does not blank an established technique",
+          bool(tamper_incs2) and tamper_incs2[0]["technique"] == "T1562.001")
+
     inc_id = fw_incs[0]["id"]
     detail = engine.get_incident(inc_id)
     check("incident detail carries its detections", len(detail["detections"]) == 3)
@@ -169,6 +192,14 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 
     # ── Response actions: dry-run, audit, protected PIDs ──────────────
     print("\n-- Response actions --------------------------------")
+    # block_domain / unblock_domain route through the ANALYSIS memory now (no
+    # manual rules file). Give the responder a recording intelligence stub.
+    class _Intel:
+        def __init__(self): self.blocked = set(); self.good = set()
+        def remember_block(self, d, r=""): self.blocked.add(d)
+        def remember_good(self, d, r=""): self.good.add(d)
+    _intel = _Intel()
+    engine._ctx.intelligence = _intel
     r1 = engine.respond("block_domain", "c2.evil", dry_run=True, incident_id=inc_id)
     check("block_domain dry-run reports dry_run", r1["status"] == "dry_run")
     r2 = engine.respond("kill_process", "4", dry_run=False, incident_id=inc_id)
@@ -186,20 +217,14 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     check("response recorded in timeline",
           any(t["kind"] == "response" for t in detail["timeline"]))
 
-    # Real block_domain against a temp rules file (no repo mutation).
-    import valkyrie.edr.response as _resp
-    _orig = _resp.RULES_PATH
-    try:
-        _resp.RULES_PATH = Path(tmp) / "rules.yaml"
-        got = engine.respond("block_domain", "tracker.test", dry_run=False)
-        check("real block_domain succeeds", got["status"] == "succeeded")
-        text = _resp.RULES_PATH.read_text(encoding="utf-8")
-        check("blocked domain written to rules", "tracker.test" in text)
-        engine.respond("unblock_domain", "tracker.test", dry_run=False)
-        text2 = _resp.RULES_PATH.read_text(encoding="utf-8")
-        check("unblock removes the domain", "tracker.test" not in text2)
-    finally:
-        _resp.RULES_PATH = _orig
+    # Real block_domain records the domain in analysis memory — NO file written,
+    # no manual list. The DNS engine enforces it via that same memory next lookup.
+    got = engine.respond("block_domain", "tracker.test", dry_run=False)
+    check("real block_domain succeeds", got["status"] == "succeeded")
+    check("blocked domain remembered in analysis memory",
+          "tracker.test" in _intel.blocked)
+    engine.respond("unblock_domain", "tracker.test", dry_run=False)
+    check("unblock marks the domain known-good", "tracker.test" in _intel.good)
 
     # ── Incident lifecycle ────────────────────────────────────────────
     print("\n-- Incident lifecycle ------------------------------")
@@ -271,19 +296,20 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 
     # ── Privacy: EDR data is local only ───────────────────────────────
     print("\n-- Privacy invariant -------------------------------")
-    # The fleet heartbeat must NOT carry EDR incident details/domains. The
-    # fleet protocol only ships counts/categories/components (proven in
-    # test_fleet.py); EDR adds no new wire fields, so a heartbeat built from
-    # the same status dict never sees an incident domain.
-    from valkyrie.fleet.agent import FleetAgent
-    def _status():
-        return {"blocked_24h": 5, "allowed_24h": 1, "flagged_24h": 0,
-                "components": {"dns": True}, "categories": {"tracker": 5}}
-    agent = FleetAgent("http://localhost:1", _status)
-    hb = agent._build_heartbeat().to_dict()
-    blob = repr(hb)
-    check("fleet heartbeat carries no EDR incident/domain data",
-          "c2.evil" not in blob and "incidents" not in hb and "beacon.evil" not in blob)
+    # The fleet-heartbeat version of this invariant moved with the fleet code
+    # to experimental/tests/test_fleet.py (ADR 0044). What remains here is the
+    # invariant that still applies to CORE: the EDR engine has no egress of its
+    # own. Incident data reaches the network only through an explicitly wired,
+    # opt-in exporter (siem.py) — the engine itself must expose no transport.
+    import inspect as _inspect
+    import valkyrie.edr.engine as _eng
+    _src = _inspect.getsource(_eng)
+    check("EDR engine imports no network transport",
+          not any(m in _src for m in ("import socket", "import requests",
+                                      "urllib.request", "http.client")))
+    # Subscribers receive incidents; nothing in that path writes to a socket.
+    check("engine fan-out is in-process only (EventBus, not a client)",
+          "EventBus" in _src)
 
     engine.stop()
     store.stop()

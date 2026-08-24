@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from .plugins import DetectionPlugin, EnrichmentPlugin, PluginContext
 from .schema import Detection
+from ..popular_domains import is_infrastructure_domain
 
 
 def _ev(event: dict) -> tuple:
@@ -38,6 +39,11 @@ _TECHNIQUE = {
     "intelligence": "T1071.004 — DNS C2 / beaconing",
     "behavioral":   "T1568.002 — Domain Generation Algorithm",
     "dga":          "T1568.002 — Domain Generation Algorithm",
+    "tunnel":       "T1048.003 — Exfiltration Over Alternative Protocol (DNS tunnelling)",
+    "dyndns":       "T1568 — Dynamic Resolution (wildcard DNS)",
+    "attack_chain": "Multi-stage attack (correlated ATT&CK tactics)",
+    "attack_sequence": "Named behavioural attack sequence (ESP-style IOA)",
+    "malware":      "T1059 — Malicious content convicted by the OS antimalware provider (AMSI)",
     "anomaly":      "T1071.004 — Anomalous DNS",
     "doh_bypass":   "T1572 — Protocol Tunnelling (DoH bypass)",
     "tracker":      "T1041 — Exfiltration / tracking",
@@ -85,6 +91,11 @@ class BeaconDetection(DetectionPlugin):
     def analyze(self, event, ctx):
         domain, decision, pname, pid, cat, susp, reason = _ev(event)
         rl = reason.lower()
+        # Repeated reverse-DNS / local lookups look periodic but are not C2 —
+        # they are routine OS resolution. Exempt them here so a real beacon to
+        # an actual domain still fires (see is_infrastructure_domain).
+        if is_infrastructure_domain(domain):
+            return []
         if cat == "intelligence" and any(m in rl for m in self._MARKERS):
             return [Detection(
                 source=self.name, severity="high", category="intelligence",
@@ -162,12 +173,60 @@ class DgaDetection(DetectionPlugin):
         return []
 
 
+class TunnelDetection(DetectionPlugin):
+    name = "dns.tunnel"
+    description = "DNS tunnelling — a stream of unique generated subdomains under one base"
+
+    def analyze(self, event, ctx):
+        domain, decision, pname, pid, cat, susp, reason = _ev(event)
+        # The scanner's unique-subdomain flood verdict (site_scanner S9 /
+        # dns_tunnel.py): many never-seen machine-generated labels under one
+        # registrable base in a short window — the shape of DNS exfil/C2,
+        # invisible to any single-query signal.
+        if cat == "tunnel":
+            return [Detection(
+                source=self.name, severity="high", category="tunnel",
+                title=f"DNS tunnelling pattern from {pname or 'a process'}",
+                entity=domain, process_name=pname, process_pid=pid,
+                technique="T1048.003 — Exfiltration Over Alternative Protocol (DNS tunnelling)",
+                details={"reason": reason, "suspicion": susp},
+            )]
+        # A blocked generated-looking hostname on a wildcard IP-echo provider —
+        # not yet a corroborated flood, but the same technique family (hiding
+        # traffic under a legitimate wildcard base). Medium: real signal,
+        # single-query evidence.
+        if cat == "dyndns" and decision in ("blocked", "behavioral"):
+            return [Detection(
+                source=self.name, severity="medium", category="dyndns",
+                title=f"Suspicious wildcard-DNS hostname from {pname or 'a process'}",
+                entity=domain, process_name=pname, process_pid=pid,
+                technique="T1568 — Dynamic Resolution (wildcard DNS)",
+                details={"reason": reason, "suspicion": susp},
+            )]
+        return []
+
+
 class AnomalyDetection(DetectionPlugin):
     name = "dns.anomaly"
     description = "A process reached a domain outside its learned baseline"
 
     def analyze(self, event, ctx):
         domain, decision, pname, pid, cat, susp, reason = _ev(event)
+        # A reverse-DNS / local name outside a process baseline is meaningless —
+        # every process does different PTR lookups constantly. This is the single
+        # highest-volume false positive on real hardware; drop it here.
+        if is_infrastructure_domain(domain):
+            return []
+        # A SIGNED OS binary (Windows Update, the search stack, WMI, background
+        # tasks, updaters, conhost) legitimately reaches a wide, changing set of
+        # domains — so "reached a domain outside its baseline" is noise on them,
+        # not signal. Suppress the lone low-value anomaly for OS processes; a real
+        # threat from one still surfaces via the intelligence / threat-intel /
+        # beacon paths, which key on BEHAVIOUR, not on baseline novelty. This is a
+        # trust judgment (signed path), not a domain allowlist.
+        from ..trust import is_trusted_os_path
+        if is_trusted_os_path(str(event.get("process_path", ""))):
+            return []
         if decision == "flagged" and cat in ("anomaly", "intelligence"):
             return [Detection(
                 source=self.name, severity="low", category="anomaly",
@@ -205,6 +264,7 @@ BUILTIN_DETECTIONS = [
     IntelBlockDetection,
     DohBypassDetection,
     DgaDetection,
+    TunnelDetection,
     AnomalyDetection,
     TrackerDetection,
 ]

@@ -20,6 +20,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# How long to wait for an async playbook response to land on an incident.
+# The work itself completes in ~0.00s; this is purely slack for a loaded CI box.
+# It was 3s, and this file has been observed failing 8 runs in a row and then
+# passing 18 in a row on the same commit — a nondeterministic result is as
+# useless as a vacuous one, so the slack is generous on purpose. If a response
+# genuinely never arrives, 10s fails just as surely as 3s did.
+_WAIT = 10.0
+
 _FAILURES: list[str] = []
 
 
@@ -54,7 +62,8 @@ def main() -> int:
     from valkyrie.store import Store
     from valkyrie.edr import EdrEngine
     from valkyrie.edr.schema import Detection
-    from valkyrie.edr.playbooks import Playbook, PlaybookAction, PlaybookEngine
+    from valkyrie.edr.playbooks import (
+        Playbook, PlaybookAction, PlaybookEngine, _parse_playbook)
 
     print("\n=== SOAR playbooks ===\n")
 
@@ -91,7 +100,7 @@ def main() -> int:
         inc_id = engine.report_detection(Detection(
             source="test", severity="high", category="c2",
             title="beacon", entity="evil.example", process_name="mal.exe"))
-        deadline = time.monotonic() + 3
+        deadline = time.monotonic() + _WAIT
         inc = engine.get_incident(inc_id)
         while time.monotonic() < deadline and not (inc and inc.get("responses")):
             time.sleep(0.05)
@@ -113,7 +122,7 @@ def main() -> int:
         rid = engine.report_detection(Detection(
             source="test", severity="critical", category="ransomware",
             title="canary tripped", entity="C:/u", process_name="crypt.exe"))
-        deadline = time.monotonic() + 3
+        deadline = time.monotonic() + _WAIT
         rinc = engine.get_incident(rid)
         while time.monotonic() < deadline and not (rinc and rinc.get("responses")):
             time.sleep(0.05)
@@ -142,9 +151,36 @@ def main() -> int:
         _check("playbook engine still active", pbe.status()["active"])
         _check("EDR still correlating", len(engine.list_incidents()) >= 2)
 
+        print("\n[7] kill_process resolves the incident PID (not the name)")
+        pb_kill = _parse_playbook({
+            "id": "kill", "min_severity": "critical", "categories": ["process"],
+            "actions": [{"action": "kill_process", "target_from": "process_pid"}],
+        })
+        _check("process_pid is a valid target_from", pb_kill.actions[0].target_from == "process_pid")
+        pbe._playbooks = [pb_kill]                      # dry-run (default mode)
+        pk = engine.report_detection(Detection(
+            source="etw", severity="critical", category="process",
+            title="injection", entity="C:/x.exe", process_name="mal.exe",
+            process_pid=2147480000))                   # unused high PID → no such process
+        deadline = time.monotonic() + _WAIT
+        pinc = engine.get_incident(pk)
+        while time.monotonic() < deadline and not (pinc and pinc.get("responses")):
+            time.sleep(0.05); pinc = engine.get_incident(pk)
+        presp = (pinc or {}).get("responses") or []
+        _check("kill fired on the process incident", len(presp) == 1)
+        if presp:
+            # The point: the target parsed as a PID. Whatever the outcome
+            # (dry_run "would terminate", or "no such process"), it must NOT be
+            # the old "invalid pid: 'mal.exe'" — that was the name-not-PID bug.
+            _check("target resolved as a PID, not the process name",
+                   "invalid pid" not in presp[0].get("result", ""))
+
         pbe.stop()
         engine.stop()
         store.stop()
+
+    print("\n[8] Shipped default playbook set")
+    _default_playbooks_checks()
 
     print("\n" + "=" * 48)
     if _FAILURES:
@@ -154,6 +190,66 @@ def main() -> int:
         return 1
     print("All checks PASSED.")
     return 0
+
+
+def _default_playbooks_checks() -> None:
+    """The shipped default (valkyrie/defaults/playbooks.default.yaml) must ship
+    enabled, safe, and parseable — it's what makes auto-response ON out of the
+    box instead of the old zero-playbook observe-only posture."""
+    import yaml
+    from valkyrie.config import DEFAULT_PLAYBOOKS_PATH
+    from valkyrie.edr.playbooks import _parse_playbook
+
+    _check("default playbook file is bundled", DEFAULT_PLAYBOOKS_PATH.exists())
+    raw = yaml.safe_load(DEFAULT_PLAYBOOKS_PATH.read_text(encoding="utf-8")) or {}
+    books = [_parse_playbook(e) for e in raw.get("playbooks") or []]
+    by_id = {b.id: b for b in books}
+
+    _check("default set parses without error", len(books) >= 3)
+    # Domain blocks are reversible → ship enforce; process kill is destructive
+    # → the BROAD stream must ship dry_run, while narrowly-scoped, high-confidence
+    # kills (critical-only, named sequences) MAY ship enforce.
+    domain_blockers = [b for b in books
+                       if any(a.action == "block_domain" for a in b.actions)]
+    _check("domain-block playbooks present", len(domain_blockers) >= 1)
+    _check("every domain-block ships in ENFORCE",
+           all(b.mode == "enforce" for b in domain_blockers))
+    _check("dga C2 is auto-blocked", "dga" in by_id.get("block-dga-c2").categories
+           if "block-dga-c2" in by_id else False)
+    _check("dns tunnelling is auto-blocked",
+           "tunnel" in by_id.get("block-dns-tunnel").categories
+           if "block-dns-tunnel" in by_id else False)
+
+    # Persistence removal is low-risk (removes the NEW artefact) → ships enforce.
+    _check("remove-persistence ships in ENFORCE",
+           by_id.get("remove-persistence").mode == "enforce"
+           if "remove-persistence" in by_id else False)
+
+    # The safety contract for auto-kill: any ENFORCE kill must be narrowly
+    # scoped so the everyday LOLBin stream can never trip it. Concretely, an
+    # enforce kill either fires only at CRITICAL severity (reserved for
+    # malicious-by-construction tradecraft), or is limited to the high-confidence
+    # named-sequence/chain categories — never the bare 'process' stream at
+    # medium/high.
+    killers = [b for b in books
+               if any(a.action == "kill_process" for a in b.actions)]
+    _broad_process = {"process"}
+    for b in killers:
+        if b.mode != "enforce":
+            continue
+        scoped_by_severity = b.min_severity == "critical"
+        scoped_by_category = set(b.categories).issubset(
+            {"attack_sequence", "attack_chain"}) and bool(b.categories)
+        _check(f"enforce kill '{b.id}' is narrowly scoped (critical-only or named sequence)",
+               scoped_by_severity or scoped_by_category)
+        if set(b.categories) & _broad_process:
+            _check(f"enforce kill '{b.id}' on 'process' fires only at CRITICAL",
+                   b.min_severity == "critical")
+    _check("the BROAD process-kill stream still ships DRY_RUN",
+           any(b.mode == "dry_run" and "process" in b.categories
+               and b.min_severity != "critical" for b in killers))
+    _check("no domain-block targets a bare TLD or wildcard root (would over-block)",
+           all(a.target_from == "entity" for b in domain_blockers for a in b.actions))
 
 
 if __name__ == "__main__":

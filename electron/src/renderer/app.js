@@ -35,26 +35,35 @@ function trapFocus(container) {
   return () => container.removeEventListener('keydown', handler);
 }
 
-// Twin-wing "V" mark — angular, faceted (two fill tones per blade to read as
-// folded metal), converging on a center spike. Monochrome, matches the
-// design system's black/white/grey rule; no color.
+// Winged-V mark — matched to the real Valkyrie logo (see electron/build/icon.*
+// and icons.js ICON.mark, which share this exact geometry — one shape, one
+// source of truth). Monochrome, matches the tactical HUD design system.
 const LOGO = `
-<svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <polygon points="29,4 2,14 9,19" fill="#f6f6f7" opacity="0.72"/>
-  <polygon points="35,4 62,14 55,19" fill="#f6f6f7" opacity="0.72"/>
-  <polygon points="18,12 2,22 7.5,25.5" fill="#f6f6f7" opacity="0.72"/>
-  <polygon points="46,12 62,22 56.5,25.5" fill="#f6f6f7" opacity="0.72"/>
-  <polygon points="29,4 25.5,8.5 2,14" fill="#f6f6f7"/>
-  <polygon points="35,4 38.5,8.5 62,14" fill="#f6f6f7"/>
-  <polygon points="18,12 15.5,16 2,22" fill="#f6f6f7"/>
-  <polygon points="46,12 48.5,16 62,22" fill="#f6f6f7"/>
-  <polygon points="30,19 32,31 34,19" fill="#f6f6f7"/>
+<svg viewBox="0 0 100 88" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M40,38 L50,80 L60,38 L54,38 L50,64 L46,38 Z" fill="#eef2f5"/>
+  <path d="M12,9 L46,29 L46,33.5 L14,15 Z" fill="#eef2f5"/>
+  <path d="M19,20 L46,35 L46,39.5 L21,26 Z" fill="#eef2f5"/>
+  <path d="M88,9 L54,29 L54,33.5 L86,15 Z" fill="#eef2f5"/>
+  <path d="M81,20 L54,35 L54,39.5 L79,26 Z" fill="#eef2f5"/>
 </svg>`;
 
 const state = { engineUp: false, protected: false, busy: false, route: 'dashboard', tele: null, pageTimer: null };
 
 /* ============================ Utilities ============================== */
 function fmt(n) { return (n == null || isNaN(n)) ? '0' : Number(n).toLocaleString('en-US'); }
+// Formats a duration in SECONDS (fractional — MTTD/MTTR are often
+// sub-second) into the shortest reasonable human string. Used only for
+// valkyrie/edr/metrics.py's median_seconds/p95_seconds — null means "not
+// enough data", handled by the caller before this is reached.
+function fmtDuration(s) {
+  if (s == null || isNaN(s)) return '—';
+  if (s < 1) return `${Math.round(s * 1000)}ms`;
+  if (s < 60) return `${s.toFixed(s < 10 ? 1 : 0)}s`;
+  const m = Math.floor(s / 60), rem = Math.round(s % 60);
+  if (m < 60) return rem ? `${m}m ${rem}s` : `${m}m`;
+  const h = Math.floor(m / 60), remM = m % 60;
+  return remM ? `${h}h ${remM}m` : `${h}h`;
+}
 function fmtUptime(s) {
   if (!s || s < 0) return '—';
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
@@ -67,8 +76,39 @@ function privacyScore(stats, up) {
   const blocked = (stats.dns_blocked || 0) + (stats.fw_blocked || 0);
   return Math.min(100, Math.round(72 + 28 * (1 - 1 / (1 + blocked / 200))));
 }
+// Sentinel for "this poll did not reach the engine", which is NOT the same as
+// null ("this layer is switched off") and NOT the same as 0 ("we looked and
+// found none"). Three distinct truths that all used to render as "0".
+const NO_DATA = '—';
+// Map a telemetry number for display: only trust it when the poll succeeded.
+// Every counter these cards show is cumulative, so a 0 arriving on a failed
+// poll is never real data -- it is the {} fallback in each onTele().
+function statVal(up, v) { return up ? (v || 0) : NO_DATA; }
+
 function animateNumber(node, to) {
   if (!node) return;
+  if (to === NO_DATA) {
+    // Deliberately does NOT clear dataset.v: the last known value is kept so
+    // the number animates back from where it was once the engine returns,
+    // rather than counting up from zero and looking like fresh activity.
+    node.textContent = NO_DATA;
+    node.classList.add('stat-off');
+    node.title = 'No data — could not reach the engine on this poll';
+    return;
+  }
+  // null/undefined means "the subsystem that produces this number is not
+  // running" — distinct from a real zero. Rendering it as 0 reads as
+  // "running, nothing found", which is false reassurance about a layer that
+  // is switched off entirely. The API sends null deliberately for this.
+  if (to == null) {
+    node.dataset.v = 0;
+    node.textContent = 'Off';
+    node.classList.add('stat-off');
+    node.title = 'This protection layer is not currently running';
+    return;
+  }
+  node.classList.remove('stat-off');
+  node.removeAttribute('title');
   const from = Number(node.dataset.v || 0);
   if (from === to) { node.textContent = fmt(to); return; }
   node.dataset.v = to;
@@ -84,6 +124,10 @@ function animateNumber(node, to) {
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function truncate(s, n) {
+  const str = String(s || '');
+  return str.length > n ? str.slice(0, n - 1) + '…' : str;
 }
 
 /* Component builders -------------------------------------------------- */
@@ -111,31 +155,80 @@ function stateBlock(kind, title, sub) {
   return `<div class="state-block ${kind}"><div class="sb-ic">${ic || ''}</div>
     <div class="sb-t">${escapeHtml(title)}</div>${sub ? `<div class="sb-s">${escapeHtml(sub)}</div>` : ''}</div>`;
 }
+// Plain-language incident impact (valkyrie/edr/impact.py, NIST SP 800-30
+// harm-to-individuals vocabulary): what was exposed, to whom, is it
+// reversible, what to do. Supplements severity — never replaces the .sev
+// chip already shown alongside it — and is deliberately never a color or a
+// score: harm_level is named in the caption, not painted. Missing/older-
+// build incidents (no `impact` key) render nothing, not a placeholder.
+function renderImpactLine(impact) {
+  if (!impact || !impact.line) return '';
+  return `<div class="impact-line"><span class="il-cap">Impact (${escapeHtml(impact.harm_level || 'unknown')}${impact.confirmed ? ', confirmed' : ''})</span>
+    <span class="il-text">${escapeHtml(impact.line)}</span></div>`;
+}
 
 /* ============================ Particles ============================== */
 function startParticles() {
   const c = $('particles'); if (!c) return () => {};
   const ctx = c.getContext('2d');
-  let raf, w, h, pts;
-  const resize = () => { w = c.width = c.offsetWidth * devicePixelRatio; h = c.height = c.offsetHeight * devicePixelRatio; };
-  resize(); window.addEventListener('resize', resize);
-  pts = Array.from({ length: 46 }, () => ({
-    x: Math.random() * w, y: Math.random() * h, r: (Math.random() * 1.6 + 0.4) * devicePixelRatio,
-    vy: (-0.15 - Math.random() * 0.35) * devicePixelRatio, vx: (Math.random() - 0.5) * 0.15 * devicePixelRatio,
-    a: Math.random() * 0.5 + 0.1,
+  let raf, w = 1, h = 1;
+  // Keep the canvas BUFFER matched to its on-screen size at all times. Measuring
+  // the element (with a viewport fallback) means we never seed into a partial
+  // layout — the bug that bunched every particle into the top-left corner.
+  //
+  // That bug reproduced live even with the fallback chain below: the FIRST
+  // resize() ran synchronously from runSplashNormal(), before the BrowserWindow
+  // had actually settled its size — at that instant offsetWidth/clientWidth
+  // AND window.innerWidth can all still read as their transient near-zero
+  // pre-layout value, so every faller's fractional (0..1) position multiplied
+  // out to ~1px and the whole field collapsed into the top-left corner. Two
+  // fixes, both belt-and-suspenders: (1) defer the first measurement past the
+  // next paint with rAF, when layout is guaranteed settled, and (2) a
+  // one-shot re-measure shortly after as a backstop for a window that is
+  // still resizing at that point — self-correcting either way since draw()
+  // always reads the live w/h, never a snapshot.
+  const resize = () => {
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = c.offsetWidth || c.clientWidth || window.innerWidth || screen.width || 1;
+    const cssH = c.offsetHeight || c.clientHeight || window.innerHeight || screen.height || 1;
+    w = c.width = Math.max(1, Math.round(cssW * dpr));
+    h = c.height = Math.max(1, Math.round(cssH * dpr));
+  };
+  requestAnimationFrame(resize);
+  const resettleTimer = setTimeout(resize, 250);
+  window.addEventListener('resize', resize);
+  // Density from the viewport (always known), not a maybe-unlaid-out canvas.
+  const area = (window.innerWidth || 1440) * (window.innerHeight || 900);
+  const count = Math.max(150, Math.min(340, Math.round(area / 9000)));
+  // Positions are stored as FRACTIONS of the canvas (0..1). Multiplying by the
+  // live width/height at draw time guarantees the field ALWAYS fills the whole
+  // screen — independent of size, DPR, or when a resize lands.
+  const pts = Array.from({ length: count }, () => ({
+    fx: Math.random(), fy: Math.random(),
+    r: Math.random() * 1.7 + 0.4,            // css px; scaled by dpr at draw
+    vx: (Math.random() - 0.5) * 0.00022,     // fraction of width  / frame
+    vy: -(0.00022 + Math.random() * 0.00060),// fraction of height / frame (up)
+    a: Math.random() * 0.5 + 0.12,
   }));
   const draw = () => {
+    const dpr = window.devicePixelRatio || 1;
     ctx.clearRect(0, 0, w, h);
     for (const p of pts) {
-      p.x += p.vx; p.y += p.vy;
-      if (p.y < -10) { p.y = h + 10; p.x = Math.random() * w; }
-      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      p.fx += p.vx; p.fy += p.vy;
+      if (p.fy < -0.02) { p.fy = 1.02; p.fx = Math.random(); }   // wrap top→bottom
+      if (p.fx < -0.02) p.fx = 1.02; else if (p.fx > 1.02) p.fx = -0.02;
+      ctx.beginPath();
+      ctx.arc(p.fx * w, p.fy * h, p.r * dpr, 0, Math.PI * 2);
       ctx.fillStyle = `rgba(235,235,240,${p.a})`; ctx.fill();
     }
     raf = requestAnimationFrame(draw);
   };
   draw();
-  return () => { cancelAnimationFrame(raf); window.removeEventListener('resize', resize); };
+  return () => {
+    cancelAnimationFrame(raf);
+    clearTimeout(resettleTimer);
+    window.removeEventListener('resize', resize);
+  };
 }
 
 /* ============================ Splash ================================ */
@@ -234,19 +327,49 @@ async function runSetupSplash(scenario) {
   finishSplash(stopParticles);
 }
 
-/* ============================ Chrome / nav ========================== */
-const NAV = [
-  ['dashboard', 'Dashboard', 'dashboard'], ['protection', 'Protection', 'shield'],
-  ['privacy', 'Privacy', 'lock'], ['firewall', 'Firewall', 'flame'],
-  ['threats', 'Threats', 'alert'], ['hunting', 'Threat Hunting', 'search'],
-  ['intelligence', 'Intelligence', 'brain'],
-  ['applications', 'Applications', 'apps'], ['network', 'Network', 'network'],
-  ['dns', 'DNS', 'dns'], ['devices', 'Devices', 'devices'],
-  ['updates', 'Updates', 'download'], ['components', 'Components', 'cpu'],
-  ['compliance', 'Compliance', 'shieldCheck'],
-  ['settings', 'Settings', 'settings'], ['about', 'About', 'info'],
+/* ============================ Chrome / nav ==========================
+   Enterprise SOC information architecture: the sidebar is grouped by what an
+   analyst is DOING — Monitor (what is happening) → Detect (what we found) →
+   Protect (what is enforcing) → System (how the product itself is doing) —
+   rather than as one flat product-feature list. Every entry below maps to a
+   real implemented PAGES.* route; nothing here is a dead link.
+   `count` is an optional key on the live telemetry `stats` object; when the
+   engine reports it, the row shows it as a badge (open detections, incidents,
+   endpoints). `crit: true` lets that badge use the one permitted red. */
+const NAV_GROUPS = [
+  ['Monitor', [
+    ['dashboard',    'Overview',            'dashboard'],
+    ['devices',      'Endpoints',           'devices'],
+    ['network',      'Network',             'network'],
+    ['applications', 'Applications',        'apps'],
+  ]],
+  ['Detect', [
+    ['threats',      'Detections',          'alert',      { count: 'flagged', crit: true }],
+    ['nyx',          'Nyx Data Guard',      'brain'],
+    ['hunting',      'Threat Hunting',      'search'],
+    ['intelligence', 'Intelligence',        'brain'],
+  ]],
+  ['Protect', [
+    ['protection',   'Protection',          'shield'],
+    ['privacy',      'Privacy',             'lock'],
+    ['firewall',     'Firewall',            'flame'],
+    ['dns',          'DNS',                 'dns'],
+  ]],
+  ['System', [
+    ['components',   'Components',          'cpu'],
+    ['compliance',   'Compliance',          'shieldCheck'],
+    ['updates',      'Updates',             'download'],
+    ['settings',     'Settings',            'settings'],
+    ['about',        'About',               'info'],
+  ]],
 ];
-const NAV_SYSTEM_START = 'network';   // first item of the "System" sidebar section
+// Flat view of the same data — every existing call site (route(), the command
+// palette, loadLastRoute) still expects [id, label, icon] tuples.
+const NAV = NAV_GROUPS.flatMap(([, items]) => items.map(([id, label, icon]) => [id, label, icon]));
+// id -> {count, crit} for the rows that carry a live badge.
+const NAV_BADGES = Object.fromEntries(
+  NAV_GROUPS.flatMap(([, items]) => items.filter((i) => i[3]).map((i) => [i[0], i[3]])));
+
 function buildChrome() {
   $('brandMark').innerHTML = ICON.mark;
   $('minBtn').innerHTML = ICON.min; $('maxBtn').innerHTML = ICON.max;
@@ -254,18 +377,26 @@ function buildChrome() {
   $('searchBtn').innerHTML = ICON.search;
   $('searchBtn').onclick = () => CommandPalette.open();
   const sb = $('sidebar');
-  sb.appendChild(el('div', 'section-label', 'Protection'));
-  NAV.forEach(([id, label, icon]) => {
-    if (id === NAV_SYSTEM_START) sb.appendChild(el('div', 'section-label', 'System'));
-    const item = el('div', 'nav-item' + (id === 'dashboard' ? ' active' : ''), `${ICON[icon]}<span>${label}</span>`);
-    item.dataset.route = id;
-    item.tabIndex = 0;
-    item.setAttribute('role', 'button');
-    item.setAttribute('aria-current', id === 'dashboard' ? 'page' : 'false');
-    item.onclick = () => route(id);
-    item.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); route(id); } };
-    sb.appendChild(item);
+  NAV_GROUPS.forEach(([group, items]) => {
+    sb.appendChild(el('div', 'section-label', group));
+    items.forEach(([id, label, icon]) => {
+      const badge = NAV_BADGES[id] ? `<span class="nav-count" id="navCount-${id}"></span>` : '';
+      const item = el('div', 'nav-item' + (id === 'dashboard' ? ' active' : ''),
+        `${ICON[icon]}<span>${label}</span>${badge}`);
+      item.dataset.route = id;
+      item.tabIndex = 0;
+      item.setAttribute('role', 'button');
+      item.setAttribute('aria-current', id === 'dashboard' ? 'page' : 'false');
+      item.onclick = () => route(id);
+      item.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); route(id); } };
+      sb.appendChild(item);
+    });
   });
+  // Footer status — the one place the product's mythology is allowed to
+  // surface, and only as words. Reflects real engine state (see updateTopbar).
+  const foot = el('div', 'rail-foot',
+    `<div class="rail-status off" id="railStatus"><span class="rs-dot"></span><span id="railStatusText">Connecting…</span></div>`);
+  sb.appendChild(foot);
   if (V) {
     $('minBtn').onclick = () => V.minimize();
     $('maxBtn').onclick = () => V.maximize();
@@ -303,62 +434,375 @@ function route(id) {
 /* ============================ PAGES ================================= */
 const PAGES = {};
 
+/* ---- Trend chart — a real, live "detections per tick" activity chart ----
+   The engine's counters are cumulative since start, so the chart plots the
+   PER-TICK DELTA (this poll's total minus the last one) — genuine session
+   activity, not a fabricated series. Single series -> no legend needed
+   (dataviz: "a single series needs no legend box, the title names it"),
+   thin 2px accent line, faint area fill, rounded end-cap, minimal
+   crosshair+tooltip on hover. Reset each time the page is (re)opened. */
+const dashTrend = { buf: [], lastBlocked: null, canvas: null, hoverX: null };
+function pushTrendSample(up, stats) {
+  if (!up) return;                       // no real data this tick — don't fabricate a point
+  const now = (stats.dns_blocked || 0) + (stats.fw_blocked || 0);
+  if (dashTrend.lastBlocked != null) {
+    const delta = Math.max(0, now - dashTrend.lastBlocked);
+    dashTrend.buf.push({ t: Date.now(), v: delta });
+    if (dashTrend.buf.length > 50) dashTrend.buf.shift();
+  }
+  dashTrend.lastBlocked = now;
+}
+function drawTrend() {
+  const c = dashTrend.canvas; if (!c) return;
+  const dpr = window.devicePixelRatio || 1;
+  const cw = c.clientWidth || 400, ch = c.clientHeight || 88;
+  if (c.width !== Math.round(cw * dpr) || c.height !== Math.round(ch * dpr)) {
+    c.width = Math.round(cw * dpr); c.height = Math.round(ch * dpr);
+  }
+  const ctx = c.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cw, ch);
+  const buf = dashTrend.buf;
+  const padB = 4, padT = 6;
+  // Faint recessive gridlines — 3 horizontal guides, never the data ink.
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 1;
+  for (let i = 1; i <= 2; i++) {
+    const y = Math.round(padT + (ch - padT - padB) * (i / 3)) + 0.5;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(cw, y); ctx.stroke();
+  }
+  if (buf.length < 2) {
+    ctx.fillStyle = 'rgba(255,255,255,0.28)'; ctx.font = '11px ' + getComputedStyle(document.body).fontFamily;
+    ctx.fillText('Collecting activity…', 2, ch / 2 + 4);
+    return;
+  }
+  const max = Math.max(1, ...buf.map((p) => p.v));
+  const stepX = cw / (Math.max(buf.length, 30) - 1);
+  const xAt = (i) => cw - (buf.length - 1 - i) * stepX;
+  const yAt = (v) => padT + (ch - padT - padB) * (1 - v / max);
+
+  // Area fill — accent, fading to transparent toward the baseline.
+  const grad = ctx.createLinearGradient(0, padT, 0, ch);
+  grad.addColorStop(0, 'rgba(255,255,255,0.22)');
+  grad.addColorStop(1, 'rgba(255,255,255,0.0)');
+  ctx.beginPath();
+  ctx.moveTo(xAt(0), ch - padB);
+  buf.forEach((p, i) => ctx.lineTo(xAt(i), yAt(p.v)));
+  ctx.lineTo(xAt(buf.length - 1), ch - padB);
+  ctx.closePath();
+  ctx.fillStyle = grad; ctx.fill();
+
+  // The line itself — thin, one accent hue, rounded joins.
+  ctx.beginPath();
+  buf.forEach((p, i) => { const x = xAt(i), y = yAt(p.v); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
+  ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.8; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  ctx.stroke();
+
+  // Rounded end-cap on the most recent sample.
+  const lastX = xAt(buf.length - 1), lastY = yAt(buf[buf.length - 1].v);
+  ctx.beginPath(); ctx.arc(lastX, lastY, 3, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffffff'; ctx.fill();
+
+  // Hover crosshair + the tooltip element (positioned, not drawn, for crisp text).
+  const tip = $('trendTip');
+  if (dashTrend.hoverX != null && tip) {
+    // Inverse of xAt(i) = cw - (n-1-i)*stepX, solved for i given a hovered x.
+    let idx = Math.round(buf.length - 1 - (cw - dashTrend.hoverX) / stepX);
+    idx = Math.max(0, Math.min(buf.length - 1, idx));
+    const p = buf[idx], x = xAt(idx), y = yAt(p.v);
+    ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, ch - padB);
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#fff'; ctx.fill();
+    tip.style.left = x + 'px';
+    tip.innerHTML = `${fmt(p.v)}<div class="tt">${new Date(p.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>`;
+    tip.classList.add('show');
+  } else if (tip) tip.classList.remove('show');
+}
+
 /* ---- Dashboard ---- */
 PAGES.dashboard = {
   render() {
+    dashTrend.buf = []; dashTrend.lastBlocked = null; dashTrend.hoverX = null;
+    // Posture first: a console opens by STATING where you stand, then shows
+    // the numbers behind it. The protection control keeps its original IDs
+    // (#orbWrap/#orbLabel/#statusPill/#statusText) so setProtectionUI() and
+    // toggleProtection() keep working exactly as before.
     $('page').innerHTML = `
       <div class="hero">
-        <div class="status-pill" id="statusPill"><span class="dot"></span><span id="statusText">Checking…</span></div>
         <div class="orb-wrap" id="orbWrap">
-          <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div>
-          <button class="orb" id="orb"><span class="orb-icon">${ICON.power}</span><span class="orb-label" id="orbLabel">—</span></button>
+          <div class="posture-ring">
+            <svg viewBox="0 0 62 62" aria-hidden="true">
+              <circle class="track" cx="31" cy="31" r="27" fill="none" stroke-width="4"/>
+              <circle class="value" id="postureArc" cx="31" cy="31" r="27" fill="none" stroke-width="4"
+                      stroke-linecap="round" stroke-dasharray="169.6" stroke-dashoffset="169.6"/>
+            </svg>
+          </div>
+          <div class="posture-score" id="postureScore">—</div>
         </div>
-        <div class="sub">Valkyrie guards your DNS, firewall and privacy in real time.</div>
+        <div class="posture-text">
+          <div class="pl">Security posture</div>
+          <div class="pt" id="postureHeadline">Checking…</div>
+          <div class="ps" id="postureDetail">Contacting the local engine</div>
+        </div>
+        <div class="hero-spacer"></div>
+        <div class="status-pill" id="statusPill"><span class="dot"></span><span id="statusText">Checking…</span></div>
+        <button class="orb" id="orb"><span class="orb-icon">${ICON.power}</span><span class="orb-label" id="orbLabel">—</span></button>
       </div>
-      ${sectionHead('Live Activity', 'Updating every 1.5s')}
-      <div class="grid">
-        ${statCard('dns_blocked', 'DNS Requests Blocked', 'shield', 'accent-green')}
-        ${statCard('fw_blocked', 'Firewall Blocks', 'flame')}
-        ${statCard('flagged', 'Threats Flagged', 'alert')}
-        ${statCard('total_24h', 'DNS Requests (24h)', 'dns', 'accent-blue')}
-        ${statCard('allowed', 'Connections Allowed', 'network')}
-        ${statCard('elements_cleaned', 'Trackers Cleaned', 'lock')}
-        ${statCard('scanner_decisions', 'Scanner Decisions', 'activity')}
-        ${statCard('privacy', 'Privacy Score', 'brain', 'accent-green')}
+
+      ${sectionHead('Security telemetry', 'Live · updates every 1.5s')}
+      <div class="grid cols-3">
+        ${statCard('flagged', 'Threats flagged', 'alert')}
+        ${statCard('dns_blocked', 'DNS blocked', 'shield', 'accent-green')}
+        ${statCard('fw_blocked', 'Firewall blocks', 'flame')}
+        ${statCard('elements_cleaned', 'Trackers cleaned', 'lock')}
+        ${statCard('scanner_decisions', 'Scanner decisions', 'activity')}
+        ${statCard('total_24h', 'DNS requests (24h)', 'dns', 'accent-blue')}
       </div>
-      ${sectionHead('Recent Events', '')}
+
+      ${sectionHead('Detection activity', 'Blocked events per tick, this session')}
+      <div class="chart-card">
+        <div class="chart-head">
+          <div>
+            <div class="ct">Blocked, cumulative</div>
+            <div class="cv"><span id="trendHeadline">0</span><span class="cu">this session</span></div>
+          </div>
+          <div class="clabel"><span class="csw"></span>Blocked / tick</div>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="trendChart"></canvas>
+          <div class="chart-tip" id="trendTip"></div>
+        </div>
+      </div>
+
+      ${sectionHead('Recent events', '')}
       <div class="feed" id="feed"><div class="empty">Waiting for live events…</div></div>`;
     const orb = $('orb'); if (orb) orb.onclick = toggleProtection;
+    const canvas = $('trendChart');
+    dashTrend.canvas = canvas;
+    if (canvas) {
+      canvas.addEventListener('mousemove', (e) => {
+        dashTrend.hoverX = e.clientX - canvas.getBoundingClientRect().left;
+        drawTrend();
+      });
+      canvas.addEventListener('mouseleave', () => { dashTrend.hoverX = null; drawTrend(); });
+    }
+    drawTrend();
   },
   onTele(data) {
     const stats = (data && data.stats) || {}, up = !!(data && data.ok);
-    setProtectionUI(!!(data && data.protected));
+    setProtectionUI(!!(data && data.protected), up);
     const ps = privacyScore(stats, up);
     const vals = {
-      dns_blocked: stats.dns_blocked || 0, fw_blocked: stats.fw_blocked || 0,
-      flagged: stats.flagged || 0, total_24h: stats.total_24h || 0, allowed: stats.allowed || 0,
-      elements_cleaned: stats.elements_cleaned || 0, scanner_decisions: stats.scanner_decisions || 0, privacy: ps,
+      dns_blocked: statVal(up, stats.dns_blocked), fw_blocked: statVal(up, stats.fw_blocked),
+      flagged: statVal(up, stats.flagged), total_24h: statVal(up, stats.total_24h),
+      allowed: statVal(up, stats.allowed),
+      // elements_cleaned is intentionally NOT `|| 0`: the API sends null when
+      // TLS inspection isn't running, and that must render as "Off", not 0.
+      // On a failed poll we don't even know that much, so it is NO_DATA, not Off.
+      elements_cleaned: up ? (stats.elements_cleaned ?? null) : NO_DATA,
+      scanner_decisions: statVal(up, stats.scanner_decisions),
+      privacy: up ? ps : NO_DATA,
     };
     for (const [k, v] of Object.entries(vals)) animateNumber($('card-' + k), v);
     renderFeed((data && data.events) || [], up);
+    pushTrendSample(up, stats);
+    const headline = $('trendHeadline');
+    if (headline) headline.textContent = fmt(up ? (stats.dns_blocked || 0) + (stats.fw_blocked || 0) : 0);
+    drawTrend();
+    renderPosture(stats, up, !!(data && data.protected), ps);
   },
 };
+
+/* Security posture — the one-line answer to "where do I stand?". Deliberately
+   derived from real signals only (engine reachable, protection armed, whether
+   anything is currently flagged), and it says so in plain words. It is NOT a
+   vanity score: when the engine is unreachable it refuses to show a number at
+   all rather than inventing a reassuring one. */
+function renderPosture(stats, up, prot, privacy) {
+  const arc = $('postureArc'), score = $('postureScore');
+  const head = $('postureHeadline'), detail = $('postureDetail');
+  if (!arc || !score || !head || !detail) return;
+  const CIRC = 169.6;                     // 2πr for r=27, matches the markup
+
+  if (!up) {
+    arc.style.strokeDashoffset = CIRC;
+    score.textContent = '—';
+    head.textContent = 'Engine unreachable';
+    detail.textContent = 'Could not reach the local engine on this poll — retrying.';
+    return;
+  }
+  const flagged = stats.flagged || 0;
+  const value = prot ? privacy : Math.min(privacy, 45);
+  arc.style.strokeDashoffset = String(CIRC - (CIRC * Math.max(0, Math.min(100, value)) / 100));
+  score.textContent = String(value);
+
+  if (!prot) {
+    head.textContent = 'Not protected';
+    detail.textContent = 'Protection is off. Start it to resume DNS, firewall and privacy enforcement.';
+  } else if (flagged > 0) {
+    head.textContent = 'Elevated attention required';
+    detail.textContent = `${fmt(flagged)} ${flagged === 1 ? 'threat' : 'threats'} flagged · protection is active and enforcing.`;
+  } else {
+    head.textContent = 'All clear';
+    detail.textContent = 'Protection active. Nothing has met the detection threshold.';
+  }
+}
+// Keys of the rows currently on screen, so a poll that returns the same events
+// does not rebuild the DOM. Rebuilding every 1.5s replayed each row's entry
+// animation on all 40 rows at once, which read as a constant flicker — the
+// opposite of the "subtle and functional" motion the console is meant to have.
+let _feedKeys = [];
+function feedRowKey(e) {
+  return [e.time || e.timestamp || '', e.domain || e.query || e.name || e.host || e.target || '',
+          e.process || '', e.action || e.verdict || e.decision || ''].join('|');
+}
 function renderFeed(events, up) {
   const feed = $('feed'); if (!feed) return;
   const vs = ViewState.feedState(up, events);
-  if (vs.kind !== 'list') { feed.innerHTML = stateBlock(vs.kind, vs.title, vs.sub); return; }
+  if (vs.kind !== 'list') { feed.innerHTML = stateBlock(vs.kind, vs.title, vs.sub); _feedKeys = []; return; }
+
+  const rows = events.slice(0, 40);
+  const keys = rows.map(feedRowKey);
+  // Identical payload -> leave the DOM (and the user's scroll position) alone.
+  if (keys.length === _feedKeys.length && keys.every((k, i) => k === _feedKeys[i])) return;
+  const prev = new Set(_feedKeys);
+
   feed.innerHTML = '';
-  events.slice(0, 40).forEach((e) => {
+  rows.forEach((e, i) => {
     const verdict = (e.action || e.verdict || e.decision || '').toString().toLowerCase();
     const kind = /block|deny|sinkhole/.test(verdict) ? 'block' : /flag|suspic|warn/.test(verdict) ? 'flag' : 'allow';
     const name = e.domain || e.query || e.name || e.host || e.target || '—';
     const meta = [e.process, e.type, e.reason].filter(Boolean).join(' · ');
     const t = e.time || e.timestamp || '';
-    feed.appendChild(el('div', 'feed-row',
+    // Only genuinely new events animate in; carried-over rows appear instantly.
+    const cls = prev.has(keys[i]) ? 'feed-row no-anim' : 'feed-row';
+    feed.appendChild(el('div', cls,
       `<span class="fdot ${kind}"></span><span class="fname">${escapeHtml(name)}</span>
        <span class="fmeta">${escapeHtml(meta || t)}</span>`));
   });
+  _feedKeys = keys;
 }
+
+/* ---- Nyx (the data guard) ---- */
+// Nyx is Valkyrie's data brain: it reads each outbound request in the raw and,
+// by the SHAPE of what's inside, spots a piece of the user crossing to a third
+// party. This slice is SEE & REPORT — observe-only — so the page says so plainly
+// and never implies Nyx is blocking those leaks (it isn't, yet). The "defended"
+// tiles below are the OTHER, already-acting defenses (blocks, fake beacons),
+// kept visually distinct from the observe-only leak feed so the honesty holds.
+PAGES.nyx = {
+  render() {
+    $('page').innerHTML = `
+      <div class="page-intro">Nyx is Valkyrie's data guard. It watches every request leaving your machine and,
+      reading the raw data itself, catches when a piece of <em>you</em> — a device ID, your location,
+      your contact details, a browser fingerprint — is being handed to a third party you didn't mean to talk to.
+      <b id="nyxMode"></b></div>
+      <div class="btn-row"><button class="btn primary" id="nyxSelfTest">${ICON.activity || ''}<span>Show me Nyx working</span></button></div>
+      <div class="feed" id="nyxSelfTestOut"></div>
+      ${sectionHead('What Nyx saw', 'Live · updates every 3s')}
+      <div class="grid">
+        ${statCard('nyx_watched', 'Requests Watched (24h)', 'network', 'accent-blue')}
+        ${statCard('nyx_leaks', 'Data Leaks Caught', 'alert')}
+        ${statCard('nyx_faked', 'Fed Fake Data', 'lock', 'accent-green')}
+        ${statCard('nyx_blocked', 'Trackers Stopped', 'shield', 'accent-green')}
+      </div>
+      ${sectionHead('What crossed to third parties', 'Each line is one thing Nyx caught leaving')}
+      <div class="feed" id="nyxFeed"><div class="empty">Waiting for Nyx…</div></div>
+      ${sectionHead('Who is following you', 'Each tracker unmasked — how many of your sites it rides, and how many disguises it wears')}
+      <div class="feed" id="nyxTrackers"><div class="empty">Correlating…</div></div>`;
+    const stBtn = $('nyxSelfTest');
+    if (stBtn) stBtn.onclick = async () => {
+      const out = $('nyxSelfTestOut');
+      out.innerHTML = '<div class="empty">Running Nyx against synthetic trackers…</div>';
+      const r = await safe(() => V.api.get('/api/nyx/self-test'), null);
+      if (!r || !r.cases) {
+        out.innerHTML = stateBlock('error', 'Self-test unavailable', 'Start protection and try again.');
+        return;
+      }
+      out.innerHTML = '';
+      r.cases.forEach((cse) => {
+        const changed = cse.before !== cse.after;
+        const verb = changed ? '→ fed a fake' : (cse.caught ? '→ caught' : '→ missed');
+        out.appendChild(el('div', 'feed-row',
+          `<span class="fdot ${changed ? 'allow' : (cse.caught ? 'flag' : 'block')}"></span><span class="fname">your ${escapeHtml(cse.case)} ${verb}</span>
+           <span class="fmeta">${escapeHtml(cse.after)}</span>`));
+      });
+    };
+  },
+  interval: 3000,
+  async poll() {
+    const feed = $('nyxFeed'); if (!feed) return;
+    const data = await safe(() => V.api.get('/api/nyx'), null);
+    const up = !!data && !data.error;
+    const d = data || {}, def = d.defended || {};
+    const acting = d.mode === 'acting';
+    animateNumber($('card-nyx_watched'), statVal(up, d.watched_24h));
+    animateNumber($('card-nyx_leaks'),   statVal(up, d.leak_count));
+    animateNumber($('card-nyx_faked'),   statVal(up, def.fake_data_served));
+    animateNumber($('card-nyx_blocked'), statVal(up, def.trackers_blocked));
+
+    const modeEl = $('nyxMode');
+    if (modeEl) modeEl.textContent = !up ? '' : (acting
+      ? 'Nyx is ACTIVE — feeding trackers fake data, not just watching.'
+      : 'Nyx is watching and reporting — it never changes your traffic, so it can’t break a page.');
+
+    // The correlation brain: who is following you, unmasked.
+    const tb = $('nyxTrackers');
+    if (tb) {
+      const trk = (up && d.trackers) ? d.trackers : [];
+      if (!trk.length) {
+        tb.innerHTML = stateBlock('empty', 'No trackers correlated yet',
+          'As you browse, Nyx links each tracker across your sites here.');
+      } else {
+        tb.innerHTML = '';
+        const sm = d.tracker_summary || {};
+        if (sm.distinct_trackers) {
+          const lf = sm.longest_following_hours || 0;
+          const lfTxt = lf >= 48 ? `${Math.round(lf / 24)}d` : (lf >= 1 ? `${Math.round(lf)}h` : '');
+          const hdr = `${sm.distinct_trackers} tracker${sm.distinct_trackers === 1 ? '' : 's'} trying to follow you`
+            + (sm.widest_reach ? ` · widest reaches ${sm.widest_reach} of your sites` : '')
+            + (lfTxt ? ` · longest ${lfTxt}` : '');
+          tb.appendChild(el('div', 'feed-row',
+            `<span class="fdot flag"></span><span class="fname">${escapeHtml(hdr)}</span>
+             <span class="fmeta">correlated on your machine — no cloud</span>`));
+        }
+        trk.forEach((t) => {
+          const cats = (t.categories || []).join(', ');
+          const sh = t.span_hours || 0;
+          const span = sh >= 1 ? ` · following you ${sh >= 48 ? Math.round(sh / 24) + 'd' : Math.round(sh) + 'h'}` : '';
+          const meta = `across ${t.reach} of your site${t.reach === 1 ? '' : 's'} · `
+            + `${t.masks} mask${t.masks === 1 ? '' : 's'}`
+            + (t.cross_channel ? ' · many surfaces' : '')
+            + span
+            + (cats ? ' · wants your ' + cats : '');
+          tb.appendChild(el('div', 'feed-row',
+            `<span class="fdot ${t.cross_channel ? 'flag' : 'allow'}"></span><span class="fname">${escapeHtml(t.tracker)}</span>
+             <span class="fmeta">${escapeHtml(meta)}</span>`));
+        });
+      }
+    }
+
+    if (!up) {
+      feed.innerHTML = stateBlock('offline', 'Nyx is offline',
+        'Turn protection on and Nyx will start watching your data.');
+      return;
+    }
+    // When acting, lead with what Nyx actually fed fake; otherwise the raw leaks.
+    const items = (acting && (d.faked || []).length) ? d.faked : (d.leaks || []);
+    if (!items.length) {
+      feed.innerHTML = stateBlock('empty',
+        acting ? 'Nothing to fake yet' : 'No data leaks caught',
+        'Nyx is watching. Nothing has tried to take your data yet.');
+      return;
+    }
+    feed.innerHTML = '';
+    items.forEach((l) => {
+      feed.appendChild(el('div', 'feed-row',
+        `<span class="fdot ${acting ? 'allow' : 'flag'}"></span><span class="fname">${escapeHtml(l.sentence)}</span>
+         <span class="fmeta">${escapeHtml(l.host || '')}</span>`));
+    });
+  },
+};
 
 /* ---- Protection ---- */
 PAGES.protection = {
@@ -371,7 +815,13 @@ PAGES.protection = {
         <button class="btn primary" id="protToggle">${ICON.power}<span>Toggle Protection</span></button>
         <button class="btn" id="protMeeting">${ICON.lock}<span>Meeting Mode</span></button>
         <button class="btn" id="protLogs">${ICON.activity}<span>Open Logs</span></button>
-      </div>`;
+      </div>
+      ${sectionHead('Defense Coverage', 'What fraction of Valkyrie\'s defenses are actually running, right now')}
+      <div id="tamperBanner"></div>
+      <div id="covHead"><div class="empty">Loading…</div></div>
+      <div id="covGaps"></div>
+      ${sectionHead('Sensor Health', 'Detection sensors this engine depends on')}
+      <div id="sensorRows"><div class="empty">Loading…</div></div>`;
     $('protToggle').onclick = toggleProtection;
     $('protLogs').onclick = () => V && V.openLogs();
     $('protMeeting').onclick = toggleMeetingMode;
@@ -389,7 +839,98 @@ PAGES.protection = {
       ['Uptime', up ? fmtUptime(s.uptime_seconds) : '—', 'activity'],
     ]);
   },
+  interval: 5000,
+  async poll() {
+    const tamperBanner = $('tamperBanner'), covHead = $('covHead'), covGaps = $('covGaps'),
+      sensorBox = $('sensorRows');
+    if (!sensorBox) return;
+    const [sysmon, coverage, incidents] = await Promise.all([
+      safe(() => V.api.get('/api/sysmon/status'), null),
+      safe(() => V.api.get('/api/controls/coverage'), null),
+      safe(() => V.api.get('/api/edr/incidents'), []),
+    ]);
+    const arr = Array.isArray(incidents) ? incidents : (incidents.incidents || []);
+    // Sensor tamper (T1562.001): a security tool's OWN sensor going dark is
+    // itself an attack technique (Impair Defenses). This is DIFFERENT
+    // information from the coverage gap list below — an active-tampering
+    // signal, not just "something isn't running" — so it keeps its own
+    // banner rather than being folded into coverage. The old binary
+    // "DEGRADED" banner (sysmon.degraded alone) is retired: the coverage
+    // section below already reports that, with the effective/degraded/
+    // absent nuance a boolean can't carry.
+    const tamper = arr.filter((i) => (i.technique || '').includes('T1562.001'));
+    const openTamper = tamper.find((i) => i.status === 'open') || tamper[0];
+    if (tamperBanner) {
+      tamperBanner.innerHTML = openTamper
+        ? stateBlock('error', 'Sensor tamper detected (T1562.001)',
+            openTamper.explanation || openTamper.title)
+        : '';
+    }
+
+    renderCoverage(covHead, covGaps, coverage);
+
+    sensorBox.innerHTML = rowsPanel([
+      ['Sysmon', !sysmon ? badge('—', 'off')
+        : !sysmon.monitored ? badge('Not monitored', 'off')
+        : sysmon.sysmon_healthy == null ? badge('Checking…', 'off')
+        : sysmon.sysmon_healthy ? badge('Healthy', 'ok') : badge('Degraded', 'warn'),
+        'shield'],
+      ['Coverage detail', sysmon && sysmon.monitored ? (sysmon.detail || '—') : '—', 'activity'],
+      ['Sensor tamper alerts', tamper.length ? badge(`${tamper.length} (T1562.001)`, 'warn') : badge('None', 'ok'), 'alert'],
+    ]);
+  },
 };
+
+// Defense coverage (valkyrie/coverage.py): the headline fraction plus the
+// NAMED gaps — "which parts of my defense are not running" is the actual
+// deliverable, not the percentage alone. Three states, encoded by
+// fill/opacity only (no color): effective = solid, degraded = mid-opacity,
+// absent = hairline outline on empty track. A present-but-STOPPED sensor
+// (e.g. Sysmon installed but not delivering events) lands in absent, never
+// effective — see coverage.py's own module docstring for why that
+// distinction is the entire point of this metric.
+function renderCoverage(headBox, gapsBox, cov) {
+  if (!headBox || !gapsBox) return;
+  if (!cov) {
+    headBox.innerHTML = rowsPanel([['Defense coverage', '—', 'shieldCheck']]);
+    gapsBox.innerHTML = '';
+    return;
+  }
+  const counts = cov.counts || {}, total = cov.total || 0;
+  const eff = counts.effective || 0, deg = counts.degraded || 0, abs = counts.absent || 0;
+  const pct = total ? Math.round((eff / total) * 100) : 0;
+  const segPct = (n) => total ? Math.max(n > 0 ? 1.5 : 0, (n / total) * 100) : 0;
+  headBox.innerHTML = `
+    <div class="cov-head">
+      <div class="cov-frac">${fmt(eff)} / ${fmt(total)}<span class="unit">controls effective · ${pct}%</span></div>
+      <div class="cov-legend">
+        <span class="lg"><span class="sw effective"></span>Effective (${fmt(eff)})</span>
+        <span class="lg"><span class="sw degraded"></span>Degraded (${fmt(deg)})</span>
+        <span class="lg"><span class="sw absent"></span>Absent (${fmt(abs)})</span>
+      </div>
+    </div>
+    <div class="cov-track">
+      <span class="cov-seg effective" style="width:${segPct(eff)}%"></span>
+      <span class="cov-seg degraded" style="width:${segPct(deg)}%"></span>
+      <span class="cov-seg absent" style="width:${segPct(abs)}%"></span>
+    </div>`;
+
+  const gaps = (cov.gaps || []).slice()
+    // Absent first — the most actionable state — then degraded.
+    .sort((a, b) => (a.state === b.state ? 0 : a.state === 'absent' ? -1 : 1));
+  if (!gaps.length) {
+    gapsBox.innerHTML = stateBlock('empty', 'Every control is effective', 'No named gaps right now.');
+    return;
+  }
+  gapsBox.innerHTML = `<div class="list">${gaps.slice(0, 25).map((g) => {
+    const stateBadge = g.state === 'absent' ? badge('Absent', 'err')
+      : g.state === 'degraded' ? badge('Degraded', 'warn') : badge(g.state, 'off');
+    return `<div class="list-row"><div class="lr-main">
+        <span class="lr-title">${escapeHtml(g.name)}</span>
+        <span class="lr-sub">${escapeHtml(g.category || '')} · ${escapeHtml(truncate(g.detail || '', 130))}</span>
+      </div>${stateBadge}</div>`;
+  }).join('')}</div>`;
+}
 
 /* ---- Privacy ---- */
 PAGES.privacy = {
@@ -405,28 +946,59 @@ PAGES.privacy = {
       <div class="btn-row">
         <button class="btn" id="pvKill">${ICON.shield}<span>Kill Telemetry</span></button>
         <button class="btn" id="pvMac">${ICON.network}<span>Randomize MAC</span></button>
-      </div>`;
+      </div>
+      ${sectionHead('Deception Engine', 'Fake replies fed to trackers instead of a dead end')}
+      <div id="decRows"><div class="empty">Loading…</div></div>
+      ${sectionHead('DoH Bypass Detection', 'Apps trying to route DNS around Valkyrie entirely')}
+      <div id="dohRows"><div class="empty">Loading…</div></div>`;
     $('pvKill').onclick = killTelemetry;
     $('pvMac').onclick = randomizeMac;
   },
   onTele(data) {
-    const s = (data && data.stats) || {};
-    animateNumber($('card-cleaned'), s.elements_cleaned || 0);
-    animateNumber($('card-pblocked'), (s.dns_blocked || 0) + (s.fw_blocked || 0));
+    const s = (data && data.stats) || {}, up = !!(data && data.ok);
+    animateNumber($('card-cleaned'), up ? (s.elements_cleaned ?? null) : NO_DATA);
+    animateNumber($('card-pblocked'), statVal(up, (s.dns_blocked || 0) + (s.fw_blocked || 0)));
   },
   async poll() {
     const box = $('privRows'); if (!box) return;
     const vs = ViewState.privacyRowsState(state.engineUp);
-    if (vs.kind !== 'list') { box.innerHTML = stateBlock(vs.kind, vs.title, vs.sub); return; }
-    const [tel, vpn, zero] = await Promise.all([
+    if (vs.kind !== 'list') {
+      box.innerHTML = stateBlock(vs.kind, vs.title, vs.sub);
+      const decBox = $('decRows'); if (decBox) decBox.innerHTML = stateBlock(vs.kind, vs.title, vs.sub);
+      const dohBox = $('dohRows'); if (dohBox) dohBox.innerHTML = stateBlock(vs.kind, vs.title, vs.sub);
+      return;
+    }
+    const [tel, vpn, zero, mac, fp, dec, doh] = await Promise.all([
       safe(() => V.api.get('/api/telemetry/status'), {}),
       safe(() => V.api.get('/api/vpn/status'), {}),
       safe(() => V.api.get('/api/zero-log/status'), {}),
+      safe(() => V.api.get('/api/mac/status'), {}),
+      safe(() => V.api.get('/api/fingerprint/status'), {}),
+      safe(() => V.api.get('/api/deception/status'), null),
+      safe(() => V.api.get('/api/doh/status'), null),
     ]);
+    renderDeceptionRows($('decRows'), dec);
+    renderDohRows($('dohRows'), doh);
     const telStatus = tel.status === 'KILLED' ? badge('Killed', 'ok')
       : tel.status === 'ACTIVE' ? badge('Telemetry active', 'warn')
       : tel.status === 'PARTIAL' ? badge('Partial', 'warn') : badge('Unknown', 'off');
+    // MAC identity — show original → current (spoofed) for the adapter that changed.
+    const ifaces = (mac && mac.interfaces) || {};
+    let m = null, mName = '';
+    for (const [name, v] of Object.entries(ifaces)) {
+      if (v && v.changed) { m = v; mName = name; break; }
+      if (!m && v && v.current) { m = v; mName = name; }
+    }
+    const monoOld = 'font-family:ui-monospace,monospace;opacity:.55';
+    const monoNew = 'font-family:ui-monospace,monospace';
+    const macCell = m && m.changed
+      ? `<span style="${monoOld}">${m.original}</span> <span style="opacity:.5">→</span> <span style="${monoNew}">${m.current}</span>`
+      : (m ? `<span style="${monoNew}">${m.current || '—'}</span> ${badge('original', 'off')}` : badge('—', 'off'));
+    const fpCell = (fp && fp.normalized) ? badge('Spoofed (generic · TTL 64)', 'ok')
+      : (fp && fp.supported ? badge('Real (Windows stack)', 'off') : badge('—', 'off'));
     box.innerHTML = rowsPanel([
+      ['MAC identity' + (mName ? ' (' + mName + ')' : ''), macCell, 'network'],
+      ['TCP/IP fingerprint', fpCell, 'activity'],
       ['Windows telemetry', telStatus, 'shield'],
       ['Telemetry settings tracked', fmt((tel.settings || []).length), 'activity'],
       ['Encrypted transport (VPN)', vpn.hop1_conf_exists ? badge('Configured', 'ok') : badge('Not configured', 'off'), 'globe'],
@@ -435,6 +1007,46 @@ PAGES.privacy = {
     ]);
   },
 };
+
+// Deception engine rows — how many trackers got a fabricated persona instead
+// of a dead end, and what that persona currently looks like. A NULL `dec`
+// means the endpoint call failed (engine off, or an older build without it);
+// rendered as '—' rather than 0, since 0 would falsely read as "deception is
+// active and simply has nothing to report yet".
+function renderDeceptionRows(box, dec) {
+  if (!box) return;
+  const p = (dec && dec.persona) || null;
+  box.innerHTML = rowsPanel([
+    ['Trackers deceived (24h)', dec ? fmt(dec.trackers_deceived_24h) : '—', 'shield'],
+    ['Beacons answered (24h)', dec ? fmt(dec.beacons_deceived_24h) : '—', 'activity'],
+    ['Trackers deceived (all time)', dec ? fmt(dec.trackers_deceived_total) : '—', 'shield'],
+    ['Current persona', p ? `${escapeHtml(p.city)}, ${escapeHtml(p.region)} · ${escapeHtml(p.locale)}` : '—', 'target'],
+    ['Persona device', p ? `${escapeHtml(p.os)} · ${escapeHtml(p.browser)}` : '—', 'cpu'],
+    ['Persona display', p ? `${escapeHtml(p.screen)} · ${p.cores}-core · ${p.memory_gb}GB` : '—', 'network'],
+  ]);
+}
+
+// DoH-bypass rows — a process resolving DNS-over-HTTPS straight to a public
+// resolver's IP is routing DNS around Valkyrie entirely, so it never reaches
+// the deception/block decision at all. A NULL `doh` (endpoint call failed)
+// renders as '—'; a wired-but-unavailable detector (no psutil) renders as
+// its own distinct badge rather than looking identical to "nothing found".
+function renderDohRows(box, doh) {
+  if (!box) return;
+  if (!doh) { box.innerHTML = rowsPanel([['DoH bypass detection', '—', 'globe']]); return; }
+  const statusBadge = !doh.available ? badge('Unavailable', 'off')
+    : doh.running ? badge('Monitoring', 'ok') : badge('Not running', 'warn');
+  const r = doh.most_recent;
+  const recent = r ? `${escapeHtml(r.process_name || 'unknown')} → ${escapeHtml(r.resolver_ip || '?')} · ${rpTime(r.timestamp)}`
+    : badge('None seen', 'ok');
+  box.innerHTML = rowsPanel([
+    ['Detector', statusBadge, 'globe'],
+    ['Bypass attempts (24h)', fmt(doh.bypass_attempts_24h), 'alert'],
+    ['Distinct processes (24h)', fmt(doh.bypass_processes_24h), 'apps'],
+    ['Bypass attempts (all time)', fmt(doh.bypass_attempts_total), 'alert'],
+    ['Most recent attempt', recent, 'activity'],
+  ]);
+}
 
 /* ---- Firewall ---- */
 PAGES.firewall = {
@@ -450,8 +1062,8 @@ PAGES.firewall = {
   },
   onTele(data) {
     const s = (data && data.stats) || {}, up = !!(data && data.ok);
-    animateNumber($('card-fw'), s.fw_blocked || 0);
-    animateNumber($('card-fwallowed'), s.allowed || 0);
+    animateNumber($('card-fw'), statVal(up, s.fw_blocked));
+    animateNumber($('card-fwallowed'), statVal(up, s.allowed));
     renderTopBlocked($('fwBars'), s.top_blocked || [], up);
   },
 };
@@ -469,12 +1081,32 @@ function renderTopBlocked(box, top, up) {
   }).join('');
 }
 
+// MTTD/MTTR (valkyrie/edr/metrics.py) — labeled in plain words, not
+// acronyms alone, per the task: "time to detect" / "time to respond".
+// median/p95 side by side (never a single average — see metrics.py's own
+// docstring on why). n==0 renders as "not enough data yet", never a
+// fabricated 0s, since a metric with no samples is not the same claim as
+// an instant one.
+function renderMttdMttr(box, m) {
+  if (!box) return;
+  if (!m) { box.innerHTML = rowsPanel([['Response speed', '—', 'activity']]); return; }
+  const cell = (metric) => metric.n > 0
+    ? `${fmtDuration(metric.median_seconds)} median · ${fmtDuration(metric.p95_seconds)} p95 <span class="lr-sub" style="display:inline">(${fmt(metric.n)} of ${fmt(metric.total)} incidents)</span>`
+    : badge(`Not enough data yet (0 of ${fmt(metric.total)} incidents)`, 'off');
+  box.innerHTML = rowsPanel([
+    ['Time to detect', cell(m.mttd), 'search'],
+    ['Time to respond', cell(m.mttr), 'shield'],
+  ]);
+}
+
 /* ---- Threats (EDR) ---- */
 PAGES.threats = {
   render() {
     $('page').innerHTML = `
       <div class="page-intro">Endpoint detection &amp; response — incidents raised by the behavioral engine.</div>
       <div class="grid" id="edrCards"><div class="empty">Loading EDR…</div></div>
+      ${sectionHead('Response Speed', 'Time to detect a threat, and time to respond to it — the headline security metrics')}
+      <div id="mttdRows"><div class="empty">Loading…</div></div>
       ${sectionHead('Recent Incidents')}
       <div class="list" id="edrList"><div class="empty">Loading…</div></div>`;
     // Delegated: click or keyboard-activate an incident to replay it
@@ -499,16 +1131,20 @@ PAGES.threats = {
     // Honesty first: never imply "clean" when the engine isn't monitoring. A
     // security product that shows reassurance while protection is off is worse
     // than one that shows nothing. state.engineUp is driven by live telemetry.
+    const mttdBox = $('mttdRows');
     if (!state.engineUp) {
       if (cards) cards.innerHTML = '';
+      if (mttdBox) mttdBox.innerHTML = '';
       list.innerHTML = stateBlock('offline', 'Protection is off',
         'Valkyrie is not monitoring this endpoint right now. Start protection to see incidents and live detections.');
       return;
     }
-    const [stats, incidents] = await Promise.all([
+    const [stats, incidents, mttdMttr] = await Promise.all([
       safe(() => V.api.get('/api/edr/stats'), {}),
       safe(() => V.api.get('/api/edr/incidents'), []),
+      safe(() => V.api.get('/api/edr/metrics/mttd-mttr'), null),
     ]);
+    renderMttdMttr(mttdBox, mttdMttr);
     if (cards) cards.innerHTML = `
       <div class="card accent-green"><div class="label">${ICON.alert}Open Incidents</div><div class="value">${fmt(stats.open || stats.open_incidents || 0)}</div></div>
       <div class="card"><div class="label">${ICON.shield}Total Incidents</div><div class="value">${fmt(stats.total || stats.total_incidents || (Array.isArray(incidents) ? incidents.length : 0))}</div></div>
@@ -529,6 +1165,11 @@ PAGES.threats = {
       const entity = i.entity || i.host || '';
       const sub = [i.status, i.host].filter(Boolean).join(' · ');
       const title = i.title || i.name || i.rule || 'Incident';
+      // Plain-language "why" — the decision engine's own reasoning where
+      // available (see edr/engine.py's _incident_explanation), so a user can
+      // see why an incident exists without opening the replay view. Omitted
+      // when it would just repeat the title verbatim.
+      const explain = (i.explanation && i.explanation !== title) ? i.explanation : '';
       return `<div class="list-row inc-row" data-sev="${sevClass}" data-id="${escapeHtml(i.id || '')}"
         tabindex="0" role="button" aria-label="Replay incident: ${escapeHtml(title)}, ${escapeHtml(sevText)}">
         <span class="inc-rail"></span>
@@ -536,6 +1177,8 @@ PAGES.threats = {
         <div class="lr-main">
           <span class="lr-title">${escapeHtml(title)}</span>
           <span class="lr-sub">${entity ? `<span class="mono-tag">${escapeHtml(entity)}</span> ` : ''}${escapeHtml(sub)}</span>
+          ${explain ? `<span class="lr-sub lr-explain">${escapeHtml(truncate(explain, 160))}</span>` : ''}
+          ${i.impact && i.impact.line ? `<span class="lr-sub lr-impact">${escapeHtml(truncate(i.impact.line, 170))}</span>` : ''}
         </div>
         ${tech ? `<span class="mono-tag">${escapeHtml(tech[0])}</span>` : ''}
         <span class="rp-open">▶ Replay</span>
@@ -701,6 +1344,7 @@ PAGES.hunting = {
   },
 };
 
+
 /* ---- Intelligence ---- */
 PAGES.intelligence = {
   render() { $('page').innerHTML = `
@@ -767,10 +1411,10 @@ PAGES.network = {
     <div id="netRows"></div>`; },
   onTele(data) {
     const s = (data && data.stats) || {}, up = !!(data && data.ok);
-    animateNumber($('card-nTotal'), s.total_24h || 0);
-    animateNumber($('card-nAllowed'), s.allowed || 0);
-    animateNumber($('card-nBlocked'), s.dns_blocked || 0);
-    animateNumber($('card-nFlagged'), s.flagged || 0);
+    animateNumber($('card-nTotal'), statVal(up, s.total_24h));
+    animateNumber($('card-nAllowed'), statVal(up, s.allowed));
+    animateNumber($('card-nBlocked'), statVal(up, s.dns_blocked));
+    animateNumber($('card-nFlagged'), statVal(up, s.flagged));
     $('netRows').innerHTML = rowsPanel([
       ['DNS port', up ? String(s.dns_port || 53) : '—', 'dns'],
       ['Web / API port', up ? String(s.web_port || 8090) : '—', 'globe'],
@@ -792,18 +1436,27 @@ PAGES.dns = {
     <div class="bars" id="dnsBars"><div class="empty">No blocks yet.</div></div>`; },
   onTele(data) {
     const s = (data && data.stats) || {}, up = !!(data && data.ok);
-    animateNumber($('card-dTotal'), s.total_24h || 0);
-    animateNumber($('card-dBlocked'), s.dns_blocked || 0);
-    animateNumber($('card-dAllowed'), s.allowed || 0);
+    animateNumber($('card-dTotal'), statVal(up, s.total_24h));
+    animateNumber($('card-dBlocked'), statVal(up, s.dns_blocked));
+    animateNumber($('card-dAllowed'), statVal(up, s.allowed));
     renderTopBlocked($('dnsBars'), s.top_blocked || [], up);
   },
 };
 
 /* ---- Devices ---- */
+// Asset inventory (CIS Controls #1/#2, valkyrie/asset_inventory.py): what's
+// installed, listening and loaded on THIS device. The snapshot counts are
+// bookkeeping; "Recent Changes" — the delta since the engine started
+// watching — is the actual product surface, so it renders second and gets
+// the fuller treatment (per-row detail), not the reverse.
 PAGES.devices = {
   render() { $('page').innerHTML = `
     <div class="page-intro">This protected endpoint. Fleet devices appear here when a fleet server is connected.</div>
-    <div id="devRows"></div>`; },
+    <div id="devRows"></div>
+    ${sectionHead('Asset Inventory', 'What is installed, listening, and loaded — CIS Controls #1/#2')}
+    <div id="assetCounts"><div class="empty">Loading…</div></div>
+    ${sectionHead('Recent Changes', 'New since Valkyrie started watching — the delta is the signal')}
+    <div class="list" id="assetChanges"><div class="empty">Loading…</div></div>`; },
   onTele(data) {
     const s = (data && data.stats) || {}, up = !!(data && data.ok), prot = !!(data && data.protected);
     $('devRows').innerHTML = rowsPanel([
@@ -813,7 +1466,78 @@ PAGES.devices = {
       ['Scanner decisions', fmt(s.scanner_decisions || 0), 'shield'],
     ]);
   },
+  // Backed by an hourly server-side poll (AssetInventoryCollector) and now a
+  // fast in-memory cache (see valkyrie/asset_inventory.py's last_snapshot())
+  // — no need to hit it as often as the 2s telemetry stream.
+  interval: 15000,
+  async poll() {
+    const counts = $('assetCounts'), changes = $('assetChanges');
+    if (!counts || !changes) return;
+    if (!state.engineUp) {
+      counts.innerHTML = '';
+      changes.innerHTML = stateBlock('offline', 'Protection is off',
+        'Asset inventory is collected by the live engine — start protection to see it.');
+      return;
+    }
+    const inv = await safe(() => V.api.get('/api/asset-inventory'), null);
+    renderAssetCounts(counts, inv);
+    renderAssetChanges(changes, inv);
+  },
 };
+
+// A NULL inv means the endpoint call itself failed (engine off, or an older
+// build without it) — rendered as '—', never 0, for the same reason
+// renderDeceptionRows does: 0 would read as "collected, found nothing",
+// which is a different (and false, here) claim than "no data arrived".
+function renderAssetCounts(box, inv) {
+  if (!box) return;
+  if (!inv) { box.innerHTML = rowsPanel([['Asset inventory', '—', 'apps']]); return; }
+  const c = inv.counts || {};
+  box.innerHTML = rowsPanel([
+    ['Installed software', fmt(c.software), 'apps'],
+    ['Listening ports', fmt(c.listening_ports), 'network'],
+    ['Kernel drivers', fmt(c.kernel_drivers), 'cpu'],
+    ['Autostart entries', fmt(c.boot_items), 'activity'],
+    ['Snapshot taken', inv.taken_at ? rpTime(inv.taken_at) : '—', 'activity'],
+  ]);
+}
+
+const ASSET_CHANGE_LABEL = {
+  new_installed_software: 'New software installed',
+  new_listening_port: 'New listening port',
+  new_kernel_driver: 'New kernel driver',
+};
+const ASSET_CHANGE_ICON = {
+  new_installed_software: 'apps',
+  new_listening_port: 'network',
+  new_kernel_driver: 'cpu',
+};
+// Recent changes — the actual product surface (see the PAGES.devices
+// comment above). Each row states what changed, and — encoded by fill vs.
+// outline per the monochrome design language, never color — whether it
+// came from a trusted, Microsoft-owned path ('ok', filled) or not
+// ('warn', outline), the same badge vocabulary the rest of the app uses
+// for effective-vs-degraded state.
+function renderAssetChanges(box, inv) {
+  if (!box) return;
+  if (!inv) { box.innerHTML = stateBlock('error', 'Could not load asset inventory', ''); return; }
+  const rows = inv.recent_changes || [];
+  if (!rows.length) {
+    box.innerHTML = stateBlock('empty', 'No changes observed yet',
+      'Valkyrie snapshots this device hourly; a change is reported the poll after it first appears.');
+    return;
+  }
+  box.innerHTML = rows.slice(0, 30).map((r) => {
+    const label = ASSET_CHANGE_LABEL[r.activity] || r.activity || 'Change';
+    const icon = ASSET_CHANGE_ICON[r.activity] || 'activity';
+    const trustBadge = r.trusted_os_path ? badge('Trusted OS path', 'ok') : badge('Unverified path', 'warn');
+    const path = r.path ? truncate(r.path, 70) : '';
+    return `<div class="list-row"><div class="lr-main">
+        <span class="lr-title">${ICON[icon] || ''}${escapeHtml(label)}: ${escapeHtml(r.identity || '')}</span>
+        <span class="lr-sub">${path ? `<span class="mono-tag">${escapeHtml(path)}</span> · ` : ''}${rpTime(r.detected_at)}</span>
+      </div>${trustBadge}</div>`;
+  }).join('');
+}
 
 /* ---- Updates ---- */
 PAGES.updates = {
@@ -1109,7 +1833,7 @@ async function toggleProtection() {
   if (!V || state.busy) return;
   state.busy = true;
   const wantOn = !state.protected;
-  const label = $('orbLabel'); if (label) label.textContent = wantOn ? 'STARTING…' : 'STOPPING…';
+  const label = $('orbLabel'); if (label) label.textContent = wantOn ? 'Starting…' : 'Stopping…';
   try {
     const r = wantOn ? await V.startEngine() : await V.stopEngine();
     if (wantOn && r && r.ready === false) {
@@ -1174,21 +1898,64 @@ async function randomizeMac() {
 }
 
 /* ============================ Live topbar =========================== */
-function setProtectionUI(on) {
+// `on` (armed/disarmed) and `up` (did the engine actually answer this poll)
+// are independent facts — armed is a filesystem marker, up is live telemetry.
+// The toggle affordance (orb glow, START/STOP label) tracks the real armed
+// state either way, since that's true regardless of whether stats loaded.
+// The status TEXT must not claim "Protected" on a poll that has no data to
+// back it — that reads as reassurance the app cannot support.
+function setProtectionUI(on, up) {
   const wrap = $('orbWrap'), label = $('orbLabel'), pill = $('statusPill'), txt = $('statusText');
+  const btn = $('orb');
   if (wrap) wrap.classList.toggle('on', on);
-  if (label && !state.busy) label.textContent = on ? 'STOP PROTECTION' : 'START PROTECTION';
+  // The control is inverted (white fill) when armed — the strongest emphasis
+  // available without introducing color.
+  if (btn) btn.classList.toggle('on', on);
+  // Sentence case, not shouted caps: this is a professional tool, and the
+  // button says what it will DO when pressed.
+  if (label && !state.busy) label.textContent = on ? 'Stop protection' : 'Start protection';
   if (pill) pill.classList.toggle('on', on);
-  if (txt) txt.textContent = on ? 'Protected' : 'Not protected';
+  if (txt) txt.textContent = !up ? 'No data' : (on ? 'Protected' : 'Not protected');
 }
 function updateTopbar(data) {
   const s = (data && data.stats) || {}, up = !!(data && data.ok), prot = !!(data && data.protected);
   state.engineUp = up; state.protected = prot;
-  $('tbStatus').textContent = prot ? 'Protected' : (up ? 'Standby' : 'Off');
-  $('tbStatus').style.color = prot ? 'var(--text-0)' : 'var(--text-1)';
-  $('tbBlocked').textContent = fmt((s.dns_blocked || 0) + (s.fw_blocked || 0));
+  $('tbStatus').textContent = !up ? 'No data' : (prot ? 'Protected' : 'Standby');
+  $('tbStatus').style.color = (up && prot) ? 'var(--text-0)' : 'var(--text-1)';
+  // A failed poll leaves data.stats null, so `s` falls back to {} and every
+  // lookup below yields 0. Rendering that as "0" is a lie: it reads as "we
+  // checked and nothing was blocked", when the truth is "we could not reach
+  // the engine this tick". The counter is cumulative and never legitimately
+  // returns to 0 once it has moved, so a 0 here is ALWAYS a failed poll --
+  // that is the "numbers drop to zero and come back" flicker. Guard it with
+  // `up` exactly like its two siblings already were.
+  $('tbBlocked').textContent = up ? fmt((s.dns_blocked || 0) + (s.fw_blocked || 0)) : '—';
   $('tbPrivacy').textContent = up ? privacyScore(s, up) : '—';
   $('tbUptime').textContent = up ? fmtUptime(s.uptime_seconds) : '—';
+  updateNavBadges(s, up);
+  updateRailStatus(up, prot);
+}
+
+// Live counts on the sidebar rows. Same honesty rule as every other stat: a
+// failed poll clears the badge rather than showing a stale or fake 0.
+function updateNavBadges(stats, up) {
+  for (const [id, cfg] of Object.entries(NAV_BADGES)) {
+    const node = $('navCount-' + id);
+    if (!node) continue;
+    const v = up ? stats[cfg.count] : null;
+    node.textContent = (v == null || v === 0) ? '' : fmt(v);
+    node.classList.toggle('crit', !!cfg.crit && !!v);
+  }
+}
+
+// Sidebar footer. "Standing watch" is the product's one nod to its own name —
+// stated in words, never drawn.
+function updateRailStatus(up, prot) {
+  const wrap = $('railStatus'), txt = $('railStatusText');
+  if (!wrap || !txt) return;
+  const armed = up && prot;
+  wrap.classList.toggle('off', !armed);
+  txt.textContent = !up ? 'Engine unreachable' : (prot ? 'Standing watch' : 'Standby');
 }
 
 /* ============================ Replay Mode ===========================
@@ -1289,7 +2056,8 @@ const Replay = {
       <div class="rp-head">
         <div class="rp-tt"><h3>${escapeHtml(inc.title || 'Incident')}</h3>
           <div class="rp-meta"><span class="sev ${sev}">${escapeHtml(sev || (inc.status || 'incident'))}</span>
-            <span>${escapeHtml(String(inc.id || ''))}</span><span>·</span><span>${steps.length} steps replayed</span></div></div>
+            <span>${escapeHtml(String(inc.id || ''))}</span><span>·</span><span>${steps.length} steps replayed</span></div>
+          ${renderImpactLine(inc.impact)}</div>
         <button class="rp-x" data-a="close">${RP_ICON.x}</button>
       </div>
       <div class="rp-body">
@@ -1453,10 +2221,25 @@ const Replay = {
         'Could not reach the engine for an analysis of this incident.');
       return;
     }
-    const actions = (r.recommended_actions || []).map((a) => `
+    // Found during a wiring audit (2026-07-30): this panel already computes
+    // and DISPLAYS the recommended response (edr/investigate.py), but nothing
+    // here ever called POST /api/edr/respond — the one endpoint that actually
+    // isolates a host, kills a process, or blocks a domain. An analyst could
+    // read "isolate_host recommended" and had no button to do it; the only
+    // action reachable from the UI was relabeling the incident's status.
+    // Wired to the real, existing action vocabulary (edr/response.py:
+    // block_domain / unblock_domain / kill_process / isolate_host /
+    // release_isolation) via the same dry-run-first, explicit-second-click
+    // pattern this file already uses for the AI narrative just above.
+    const actions = (r.recommended_actions || []).map((a, i) => `
       <div class="rp-rec">
         <div class="rp-rec-head"><span class="mono-tag">${escapeHtml(a.action || '')}</span>${a.target ? `<span class="rp-rec-t">${escapeHtml(a.target)}</span>` : ''}</div>
         <div class="rp-desc">${escapeHtml(a.rationale || '')}</div>
+        ${a.action ? `
+        <div class="rp-respond" data-idx="${i}">
+          <button class="btn" data-respond-preview="${i}">${ICON.activity}<span>Preview what this would do</span></button>
+          <div class="rp-respond-result" hidden></div>
+        </div>` : ''}
       </div>`).join('')
       || '<div class="rp-desc" style="opacity:.6">No specific response action recommended.</div>';
 
@@ -1496,6 +2279,58 @@ const Replay = {
     if (askBtn) askBtn.onclick = () => this.loadInvestigation(true);
     const saveBtn = box.querySelector('#rpSaveTriage');
     if (saveBtn) saveBtn.onclick = () => this.saveTriage();
+
+    const recs = r.recommended_actions || [];
+    box.querySelectorAll('[data-respond-preview]').forEach((btn) => {
+      const idx = Number(btn.dataset.respondPreview);
+      const rec = recs[idx];
+      if (!rec || !rec.action) return;
+      btn.onclick = () => this.respondPreview(rec, btn);
+    });
+  },
+
+  // Step 1: dry_run — shows exactly what would happen, commits nothing. This
+  // mirrors edr/response.py's own stated contract ("dry-run by default, a
+  // real action must be explicitly requested") one level up into the UI,
+  // rather than only trusting the backend default silently.
+  async respondPreview(rec, btn) {
+    const wrap = btn.closest('.rp-respond');
+    const out = wrap.querySelector('.rp-respond-result');
+    btn.disabled = true;
+    const res = await safe(() => V.api.post('/api/edr/respond', {
+      action: rec.action, target: rec.target || '', incident_id: this.inc.id, dry_run: true,
+    }), null);
+    btn.disabled = false;
+    if (!res) {
+      out.hidden = false;
+      out.innerHTML = `<div class="rp-desc" style="opacity:.75">Could not reach the engine to preview this action.</div>`;
+      return;
+    }
+    out.hidden = false;
+    out.innerHTML = `
+      <div class="rp-desc">${escapeHtml(res.result || res.status || 'Previewed.')}</div>
+      <button class="btn primary" data-respond-confirm>${ICON.check}<span>Confirm — apply for real</span></button>`;
+    btn.remove();
+    const confirmBtn = out.querySelector('[data-respond-confirm]');
+    confirmBtn.onclick = () => this.respondExecute(rec, confirmBtn, out);
+  },
+
+  // Step 2: the real thing. Only reachable after a preview has already run
+  // for this exact card, and the button that triggers it is removed the
+  // moment it is clicked once, so a double-click cannot double-fire a real
+  // isolate/kill action.
+  async respondExecute(rec, btn, out) {
+    btn.disabled = true; btn.remove();
+    const res = await safe(() => V.api.post('/api/edr/respond', {
+      action: rec.action, target: rec.target || '', incident_id: this.inc.id, dry_run: false,
+    }), null);
+    if (res && res.status && res.status !== 'failed') {
+      out.innerHTML += `<div class="rp-desc" style="margin-top:6px">${escapeHtml(res.result || res.status)}</div>`;
+      toast(`${rec.action} applied.`, 'ok');
+    } else {
+      out.innerHTML += `<div class="rp-desc" style="margin-top:6px;opacity:.85">${escapeHtml((res && res.result) || 'The action did not complete — check logs.')}</div>`;
+      toast(`${rec.action} failed — see incident log.`, 'error');
+    }
   },
 
   async saveTriage() {

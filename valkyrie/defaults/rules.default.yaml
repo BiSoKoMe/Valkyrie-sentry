@@ -1,27 +1,28 @@
-# Valkyrie user rules — edit and save; changes take effect within 5 seconds.
+# Valkyrie user rules — OPTIONAL manual overrides. Empty by default.
 #
-# This is the factory-default rule set created on first launch. It is safe to
-# edit; your changes are never overwritten by updates.
+# Valkyrie does NOT ship a hand-written blocklist. Every decision is made by its
+# analysis engine — the site scanner, the behavioural/anomaly intelligence layer,
+# the DGA and DNS-tunnel classifiers, and live threat-intel IOC feeds. It finds
+# and analyses anomalies and malicious behaviour on its own; it does not rely on
+# a human maintaining a list of domains.
 #
-#   always_allow: never block these domains (e.g. work tools, trusted services)
-#   always_block: force-block these domains regardless of other decisions
+# These two lists exist ONLY as a personal override if you ever want to force a
+# specific decision. They start empty on purpose — leave them empty and let the
+# engine decide, or add your own entries. Your edits are never overwritten.
+#
+#   always_allow: never block these domains (your escape hatch if analysis ever
+#                 gets one wrong on your machine)
+#   always_block: force-block these domains regardless of what analysis decides
 #
 # Wildcards: use *.example.com to match any subdomain.
 # Process filter: add 'process: appname' to restrict a rule to one process.
+#
+# Example (commented out — uncomment and edit only if you actually want it):
+#   always_allow:
+#     - domain: "*.your-internal-tool.com"
+#   always_block:
+#     - domain: "annoying-tracker.example"
 
-always_allow:
-  # Common collaboration tools people rarely want blocked. Remove any you don't use.
-  - domain: "*.zoom.us"
-  - domain: "*.slack.com"
-  - domain: "*.microsoft.com"
+always_allow: []
 
-always_block:
-  # A small set of well-known advertising / tracking domains as a sensible
-  # starting point. Valkyrie's intelligence engine blocks far more automatically.
-  - domain: "*.doubleclick.net"
-  - domain: "doubleclick.net"
-  - domain: "*.googlesyndication.com"
-  - domain: "googlesyndication.com"
-  - domain: "*.google-analytics.com"
-  - domain: "google-analytics.com"
-  - domain: "*.adservice.google.com"
+always_block: []

@@ -1,58 +1,82 @@
 /* =========================================================================
-   Valkyrie — design system  ·  MONOCHROME
-   Black · white · graphite. Color is banned; hierarchy is carried by
-   contrast, weight, fill and hairline geometry. Premium, quiet, exact.
-   "Would Apple ship this in black and white?" is the bar for every rule.
+   Valkyrie — design system  ·  ENTERPRISE SOC (monochrome)
+   Approved 2026-08-20. A security operations console, not a marketing page:
+   pure black surfaces, white type, grayscale hierarchy, hairline dividers,
+   dense information. STRICTLY black/white/gray — the ONE exception is a
+   single red reserved for CRITICAL severity and nothing else, ever. Meaning
+   is otherwise carried by fill, weight and shape (solid dot = high, hollow
+   ring = medium, dim = low).
+   Mythology is felt, never shown: no wings/warriors/artwork; the mark stays
+   small; the only nod is the sidebar's "Standing watch" status line.
+   Fonts are SYSTEM fonts on purpose — a desktop security tool must never
+   fetch a webfont at runtime (CSP font-src 'self', and no network at boot).
    ========================================================================= */
 
 :root {
-  /* Surfaces — true black rising to graphite */
-  --bg-0: #050506;          /* app base */
-  --bg-1: #0a0a0c;          /* window body */
-  --bg-2: #111113;          /* raised panels */
-  --card: rgba(255, 255, 255, 0.028);
-  --card-hover: rgba(255, 255, 255, 0.055);
-  --glass: rgba(14, 14, 16, 0.66);
+  /* Surfaces — true black rising through neutral grays */
+  --bg-0: #000000;          /* app base */
+  --bg-1: #000000;          /* window body */
+  --bg-2: #111111;          /* raised panels */
+  --s-1: #0a0a0a;           /* faint fill (table head, kpi cells) */
+  --s-3: #181818;           /* hover / active nav */
+  --s-4: #1f1f1f;           /* pressed / track */
+  --card: #0a0a0a;
+  --card-hover: #141414;
+  --glass: rgba(0, 0, 0, 0.72);
 
-  /* Hairline borders */
-  --line: rgba(255, 255, 255, 0.065);
-  --line-strong: rgba(255, 255, 255, 0.13);
+  /* Hairline borders — the primary structural device */
+  --line: rgba(255, 255, 255, 0.10);
+  --line-strong: rgba(255, 255, 255, 0.18);
+  --line-3: rgba(255, 255, 255, 0.28);
 
-  /* Text — white to graphite */
-  --text-0: #f6f6f7;        /* primary */
-  --text-1: #a2a2a9;        /* secondary */
-  --text-2: #67676e;        /* tertiary / labels */
+  /* Text — white through gray */
+  --text-0: #ffffff;        /* primary */
+  --text-1: #b8b8b8;        /* secondary */
+  --text-2: #7a7a7a;        /* tertiary / labels */
+  --text-3: #464646;        /* faintest */
 
-  /* "Accents" — all monochrome. Legacy names kept so the renderer keeps
-     working, but every one resolves to white or graphite. Meaning is shown
-     by fill and shape, never by hue. */
-  --accent: #ffffff;        /* primary action = white */
-  --ink-strong: #ffffff;    /* "good / active"  → bright white */
+  /* The ONLY color in the product: critical severity. Nothing else. */
+  --crit: #e14b3f;
+  --crit-dim: rgba(225, 75, 63, 0.12);
+
+  /* "Ink" states — monochrome UI chrome */
+  --ink-strong: #ffffff;
   --ink-strong-dim: rgba(255, 255, 255, 0.10);
-  --ink-mid: #b9b9bf;       /* "warn / partial" → light graphite */
-  --ink-low: #6b6b72;       /* "off / idle"     → dim graphite */
-  /* Back-compat aliases (referenced by the renderer JS/markup) */
+  --ink-mid: #b8b8b8;
+  --ink-low: #7a7a7a;
+  --signal: var(--crit);                /* threat / critical */
+  --signal-dim: var(--crit-dim);
+  /* Back-compat aliases (referenced by the renderer JS/markup). Every one
+     resolves to white/gray so legacy call sites stay monochrome; only --red
+     carries the single permitted color. */
+  --accent: var(--ink-strong);
+  --accent-dim: var(--ink-strong-dim);
+  --accent-ring: var(--line-3);
+  --accent-grad: var(--ink-strong);
   --blue: var(--ink-strong);
   --blue-dim: var(--ink-strong-dim);
   --green: var(--ink-strong);
   --green-dim: var(--ink-strong-dim);
   --amber: var(--ink-mid);
-  --red: #f2f2f4;
+  --red: var(--crit);
 
-  /* Depth — shadow only, no colored glow */
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5);
-  --shadow-2: 0 18px 50px rgba(0, 0, 0, 0.55);
-  --shadow-glow: 0 0 0 1px rgba(255, 255, 255, 0.05), 0 0 60px rgba(255, 255, 255, 0.06);
+  /* Depth — restrained; structure comes from borders, not shadow */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.6);
+  --shadow-2: 0 20px 50px rgba(0, 0, 0, 0.7);
+  --shadow-glow: 0 0 0 1px rgba(255, 255, 255, 0.10);
 
-  /* Motion */
-  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Motion — subtle and functional only */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
-  --dur: 0.42s;
+  --dur: 0.28s;
 
-  --radius: 14px;
-  --radius-sm: 10px;
-  --sidebar-w: 230px;
-  --titlebar-h: 44px;
+  --radius: 8px;
+  --radius-sm: 6px;
+  --sidebar-w: 220px;
+  --titlebar-h: 40px;
+
+  --font-disp: "Segoe UI Variable Text", "Segoe UI", Inter, -apple-system, system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
 
   font-synthesis: none;
   -webkit-font-smoothing: antialiased;
@@ -61,12 +85,11 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
-/* Keyboard focus — one consistent ring app-wide, the same restrained blue
-   used for the Replay playhead and the command-palette active row. Only
-   shows for keyboard/programmatic focus (:focus-visible), never on a mouse
-   click, so it never adds visual noise to the monochrome surface. */
+/* Keyboard focus — one consistent ring app-wide. Monochrome like everything
+   else, and only for keyboard/programmatic focus (:focus-visible), never on
+   a mouse click, so it adds no visual noise. */
 :focus-visible {
-  outline: 2px solid var(--rp-accent, #5b9dff);
+  outline: 2px solid var(--line-3);
   outline-offset: 2px;
 }
 
@@ -75,23 +98,26 @@ html, body {
   overflow: hidden;
   background: var(--bg-0);
   color: var(--text-0);
-  font-family: -apple-system, "Segoe UI Variable Display", "Segoe UI",
-               Inter, system-ui, sans-serif;
-  font-size: 14px;
-  letter-spacing: 0.006em;
+  font-family: var(--font-disp);
+  font-size: 13px;
+  letter-spacing: 0;
   user-select: none;
   cursor: default;
 }
+
+/* Technical values (timestamps, PIDs, hashes, IPs, command lines, access
+   masks) wear the mono face so an analyst can scan a column of them; plain
+   counters just get tabular figures in the UI face. */
+.card .value, .metric-chip .v, .row .rv { font-variant-numeric: tabular-nums; }
+.mono, [data-mono] { font-family: var(--font-mono); }
 
 #app {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background:
-    radial-gradient(1100px 620px at 82% -12%, rgba(255,255,255,0.035), transparent 60%),
-    var(--bg-1);
+  background: var(--bg-1);
   opacity: 0;
-  transition: opacity 0.6s var(--ease);
+  transition: opacity 0.5s var(--ease);
 }
 #app.ready { opacity: 1; }
 
@@ -101,26 +127,27 @@ html, body {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  padding: 0 8px 0 18px;
+  padding: 0 8px 0 16px;
   -webkit-app-region: drag;
   border-bottom: 1px solid var(--line);
-  background: rgba(5,5,6,0.55);
-  backdrop-filter: blur(20px);
+  background: var(--bg-0);
 }
+/* The mark stays deliberately small — the product is confident enough that it
+   does not need to shout its own logo. */
 .titlebar .brand {
   display: flex; align-items: center; gap: 9px;
-  font-weight: 600; font-size: 13px; letter-spacing: 0.04em; color: var(--text-0);
+  font-weight: 700; font-size: 13px; letter-spacing: -0.005em; color: var(--text-0);
 }
-.titlebar .brand svg { width: 16px; height: 16px; opacity: 0.95; }
+.titlebar .brand svg { width: 15px; height: 15px; opacity: 1; }
 .titlebar .spacer { flex: 1; }
 .win-controls { display: flex; gap: 2px; -webkit-app-region: no-drag; }
 .win-btn {
-  width: 40px; height: 30px; border: none; background: transparent;
-  color: var(--text-1); border-radius: 8px; display: grid; place-items: center;
+  width: 38px; height: 28px; border: none; background: transparent;
+  color: var(--text-2); border-radius: var(--radius-sm); display: grid; place-items: center;
   transition: background 0.16s var(--ease), color 0.16s var(--ease);
 }
-.win-btn:hover { background: var(--card-hover); color: var(--text-0); }
-.win-btn.close:hover { background: rgba(255,255,255,0.14); color: #fff; }
+.win-btn:hover { background: var(--s-3); color: var(--text-0); }
+.win-btn.close:hover { background: var(--s-4); color: #fff; }
 .win-btn svg { width: 12px; height: 12px; }
 
 /* ============================ Shell layout ============================== */
@@ -130,47 +157,74 @@ html, body {
 .sidebar {
   width: var(--sidebar-w);
   flex: 0 0 auto;
-  padding: 16px 12px;
-  display: flex; flex-direction: column; gap: 2px;
+  padding: 14px 10px 10px;
+  display: flex; flex-direction: column; gap: 1px;
   border-right: 1px solid var(--line);
-  background: rgba(0,0,0,0.28);
+  background: var(--bg-0);
   overflow-y: auto;
 }
+/* Grouped SOC taxonomy: Monitor / Detect / Protect / System. The group label
+   is the quietest thing on screen — it orients, it does not compete. */
 .sidebar .section-label {
-  font-size: 10px; text-transform: uppercase; letter-spacing: 0.16em;
-  color: var(--text-2); padding: 15px 12px 6px;
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.09em;
+  color: var(--text-3); padding: 14px 10px 5px; font-weight: 600;
 }
+.sidebar .section-label:first-child { padding-top: 4px; }
 .nav-item {
-  display: flex; align-items: center; gap: 12px; cursor: pointer;
-  padding: 9px 12px; border-radius: var(--radius-sm);
-  color: var(--text-1); font-weight: 500; font-size: 13.5px;
-  position: relative; transition: color 0.18s var(--ease), background 0.18s var(--ease);
+  display: flex; align-items: center; gap: 10px; cursor: pointer;
+  padding: 7px 10px; border-radius: var(--radius-sm);
+  color: var(--text-2); font-weight: 500; font-size: 12.5px;
+  position: relative; transition: color 0.15s var(--ease), background 0.15s var(--ease);
   cursor: default;
 }
-.nav-item svg { width: 17px; height: 17px; flex: 0 0 auto; opacity: 0.8; }
-.nav-item:hover { background: var(--card); color: var(--text-0); }
+.nav-item svg { width: 15px; height: 15px; flex: 0 0 auto; opacity: 0.8; }
+.nav-item:hover { background: var(--bg-2); color: var(--text-1); }
 .nav-item:hover svg { opacity: 1; }
-.nav-item.active { background: var(--card-hover); color: var(--text-0); }
-.nav-item.active svg { opacity: 1; }
+.nav-item.active { background: var(--s-3); color: var(--text-0); }
+.nav-item.active svg { opacity: 1; color: var(--text-0); }
+/* A 2px white tick, not a colored rail — the active state is stated, not lit. */
 .nav-item.active::before {
-  content: ""; position: absolute; left: -12px; top: 50%; transform: translateY(-50%);
-  width: 2.5px; height: 17px; border-radius: 3px; background: var(--text-0);
+  content: ""; position: absolute; left: -10px; top: 50%; transform: translateY(-50%);
+  width: 2px; height: 14px; background: var(--text-0);
 }
+/* Live count badge on a nav row (open detections, incidents, endpoints). */
+.nav-item .nav-count {
+  margin-left: auto; font-family: var(--font-mono); font-size: 10.5px;
+  color: var(--text-3); font-variant-numeric: tabular-nums;
+}
+.nav-item.active .nav-count { color: var(--text-2); }
+.nav-item .nav-count.crit { color: var(--crit); }
+
+/* Sidebar footer — the single place mythology is allowed to surface, as
+   words ("Standing watch"), never as imagery. */
+.sidebar .rail-foot {
+  margin-top: auto; padding-top: 10px; border-top: 1px solid var(--line);
+}
+.sidebar .rail-status {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; font-size: 11.5px; color: var(--text-2);
+}
+.sidebar .rail-status .rs-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--text-0);
+  animation: railBreathe 2.6s ease-in-out infinite;
+}
+.sidebar .rail-status.off .rs-dot { background: var(--text-3); animation: none; }
+@keyframes railBreathe { 0%,100% { opacity: 0.35; } 50% { opacity: 1; } }
 
 /* Content area */
 .content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 
 /* Top bar */
 .topbar {
-  height: 62px; flex: 0 0 auto;
-  display: flex; align-items: center; gap: 24px;
-  padding: 0 26px; border-bottom: 1px solid var(--line);
+  height: 52px; flex: 0 0 auto;
+  display: flex; align-items: center; gap: 20px;
+  padding: 0 22px; border-bottom: 1px solid var(--line);
 }
-.topbar .page-title { font-size: 16px; font-weight: 600; letter-spacing: 0.005em; }
+.topbar .page-title { font-size: 14px; font-weight: 700; letter-spacing: -0.005em; }
 .topbar .spacer { flex: 1; }
-.metric-chip { display: flex; flex-direction: column; gap: 2px; min-width: 72px; }
-.metric-chip .k { font-size: 10px; color: var(--text-2); letter-spacing: 0.08em; text-transform: uppercase; }
-.metric-chip .v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.metric-chip { display: flex; flex-direction: column; gap: 2px; min-width: 70px; }
+.metric-chip .k { font-size: 9.5px; color: var(--text-3); letter-spacing: 0.07em; text-transform: uppercase; font-weight: 600; }
+.metric-chip .v { font-size: 13.5px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.005em; }
 .icon-btn {
   width: 34px; height: 34px; border-radius: 10px; border: 1px solid var(--line);
   background: var(--card); color: var(--text-1); display: grid; place-items: center;
@@ -179,128 +233,202 @@ html, body {
 .icon-btn:hover { background: var(--card-hover); color: var(--text-0); transform: translateY(-1px); }
 .avatar {
   width: 34px; height: 34px; border-radius: 50%;
-  background: #17171a;
+  background: var(--bg-2);
   border: 1px solid var(--line-strong); display: grid; place-items: center;
   font-size: 12px; font-weight: 700; color: var(--text-0); letter-spacing: 0.02em;
 }
 
 /* Scrollable page body */
 .page { flex: 1; overflow-y: auto; padding: 30px 26px 40px; }
-.page::-webkit-scrollbar { width: 10px; }
-.page::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 8px; border: 3px solid transparent; background-clip: content-box; }
-.page::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.14); background-clip: content-box; }
 
-/* ====================== Protection hero =============================== */
+/* Sleek monochrome scrollbars EVERYWHERE (sidebar, tables, panels…) — replaces
+   the chunky native Windows scrollbar with the arrow buttons. Thin, rounded,
+   quiet; matches the black-and-white design. Applied globally so nothing is
+   left with the OS default. */
+* { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.16) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.10);
+  border-radius: 8px;
+  border: 3px solid transparent;      /* inset so the thumb reads as a thin pill */
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); background-clip: content-box; }
+::-webkit-scrollbar-button { width: 0; height: 0; display: none; }   /* no arrows */
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* ====================== Security posture header ========================
+   Replaces the old centered "orb". A SOC console opens with a statement of
+   posture and a control, not a hero graphic. The protection toggle keeps
+   its original IDs (#orbWrap/#orbLabel/#statusPill/#statusText) so all the
+   existing live wiring in setProtectionUI() keeps working untouched. */
 .hero {
-  display: flex; flex-direction: column; align-items: center;
-  padding: 20px 0 34px;
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 16px 18px; margin-bottom: 16px;
+  border: 1px solid var(--line); border-radius: var(--radius);
 }
 .status-pill {
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 7px 15px; border-radius: 999px; font-size: 12px; font-weight: 600;
-  letter-spacing: 0.02em;
-  border: 1px solid var(--line); color: var(--text-1); background: var(--card);
-  margin-bottom: 30px; transition: all var(--dur) var(--ease);
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 600;
+  border: 1px solid var(--line); color: var(--text-2); background: transparent;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
 }
-.status-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-2); transition: all var(--dur) var(--ease); }
-.status-pill.on { color: var(--text-0); border-color: var(--line-strong); background: var(--card-hover); }
-.status-pill.on .dot { background: #fff; box-shadow: 0 0 0 4px rgba(255,255,255,0.10); }
+.status-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); transition: all var(--dur) var(--ease); }
+.status-pill.on { color: var(--text-0); border-color: var(--line-3); }
+.status-pill.on .dot { background: var(--text-0); }
 
-/* The massive circular button */
-.orb-wrap { position: relative; width: 260px; height: 260px; display: grid; place-items: center; }
+/* The posture ring: a thin monochrome arc, the score in the middle. */
+.orb-wrap { position: relative; width: 62px; height: 62px; flex: 0 0 auto; display: grid; place-items: center; }
+.orb-wrap .posture-ring { position: absolute; inset: 0; }
+.orb-wrap .posture-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.orb-wrap .posture-ring .track { stroke: var(--s-4); }
+.orb-wrap .posture-ring .value { stroke: var(--text-0); transition: stroke-dashoffset 0.6s var(--ease); }
+.orb-wrap .posture-score {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+/* min-width:0 lets the text column actually SHRINK inside the flex row —
+   without it the long detail sentence sets the item's min-content width and
+   shoves the pill + button clean off the right edge (seen live at 1180px). */
+.hero .posture-text { min-width: 0; flex: 1 1 260px; }
+.hero .posture-text .ps { overflow-wrap: break-word; }
+.hero .posture-text .pl {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--text-3); font-weight: 600;
+}
+.hero .posture-text .pt { font-size: 15px; font-weight: 700; margin-top: 3px; letter-spacing: -0.01em; }
+.hero .posture-text .ps { font-size: 12px; color: var(--text-2); margin-top: 3px; }
+.hero .hero-spacer { flex: 1 1 0; min-width: 0; }
+.hero .status-pill { flex: 0 0 auto; }
+.hero .orb { flex: 0 0 auto; }
+
+/* Protection control — a real button, labelled with what it will do. */
 .orb {
-  width: 232px; height: 232px; border-radius: 50%;
-  border: 1px solid var(--line-strong);
-  background:
-    radial-gradient(140px 140px at 50% 36%, rgba(255,255,255,0.055), transparent 70%),
-    #0c0c0e;
-  box-shadow: var(--shadow-2), inset 0 1px 1px rgba(255,255,255,0.05);
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
-  transition: transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease), border-color var(--dur) var(--ease);
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 15px; border-radius: var(--radius-sm);
+  border: 1px solid var(--line-strong); background: transparent; color: var(--text-0);
+  font-family: inherit; font-size: 12px; font-weight: 600;
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease);
 }
-.orb:hover { transform: scale(1.02); }
-.orb:active { transform: scale(0.985); }
-.orb .orb-icon svg { width: 44px; height: 44px; color: var(--text-1); transition: color var(--dur) var(--ease); }
-.orb .orb-label { font-size: 12px; font-weight: 700; letter-spacing: 0.14em; color: var(--text-1); text-transform: uppercase; transition: color var(--dur) var(--ease); }
+.orb:hover { background: var(--s-3); }
+.orb:active { background: var(--s-4); }
+.orb .orb-icon svg { width: 15px; height: 15px; color: currentColor; }
+.orb .orb-label { font-size: 12px; font-weight: 600; letter-spacing: 0; text-transform: none; }
+/* Armed: state is shown by a filled button, never by a glow. */
+.orb-wrap.on ~ .hero-spacer + .orb,
+.orb.on { background: var(--text-0); color: #000; border-color: var(--text-0); }
+.ring { display: none; }            /* legacy decorative rings — retired */
+.hero .sub { color: var(--text-2); font-size: 12px; }
 
-/* Concentric rings that breathe when protection is ON — monochrome */
-.ring { position: absolute; border-radius: 50%; border: 1px solid rgba(255,255,255,0.12); opacity: 0; pointer-events: none; }
-.ring.r1 { inset: -6px; }
-.ring.r2 { inset: -26px; }
-.ring.r3 { inset: -48px; }
-
-.orb-wrap.on .orb {
-  border-color: var(--line-strong);
-  box-shadow: var(--shadow-2), var(--shadow-glow), inset 0 1px 1px rgba(255,255,255,0.10);
-  background:
-    radial-gradient(150px 150px at 50% 36%, rgba(255,255,255,0.12), transparent 70%),
-    #0e0e10;
-  animation: orbPulse 3.6s var(--ease-in-out) infinite;
+/* ====================== Dashboard top: chart + status ================== */
+.dash-top {
+  display: grid; grid-template-columns: 1fr 260px; gap: 14px; margin-bottom: 8px;
 }
-.orb-wrap.on .orb .orb-icon svg { color: #fff; }
-.orb-wrap.on .orb .orb-label { color: #fff; }
-.orb-wrap.on .ring { animation: ringPulse 3.6s var(--ease-in-out) infinite; }
-.orb-wrap.on .ring.r2 { animation-delay: 0.55s; }
-.orb-wrap.on .ring.r3 { animation-delay: 1.1s; }
-
-@keyframes orbPulse {
-  0%, 100% { box-shadow: var(--shadow-2), 0 0 44px rgba(255,255,255,0.06), inset 0 1px 1px rgba(255,255,255,0.10); }
-  50%      { box-shadow: var(--shadow-2), 0 0 72px rgba(255,255,255,0.12), inset 0 1px 1px rgba(255,255,255,0.14); }
-}
-@keyframes ringPulse {
-  0%   { opacity: 0.45; transform: scale(0.96); }
-  70%  { opacity: 0;    transform: scale(1.12); }
-  100% { opacity: 0;    transform: scale(1.12); }
-}
-
-.hero .sub { margin-top: 26px; color: var(--text-2); font-size: 12.5px; letter-spacing: 0.02em; }
-
-/* ============================ Stat cards =============================== */
-.grid {
-  display: grid; gap: 14px;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-  margin-top: 8px;
-}
-.card {
+.chart-card {
   background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 18px 18px 16px; position: relative; overflow: hidden;
-  transition: background 0.22s var(--ease), transform 0.22s var(--ease), border-color 0.22s var(--ease);
+  padding: 18px 20px 14px; box-shadow: var(--shadow-1); position: relative;
 }
-.card:hover { background: var(--card-hover); transform: translateY(-2px); border-color: var(--line-strong); }
-.card .label { font-size: 11px; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.09em; display: flex; align-items: center; gap: 8px; }
-.card .label svg { width: 15px; height: 15px; opacity: 0.6; }
-.card .value { font-size: 30px; font-weight: 650; margin-top: 12px; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; color: var(--text-0); }
-.card .value .unit { font-size: 14px; color: var(--text-2); font-weight: 500; margin-left: 4px; }
-.card .foot { margin-top: 8px; font-size: 11.5px; color: var(--text-2); }
-.card .spark { position: absolute; right: 0; bottom: 0; left: 0; height: 40px; opacity: 0.5; }
-/* Emphasis cards keep a subtly brighter number + a top hairline — no hue */
-.card.accent-green, .card.accent-blue { border-color: var(--line-strong); }
+.chart-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.chart-head .ct { font-size: 11px; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.09em; }
+.chart-head .cv { font-size: 26px; font-weight: 650; margin-top: 6px; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.chart-head .cu { font-size: 12.5px; color: var(--text-2); font-weight: 500; margin-left: 5px; }
+.chart-head .clabel {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-1);
+  padding: 5px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg-1);
+}
+.chart-head .clabel .csw { width: 8px; height: 2px; border-radius: 1px; background: var(--text-0); }
+.chart-wrap { position: relative; margin-top: 10px; }
+.chart-wrap canvas { display: block; width: 100%; height: 88px; }
+.chart-tip {
+  position: absolute; top: 0; pointer-events: none; transform: translateX(-50%);
+  background: var(--bg-2); border: 1px solid var(--line-strong); border-radius: 8px;
+  padding: 5px 9px; font-size: 11px; color: var(--text-0); white-space: nowrap;
+  box-shadow: var(--shadow-1); opacity: 0; transition: opacity 0.12s var(--ease);
+  font-variant-numeric: tabular-nums;
+}
+.chart-tip.show { opacity: 1; }
+.chart-tip .tt { color: var(--text-2); font-size: 10px; margin-top: 1px; }
+
+.status-card {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px; box-shadow: var(--shadow-1);
+  display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px;
+}
+.status-card .hero { padding: 4px 0 0; }
+
+/* ============================ Stat cards ===============================
+   KPI strip: seamless hairline-separated cells, not floating tiles. Reads as
+   one instrument panel, which is denser and calmer than N bordered cards. */
+.grid {
+  display: grid; gap: 1px; background: var(--line);
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
+  margin-top: 4px;
+}
+/* Fixed 3-up: auto-fit packed 6 telemetry cards into 5 columns and left a
+   dead cell on the second row. A console's KPI block should read as a tidy
+   matrix, so the count is stated rather than left to the packer. */
+.grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 900px) { .grid.cols-3 { grid-template-columns: repeat(2, 1fr); } }
+.card {
+  background: var(--s-1); border: none; border-radius: 0;
+  padding: 13px 15px; position: relative; overflow: hidden;
+  transition: background 0.15s var(--ease);
+}
+.card:hover { background: var(--bg-2); transform: none; }
+.card .label {
+  font-size: 10.5px; color: var(--text-2);
+  text-transform: none; letter-spacing: 0; display: flex; align-items: center; gap: 7px; font-weight: 500;
+}
+.card .label svg { width: 13px; height: 13px; opacity: 0.5; }
+.card .value { font-size: 23px; font-weight: 700; margin-top: 7px; font-variant-numeric: tabular-nums; letter-spacing: -0.015em; color: var(--text-0); }
+.card .value .unit { font-size: 12px; color: var(--text-3); font-weight: 400; margin-left: 3px; }
+/* "Off" — the producing subsystem isn't running. Deliberately muted and
+   smaller than a real figure so it reads as an absence of coverage rather
+   than as a measured value of zero. */
+.card .value .num.stat-off { font-size: 16px; color: var(--text-2); font-weight: 500; }
+.card .foot { margin-top: 6px; font-size: 11px; color: var(--text-3); }
+.card .spark { position: absolute; right: 0; bottom: 0; left: 0; height: 32px; opacity: 0.35; }
+/* Emphasis: a hairline over the cell, in white — never a colored bar. */
 .card.accent-green::after, .card.accent-blue::after {
   content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent);
+  background: var(--line-3);
 }
-.card.accent-green .value, .card.accent-blue .value { color: #fff; }
 
-.section-head { display: flex; align-items: baseline; gap: 12px; margin: 30px 2px 14px; }
-.section-head h2 { font-size: 14px; font-weight: 600; letter-spacing: 0.005em; }
-.section-head .hint { font-size: 11.5px; color: var(--text-2); }
+.section-head { display: flex; align-items: baseline; gap: 10px; margin: 26px 2px 12px; }
+.section-head h2 { font-size: 13.5px; font-weight: 700; letter-spacing: -0.005em; }
+.section-head .hint { font-size: 11px; color: var(--text-3); }
 
-/* Live event feed */
-.feed { display: flex; flex-direction: column; gap: 2px; }
+/* Live event feed — dense analyst rows, hairline separated */
+.feed {
+  display: flex; flex-direction: column;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  /* Bounded + internally scrollable. An unbounded 40-row feed grew taller
+     than the viewport and pushed the posture card, KPIs and chart off the
+     top of the dashboard — the console must keep its summary visible, so
+     the long list scrolls inside itself instead of moving the page. */
+  max-height: 320px; overflow-y: auto; overflow-x: hidden;
+}
 .feed-row {
-  display: grid; grid-template-columns: 14px 1fr auto; align-items: center; gap: 12px;
-  padding: 10px 12px; border-radius: var(--radius-sm); font-size: 13px;
-  animation: rowIn 0.4s var(--ease);
+  display: grid; grid-template-columns: 12px 1fr auto; align-items: center; gap: 11px;
+  padding: 9px 13px; border-radius: 0; font-size: 12.5px;
+  border-bottom: 1px solid var(--line);
+  animation: rowIn 0.3s var(--ease);
 }
-.feed-row:hover { background: var(--card); }
-/* Verdict encoded by FILL + SHAPE, not color */
-.feed-row .fdot { width: 8px; height: 8px; border-radius: 50%; }
-.feed-row .fdot.block { background: #fff; box-shadow: 0 0 0 3px rgba(255,255,255,0.10); }        /* solid + ring = stopped */
-.feed-row .fdot.flag  { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-1); }   /* hollow = flagged */
-.feed-row .fdot.allow { background: var(--text-2); }                                              /* dim = allowed */
-.feed-row .fname { color: var(--text-0); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.feed-row .fmeta { color: var(--text-2); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.feed-row:last-child { border-bottom: none; }
+.feed-row:hover { background: var(--bg-2); }
+/* Verdict by FILL + SHAPE, never hue: solid = stopped, hollow = flagged, dim = allowed. */
+.feed-row .fdot { width: 7px; height: 7px; border-radius: 50%; }
+.feed-row .fdot.block { background: var(--text-0); }
+.feed-row .fdot.flag  { background: transparent; box-shadow: inset 0 0 0 1.4px var(--text-2); }
+.feed-row .fdot.allow { background: var(--text-3); }
+.feed-row .fname { color: var(--text-0); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.feed-row .fmeta { color: var(--text-3); font-size: 11px; font-family: var(--font-mono); }
 @keyframes rowIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+/* Rows carried over from the previous poll must not replay their entry
+   animation — only genuinely new events animate in. */
+.feed-row.no-anim { animation: none; }
 
 .empty { color: var(--text-2); font-size: 13px; padding: 24px 12px; text-align: center; }
 
@@ -315,66 +443,93 @@ html, body {
 .page-intro { color: var(--text-1); font-size: 13.5px; margin: 0 2px 22px; max-width: 720px; line-height: 1.55; }
 
 .panel {
-  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 6px 18px; margin-top: 8px;
+  background: transparent; border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 2px 15px; margin-top: 6px;
 }
 .rows { display: flex; flex-direction: column; }
 .row {
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
-  padding: 14px 0; border-bottom: 1px solid var(--line);
+  padding: 11px 0; border-bottom: 1px solid var(--line);
 }
 .row:last-child { border-bottom: none; }
-.rk { color: var(--text-1); font-size: 13.5px; display: flex; align-items: center; gap: 10px; }
-.rk svg { width: 16px; height: 16px; opacity: 0.6; }
-.rv { color: var(--text-0); font-size: 13.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.rk { color: var(--text-2); font-size: 12.5px; display: flex; align-items: center; gap: 9px; }
+.rk svg { width: 15px; height: 15px; opacity: 0.55; }
+.rv { color: var(--text-0); font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
-/* Status pills — monochrome. Good = white fill, warn = outline, off = dim. */
+/* Status pills — strictly monochrome. Meaning by fill/shape: ok = solid white
+   dot, warn = hollow ring, off = dim. `err` is the ONE place the reserved
+   critical red is allowed, because it means a real fault. */
 .badge {
-  display: inline-flex; align-items: center; gap: 7px; padding: 4px 11px; border-radius: 999px;
-  font-size: 11.5px; font-weight: 600; letter-spacing: 0.01em;
-  border: 1px solid var(--line); color: var(--text-1); background: var(--card);
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0;
+  border: 1px solid var(--line); color: var(--text-2); background: transparent;
 }
-.badge .bdot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-2); }
-.badge.ok { color: #fff; border-color: var(--line-strong); background: var(--card-hover); }
-.badge.ok .bdot { background: #fff; box-shadow: 0 0 0 3px rgba(255,255,255,0.12); }
-.badge.warn { color: var(--text-0); border-color: var(--line-strong); background: transparent; }
-.badge.warn .bdot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-1); }
-.badge.off { color: var(--text-2); }
-.badge.off .bdot { background: var(--text-2); opacity: 0.6; }
-.badge.err { color: #fff; border-color: var(--line-strong); background: rgba(255,255,255,0.06); }
-.badge.err .bdot { background: #fff; box-shadow: 0 0 0 3px rgba(255,255,255,0.22); }
+.badge .bdot { width: 5px; height: 5px; border-radius: 50%; background: var(--text-3); }
+.badge.ok { color: var(--text-0); border-color: var(--line-3); background: transparent; }
+.badge.ok .bdot { background: var(--text-0); }
+.badge.warn { color: var(--text-1); border-color: var(--line-strong); background: transparent; }
+.badge.warn .bdot { background: transparent; box-shadow: inset 0 0 0 1.4px var(--text-2); }
+.badge.off { color: var(--text-3); }
+.badge.off .bdot { background: var(--text-3); opacity: 0.7; }
+.badge.err { color: var(--crit); border-color: rgba(225,75,63,0.35); background: var(--crit-dim); }
+.badge.err .bdot { background: var(--crit); }
 
-.btn-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+.btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .btn {
-  display: inline-flex; align-items: center; gap: 8px; padding: 9px 16px; border-radius: var(--radius-sm);
-  border: 1px solid var(--line-strong); background: var(--card); color: var(--text-0);
-  font-size: 13px; font-weight: 600; transition: all 0.18s var(--ease);
+  display: inline-flex; align-items: center; gap: 7px; padding: 7px 14px; border-radius: var(--radius-sm);
+  border: 1px solid var(--line-strong); background: transparent; color: var(--text-0);
+  font-size: 12px; font-weight: 600; transition: background 0.15s var(--ease), border-color 0.15s var(--ease);
 }
-.btn:hover { background: var(--card-hover); transform: translateY(-1px); }
-.btn:active { transform: translateY(0); }
-.btn svg { width: 15px; height: 15px; }
-.btn.primary { background: #fff; border-color: #fff; color: #000; }
-.btn.primary:hover { background: #ececee; border-color: #ececee; }
+.btn:hover { background: var(--s-3); }
+.btn:active { background: var(--s-4); }
+.btn svg { width: 14px; height: 14px; }
+/* Primary = inverted (white fill, black text). The strongest emphasis the
+   monochrome system has, and it costs no color. */
+.btn.primary { background: var(--text-0); border-color: var(--text-0); color: #000; }
+.btn.primary:hover { background: #e6e6e6; border-color: #e6e6e6; }
 .btn.danger { color: var(--text-1); }
-.btn.danger:hover { border-color: rgba(255,255,255,0.28); color: #fff; background: var(--card-hover); }
-.btn[disabled] { opacity: 0.5; pointer-events: none; }
+.btn.danger:hover { border-color: rgba(225,75,63,0.45); color: var(--crit); background: var(--crit-dim); }
+.btn[disabled] { opacity: 0.4; pointer-events: none; }
 
-.list { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+.list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin-top: 6px; }
 .list-row {
   display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 14px;
-  padding: 12px 14px; border-radius: var(--radius-sm); border: 1px solid var(--line);
-  background: var(--card); font-size: 13px; animation: rowIn 0.4s var(--ease);
+  padding: 10px 13px; border-radius: 0; border: none; border-bottom: 1px solid var(--line);
+  background: transparent; font-size: 12.5px; animation: rowIn 0.3s var(--ease);
 }
-.list-row:hover { background: var(--card-hover); }
+.list-row:last-child { border-bottom: none; }
+.list-row:hover { background: var(--bg-2); }
 .list-row .lr-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .list-row .lr-title { color: var(--text-0); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .list-row .lr-sub { color: var(--text-2); font-size: 11.5px; }
 .list-row .lr-val { color: var(--text-1); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* Plain-language incident explanation — one line, quieter than .lr-sub's
+   status/host line so title -> where -> why reads as a clear hierarchy. */
+.list-row .lr-explain { opacity: 0.72; font-style: italic; }
+/* Impact (NIST SP 800-30, valkyrie/edr/impact.py) — what was exposed, is
+   it reversible, what to do. Supplements severity (the .sev chip), never
+   replaces it; set apart by a hairline top rule rather than color so it
+   reads as "a different KIND of information," not "a different urgency". */
+.list-row .lr-impact { padding-top: 6px; margin-top: 2px; border-top: 1px solid var(--line); opacity: 0.85; }
 
-/* Incident rows: a leading severity rail + monochrome severity chip. */
+/* Same impact line, in the Replay header — bigger surface, so it gets a
+   caption instead of relying on truncation. */
+.impact-line {
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 3px; max-width: 62ch;
+}
+.impact-line .il-cap {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-2);
+}
+.impact-line .il-text { font-size: 12.5px; color: var(--text-1); line-height: 1.5; }
+
+/* Incident rows: a leading severity rail + severity chip. Critical alone
+   carries the reserved signal red — semantic, not the UI accent; every other
+   tier stays monochrome so red keeps meaning "actual threat", never décor. */
 .list-row.inc-row { grid-template-columns: 3px auto 1fr auto; gap: 14px; padding-left: 0; }
-.inc-rail { align-self: stretch; border-radius: 3px 0 0 3px; background: var(--text-2); margin: -12px 0; }
-.inc-row[data-sev="critical"] .inc-rail { background: #fff; }
+.inc-rail { align-self: stretch; background: var(--text-2); margin: -12px 0; }
+.inc-row[data-sev="critical"] .inc-rail { background: var(--signal); }
 .inc-row[data-sev="high"] .inc-rail { background: var(--text-0); }
 .inc-row[data-sev="medium"] .inc-rail { background: var(--text-1); }
 .inc-row[data-sev="low"] .inc-rail { background: var(--text-2); }
@@ -383,12 +538,12 @@ html, body {
   letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-1); white-space: nowrap;
 }
 .sev::before { content: ""; width: 7px; height: 7px; border-radius: 2px; background: var(--text-2); }
-.sev.critical { color: #fff; } .sev.critical::before { background: #fff; box-shadow: 0 0 0 3px rgba(255,255,255,0.14); }
+.sev.critical { color: var(--signal); } .sev.critical::before { background: var(--signal); box-shadow: 0 0 8px var(--accent-dim); }
 .sev.high { color: var(--text-0); } .sev.high::before { background: var(--text-0); }
 .sev.medium { color: var(--text-1); } .sev.medium::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-1); }
 .sev.low { color: var(--text-2); } .sev.low::before { background: var(--text-2); }
 .mono-tag {
-  font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 10.5px; color: var(--text-1); background: rgba(255,255,255,0.05);
   border-radius: 5px; padding: 1px 6px; letter-spacing: -0.1px;
 }
@@ -433,7 +588,7 @@ html, body {
   transition: all 0.18s var(--ease);
 }
 .hunt-chip:hover { background: var(--card-hover); color: var(--text-0); }
-.hunt-chip.active { background: #fff; color: #000; border-color: #fff; }
+.hunt-chip.active { background: var(--accent-grad); color: #fff; border-color: transparent; }
 .hunt-facet { margin-bottom: 14px; }
 .hunt-facet-l { font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); font-weight: 600; }
 .hunt-facet-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
@@ -477,6 +632,27 @@ html, body {
 .bar-fill { height: 100%; border-radius: 6px; background: var(--text-0); opacity: 0.85; transition: width 0.6s var(--ease); }
 .bar-row .bv { color: var(--text-0); text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
 
+/* Defense coverage — three states (effective/degraded/absent), encoded
+   ONLY by fill/opacity/outline, never color. Mirrors the severity-rail
+   language above (.sev.critical solid+glow, .sev.medium hollow outline):
+   effective = solid white, degraded = mid-opacity grey, absent = hairline
+   outline on empty track, so "nothing here" is visibly a gap, not just a
+   quiet absence. */
+.cov-head { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+.cov-frac { font-size: 32px; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; color: var(--text-0); }
+.cov-frac .unit { font-size: 14px; color: var(--text-2); font-weight: 500; margin-left: 6px; }
+.cov-legend { display: flex; gap: 16px; font-size: 11px; color: var(--text-2); letter-spacing: 0.01em; }
+.cov-legend .lg { display: inline-flex; align-items: center; gap: 6px; }
+.cov-legend .sw { width: 8px; height: 8px; border-radius: 2px; flex: 0 0 auto; }
+.cov-legend .sw.effective { background: #fff; }
+.cov-legend .sw.degraded { background: var(--text-1); opacity: 0.5; }
+.cov-legend .sw.absent { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-2); }
+.cov-track { display: flex; height: 8px; border-radius: 6px; overflow: hidden; margin: 16px 0 6px; background: rgba(255,255,255,0.035); border: 1px solid var(--line); }
+.cov-seg { height: 100%; transition: width 0.6s var(--ease); }
+.cov-seg.effective { background: #fff; opacity: 0.92; }
+.cov-seg.degraded { background: var(--text-1); opacity: 0.4; }
+.cov-seg.absent { background: transparent; }
+
 /* ============================ Splash =================================== */
 #splash {
   position: fixed; inset: 0; z-index: 50;
@@ -485,7 +661,12 @@ html, body {
   transition: opacity 0.9s var(--ease); overflow: hidden;
 }
 #splash.hide { opacity: 0; pointer-events: none; }
-#particles { position: absolute; inset: 0; }
+/* Explicit width/height (not just inset:0) — a <canvas> is a replaced element
+   whose rendered box otherwise resolves toward its intrinsic buffer size
+   (the width/height ATTRIBUTES the resize() JS sets), not the parent. Without
+   this the field only ever painted into a corner-sized box: correct dots,
+   wrong box. This pins the box to the full splash regardless of buffer res. */
+#particles { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 
 .splash-core { position: relative; display: flex; flex-direction: column; align-items: center; z-index: 2; }
 .splash-logo {
@@ -546,7 +727,15 @@ html, body {
    Replay Mode — step-by-step incident replay overlay
    Premium monochrome + a single restrained blue accent for the playhead.
    ====================================================================== */
-:root { --rp-accent: #5b9dff; --rp-accent-dim: rgba(91,157,255,0.16); }
+/* Replay Mode inherits the monochrome system: its "accent" (playhead, active
+   tab, technique hits) is white, and `--border` is defined here so the many
+   `var(--border, #23262d)` fallbacks below resolve to our hairline instead of
+   the old blue-gray literal. */
+:root {
+  --rp-accent: #ffffff;
+  --rp-accent-dim: rgba(255,255,255,0.14);
+  --border: rgba(255,255,255,0.10);
+}
 .rp-scrim {
   position: fixed; inset: 0; z-index: 200; display: flex; flex-direction: column;
   background: rgba(6, 7, 9, 0.72); backdrop-filter: blur(6px);
@@ -629,6 +818,10 @@ html, body {
 .rp-rec { border: 1px solid var(--border, #23262d); border-radius: 9px; padding: 10px 11px; margin-bottom: 8px; }
 .rp-rec-head { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
 .rp-rec-t { font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: var(--text-1, #aeb4bc); }
+.rp-respond { margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--border, #23262d); }
+.rp-respond .btn { font-size: 11.5px; padding: 6px 10px; }
+.rp-respond-result { margin-top: 8px; }
+.rp-respond-result .rp-desc { margin-bottom: 6px; }
 
 /* Investigation — triage form */
 .rp-triage { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
@@ -648,7 +841,7 @@ html, body {
 .rp-b { width: 34px; height: 34px; border-radius: 9px; border: 1px solid var(--border, #23262d);
   background: transparent; color: var(--text-1, #c2c8cf); display: grid; place-items: center; cursor: pointer; }
 .rp-b:hover { background: rgba(255,255,255,0.05); color: var(--text-0, #fff); }
-.rp-b.play { background: var(--rp-accent); border-color: var(--rp-accent); color: #06121f; width: 40px; height: 40px; }
+.rp-b.play { background: var(--rp-accent); border-color: var(--rp-accent); color: #000; width: 40px; height: 40px; }
 .rp-b.play:hover { filter: brightness(1.08); }
 .rp-b svg { width: 16px; height: 16px; }
 .rp-track { flex: 1; height: 6px; border-radius: 4px; background: rgba(255,255,255,0.07); position: relative; cursor: pointer; }
@@ -693,7 +886,7 @@ html, body {
 }
 .toast {
   display: flex; align-items: center; gap: 9px; padding: 11px 15px;
-  background: var(--bg-2, #111113); border: 1px solid var(--line-strong);
+  background: var(--bg-2); border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm); box-shadow: var(--shadow-2);
   color: var(--text-0); font-size: 12.5px; font-weight: 500; max-width: 320px;
   opacity: 0; transform: translateY(8px) scale(0.98); cursor: pointer;

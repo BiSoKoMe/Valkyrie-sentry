@@ -22,12 +22,17 @@ from typing import Optional
 from .framework import Sensor
 from .wineventlog import ChannelReader, parse_event_xml
 from ..telemetry import (
-    ACT_FLAGGED, ACT_OBSERVED, CAT_PROCESS,
-    SEV_HIGH, SEV_INFO, SEV_LOW, SEV_MEDIUM, severity_rank, TelemetryEvent,
+    ACT_FLAGGED, ACT_OBSERVED, CAT_MALWARE, CAT_PROCESS,
+    SEV_CRITICAL, SEV_HIGH, SEV_INFO, SEV_LOW, SEV_MEDIUM,
+    severity_rank, TelemetryEvent,
 )
 
 _CHANNEL = "Microsoft-Windows-PowerShell/Operational"
 _EVENT_IDS = (4104,)          # script-block; 4103 is pipeline, noisier — omit for now
+
+# Script blocks shorter than this are prompt fragments and tab-completion noise;
+# submitting them to AMSI costs a round trip per keystroke for no signal.
+_AMSI_MIN_SCRIPT_LEN = 24
 
 # ── pure classifier (unit-tested; no OS calls) ─────────────────────────────
 # Each rule: (compiled regex, label, severity, MITRE technique, human reason).
@@ -87,9 +92,19 @@ class PowerShellSensor(Sensor):
     name = "powershell"
     interval = 1.5
 
-    def __init__(self) -> None:
+    def __init__(self, scanner=None) -> None:
+        """``scanner`` is an optional ``valkyrie.amsi.AmsiScanner``.
+
+        When supplied, each script block is also submitted to the OS antimalware
+        provider, so a heuristic "this looks obfuscated" can be upgraded to an
+        engine-backed conviction. Absent (or unavailable), the sensor behaves
+        exactly as before — the corroborator is additive, never load-bearing.
+        """
         super().__init__()
         self._reader = ChannelReader(_CHANNEL, _EVENT_IDS)
+        self._scanner = scanner
+        self.amsi_scans = 0
+        self.amsi_convictions = 0
 
     def available(self) -> bool:
         return self._reader.available()
@@ -111,6 +126,26 @@ class PowerShellSensor(Sensor):
         pid = int(ev.get("process_id", 0) or 0)
 
         severity, labels, technique, reason = classify_powershell(script)
+        category = CAT_PROCESS
+        amsi_fields: dict = {}
+
+        # Corroborate with the OS antimalware provider. A conviction is an
+        # external engine's verdict on the *deobfuscated* text PowerShell was
+        # about to run — stronger evidence than any shape heuristic, so it
+        # overrides severity and re-categorizes the event as malware.
+        verdict = self._amsi_verdict(script, path)
+        if verdict is not None:
+            amsi_fields = {"amsi_disposition": verdict.disposition,
+                           "amsi_result": verdict.result}
+            if verdict.is_malware:
+                self.amsi_convictions += 1
+                category = CAT_MALWARE
+                severity = SEV_CRITICAL
+                labels = list(labels) + ["amsi_detected"]
+                technique = technique or "T1059.001"
+                reason = ("antimalware provider convicted this script block"
+                          + (f"; {reason}" if reason else ""))
+
         action = ACT_FLAGGED if severity_rank(severity) >= severity_rank(SEV_MEDIUM) else ACT_OBSERVED
 
         snippet = script.strip().replace("\r", " ").replace("\n", " ")
@@ -118,7 +153,7 @@ class PowerShellSensor(Sensor):
             snippet = snippet[:300] + "…"
 
         self.submit(TelemetryEvent(
-            category=CAT_PROCESS,
+            category=category,
             activity="script_block",
             action=action,
             ts=time.time(),
@@ -137,7 +172,33 @@ class PowerShellSensor(Sensor):
                 "script_len": len(script),
                 "user_sid": ev.get("user_sid", ""),
                 "script": script if len(script) <= 8000 else script[:8000],
+                **amsi_fields,
                 # Dedup on the exact script-block fragment.
                 "_dedup": f"{sbid}:{part}",
             },
         ))
+
+    def _amsi_verdict(self, script: str, path: str):
+        """Submit a script block to AMSI. Returns a verdict, or None if not scanned.
+
+        Never raises and never blocks the sensor: a scanner that errors is a
+        missing corroborator, not a missing detection.
+        """
+        if self._scanner is None or len(script) < _AMSI_MIN_SCRIPT_LEN:
+            return None
+        try:
+            if not self._scanner.is_running():
+                return None
+            verdict = self._scanner.scan_string(
+                script, content_name=path or "powershell-scriptblock")
+        except Exception:
+            return None
+        self.amsi_scans += 1
+        return verdict if verdict.scanned else None
+
+    def health(self) -> dict:
+        h = super().health()
+        h.update({"amsi_enabled": self._scanner is not None,
+                  "amsi_scans": self.amsi_scans,
+                  "amsi_convictions": self.amsi_convictions})
+        return h

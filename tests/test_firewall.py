@@ -108,13 +108,51 @@ not-valid-line
     _check("count correct",          ipset.count() == 3)
 
     # ------------------------------------------------------------------
-    # 6. DoH IPs are blocked (in-process — no kernel rules needed)
+    # 6. DoH IP coverage — TWO DIFFERENT SURFACES, do not conflate them.
+    #
+    # This section previously asserted `fw.is_blocked_ip(ip)` for every DoH IP
+    # and had been FAILING 7/10 since commit 5418a61 added the public-resolver
+    # exemption. It went unnoticed because the whole file was being skipped on
+    # host-safety grounds — the §9 live-rule hazard caused the other 46 pure
+    # checks to be skipped with it. The failure was in the test, not the code.
+    #
+    #   _ipset.contains(ip)  = ENFORCEMENT. Is this IP in the loaded blocked
+    #                          set? DoH blocking (browser DoH must not bypass
+    #                          the sinkhole) rides on this + the netsh rules
+    #                          installed by add_doh_rules (verified in §8b).
+    #
+    #   is_blocked_ip(ip)    = REPUTATION. "Should I treat traffic to this IP
+    #                          as malicious?" network_telemetry uses this to
+    #                          raise C2 incidents. It deliberately answers
+    #                          False for well-known public resolvers, because
+    #                          Valkyrie's OWN upstream (DNS_UPSTREAM=9.9.9.9)
+    #                          lives there and flagging it would be a
+    #                          self-inflicted false positive.
+    #
+    # Both behaviours are correct and they must both be pinned.
     # ------------------------------------------------------------------
-    print("\n[6] DoH IP coverage")
+    print("\n[6] DoH IP coverage (enforcement vs reputation)")
     fw = FirewallManager()
     fw._ipset.load(set(FIREWALL_DOH_IPS))
     for ip in FIREWALL_DOH_IPS:
-        _check(f"DoH IP {ip} blocked", fw.is_blocked_ip(ip))
+        _check(f"DoH IP {ip} is enforced (in ipset)", fw._ipset.contains(ip))
+
+    # The exemption itself, pinned in both directions so neither can silently
+    # regress: a well-known resolver must never be reported as malicious, and a
+    # non-resolver in the set must still be.
+    from valkyrie.trust import is_public_resolver_ip
+    from valkyrie.config import DNS_UPSTREAM
+    _check("Valkyrie's own upstream is a recognised public resolver",
+           is_public_resolver_ip(DNS_UPSTREAM))
+    _check("Valkyrie's own upstream is NOT reported malicious "
+           "(would be a self-inflicted C2 false positive)",
+           not fw.is_blocked_ip(DNS_UPSTREAM))
+    for ip in ("8.8.8.8", "1.1.1.1", "9.9.9.9"):
+        _check(f"public resolver {ip} not reported malicious",
+               not fw.is_blocked_ip(ip))
+    fw._ipset.load({"203.0.113.7"})       # a plain blocked host, not a resolver
+    _check("a non-resolver blocked IP IS still reported malicious",
+           fw.is_blocked_ip("203.0.113.7"))
 
     # ------------------------------------------------------------------
     # 7. Private ranges NOT blocked by FirewallManager.start()

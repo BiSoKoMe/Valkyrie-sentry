@@ -33,7 +33,21 @@ CAT_DNS         = "dns"
 CAT_PROCESS     = "process"
 CAT_NETWORK     = "network"
 CAT_PERSISTENCE = "persistence"     # auto-start extension points (ASEPs)
-CATEGORIES  = frozenset({CAT_DNS, CAT_PROCESS, CAT_NETWORK, CAT_PERSISTENCE})
+# Content convicted by the OS antimalware provider via AMSI (valkyrie/amsi.py).
+# Distinct from CAT_PROCESS on purpose: every other endpoint category carries a
+# Valkyrie *heuristic*, while this one carries an external engine's *verdict* —
+# a different kind of evidence that deserves its own meaning and response.
+CAT_MALWARE     = "malware"
+# Asset inventory (valkyrie/asset_inventory.py, CIS Controls #1/#2): a CHANGE
+# to what's installed/listening/loaded on the host — new software, a newly
+# LISTENING port, a newly loaded kernel driver. Distinct from CAT_PERSISTENCE:
+# persistence_telemetry already owns autostart-entry changes at their own
+# (usually higher) severity; this category is deliberately always INFO, same
+# discipline as process_telemetry.classify_discovery's Discovery-tactic
+# labels — weak on its own, real as correlation input.
+CAT_ASSET       = "asset"
+CATEGORIES  = frozenset({CAT_DNS, CAT_PROCESS, CAT_NETWORK, CAT_PERSISTENCE,
+                         CAT_MALWARE, CAT_ASSET})
 
 # persistence activities — which ASEP class changed. Kept as a small vocab so the
 # EDR correlator and dashboard can reason over persistence uniformly.

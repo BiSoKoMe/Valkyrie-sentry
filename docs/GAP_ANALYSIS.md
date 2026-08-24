@@ -26,7 +26,7 @@ needing global scale (signature clouds, ML from millions of endpoints) are marke
 | 3 | Behavioral detection depth | High | Med | Med (ETW process/file/registry sensors) | Iterative |
 | 4 | SIEM integration (CEF/syslog export) | Med | Med (enterprise) | High | Cheap win later |
 | 5 | Digital forensics / triage collection | Med | Med | High | Later |
-| 6 | Malware detection (files) | Critical | High | **Needs infra** | Integrate OS AMSI/Defender; don't build a signature engine |
+| 6 | Malware detection (files) | Critical | High | **Needs infra** | **✅ PARTIAL** 2026-07-28 (ADR 0035, `valkyrie/amsi.py`): the OS AMSI provider is integrated for content verdicts. Still no Valkyrie signature engine — we borrow a verdict, we do not have parity |
 | 7 | Exploit / memory-attack detection | Critical | High | Low–Med (ETW/AMSI, no kernel driver) | Partial only; honest boundary |
 | 8 | Kernel protection (minifilter/ELAM) | Critical | High | **Needs signed driver** | Document as extension point |
 | 9 | Cloud analytics / global ML | High | Med | **Needs infra** | Architecture only, privacy-preserving |
@@ -140,3 +140,86 @@ corpus, queued as the next dedicated cycle (corroborated DGA detector).
 in-repo harness structurally cannot measure; (c) vulnerability visibility
 (installed software vs local CVE feed); (d) browser protection via
 TLS-inspector + URLhaus full URLs.
+
+## Cycle 2026-07-28: AMSI content scanning — SHIPPED (rank-6 gap, partially)
+ADR 0035, `valkyrie/amsi.py`. Every endpoint verdict Valkyrie could previously
+produce was a **heuristic**; it had zero content conviction. This integrates the
+OS **Antimalware Scan Interface** — the documented path this document has
+recommended since the first review — so script blocks and files get a real
+verdict from the installed antimalware provider. Wired into the PowerShell
+script-block sensor (which already holds the *deobfuscated* text), producing a
+new `malware` incident category that correlates with everything else on the same
+lineage. Strictly additive: an absent, stopped, silent, or raising scanner leaves
+the heuristic output unchanged (pinned by four tests). ~1–6 ms per scan.
+
+**Live testing corrected a wrong assumption, which is why it was run.** The first
+implementation inferred "no provider" from a non-conviction on Microsoft's AMSI
+test marker. On the dev host that inference was false: `AMServiceEnabled: False`
+(Defender stands down because Avast + McAfee are installed) and neither
+third-party provider recognises the marker *or* EICAR through AMSI — yet both
+provider DLLs are demonstrably resident and answering. Provider presence is now
+read from `HKLM\SOFTWARE\Microsoft\AMSI\Providers` plus `GetModuleHandleW`, and
+the self-test reports a **tri-state** conclusion (`confirmed` / `inconclusive` /
+`no_provider`) instead of a false negative.
+
+**This does not close rank 6.** Valkyrie still has no signature engine, cannot
+detect what the installed provider cannot, and contributes nothing on a host with
+no provider. It borrows a verdict — that is the honest description, and the
+efficacy harness deliberately does not score it, because measuring someone else's
+engine as Valkyrie's recall is exactly the fake parity this document forbids.
+
+**Next candidates (re-ranked)**: (a) **VM detonation lab** — build/test-sign the
+kernel driver (ADR 0026/0031) and run the Atomic Red Team harness in `redteam/`
+against a live agent; this is now the top gap, because the driver has never been
+compiled and the sensor-capture dimension has never been measured; (b) AMSI file
+scanning wired to process images the behavioural layers already flagged
+(conviction as corroborator); (c) vulnerability visibility (installed software vs
+local CVE feed); (d) browser protection via TLS-inspector + URLhaus full URLs.
+
+## Cycle 2026-08-04: closing the measured Tier A gaps — SHIPPED
+ADR 0041. Driven by `redteam/evaluation/`'s own root-cause output rather than a
+fresh survey: the evaluation had already named a concrete code fix per miss, so
+this cycle executed the subset needing no new infrastructure.
+
+- **Reconnaissance burst** (Discovery 17% → 83%): `classify_discovery` attaches
+  an INFO-only `discovery_command` label; the new `reconnaissance-burst` sequence
+  IOA fires (MEDIUM) only on **≥3 DISTINCT** discovery techniques from one
+  lineage in 120s. Needed a new `Step.min_distinct` capability — the sequence
+  engine could previously express only *order*, never *breadth*. A lone `whoami`
+  still raises nothing, by design. Also wired `classify_discovery` into
+  `etw/sysmon.py` EID 1 (and therefore Security/4688), because these commands
+  exit in milliseconds and the 2s poller loses them — correct logic behind a dead
+  delivery path is not detection.
+- **T1489 service stop/disable** (Impact 67% → 100%) and **T1570 lateral tool
+  transfer**: real coverage holes, now two + one rules, each with `cmd_all` verb
+  pinning and benign regression controls (`sc stop Spooler`, `sc query WinDefend`,
+  UNC copy to a non-admin share).
+- **Browser credential-store watch** (`browser_cred_watch.py`, T1555.003):
+  polls open file **handles** against the known browser password stores instead
+  of a command-line rule — catches a compiled stealer that has nothing revealing
+  on its command line. HIGH with no corroboration (owning browsers excluded).
+- **Threat-intel feeds default ON** (`USE_EXTERNAL_LISTS` False → True, new
+  `--no-download-lists` opt-out). Feodo/URLhaus/ThreatFox were silent no-ops
+  unless the user knew to pass a flag. Matching stays 100% local; only the
+  periodic fetch is affected.
+- **Path-level URL blocking** (the extension seam ADR 0015 left open): new `url`
+  indicator kind + `normalize_url` + `match_url`, enforced in `tls_addon.py`.
+  Matching is **exact**, never parent-based — malware lives on compromised
+  legitimate sites, so blocking the parent domain off one bad path would be the
+  false positive.
+
+**Measured: Tier A 25/40 (62.5%) → 32/40 (80.0%)**; efficacy gate held at
+100% recall / 0% FPR; 35 → 38 IOA rules, 5 → 6 sequence IOAs.
+
+**Honest boundaries (unchanged):** Tier A is still classifier-input replay, not a
+live attack — **Tier B has still never been run**, and that number will be worse.
+Discovery hits are scored as burst *contributors*, not standalone alerts. The
+credential watch is a 5s poll, not a minifilter. Real-time discovery delivery
+needs Sysmon or 4688 auditing. URL blocking needs the opt-in TLS inspector.
+
+**Next candidates (unchanged at the top)**: (a) **VM detonation lab** — build and
+test-sign the kernel driver (ADR 0026/0031) and run Tier B against a live agent.
+This is still the #1 gap and nothing in this cycle moved it: the driver has never
+been compiled, and prevention (as opposed to detect-and-respond) does not exist
+until it is. (b) AMSI file scanning as a corroborator on already-flagged images;
+(c) vulnerability visibility vs a local CVE feed.

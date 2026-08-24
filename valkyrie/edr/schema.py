@@ -45,6 +45,29 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
+def iso_from_epoch(ts: float) -> str:
+    """Same wire format as ``_now_iso()``, but for a specific epoch-seconds
+    timestamp rather than "now". Used so a Detection can carry WHEN the
+    underlying observation actually happened (e.g. a polling collector's own
+    ``TelemetryEvent.ts``) instead of always defaulting to the moment the
+    engine got around to processing it — the two can differ by up to a
+    collector's poll interval, and that gap is real MTTD signal (see
+    valkyrie/edr/metrics.py), not noise to discard."""
+    return datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat(
+        timespec="milliseconds")
+
+
+def parse_iso(ts: str) -> Optional[float]:
+    """Inverse of _now_iso()/iso_from_epoch(): wire ISO timestamp -> epoch
+    seconds, or None if unparseable. Never raises."""
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts).timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:16]}"
 
@@ -148,7 +171,9 @@ class Incident:
     category:     str = ""
     entity:       str = ""                  # primary subject (process or domain)
     status:       str = "open"
+    technique:    str = ""                  # MITRE id(s), e.g. "T1562.001"
     process_name: str = ""
+    process_pid:  int = 0                    # live only; not persisted (see store)
     assignee:     str = ""
     notes:        str = ""
     detection_count: int = 0

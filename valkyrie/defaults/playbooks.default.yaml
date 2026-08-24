@@ -1,0 +1,132 @@
+# Valkyrie — default response playbooks (SOAR)
+# ---------------------------------------------------------------------------
+# Auto-response for HIGH-CONFIDENCE, LOW-RISK incidents, so a confirmed threat
+# is BLOCKED and AUDITED, not merely recorded. Every action is written to the
+# incident timeline with operator "playbook:<id>", and a (playbook, target)
+# pair will not re-fire within cooldown_seconds.
+#
+# Safety model (tiered by how reversible and how confident each action is):
+#   * Domain blocks ship in ENFORCE — a block is just a reversible DNS rule
+#     (unblock any time from Threats → the domain).
+#   * Persistence removal ships in ENFORCE — deleting the autostart entry an
+#     attacker just added is low-risk (you remove the NEW artefact, nothing
+#     pre-existing) and the responder hard-refuses critical services / the
+#     system task tree.
+#   * CRITICAL process termination ships in ENFORCE — `critical` is reserved for
+#     tradecraft that is malicious by construction (LSASS dumping, shadow-copy
+#     deletion), so the everyday LOLBin stream never reaches it. Protected
+#     system PIDs/names are always refused even when armed.
+#   * The BROAD process stream (medium/high LOLBin) stays DRY_RUN — real
+#     false-positive risk, so it only SIMULATES until you consciously arm it.
+#
+# This file is copied to %ProgramData%\Valkyrie\playbooks.yaml on first launch.
+# Edit that copy to customise; delete it to restore this shipped default.
+#
+# `version` drives automatic migration: on startup, if the installed copy has an
+# older version than this shipped default, Valkyrie refreshes its BUILT-IN
+# playbooks to this armed set (backing up the old file) while preserving any
+# playbooks you added under new ids. Bump `version` whenever the built-in set
+# changes so existing installs pick it up with no manual step.
+# ---------------------------------------------------------------------------
+
+version: 3
+
+playbooks:
+  # Confirmed algorithmically-generated C2 rendezvous (T1568.002). The DGA
+  # classifier only fires when length, entropy and bigram-implausibility all
+  # agree, so a durable block here is safe.
+  - id: block-dga-c2
+    min_severity: high
+    categories: [dga]
+    mode: enforce
+    actions:
+      - action: block_domain
+        target_from: entity
+
+  # DNS tunnelling / exfiltration (T1048.003) — durably block the specific
+  # generated hostname carrying the tunnel. Blocks the exact host, never the
+  # wildcard provider root, so legitimate use of the same provider is intact.
+  - id: block-dns-tunnel
+    min_severity: high
+    categories: [tunnel]
+    mode: enforce
+    actions:
+      - action: block_domain
+        target_from: entity
+
+  # Known-bad / beaconing infrastructure surfaced by the threat-intel feeds
+  # and the behavioural intelligence layer (T1071.004). High severity only.
+  - id: block-known-bad-domain
+    min_severity: high
+    categories: [intelligence, threat_intel]
+    mode: enforce
+    actions:
+      - action: block_domain
+        target_from: entity
+
+  # Attacker-created persistence (Scheduled Task / Service / Run key / Startup
+  # file) surfaced by the persistence collector or the Sysmon registry/file
+  # sensors. ENFORCE: removing the autostart entry an attacker just added is
+  # low-risk and reversible — you are deleting the *new* artefact, not touching
+  # anything that was already there. Hard safety rails live in the responder
+  # (critical Windows services and the Microsoft\Windows task tree are never
+  # deleted; Startup-folder deletes are confined to the Startup dirs). This is
+  # the single highest-value auto-remediation: detect the persistence AND rip it
+  # back out, not merely record it.
+  - id: remove-persistence
+    min_severity: medium
+    categories: [persistence]
+    mode: enforce
+    cooldown_seconds: 30
+    actions:
+      - action: remove_persistence
+        target_from: entity
+
+  # Unambiguous, high-confidence malicious PROCESS activity — CRITICAL only.
+  # The IOA rule set reserves `critical` for tradecraft that is malicious by
+  # construction: comsvcs/procdump LSASS dumping (T1003.001) and shadow-copy
+  # deletion (T1490). The broad medium/high LOLBin stream (ordinary
+  # powershell/cmd/node) never reaches this bar, so arming ENFORCE here kills
+  # the genuinely bad without touching everyday admin/dev activity.
+  # (Kill-after-detect: a user-mode agent cannot *prevent* execution without a
+  # kernel driver; it terminates on detection.)
+  - id: kill-critical-process
+    min_severity: critical
+    categories: [process]
+    mode: enforce
+    cooldown_seconds: 30
+    actions:
+      - action: kill_process
+        target_from: process_pid
+
+  # A completed, NAMED multi-stage attack sequence on one process lineage
+  # (e.g. document-spawned shell → remote payload → in-memory execution).
+  #
+  # DRY_RUN on purpose: a kill is irreversible, and a sequence FP reached this
+  # exact playbook in testing (a benign powershell matched the "macro-dropper"
+  # chain because Step 1 keyed on bare T1059). That Step now requires the
+  # office-parent discriminator (behavioral_sequences macro-dropper-c2), so the
+  # FP source is fixed — but the rule stays in SIMULATE until a full re-test
+  # shows ZERO false sequences on the fleet. Then arm by setting mode: enforce.
+  - id: kill-attack-sequence
+    min_severity: high
+    categories: [attack_sequence]
+    mode: dry_run
+    cooldown_seconds: 30
+    actions:
+      - action: kill_process
+        target_from: process_pid
+
+  # The BROAD process stream (medium/high LOLBin, encoded command, web-shell
+  # shape). Left in DRY_RUN on purpose: these carry real false-positive risk
+  # (legitimate powershell/node/cmd), so they SIMULATE ("would terminate …") for
+  # review. Arm by changing mode to `enforce` only once you trust the matches on
+  # your fleet.
+  - id: kill-malicious-process
+    min_severity: high
+    categories: [process]
+    mode: dry_run
+    cooldown_seconds: 30
+    actions:
+      - action: kill_process
+        target_from: process_pid

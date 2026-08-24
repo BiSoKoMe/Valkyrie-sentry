@@ -5,10 +5,11 @@ pipeline, and either:
   - Returns a NXDOMAIN / sinkhole response (blocked)
   - Forwards the query to the upstream resolver and relays the real answer
 
-Decision pipeline (in order):
-  1. User rules — always_allow / always_block take priority
-  2. Intelligence memory — verdicts Valkyrie already learned (fast path)
-  3. Blocklist / scanner — known-bad domains + positive tracker signals
+Decision pipeline (in order) — PURE ANALYSIS, no human-authored lists:
+  1. Threat-intel IOC feeds — highest-confidence known-bad signal
+  2. Intelligence memory — verdicts Valkyrie already learned (fast path); the
+     engine's own analysis-driven auto-blocks are enforced here, not via a list
+  3. Scanner — page-content analysis + positive tracker signals
   4. Threat classifier — behavioural intelligence (anomaly + threat graph)
   5. Baseline anomaly check — post-profiling phase
 
@@ -41,6 +42,8 @@ from typing import Optional
 
 from .behavioral import BehavioralEngine
 from .blocklist import BlocklistManager
+from .cname_uncloak import matches_cname_tracker, same_registrable
+from .resolution_log import record_resolution
 from .site_scanner import SiteScanner
 from .config import (
     DNS_LISTEN_HOST,
@@ -48,8 +51,11 @@ from .config import (
     DNS_TIMEOUT,
     DNS_UPSTREAM,
     DNS_UPSTREAM_PORT,
+    HEALTH_PROBE_DOMAIN,
     SINKHOLE_IPV4,
     SINKHOLE_IPV6,
+    DECEPTION_IPV4,
+    DECEPTION_IPV6,
     UPSTREAM_SERVERS,
 )
 from .process_watcher import ProcessInfo, ProcessWatcher, _UNKNOWN
@@ -80,6 +86,37 @@ try:
 except ImportError:
     _DNSLIB = False
 
+# Precomputed wire-format QNAME for the health-probe domain (12-byte DNS header
+# + length-prefixed labels + root byte), so the serve loop can recognise a
+# heartbeat probe with a raw byte-slice compare — no dns.message parsing, no
+# worker-thread dispatch. See _serve_loop for why this matters under load.
+_HEALTH_PROBE_WIRE = dns.name.from_text(
+    HEALTH_PROBE_DOMAIN).to_wire() if _DNSLIB else b""
+
+
+def _is_health_probe_wire(data: bytes) -> bool:
+    n = len(_HEALTH_PROBE_WIRE)
+    return n > 0 and len(data) >= 12 + n and data[12:12 + n] == _HEALTH_PROBE_WIRE
+
+
+# The user's risk profile decides deceive-vs-block for trackers. Reading it per
+# DNS query would be file I/O on the hot path, so it is cached with a short TTL
+# (the profile changes rarely; a few seconds of staleness is fine).
+_PROFILE_CACHE = {"val": None, "ts": 0.0}
+
+
+def _current_profile():
+    now = time.time()
+    if _PROFILE_CACHE["val"] is None or now - _PROFILE_CACHE["ts"] > 5.0:
+        try:
+            from .profiles import get_profile
+            _PROFILE_CACHE["val"] = get_profile()
+        except Exception:
+            from .decision import Profile
+            _PROFILE_CACHE["val"] = Profile.STANDARD
+        _PROFILE_CACHE["ts"] = now
+    return _PROFILE_CACHE["val"]
+
 
 class DNSInterceptor:
     """UDP DNS sinkhole server.
@@ -99,6 +136,8 @@ class DNSInterceptor:
         intelligence=None,          # valkyrie.intelligence.Intelligence (optional)
         firewall=None,              # valkyrie.firewall.FirewallManager (optional)
         threat_intel=None,          # valkyrie.threat_intel.ThreatIntelManager (optional)
+        content_watch=None,         # valkyrie.content_watch.ContentWatcher (optional)
+        deception=None,             # valkyrie.deception.DeceptionEndpoint (optional)
         strict: bool = False,
         host: str          = DNS_LISTEN_HOST,
         port: int          = DNS_LISTEN_PORT,
@@ -114,6 +153,14 @@ class DNSInterceptor:
         self._watcher       = process_watcher
         self._scanner       = scanner
         self._intelligence  = intelligence
+        # Background page-content analysis. Optional and fail-open: when None,
+        # _decide behaves exactly as it did before this was added.
+        self._content_watch = content_watch
+        # Deception endpoint. Optional and fail-safe: when absent or not
+        # listening, DECEIVE falls back to the sinkhole address, i.e. exactly
+        # the previous behaviour. Nothing here can make DECEIVE worse than the
+        # dead-end it used to be.
+        self._deception     = deception
         # Firewall's in-process CIDR set (12k+ threat-intel ranges). Consulted
         # AFTER an allowed query is resolved: if the upstream answer points at
         # an IP inside a blocked range we sinkhole the reply instead of handing
@@ -241,6 +288,28 @@ class DNSInterceptor:
                 continue
             except OSError:
                 break
+            # Liveness-probe fast path: answered INLINE on this loop thread,
+            # never spawning a worker thread. Real queries each get their own
+            # thread below (to avoid head-of-line blocking), but Python's GIL
+            # still serializes CPU time across however many of those are alive
+            # at once — a burst of worker threads can delay a freshly-spawned
+            # heartbeat-reply thread past its 1s probe budget purely from
+            # scheduling contention. Verified live: heartbeat false-failures
+            # correlated with concurrent query bursts, not just cold boot. The
+            # reserved health-probe name is recognised straight off the wire
+            # (byte-slice compare, no dns.message parse, no thread spawn), so
+            # it never competes with worker threads for the GIL.
+            if _is_health_probe_wire(data):
+                try:
+                    request = dns.message.from_wire(data)
+                    if request.question:
+                        qname = str(request.question[0].name).rstrip(".")
+                        qtype = request.question[0].rdtype
+                        self._sock.sendto(
+                            self._sinkhole_response(request, qname, qtype), addr)
+                except Exception:
+                    pass
+                continue
             # Handle each query in its own thread to avoid head-of-line blocking
             threading.Thread(
                 target=self._handle, args=(data, addr), daemon=True
@@ -258,6 +327,20 @@ class DNSInterceptor:
 
         qname    = str(request.question[0].name).rstrip(".")
         qtype    = request.question[0].rdtype
+
+        # Liveness-probe shortcut. The protection heartbeat resolves a reserved
+        # local name to confirm the interceptor is still answering. Serve it
+        # instantly and locally here — never consult _decide or upstream — so a
+        # legitimately OFFLINE machine (no internet → upstream times out) still
+        # reports protection HEALTHY instead of flapping into a false "sinkhole
+        # not answering" alarm. Not logged: it fires every 15s and is internal.
+        if qname.lower() == HEALTH_PROBE_DOMAIN:
+            try:
+                self._sock.sendto(self._sinkhole_response(request, qname, qtype), addr)
+            except OSError:
+                pass
+            return
+
         proc     = self._watcher.lookup(src_ip, src_port)
 
         decision, reason, suspicion, category = self._decide(
@@ -268,6 +351,29 @@ class DNSInterceptor:
             print(f"[dns] {qname}  decision={decision}  proc={proc.name}  reason={reason or '-'}")
 
         response = self._build_response(request, qname, qtype, decision)
+
+        # CNAME uncloaking — the step that catches trackers hiding behind a
+        # first-party subdomain. _decide() judged the QUERIED name, which looks
+        # first-party and is on no list; the tracker is in the answer's CNAME
+        # chain (metrics.brand.com -> brand.eulerian.net). If any CNAME target is
+        # a known cloaked tracker (or trips the normal checks), sinkhole the
+        # reply. This is what defeats Criteo/Adobe/AT-Internet-style cloaking.
+        if decision not in ("blocked", "behavioral", "deceived") and response:
+            cloaked = self._uncloak_block(response, qname, proc)
+            if cloaked is not None:
+                target, why = cloaked
+                decision  = "blocked"
+                reason    = f"CNAME-cloaked tracker: {target} — {why}"
+                category  = "cname_cloak"
+                suspicion = 1.0
+                if self._intelligence is not None:
+                    try:
+                        self._intelligence.remember_block(qname, reason)
+                    except Exception:
+                        pass
+                if self._debug:
+                    print(f"  [uncloak] {qname} -> {target} blocked ({why})")
+                response = self._sinkhole_response(request, qname, qtype)
 
         # Answer-IP screening — the step that makes the firewall's threat-intel
         # CIDR ranges enforce on every platform. _decide() works on the DOMAIN;
@@ -295,6 +401,20 @@ class DNSInterceptor:
                 if self._debug:
                     print(f"  [firewall] {qname} -> {bad_ip} blocked (threat-intel CIDR)")
                 response = self._sinkhole_response(request, qname, qtype)
+
+        # Resolution log — the list-free network scorer's strongest signal
+        # (network_score.py S2: "was this destination ever resolved here?").
+        # Recorded here, AFTER CNAME uncloaking and answer-IP screening can
+        # both still flip an initially-allowed decision to "blocked" and
+        # rewrite `response` to the sinkhole — so this only ever sees the
+        # FINAL decision and the FINAL (possibly rewritten) wire response.
+        # "allowed" and "flagged" both reach here as real forwarded answers;
+        # "blocked"/"behavioral"/"deceived" never resolve to a real
+        # destination and must never be recorded as if they did.
+        if decision not in ("blocked", "behavioral", "deceived") and response:
+            ips = self._answer_ips(response)
+            if ips:
+                record_resolution(qname, ips)
 
         # Defensive: guarantee the reply's transaction ID matches the
         # original client request, regardless of what ID was used internally
@@ -361,6 +481,82 @@ class DNSInterceptor:
                     return None
         return None
 
+    def _answer_ips(self, response_wire: bytes) -> list[str]:
+        """Every A/AAAA answer IP in a wire response. Parse failures return
+        [] (fail-open — worst case is a missed resolution-log entry, never a
+        crash on the reply path)."""
+        try:
+            msg = dns.message.from_wire(response_wire)
+        except Exception:
+            return []
+        out: list[str] = []
+        for rrset in msg.answer:
+            if rrset.rdtype not in (dns.rdatatype.A, dns.rdatatype.AAAA):
+                continue
+            for rdata in rrset:
+                out.append(str(rdata))
+        return out
+
+    def _cname_targets(self, response_wire: bytes) -> list[str]:
+        """Parse the CNAME target chain out of a DNS answer. Pure of policy;
+        parse failures return [] (fail-open — can only ever add blocks)."""
+        try:
+            msg = dns.message.from_wire(response_wire)
+        except Exception:
+            return []
+        out: list[str] = []
+        for rrset in msg.answer:
+            if rrset.rdtype == dns.rdatatype.CNAME:
+                for rdata in rrset:
+                    out.append(str(rdata.target).rstrip("."))
+        return out
+
+    def _uncloak_block(
+        self, response_wire: bytes, qname: str, proc: ProcessInfo
+    ) -> Optional[tuple[str, str]]:
+        """If the answer's CNAME chain leads to a tracker, return (target,
+        reason) to block on; else None.
+
+        Each CNAME target is judged by the SAME criteria a queried name would
+        be — a curated known-cloaking-tracker set first, then threat-intel,
+        scanner and blocklist — so uncloaking adds no false-positive surface
+        beyond what those already decide. A CNAME that stays within the queried
+        site's own registrable domain is skipped unless the target is itself a
+        known tracker apex.
+        """
+        for target in self._cname_targets(response_wire):
+            # First-party internal CNAME (a.brand.com -> b.brand.com) is not
+            # cloaking — skip, unless the target is a known tracker apex anyway.
+            if same_registrable(qname, target) and matches_cname_tracker(target) is None:
+                continue
+
+            apex = matches_cname_tracker(target)
+            if apex is not None:
+                return target, f"known cloaked tracker ({apex})"
+
+            if self._threat_intel is not None:
+                try:
+                    hit = self._threat_intel.match_domain(target)
+                    if hit is not None:
+                        return target, hit.reason
+                except Exception:
+                    pass
+
+            if self._scanner is not None:
+                try:
+                    res = self._scanner.analyze(target, proc.name)
+                    if res.decision == "block":
+                        return target, "; ".join(res.reasons)
+                except Exception:
+                    pass
+
+            try:
+                if self._blocklist.is_blocked(target):
+                    return target, "blocklist"
+            except Exception:
+                pass
+        return None
+
     # ------------------------------------------------------------------
     # Decision pipeline
     # ------------------------------------------------------------------
@@ -369,21 +565,29 @@ class DNSInterceptor:
         self, domain: str, qtype: int, proc: ProcessInfo, payload_size: int = 0
     ) -> tuple[str, str, float, str]:
         """Return (decision, reason, suspicion_score, category)."""
-        rules = self._rules.get()
         intel = self._intelligence
 
-        # 1. User always_allow
-        if rules.is_always_allowed(domain, proc.name):
-            return "allowed", "user:always_allow", 0.0, "user_rule"
+        # Queue the domain for background page-content analysis. This is O(1)
+        # and cannot raise — the fetch happens on a worker thread, never here,
+        # because this function is synchronous with a live DNS query waiting on
+        # it. A verdict therefore informs LATER lookups, not this one.
+        #
+        # No new decision stage is needed: an auto-blocked page writes itself
+        # into intelligence memory via remember_bad(), so the next lookup picks
+        # it up at stage 2b below through the path that already exists.
+        if self._content_watch is not None:
+            self._content_watch.observe(domain)
 
-        # 2. User always_block
-        if rules.is_always_blocked(domain, proc.name):
-            return "blocked", "user:always_block", 1.0, "user_rule"
+        # NO human-authored allow/block list is ever consulted. There is no
+        # "user:always_allow" / "user:always_block" verdict — Valkyrie ANALYSES
+        # every domain and decides for itself. What follows is pure analysis:
+        # threat-intel IOC feeds, the learned intelligence layer, then the site
+        # scanner. (The engine's own analysis-driven auto-blocks are enforced
+        # through the intelligence memory at stage 2 below, not through a list.)
 
-        # 2a. Threat-intel IOC feeds — highest-confidence non-user signal.
-        #     Checked before the intelligence fast path so a learned
-        #     known-good domain that appears in a C2/malware feed still
-        #     blocks (compromised-infrastructure case).
+        # 1. Threat-intel IOC feeds — highest-confidence signal. Checked before
+        #    the intelligence fast path so a learned known-good domain that
+        #    appears in a C2/malware feed still blocks (compromised-infra case).
         ti = self._threat_intel
         if ti is not None:
             hit = ti.match_domain(domain)
@@ -401,6 +605,14 @@ class DNSInterceptor:
             verdict = intel.check_memory(domain)
             if verdict == "bad":
                 reason = intel.memory_reason(domain) or "learned threat"
+                # A tracker/telemetry domain must never be served as a hard THREAT
+                # from memory — in Standard profile it is DECEIVED (decoy dead-end).
+                # Belt-and-suspenders alongside the startup purge: covers a bad
+                # verdict still resident this session or matched via a bad parent.
+                from .decision import reason_denotes_deceivable, should_deceive
+                if (reason_denotes_deceivable(reason)
+                        and should_deceive("tracker", _current_profile())):
+                    return "deceived", f"intelligence:{reason}", 0.7, "tracker"
                 return "blocked", f"intelligence:{reason}", 1.0, "intelligence"
             if verdict == "good":
                 return "allowed", "intelligence:known_good", 0.0, "intelligence"
@@ -410,6 +622,20 @@ class DNSInterceptor:
             result = self._scanner.analyze(domain, proc.name)
             if result.decision == "block":
                 reason = "; ".join(result.reasons)
+                # Tracker/telemetry in Standard profile → DECEIVE (decoy dead-end
+                # so the app keeps working) instead of a hard block. Stricter
+                # profiles fall through and hard-block.
+                from .decision import should_deceive
+                if should_deceive(result.category, _current_profile()):
+                    # Do NOT remember_block a deceived domain. The intelligence
+                    # fast path (stage 2b) only stores "bad" and would hard-BLOCK
+                    # every subsequent lookup — flipping deception into a block on
+                    # the very next query (the duplicate deceived+blocked pair seen
+                    # in testing, e.g. an A then AAAA for the same tracker). Left
+                    # unremembered, each lookup re-flows through the scanner, which
+                    # is cache-backed (scan_cache), so the deceive verdict is both
+                    # O(1) and durable.
+                    return "deceived", reason, result.confidence, result.category
                 if intel is not None:
                     intel.remember_block(domain, reason)
                 return "blocked", reason, result.confidence, result.category
@@ -462,14 +688,57 @@ class DNSInterceptor:
     def _build_response(
         self, request: "dns.message.Message", qname: str, qtype: int, decision: str
     ) -> bytes:
+        # "deceived" is a soft block for tracker/telemetry (Standard profile).
+        #
+        # It used to return the SINKHOLE address, which made it a relabelled
+        # block: the beacon failed at connect, the tracker learned nothing
+        # false, and a machine whose beacons reliably fail while everything
+        # else resolves is marked "runs a blocker" -- a small, stable, easily
+        # singled-out population. Deception that only fails is anti-deception.
+        #
+        # It now points at the loopback deception endpoint (deception.py), which
+        # accepts the connection and answers with a plausible, persona-consistent
+        # reply. Fall back to the sinkhole when the endpoint is not listening,
+        # because an address with nothing behind it is strictly worse than the
+        # sinkhole -- it costs the client a connect timeout for the same failure.
+        if decision == "deceived":
+            deceive_ip = self._deception_address()
+            if deceive_ip is not None:
+                return self._sinkhole_response(request, qname, qtype,
+                                               ipv4=deceive_ip,
+                                               ipv6=DECEPTION_IPV6)
+            return self._sinkhole_response(request, qname, qtype)
         if decision in ("blocked", "behavioral"):
             return self._sinkhole_response(request, qname, qtype)
         else:
             return self._forward(request)
 
+    def _deception_address(self) -> "str | None":
+        """Loopback IP to hand out for DECEIVE, or None to use the sinkhole.
+
+        Checked per response rather than cached at construction: the endpoint
+        can fail to bind (port in use) or be stopped at runtime, and handing out
+        an address with nothing behind it turns a served lie into a connect
+        timeout -- a worse outcome than the sinkhole we came from.
+        """
+        ep = getattr(self, "_deception", None)
+        try:
+            if ep is not None and ep.running:
+                return DECEPTION_IPV4
+        except Exception:
+            pass
+        return None
+
     def _sinkhole_response(
-        self, request: "dns.message.Message", qname: str, qtype: int
+        self, request: "dns.message.Message", qname: str, qtype: int,
+        ipv4: str = SINKHOLE_IPV4, ipv6: str = SINKHOLE_IPV6,
     ) -> bytes:
+        """Answer locally with `ipv4`/`ipv6`.
+
+        Defaults are the sinkhole (a dead-end). DECEIVE overrides them with the
+        deception endpoint's loopback address so the beacon is answered rather
+        than dropped -- same wire construction, different destination.
+        """
         response = dns.message.make_response(request)
         response.flags |= dns.flags.AA
 
@@ -478,13 +747,13 @@ class DNSInterceptor:
             rrset = response.find_rrset(
                 response.answer, name, dns.rdataclass.IN, dns.rdatatype.AAAA, create=True
             )
-            rdata = dns.rdtypes.IN.AAAA.AAAA(dns.rdataclass.IN, dns.rdatatype.AAAA, SINKHOLE_IPV6)
+            rdata = dns.rdtypes.IN.AAAA.AAAA(dns.rdataclass.IN, dns.rdatatype.AAAA, ipv6)
             rrset.add(rdata, ttl=60)
         else:
             rrset = response.find_rrset(
                 response.answer, name, dns.rdataclass.IN, dns.rdatatype.A, create=True
             )
-            rdata = dns.rdtypes.IN.A.A(dns.rdataclass.IN, dns.rdatatype.A, SINKHOLE_IPV4)
+            rdata = dns.rdtypes.IN.A.A(dns.rdataclass.IN, dns.rdatatype.A, ipv4)
             rrset.add(rdata, ttl=60)
 
         return response.to_wire()

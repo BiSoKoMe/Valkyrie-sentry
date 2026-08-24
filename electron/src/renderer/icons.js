@@ -26,23 +26,21 @@ const ICON = (() => {
     activity: s('<path d="M3 12h4l3 8 4-16 3 8h4"/>'),
     cpu: s('<rect x="7" y="7" width="10" height="10" rx="2"/><path d="M10 3v2M14 3v2M10 19v2M14 19v2M3 10h2M3 14h2M19 10h2M19 14h2"/>'),
     search: s('<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/>'),
+    target: s('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>'),
     min: s('<path d="M5 12h14"/>'),
     max: s('<rect x="5" y="5" width="14" height="14" rx="2"/>'),
     x: s('<path d="M6 6l12 12M18 6L6 18"/>'),
-    // Brand mark — the twin-wing "V" emblem. Fixed identity color (not
-    // currentColor like the rest of the set) since it's the logo, not a
-    // semantic UI glyph. Same geometry as the big splash/About LOGO in
-    // app.js, just reused at icon size — one shape, one source of truth.
-    mark: '<svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-      '<polygon points="29,4 2,14 9,19" fill="#f6f6f7" opacity="0.72"/>' +
-      '<polygon points="35,4 62,14 55,19" fill="#f6f6f7" opacity="0.72"/>' +
-      '<polygon points="18,12 2,22 7.5,25.5" fill="#f6f6f7" opacity="0.72"/>' +
-      '<polygon points="46,12 62,22 56.5,25.5" fill="#f6f6f7" opacity="0.72"/>' +
-      '<polygon points="29,4 25.5,8.5 2,14" fill="#f6f6f7"/>' +
-      '<polygon points="35,4 38.5,8.5 62,14" fill="#f6f6f7"/>' +
-      '<polygon points="18,12 15.5,16 2,22" fill="#f6f6f7"/>' +
-      '<polygon points="46,12 48.5,16 62,22" fill="#f6f6f7"/>' +
-      '<polygon points="30,19 32,31 34,19" fill="#f6f6f7"/>' +
+    // Brand mark — the winged-V emblem, matched to the real Valkyrie logo.
+    // Fixed identity color (not currentColor like the rest of the set) since
+    // it's the logo, not a semantic UI glyph. Same geometry as the big
+    // splash/About LOGO in app.js AND electron/build/icon.* (installer +
+    // taskbar), just reused at icon size — one shape, one source of truth.
+    mark: '<svg viewBox="0 0 100 88" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+      '<path d="M40,38 L50,80 L60,38 L54,38 L50,64 L46,38 Z" fill="#f6f6f7"/>' +
+      '<path d="M12,9 L46,29 L46,33.5 L14,15 Z" fill="#f6f6f7"/>' +
+      '<path d="M19,20 L46,35 L46,39.5 L21,26 Z" fill="#f6f6f7"/>' +
+      '<path d="M88,9 L54,29 L54,33.5 L86,15 Z" fill="#f6f6f7"/>' +
+      '<path d="M81,20 L54,35 L54,39.5 L79,26 Z" fill="#f6f6f7"/>' +
       '</svg>',
   };
 })();

@@ -245,20 +245,79 @@ class ProcessWatcher:
     """
 
     REFRESH_INTERVAL = 2.0
+    # How far past a due refresh the table may drift before it stops being
+    # treated as current. Generous (5 intervals) so ordinary scheduling jitter
+    # never trips it, tight enough that genuinely frozen data is caught.
+    STALE_AFTER = REFRESH_INTERVAL * 5
 
     def __init__(self) -> None:
         self._table: dict[tuple[str, int], ProcessInfo] = {}
         self._lock  = threading.RLock()
+        self._running = False
+        self._last_refresh = 0.0
+        self._refresh_errors = 0
+        self._last_error = ""
         self._watcher = threading.Thread(
             target=self._refresh_loop, daemon=True, name="proc-watcher"
         )
 
     def start(self) -> None:
-        self._refresh()
+        """Start (or RESTART) the refresh loop. Safe to call repeatedly.
+
+        Restartability is not a nicety here: the self-healing watchdog's
+        recovery action for this component is literally ``start``, so if a
+        second call raised, the watchdog could detect a dead watcher and never
+        be able to revive it — self-healing that cannot heal. A Python thread
+        object cannot be started twice, so a fresh one is created whenever the
+        previous has finished.
+        """
+        self._running = True
+        # A failure here must not stop the watcher from starting — the loop can
+        # recover on a later tick, and an empty table degrades to "unknown
+        # process" rather than to no monitoring at all.
+        try:
+            self._refresh()
+        except BaseException as exc:              # noqa: BLE001
+            self._refresh_errors += 1
+            self._last_error = f"{type(exc).__name__}: {exc}"
+        if self._watcher.is_alive():
+            return
+        self._watcher = threading.Thread(
+            target=self._refresh_loop, daemon=True, name="proc-watcher"
+        )
         self._watcher.start()
 
+    def stop(self) -> None:
+        self._running = False
+
+    def is_running(self) -> bool:
+        """True when the refresh thread is alive AND the table is current.
+
+        Both halves matter. A dead thread leaves `_table` frozen at whatever it
+        last held, and `lookup()` would keep confidently attributing every DNS
+        query to whichever process happened to own that port at the moment of
+        death — wrong attribution reported as fact, with nothing to indicate
+        it. Exposed so the self-healing watchdog can restart this like every
+        other subsystem.
+        """
+        if not (self._running and self._watcher.is_alive()):
+            return False
+        return (time.time() - self._last_refresh) <= self.STALE_AFTER
+
+    def is_stale(self) -> bool:
+        """True when the table has not refreshed within STALE_AFTER."""
+        return (time.time() - self._last_refresh) > self.STALE_AFTER
+
     def lookup(self, src_ip: str, src_port: int) -> ProcessInfo:
-        """Return ProcessInfo for the given UDP source endpoint."""
+        """Return ProcessInfo for the given UDP source endpoint.
+
+        Returns UNKNOWN rather than a stale entry when the table has stopped
+        refreshing: a wrong process name presented as fact is worse than an
+        admitted unknown, because every downstream consumer (EDR correlation,
+        behavioural rules, the UI) treats attribution as ground truth.
+        """
+        if self.is_stale() and self._last_refresh > 0.0:
+            return _UNKNOWN
         with self._lock:
             info = self._table.get((src_ip, src_port))
         if info is not None:
@@ -268,6 +327,21 @@ class ProcessWatcher:
             return _windows_heuristic_fallback()
         return _UNKNOWN
 
+    def status(self) -> dict:
+        """Health/inventory view for the component registry."""
+        with self._lock:
+            entries = len(self._table)
+        age = (time.time() - self._last_refresh) if self._last_refresh else None
+        return {
+            "running": self.is_running(),
+            "thread_alive": self._watcher.is_alive(),
+            "entries": entries,
+            "seconds_since_refresh": round(age, 1) if age is not None else None,
+            "stale": self.is_stale() and self._last_refresh > 0.0,
+            "refresh_errors": self._refresh_errors,
+            "last_error": self._last_error,
+        }
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
@@ -276,11 +350,24 @@ class ProcessWatcher:
         new_table = _build_table()
         with self._lock:
             self._table = new_table
+        self._last_refresh = time.time()
 
     def _refresh_loop(self) -> None:
-        while True:
+        # _build_table() reaches into psutil, /proc parsing and Windows APIs —
+        # all of which can raise transiently (a process exiting mid-enumeration
+        # is routine). Without this guard a single such raise killed the thread
+        # permanently and froze the table, which was verified, not assumed.
+        # BaseException, not Exception, so a stray SystemExit from a library
+        # cannot silently take the thread down either.
+        while self._running:
             time.sleep(self.REFRESH_INTERVAL)
-            self._refresh()
+            if not self._running:
+                break
+            try:
+                self._refresh()
+            except BaseException as exc:          # noqa: BLE001
+                self._refresh_errors += 1
+                self._last_error = f"{type(exc).__name__}: {exc}"
 
 
 # ---------------------------------------------------------------------------

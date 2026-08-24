@@ -24,6 +24,15 @@ one event bus, one store, one correlation engine, one API. See
   classifier → baseline anomaly. Blocked names are sinkholed; the answer IP is
   also screened against the firewall/intel CIDR sets (catches hard-coded-IP and
   fast-flux cases DNS alone would miss).
+- **CNAME-cloak uncloaking** (`cname_uncloak.py`, ADR 0030) — defeats the #1
+  modern blocklist-evasion: a first-party-looking subdomain
+  (`metrics.brand.com`) published as a CNAME to the tracker
+  (`brand.eulerian.net`). The interceptor parses the answer's CNAME chain and
+  re-applies the block decision to the *targets* — a curated set of known
+  cloaking providers (Adobe/Criteo/AT-Internet/Keyade/…) plus the normal
+  scanner/blocklist/intel checks — so the disguised tracker is sinkholed while
+  legitimate CDN CNAMEs (Akamai/CloudFront/Fastly/Azure) pass untouched.
+  Protects apps and websites alike (anything using system DNS), over any link.
 - **Blocklists** (`blocklist.py`, `seed_blocklist.py`) — a curated built-in
   **seed blocklist** gives day-one protection with no download; external list
   downloads are strictly opt-in.
@@ -62,6 +71,32 @@ The behavioral heart of the platform (`valkyrie/edr/`), fed by these sensors:
   full command line + parent-process chain; heuristics for LOLBins,
   Office-spawns-shell, temp/download execution, encoded PowerShell, download
   cradles, hidden-window / silent-batch flags.
+- **Behavioral IOA rules** (`behavioral_rules.py`, ADR 0027) — a CrowdStrike-
+  style content engine: 32 declarative, ATT&CK-mapped rules over process
+  image/parent/command line (LOLBin proxy exec, credential access, defense
+  evasion, recovery inhibition, persistence, discovery, lateral movement).
+  Detection is *content* — coverage grows by adding data, each with a benign
+  control that pins the false-positive boundary.
+- **Behavioral anomaly scorer** (`behavior_score.py`, ADR 0028) — the
+  *generalizing* half: a pure weak-signal ensemble that scores a process's
+  intrinsic wrongness (system-name masquerade, double-extension / bidi lures,
+  measured command-line obfuscation, impossible parent→child lineage, LOLBin
+  network fetch, interpreter-from-low-trust) and fires only when a strong tell
+  or a compounding combination crosses threshold. Catches shapes no rule was
+  written for; an opt-in per-host ancestry baseline lets it learn what is normal
+  *for this machine*. Honest limit: a score is suspicion, not proof.
+- **Behavioural sequence IOAs** (`behavioral_sequences.py`, ADR 0032) — a
+  CrowdStrike-style **Event Stream Processing** engine: it statefully holds prior
+  behaviours per process lineage and fires ONE named, high-confidence indicator
+  when an *ordered* attack pattern completes within a window —
+  injection→credential-access, recovery-inhibition→mass-encryption,
+  document-shell→remote-payload. Tool-agnostic (matches behaviour shape, never a
+  tool name) and lineage-aware (a child's behaviour advances its parent's
+  sequence); it *names the exact tradecraft* where the kill-chain only counts
+  distinct tactics.
+- **Multi-stage kill-chain correlation** (`edr/killchain.py`, ADR 0025) — links
+  detections on one actor/lineage and escalates to a single `attack_chain`
+  incident when they span several independent ATT&CK tactics.
 - **Persistence (ASEP) telemetry** (`persistence_telemetry.py`) — detects new
   Run/RunOnce/Winlogon keys, services, Scheduled Tasks, and Startup-folder
   entries (T1547/T1543/T1053), escalating on suspicious commands.
@@ -75,6 +110,19 @@ The behavioral heart of the platform (`valkyrie/edr/`), fed by these sensors:
     network-with-process, unsigned module loads, CreateRemoteThread injection
     (T1055), LSASS access (T1003.001), registry/startup persistence, process
     tampering (`classify_sysmon`).
+- **AMSI content scanning** (`amsi.py`, ADR 0035) — the one **non-heuristic**
+  verdict Valkyrie can produce. Submits script content and files to the OS
+  antimalware provider (Defender, or a third-party AV) through the documented
+  Antimalware Scan Interface and gets back a real conviction, which enters the
+  normal detection pipeline as category `malware` — so an AV conviction and a
+  later LSASS touch on the same lineage correlate into **one** incident.
+  Valkyrie ships no signature engine and does not fake one; this borrows a
+  verdict from an engine that has one. *Boundaries: `not detected` is not proof
+  of clean; where Defender is the provider, script content was likely already
+  scanned by its own hook (the added value is file scanning + correlation, not a
+  second scanner); and provider presence is read from the registry + loader
+  rather than inferred from a scan result, because a non-conviction cannot tell
+  "no provider" apart from "no opinion".*
 - **Detections → incidents** (`edr/engine.py`, `edr/schema.py`) — cheap
   detections are correlated into a small set of triable incidents with
   severity, MITRE ATT&CK technique (per detection), a timeline and an
@@ -145,7 +193,16 @@ DGAs need an internet-scale model — not faked.*
 
 - **Windows telemetry killer** (`telemetry_killer.py`) — reversible registry +
   service edits that cut OS-level tracking at the source.
-- **MAC randomization** (`mac_randomizer.py`) — randomizes adapter MAC identity.
+- **MAC randomization** (`mac_randomizer.py`, ADR 0029) — privacy-grade adapter
+  identity randomisation. Addresses are drawn from the OS **CSPRNG** (`secrets`,
+  never a reconstructable PRNG) and default to **per-network stable** derivation
+  (HMAC of a per-install secret key + a stable network id — the iOS "Private
+  Wi-Fi Address" / Android persistent-randomised-MAC model): the same address
+  each time you rejoin a network (captive portals / DHCP / NAC keep working) but
+  unlinkable across networks. Spec-compliant locally-administered by default,
+  with an opt-in real-vendor-OUI blend; the old vendor-OUI-with-LA-bit
+  combination (itself a fingerprint) is no longer produced. Applies with live
+  read-back verification — a write that doesn't take is reported, not assumed.
 - **Zero-log mode** (`zero_log.py`) — RAM-only operation with log-integrity
   verification for privacy-critical sessions.
 - **Meeting Mode** (`meeting_mode.py`) — one-command network kill switch for
@@ -178,6 +235,16 @@ DGAs need an internet-scale model — not faked.*
   metrics, arm-then-confirm restart).
 - **Signed auto-update** (`updater.py`) — signature-verified update
   verification (the security-critical half of the local update path).
+- **MCP server / AI-agent interface** (`valkyrie/mcp/`, ADR 0033, `docs/MCP.md`) —
+  `valkyrie.exe --mcp` runs a **Model Context Protocol** server over stdio so an
+  AI agent (Claude Desktop/Code, any MCP client) can search and investigate
+  incidents, run threat hunts and query telemetry in natural language against
+  **this machine's own** data. 9 tools, stdlib-only JSON-RPC (no new deps).
+  **Read-only by default** — the response tool is not even advertised without
+  `--allow-response`, and is dry-run unless `dry_run:false` is explicit; stdio
+  only, so nothing is network-reachable. Includes
+  `valkyrie_get_detection_coverage`, which reports Valkyrie's real limits so an
+  agent describing the product can't oversell it.
 
 ## 11. Platform & reliability
 
@@ -225,13 +292,29 @@ Per project policy, capabilities needing external scale or a signed kernel drive
 are built as the strongest **local** version with clean extension points, and
 labeled — never faked:
 
-- **No kernel driver.** Firewall is userland `netsh`; sensors are userland
-  pollers + ETW event-log readers, not a kernel ETW consumer or minifilter.
-  Deterministic pre-write ransomware blocking, exact-PID attribution, and
-  tamper-proof kernel telemetry require a signed driver — documented seams.
-- **No signature-based file AV.** Valkyrie does not ship a malware signature
-  engine; the intended path is integrating the OS's AMSI/Defender rather than
-  faking an internet-scale signature cloud.
+- **Kernel driver: source component, not a shipped binary.** `driver/valkyrie_km`
+  is a *real, buildable* WDM driver — authoritative process lineage
+  (`PsSetCreateProcessNotifyRoutineEx`), module-load + remote-thread-injection
+  visibility, autostart-registry detection, LSASS credential-theft protection,
+  **process-launch prevention** (deny-on-create), and **agent self-protection**
+  (tamper resistance) — all pushed a fixed, validated policy by a
+  fully-integrated, unit-tested user-mode bridge (`valkyrie/kernel_bridge.py`)
+  that self-disables when the driver isn't loaded. Prevention + self-protection
+  **default OFF**, never block anything under `\Windows\`, and fail open — the
+  safety rails (ADR 0031, the CrowdStrike-2024 lesson) that keep an unvalidated
+  driver from bricking a machine. **It is NOT built, signed, loaded, or
+  detonation-tested in this repo** (no WDK/signing/VM here); loading needs an EV
+  cert + attestation (Ob callbacks need the ELAM-class entitlement), and every
+  protection is *unproven until VM detonation*. See ADR 0026 + ADR 0031 and
+  `driver/README.md` — status table, build/sign/load, and the validation gate.
+  Firewall remains userland `netsh`; the remaining userland sensors are pollers
+  + ETW event-log readers. Deterministic pre-write ransomware blocking (a
+  minifilter) and network callouts (WFP) are deliberately still out of scope.
+- **No signature-based file AV of its own.** Valkyrie still ships no malware
+  signature engine. As of ADR 0035 it *integrates* the OS's AMSI provider for
+  content verdicts (see §3) — which is the documented honest path, not parity:
+  Valkyrie cannot detect what the installed provider cannot, and on a host with
+  no antimalware provider registered, AMSI contributes nothing at all.
 - **No global/cloud ML.** The intelligence layer is local and list-free; a
   cloud model trained on millions of endpoints (incl. short-label DGA) is
   architecture-only, marked "needs infra."

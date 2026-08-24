@@ -1,0 +1,11 @@
+# Windows batch files MUST be CRLF. cmd.exe's batch parser can misread a
+# bare-LF .bat file -- found 2026-08-05 with driver/build_km.bat: it read
+# fragments of REM comment lines as attempted commands ('m.bat' is not
+# recognized, 'l' is not recognized, ...) and failed outright. core.autocrlf
+# alone is not reliable enough here -- it depends on each contributor's local
+# git config, and a file written by a tool that emits LF (this repo has hit
+# that from more than one editor/agent) can sit in the working tree as LF
+# until the next checkout. This makes CRLF an explicit, repo-level property
+# of the file type instead of an assumption.
+*.bat text eol=crlf
+graphify-out/graph.json merge=graphify

@@ -65,6 +65,7 @@ from .config import (
     DNS_LISTEN_HOST,
     DNS_LISTEN_PORT,
     INTELLIGENCE_MODE,
+    LEASE_SWEEP_INTERVAL,
     WEB_HOST,
     WEB_PORT,
 )
@@ -76,7 +77,8 @@ from .resolver import UnboundManager
 from .rules import RulesLoader
 from .store import Store
 from .ui import Dashboard
-from .wireguard import WireGuardConfig
+# wireguard / multihop / fleet / mcp / compliance moved to experimental/ —
+# frozen, not deleted. See experimental/README.md and ADR 0044.
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +202,106 @@ def _print_status_box(console, rows) -> None:
     ))
 
 
+def build_status_rows(
+    *, args, dns_server=None, firewall=None, edr_engine=None, intelligence=None,
+    unbound_ok=False, dns_upstream_host="", dns_upstream_port=0,
+    allow_external_fallback=True, zero_log=None, mac_randomizer=None,
+    tls_inspector=None, heartbeat=None, sysmon_result=None,
+) -> list[tuple[str, bool, str]]:
+    """Build the (label, ok, detail) rows for the startup status box.
+
+    Extracted from ``main()`` so it can be tested. This is the surface that
+    tells a user whether they are protected, which puts it in the same category
+    as ``self_test.HeartbeatMonitor``: a bug that renders a component green
+    while it is down is worse than a crash, because the user acts on it.
+
+    Pure — reads only its arguments and returns rows. Kept as a free function
+    rather than a method precisely so a test can hand it a dead DNS server and
+    assert the row goes red, without starting anything.
+
+    TEST_PLAN tier 3.16 calls for the rest of ``main()``'s wiring to be
+    extracted the same way. That work is deliberately NOT done blind: the
+    startup path binds DNS ports and edits firewall rules, so it cannot be
+    executed on a developer host to prove an extraction preserved behaviour.
+    See the tier 3.16 note in docs/TEST_PLAN.md.
+    """
+    rows: list[tuple[str, bool, str]] = []
+
+    if not args.no_dns:
+        if dns_server is not None:
+            rows.append(("DNS Sinkhole", True, f"port {args.port}"))
+        else:
+            rows.append(("DNS Sinkhole", False,
+                         f"could not bind port {args.port}"))
+    if not args.no_firewall:
+        # The firewall is optional/non-fatal at startup, so it can legitimately
+        # be None here. The inline version called firewall.count() regardless,
+        # which raised AttributeError and took the whole status box down. It
+        # renders RED instead: the user asked for a firewall and has not got
+        # one, and silently omitting the row would be the same lie the DNS row
+        # is careful not to tell.
+        if firewall is not None:
+            rows.append(("Firewall", True, f"{firewall.count():,} IP ranges"))
+        else:
+            rows.append(("Firewall", False, "failed to initialise"))
+    rows.append(("Behavioral AI", True, "active"))
+    if edr_engine is not None:
+        _es = edr_engine.stats()
+        rows.append(("EDR", True,
+                     f"{_es['plugins']} plugins, "
+                     f"{_es['incidents_open']} open incidents"))
+    if intelligence is not None:
+        _ist = intelligence.status()
+        if _ist["learning"]:
+            rows.append(("Intelligence", True,
+                         f"learning ({_ist['learning_observed']}/"
+                         f"{_ist['learning_target']} behaviours, "
+                         f"{_ist['learning_percent']}%)"))
+        else:
+            rows.append(("Intelligence", True,
+                         f"active — {_ist['threats_learned']:,} threats learned"))
+    if unbound_ok:
+        rows.append(("Recursive DNS", True,
+                     f"Unbound {dns_upstream_host}:{dns_upstream_port}"))
+    else:
+        rows.append(("Upstream DNS", True,
+                     f"{dns_upstream_host}:{dns_upstream_port}"))
+    if not allow_external_fallback:
+        rows.append(("DNS Leak Guard", True, "local resolver only (fail-closed)"))
+    else:
+        rows.append(("DNS Leak Guard", False,
+                     "public-DNS fallback ENABLED (install Unbound)"))
+    if zero_log is not None and zero_log.is_active():
+        rows.append(("Zero Log", True, "RAM only (no disk)"))
+    else:
+        rows.append(("Logging", True, "disk (persistent)"))
+    if mac_randomizer is not None:
+        rows.append(("MAC Random", True, "auto on reconnect"))
+    if tls_inspector is not None:
+        rows.append(("TLS Inspect", True, f"port {tls_inspector.port}"))
+    if heartbeat is not None:
+        rows.append(("Heartbeat", True, "self-check every 15s"))
+    if sysmon_result is not None:
+        # Degraded is a MAIN path, not an edge case (ADR 0048) — this row
+        # goes red on it deliberately, the same way every other row here
+        # does, rather than being hidden or softened into a footnote.
+        rows.append(("Sysmon", not sysmon_result.degraded,
+                     sysmon_result.reason if sysmon_result.degraded
+                     else sysmon_result.mode))
+    if args.web:
+        rows.append(("Dashboard", True, f"localhost:{args.web_port}"))
+    return rows
+
+
+def protection_state(rows) -> str:
+    """'ACTIVE' only if every row is ok, else 'DEGRADED'.
+
+    Separated from rendering so the rule cannot drift from what is displayed:
+    a single red row must never still read ACTIVE.
+    """
+    return "ACTIVE" if all(ok for _, ok, _ in rows) else "DEGRADED"
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -217,12 +319,8 @@ def main() -> None:
     parser.add_argument("--build-baseline", action="store_true", help="Rebuild process baselines now")
     parser.add_argument("--no-firewall",  action="store_true",  help="Skip kernel IP firewall")
     parser.add_argument("--no-unbound",   action="store_true",  help="Skip local Unbound resolver")
-    parser.add_argument("--setup-wireguard", action="store_true",
-                        help="Generate WireGuard configs and print setup instructions, then exit")
-    parser.add_argument("--server-ip", type=str, default="YOUR_SERVER_IP",
-                        help="Public IP for --setup-wireguard (e.g. 203.0.113.1)")
-    parser.add_argument("--wg-iface", type=str, default="eth0",
-                        help="Server network interface for WireGuard NAT (default: eth0)")
+    # --setup-wireguard / --server-ip / --wg-iface removed: WireGuard moved to
+    # experimental/ (Valkyrie is not a VPN product). See experimental/README.md.
     parser.add_argument("--test-dns", metavar="DOMAIN", nargs="?", const="google.com",
                         help="Self-test the DNS interceptor and exit (default domain: google.com)")
     parser.add_argument("--web",      action="store_true",  help="Start web dashboard")
@@ -237,12 +335,16 @@ def main() -> None:
                          help="Enable strict mode: apply blocklist on top of scanner decisions")
     parser.add_argument("--mac-rand",    action="store_true", help="Enable auto MAC randomisation on reconnect")
     parser.add_argument("--mac-restore", action="store_true", help="Restore original MACs from backup and exit")
+    parser.add_argument("--version", action="store_true",
+                        help="Print the Valkyrie version + build stamp and exit "
+                             "(so 'which build is installed?' is never ambiguous).")
     parser.add_argument("--mac-status",  action="store_true", help="Print current vs original MACs and exit")
-    parser.add_argument("--setup-multihop", action="store_true",
-                        help="Generate multi-hop WireGuard configs and exit")
-    parser.add_argument("--hop1", type=str, default="", help="Hop-1 server IP for --setup-multihop")
-    parser.add_argument("--hop2", type=str, default="", help="Hop-2 server IP for --setup-multihop")
-    parser.add_argument("--multihop-status", action="store_true", help="Print multi-hop VPN config status and exit")
+    parser.add_argument("--privacy",     action="store_true",
+                        help="Privacy pillar ON at startup: randomise the MAC and "
+                             "spoof the TCP/IP fingerprint every boot (the installed "
+                             "service runs with this).")
+    # --setup-multihop / --hop1 / --hop2 / --multihop-status removed with the
+    # multi-hop VPN (experimental/).
     parser.add_argument("--zero-log",        action="store_true",  help="RAM-only mode — no disk writes")
     parser.add_argument("--zero-log-import", type=int, default=0, metavar="HOURS",
                         help="Import last N hours from disk DB into RAM at startup")
@@ -262,6 +364,10 @@ def main() -> None:
                         help="Also export blocked/flagged DNS events to the SIEM "
                              "(includes domains — explicit opt-in)")
     parser.add_argument("--skip-selftest", action="store_true", help="Skip the startup self-test (not recommended)")
+    parser.add_argument("--enable-native-audit", action="store_true",
+                        help="Turn on Windows process-creation auditing (Security 4688 + "
+                             "command line) so command-line detection works WITHOUT Sysmon, "
+                             "then exit. Needs admin.")
     parser.add_argument("--debug", action="store_true",
                         help="Verbose DNS forwarding logs — prints every query, upstream tried, and result")
     parser.add_argument("--intelligence-status", action="store_true",
@@ -274,38 +380,51 @@ def main() -> None:
                         help="Disable the self-learning intelligence layer")
     parser.add_argument("--no-edr", action="store_true",
                         help="Disable the EDR layer (incidents, hunting, response)")
+    parser.add_argument("--no-sysmon-setup", action="store_true",
+                        help="Skip Sysmon install/verify at startup — Valkyrie still "
+                             "runs, but command-line, process-injection and "
+                             "credential-dump detection may run in degraded mode "
+                             "without it. For hosts where Sysmon is managed "
+                             "separately, or for testing.")
     parser.add_argument("--no-ransomware-shield", action="store_true",
                         help="Disable the behavioral ransomware shield (canary tripwires)")
+    parser.add_argument("--no-amsi", action="store_true",
+                        help="Disable AMSI content scanning (OS antimalware verdicts "
+                             "on script blocks and files)")
     parser.add_argument("--edr-plugin-dir", type=str, default="",
                         help="Directory to load third-party EDR plugins from "
                              "(detection/responder/enrichment). Opt-in; trusted code only")
     parser.add_argument("--endpoint", action="store_true",
-                        help="Enable endpoint process telemetry: observe process "
-                             "starts and feed behavioral detections (LOLBins, "
-                             "Office-spawns-shell, temp-dir execution) into the EDR layer")
+                        help="(Default; kept for compatibility.) Enable endpoint "
+                             "process/persistence/network telemetry and real-time "
+                             "sensors feeding the EDR layer")
+    parser.add_argument("--no-endpoint", action="store_true",
+                        help="DNS-only mode: disable endpoint telemetry and real-time "
+                             "sensors. Endpoint detection is ON BY DEFAULT so a shipped "
+                             "install is fully armed however it is launched — this flag "
+                             "opts out")
     parser.add_argument("--incidents", action="store_true",
                         help="Print current EDR incidents and exit")
     parser.add_argument("--hunt", type=str, default="", metavar="HUNT",
                         help="Run a saved threat hunt by id and exit "
                              "(use --hunt list to see available hunts)")
+    parser.add_argument("--analyze", type=str, default="", metavar="URL",
+                        help="Genuinely analyze a site's CONTENT and exit: fetch the page and "
+                             "score fingerprinting, cryptomining, obfuscated JS, phishing and "
+                             "tracker density. List-free — it judges what the site actually does.")
+    # --mcp / --allow-response removed with the MCP server (experimental/).
     parser.add_argument("--download-lists", action="store_true",
-                        help="Opt in to downloading external blocklist/IP feeds "
-                             "(default: built-in seed list + learned intelligence, no downloads)")
+                        help="Force-enable downloading external blocklist/threat-intel feeds "
+                             "for this run, even if USE_EXTERNAL_LISTS is False in config.py "
+                             "(default: on — see --no-download-lists to opt out)")
+    parser.add_argument("--no-download-lists", action="store_true",
+                        help="Opt OUT of downloading external blocklist/IP/threat-intel feeds "
+                             "for this run — stay on the built-in seed list + learned "
+                             "intelligence only, with zero outbound fetches at startup")
     parser.add_argument("--no-dns-leak", action="store_true",
                         help="Fail-closed DNS: only ever use the local resolver upstream; "
                              "never fall back to public resolvers (auto-enabled when Unbound is active)")
-    parser.add_argument("--fleet-server", action="store_true",
-                        help="Run the fleet control-plane server (blocking) and exit — "
-                             "lets one operator monitor many Valkyrie devices")
-    parser.add_argument("--fleet-agent", type=str, default="", metavar="URL",
-                        help="Report this device's status to a fleet control plane at URL "
-                             "(metadata only — never domains). Requires --fleet-enroll-token on first run")
-    parser.add_argument("--fleet-enroll-token", type=str, default="",
-                        help="Enrollment secret for --fleet-server (to accept devices) "
-                             "or --fleet-agent (to join). Falls back to $VALKYRIE_FLEET_ENROLL_TOKEN")
-    parser.add_argument("--fleet-insecure-http", action="store_true",
-                        help="Allow --fleet-server to bind a non-loopback host over plain "
-                             "HTTP (only if TLS is terminated by a reverse proxy in front)")
+    # --fleet-* removed with the fleet control plane (experimental/).
     args = parser.parse_args()
 
     # Frozen exe double-clicked with no arguments: start the dashboard and let
@@ -326,39 +445,6 @@ def main() -> None:
             f"[cyan]config:[/cyan] {_ov.key} = {_ov.value!r} "
             f"[dim](from {_ov.source})[/dim]"
         )
-
-    # ------------------------------------------------------------------
-    # Early-exit: WireGuard config generator
-    # ------------------------------------------------------------------
-    if args.setup_wireguard:
-        wg = WireGuardConfig(console=console)
-        wg.generate(server_ip=args.server_ip, iface=args.wg_iface)
-        return
-
-    # ------------------------------------------------------------------
-    # Early-exit: fleet control-plane server (blocking)
-    # ------------------------------------------------------------------
-    if args.fleet_server:
-        from .fleet.server import run_fleet_server
-        from .config import FLEET_SERVER_PORT
-        console.print(
-            f"[bold cyan]Valkyrie Fleet Control Plane[/bold cyan] — "
-            f"http://localhost:{FLEET_SERVER_PORT}"
-        )
-        console.print("[dim]  Devices report status metadata only (never domains). "
-                      "Ctrl-C to stop.[/dim]")
-        import os as _os
-        try:
-            run_fleet_server(
-                host=args.web_host, port=FLEET_SERVER_PORT,
-                enroll_token=args.fleet_enroll_token,
-                policy_public_key_hex=_os.environ.get("VALKYRIE_FLEET_POLICY_PUBKEY", ""),
-                admin_token=_os.environ.get("VALKYRIE_FLEET_ADMIN_TOKEN", ""),
-                allow_insecure_http=args.fleet_insecure_http,
-            )
-        except SystemExit as exc:
-            console.print(f"[red]{exc}[/red]")
-        return
 
     # ------------------------------------------------------------------
     # Early-exit: intelligence status / reset / export
@@ -390,7 +476,8 @@ def main() -> None:
                 console.print(f"  Safe patterns   : {len(data['safe']):,}")
             else:
                 st = intel.status()
-                mode = (f"LEARNING (day {st['learning_day']} of {st['learning_days_total']})"
+                mode = (f"LEARNING ({st['learning_observed']}/{st['learning_target']} "
+                        f"behaviours, {st['learning_percent']}%)"
                         if st["learning"] else "ACTIVE")
                 console.print(f"[bold]Intelligence mode  :[/bold] {mode}")
                 console.print(f"  Threats learned  : {st['threats_learned']:,}")
@@ -404,6 +491,44 @@ def main() -> None:
         finally:
             intel.stop()
             store.stop()
+        return
+
+    # ------------------------------------------------------------------
+    # Early-exit: enable native process-creation auditing, then exit.
+    # ------------------------------------------------------------------
+    if args.enable_native_audit:
+        from . import native_audit
+        ok, detail = native_audit.enable_process_auditing()
+        colour = "green" if ok else "yellow"
+        console.print(f"[{colour}]Native process auditing: {detail}[/{colour}]")
+        if ok:
+            console.print("[dim]Command-line detection now works without Sysmon "
+                          "(Valkyrie reads Security event 4688).[/dim]")
+        else:
+            console.print("[dim]Run this from an elevated (Administrator) prompt.[/dim]")
+        return
+
+    # ------------------------------------------------------------------
+    # Early-exit: genuine site content analysis (fetch + score, then exit)
+    # ------------------------------------------------------------------
+    if args.analyze:
+        from .site_analyzer import SiteAnalyzer
+        console.print(f"[bold]Analyzing site content:[/bold] {args.analyze}")
+        v = SiteAnalyzer().analyze_url(args.analyze)
+        if not v.fetched:
+            console.print(f"[yellow]Could not fetch the page[/yellow] "
+                          f"({'; '.join(v.reasons) or 'unreachable'})")
+            return
+        colour = {"block": "red", "flag": "yellow", "allow": "green"}.get(v.decision, "white")
+        console.print(f"  Verdict  : [{colour}]{v.decision.upper()}[/{colour}]  "
+                      f"(score {v.score}; category: {v.category})")
+        if v.reasons:
+            console.print("  Evidence :")
+            for r in v.reasons:
+                console.print(f"    - {r}")
+        else:
+            console.print("  Evidence : none — the page content looks clean")
+        console.print(f"  Signals  : {v.signals}")
         return
 
     # ------------------------------------------------------------------
@@ -491,6 +616,18 @@ def main() -> None:
         return
 
     # ------------------------------------------------------------------
+    # Early-exit: version + build stamp
+    # ------------------------------------------------------------------
+    if args.version:
+        from . import __version__
+        try:
+            from ._build import BUILD_STAMP
+        except Exception:
+            BUILD_STAMP = "dev (unstamped source run)"
+        print(f"Valkyrie {__version__}  ·  build {BUILD_STAMP}")
+        return
+
+    # ------------------------------------------------------------------
     # Early-exit: MAC status / restore
     # ------------------------------------------------------------------
     if args.mac_status or args.mac_restore:
@@ -505,28 +642,6 @@ def main() -> None:
             changed = " [yellow](randomised)[/yellow]" if info["changed"] else ""
             console.print(f"  {iface:20s}  current={info['current'] or '?'}  "
                           f"original={info['original'] or '?'}{changed}")
-        return
-
-    # ------------------------------------------------------------------
-    # Early-exit: multi-hop setup
-    # ------------------------------------------------------------------
-    if args.setup_multihop:
-        from .multihop import MultiHopVPN
-        mh   = MultiHopVPN()
-        hop1 = args.hop1 or "HOP1_IP"
-        hop2 = args.hop2 or "HOP2_IP"
-        cfg  = mh.generate_config(hop1_ip=hop1, hop2_ip=hop2)
-        console.print(f"[green]✓[/green] Configs written:")
-        console.print(f"  {cfg['hop1_path']}")
-        console.print(f"  {cfg['hop2_path']}")
-        console.print(f"\n[dim]{mh.instructions()}[/dim]")
-        return
-
-    if args.multihop_status:
-        from .multihop import MultiHopVPN
-        st = MultiHopVPN().status()
-        for k, v in st.items():
-            console.print(f"  {k:25s} {v}")
         return
 
     # ------------------------------------------------------------------
@@ -637,6 +752,43 @@ def main() -> None:
                           "(would leave a domain trace on the terminal).[/dim]")
 
     # ------------------------------------------------------------------
+    # 0. Secret hygiene — re-assert file permissions before anything runs.
+    #
+    #    A single audit found FOUR secrets written world-readable on Windows
+    #    (TLS CA private key, MAC install key, API control token, fleet
+    #    enrolment token), all for the same reason: DATA_DIR inherits a
+    #    BUILTIN\Users:read ACE from %ProgramData%, so anything written there
+    #    is readable by every local account unless something prevents it.
+    #    Each write site is now fixed, but this sweep is the backstop — it
+    #    heals a secret left exposed by an older build, and catches a future
+    #    write site that forgets. Idempotent and cheap; already-restricted
+    #    files are skipped.
+    # ------------------------------------------------------------------
+    # Run OFF the startup critical path. verify() shells out to `powershell
+    # Get-Acl` once per secret with a 20s timeout each (secure_file._TIMEOUT);
+    # on a host where spawning powershell is slow — measured on a VM under load —
+    # those calls TIME OUT, so a sweep of 4+ secrets added up to ~80s of dead
+    # wait before the store even started and the web server bound. The comment
+    # below always claimed "never block startup", but only exceptions were
+    # non-blocking, not the latency. The sweep is an idempotent backstop (every
+    # write site already restricts its own file), so it is safe to let it finish
+    # in the background while the agent comes up.
+    def _harden_secrets_bg() -> None:
+        try:
+            from .secure_file import harden_known_secrets
+            for _label, _p, _ok, _detail in harden_known_secrets():
+                if _ok:
+                    console.print(f"[dim]  Secured {_label} ({_p.name})[/dim]")
+                else:
+                    console.print(f"[yellow]  ! {_label} ({_p.name}) is readable "
+                                  f"by other local accounts: {_detail}[/yellow]")
+        except Exception as _exc:      # noqa: BLE001 — never block startup
+            console.print(f"[yellow]  ! secret permission sweep failed: {_exc}[/yellow]")
+
+    threading.Thread(target=_harden_secrets_bg, name="secret-hardening",
+                     daemon=True).start()
+
+    # ------------------------------------------------------------------
     # 1. Store
     # ------------------------------------------------------------------
     _t = time.monotonic()
@@ -656,11 +808,28 @@ def main() -> None:
     # ------------------------------------------------------------------
     _t = time.monotonic()
     blocklist = BlocklistManager()
-    # --update / --download-lists force a download; otherwise the built-in
-    # seed blocklist (+ any previously downloaded cache) loads offline.
-    _dl = True if (args.update or args.download_lists) else None
-    count = blocklist.load(console=_verbose, allow_download=_dl)
+    # --update / --download-lists force a download; --no-download-lists forces
+    # the opposite (stay on the built-in seed list + cache only, no fetches);
+    # otherwise defer to config.USE_EXTERNAL_LISTS (default True — see config.py).
+    _dl = (True if (args.update or args.download_lists)
+           else (False if args.no_download_lists else None))
+    # PROTECTION MUST NEVER WAIT ON THE NETWORK. Startup always loads from
+    # seed + cache (instant, offline-safe); the feed refresh happens on a
+    # background thread afterwards and hot-swaps under the same lock the DNS
+    # path reads through. `--update` is the one case that stays synchronous,
+    # because there the user explicitly asked to refresh and exit.
+    #
+    # Enabling downloads by default without this made the engine block on a
+    # ~500k-domain fetch before protecting anything — minutes on a slow link,
+    # indistinguishable from a hang, and a hard failure in the offline /
+    # air-gapped environments this product specifically targets.
+    # `test_startup_smoke` caught it: 9/9 passing -> timing out.
+    count = blocklist.load(console=_verbose,
+                           allow_download=True if args.update else False)
     _tick(f"Blocklist loaded ({count:,} domains)", _t)
+    if _dl is not False and not args.update:
+        if blocklist.start_background_refresh(console=_verbose):
+            _tick("Blocklist refresh started (background)", _t)
 
     # 2b. Threat-intel IOC feeds (abuse.ch C2/malware indicators). Same
     # download policy as the blocklist; cached feeds always load offline.
@@ -669,7 +838,12 @@ def main() -> None:
     _t = time.monotonic()
     from .threat_intel import ThreatIntelManager
     threat_intel = ThreatIntelManager()
-    ioc_count = threat_intel.load(console=_verbose, allow_download=_dl)
+    # Cache-only at startup, same rule as the blocklist above: protection must
+    # never wait on the network. Offline, a synchronous load would stall for up
+    # to 30s PER FEED on urllib timeouts before the engine came up. The
+    # background daemon started below does the first refresh ~20s later.
+    ioc_count = threat_intel.load(console=_verbose,
+                                  allow_download=True if args.update else False)
     _tick(f"Threat intel loaded ({ioc_count:,} IOCs)", _t)
     if args.update:
         console.print(f"[green]Update complete.[/green] {count:,} domains, "
@@ -684,8 +858,7 @@ def main() -> None:
     _t = time.monotonic()
     firewall = FirewallManager(console=_verbose)
     if not args.no_firewall:
-        firewall.start(console=_verbose,
-                       allow_download=True if args.download_lists else None)
+        firewall.start(console=_verbose, allow_download=_dl)
         _tick("Firewall ready", _t)
     elif args.debug:
         console.print("[yellow]Firewall disabled (--no-firewall)[/yellow]")
@@ -771,8 +944,8 @@ def main() -> None:
         intelligence.start()
         _st = intelligence.status()
         if _st["learning"]:
-            _tick(f"Intelligence learning (day {_st['learning_day']} of "
-                  f"{_st['learning_days_total']})", _t)
+            _tick(f"Intelligence learning ({_st['learning_observed']}/"
+                  f"{_st['learning_target']} behaviours, {_st['learning_percent']}%)", _t)
         else:
             _tick(f"Intelligence active ({_st['threats_learned']:,} threats learned)", _t)
     elif args.debug:
@@ -782,10 +955,12 @@ def main() -> None:
     # 7c. MAC randomizer (optional)
     # ------------------------------------------------------------------
     mac_randomizer = None
-    if args.mac_rand:
+    if args.mac_rand or args.privacy:
         _t = time.monotonic()
         from .mac_randomizer import MacRandomizer
         mac_randomizer = MacRandomizer(store=store)
+        # Randomise NOW (every boot) so each start presents a fresh hardware
+        # identity; the original is backed up so the UI can show original → new.
         new_mac = mac_randomizer.randomize()
         if new_mac:
             console.print(f"[green]✓[/green] MAC randomised: [cyan]{new_mac}[/cyan]")
@@ -794,18 +969,24 @@ def main() -> None:
         mac_randomizer.auto_randomize_on_connect()
         _tick("MAC randomizer: active (auto-randomise on reconnect)", _t)
     elif args.debug:
-        console.print("[dim]MAC randomizer: disabled (use --mac-rand to enable)[/dim]")
+        console.print("[dim]MAC randomizer: disabled (use --mac-rand / --privacy to enable)[/dim]")
 
-    # ------------------------------------------------------------------
-    # 7d. Multi-hop VPN (status only — configs generated via --setup-multihop)
-    # ------------------------------------------------------------------
-    _t = time.monotonic()
-    from .multihop import MultiHopVPN
-    _mh_status = MultiHopVPN().status()
-    if _mh_status["hop1_conf_exists"] and _mh_status["hop2_conf_exists"]:
-        _tick("Multi-hop VPN configs ready", _t)
-    elif args.debug:
-        console.print("[dim]Multi-hop VPN: no configs (run --setup-multihop --hop1 IP --hop2 IP)[/dim]")
+    # 7c-2. TCP/IP fingerprint spoofing (privacy pillar) — runs on start, not
+    # only via the --fingerprint early-exit. Makes the box present a generic
+    # (TTL 64, no TCP timestamps) stack instead of an identifiable Windows one,
+    # so MAC randomisation isn't undone by an obvious OS fingerprint. Fully
+    # reversible (backup); needs admin (the SYSTEM service has it).
+    if args.privacy:
+        _t = time.monotonic()
+        try:
+            from .fingerprint import NetworkFingerprint
+            _fp = NetworkFingerprint()
+            if _fp.normalize():
+                _tick("TCP/IP fingerprint spoofed (generic stack: TTL 64, no timestamps)", _t)
+            elif getattr(_fp, "last_error", ""):
+                console.print(f"[dim]TCP/IP fingerprint spoof skipped: {_fp.last_error}[/dim]")
+        except Exception as _exc:      # noqa: BLE001 — privacy is best-effort
+            console.print(f"[dim]TCP/IP fingerprint spoof unavailable ({_exc})[/dim]")
 
     # ------------------------------------------------------------------
     # 8. Dashboard
@@ -830,6 +1011,94 @@ def main() -> None:
     _tick("DoH detector started", _t)
 
     # ------------------------------------------------------------------
+    # 9f. Background page-content analysis.
+    #     site_analyzer.py has always been able to judge a page by what it
+    #     actually loads and runs — cryptominers, fingerprinting, packed JS,
+    #     phishing — which is how an unknown domain gets a real verdict rather
+    #     than a blocklist lookup. Until now its ONLY caller was the manual
+    #     `--analyze <url>` command, so the capability shipped switched off.
+    #     ContentWatcher runs it continuously off the DNS path (never inline:
+    #     _decide is synchronous with a live query waiting). Auto-blocking is
+    #     deliberately limited to near-certain categories — see the FP policy
+    #     in content_watch.py.
+    # ------------------------------------------------------------------
+    _t = time.monotonic()
+    content_watch = None
+    if not args.no_dns:
+        from .content_watch import ContentWatcher
+        content_watch = ContentWatcher(store=store, intelligence=intelligence)
+        content_watch.start()
+        _tick("Page-content analysis started", _t)
+
+    # ------------------------------------------------------------------
+    # 9e. Resolution log — records ALLOWED DNS answers (dns_interceptor.py)
+    #     so the list-free network scorer (network_score.py S2) can ask "was
+    #     this destination ever resolved here?" without any feed or list. A
+    #     hardcoded-IP C2 skips DNS entirely, which is exactly what this
+    #     catches. Always on: a bounded, pure in-memory structure, and a
+    #     no-op cost when nothing reads it (e.g. --no-dns / network collector
+    #     unavailable).
+    # ------------------------------------------------------------------
+    from .resolution_log import ResolutionLog
+    from .resolution_log import set_active as _set_active_resolution_log
+    _set_active_resolution_log(ResolutionLog())
+
+    # ------------------------------------------------------------------
+    # 9h. Sysmon — a first-class dependency, not an optional extra. See
+    #     docs/adr/0048-sysmon-dependency.md: without it, T1055/T1003.001 are
+    #     undetectable and command-line detection falls back to a racy 2s
+    #     poller. install_or_verify() never raises and never blocks startup —
+    #     a blocked/failed install (measured live: a mainstream consumer AV's
+    #     self-defense can silently remove the driver with no uninstall
+    #     trail) degrades detection and is reported plainly, it does not
+    #     prevent Valkyrie from running.
+    # ------------------------------------------------------------------
+    _t = time.monotonic()
+    sysmon_result = None
+    if not args.no_sysmon_setup:
+        from .sysmon_manager import install_or_verify
+        try:
+            sysmon_result = install_or_verify()
+        except Exception as exc:      # noqa: BLE001 — belt-and-suspenders on
+            # top of install_or_verify()'s own internal guards: this step must
+            # be able to fail in a way nobody anticipated without taking the
+            # whole agent down with it. Reported exactly like any other
+            # degraded mode, not swallowed silently.
+            from .sysmon_manager import SysmonEnvironment, SysmonInstallResult
+            sysmon_result = SysmonInstallResult(
+                "unknown_error", True,
+                f"Sysmon setup raised unexpectedly ({type(exc).__name__}: {exc}); "
+                "continuing without it.", SysmonEnvironment())
+        if sysmon_result.degraded:
+            console.print(f"[yellow]Sysmon: {sysmon_result.mode} — "
+                          f"{sysmon_result.reason}[/yellow]")
+        else:
+            _tick(f"Sysmon verified ({sysmon_result.mode})", _t)
+
+    # ------------------------------------------------------------------
+    # 9g. Deception endpoint — DECEIVE answers a tracker beacon instead of
+    #     resolving it to a dead end (0.0.0.0), which was a relabelled block
+    #     that still fingerprinted the machine as "runs a blocker". Loopback
+    #     only (DeceptionEndpoint enforces this in its constructor); a failed
+    #     bind (port in use) leaves `deception` None and DNSInterceptor falls
+    #     back to the sinkhole exactly as before — this can only ever improve
+    #     on the old behaviour, never regress it. See deception.py / persona.py.
+    # ------------------------------------------------------------------
+    _t = time.monotonic()
+    deception = None
+    if not args.no_dns:
+        from .config import DECEPTION_PORT
+        from .deception import DeceptionEndpoint
+        deception = DeceptionEndpoint(port=DECEPTION_PORT)
+        if deception.start():
+            _tick(f"Deception endpoint listening on 127.0.0.1:{DECEPTION_PORT}", _t)
+        else:
+            console.print(f"[dim]Deception endpoint unavailable (port "
+                          f"{DECEPTION_PORT} in use) — DECEIVE falls back to "
+                          f"the sinkhole[/dim]")
+            deception = None
+
+    # ------------------------------------------------------------------
     # 10. DNS interceptor
     # ------------------------------------------------------------------
     _t = time.monotonic()
@@ -852,6 +1121,8 @@ def main() -> None:
             intelligence    = intelligence,
             firewall        = (firewall if not args.no_firewall else None),
             threat_intel    = threat_intel,
+            content_watch   = content_watch,
+            deception       = deception,
             strict          = args.strict,
             host            = args.host,
             port            = args.port,
@@ -909,10 +1180,19 @@ def main() -> None:
     # 9. Baseline builder (background)
     # ------------------------------------------------------------------
     def _baseline_loop() -> None:
+        # store.build_baselines() does substantial SQLite work and can raise
+        # (locked database, disk full, a schema surprise). Unguarded, the first
+        # such failure killed this thread and baselines were never rebuilt again
+        # for the life of the process — the anomaly detector would keep scoring
+        # against an ageing baseline while everything looked normal.
         while True:
             time.sleep(3600)    # check every hour
-            if store.should_build_baseline():
-                store.build_baselines()
+            try:
+                if store.should_build_baseline():
+                    store.build_baselines()
+            except BaseException as exc:      # noqa: BLE001
+                console.print(f"[yellow]Baseline rebuild failed ({exc}); "
+                              f"will retry next hour.[/yellow]")
 
     if args.build_baseline:
         if store.should_build_baseline():
@@ -957,6 +1237,10 @@ def main() -> None:
     process_collector = None
     network_collector = None
     persistence_collector = None
+    asset_inventory = None
+    cred_watch = None
+    sensor_tamper_monitor = None
+    amsi_scanner = None
     from .config import EDR_MODE, EDR_CORRELATION_WINDOW, EDR_PLUGIN_DIR
     if EDR_MODE and not args.no_edr:
         _t = time.monotonic()
@@ -1004,9 +1288,15 @@ def main() -> None:
             playbook_engine.start()
             _tick(f"SOAR playbooks active ({n_pb})", _t)
 
-        # Endpoint process telemetry (opt-in via --endpoint): observe process
-        # starts and feed behavioral detections into the same correlation engine.
-        if args.endpoint:
+        # Endpoint telemetry + real-time sensors are ON BY DEFAULT so a shipped
+        # install actually protects the endpoint however it was launched — a
+        # launch script that forgets to pass --endpoint must NOT silently drop
+        # the client to DNS-only (no process/persistence detection, no
+        # command-line sensor). Pass --no-endpoint for explicit DNS-only. (This
+        # whole block is already inside the EDR-enabled path, so --no-edr still
+        # disables it.)
+        endpoint_enabled = not getattr(args, "no_endpoint", False)
+        if endpoint_enabled:
             _tp = time.monotonic()
             from .process_telemetry import ProcessCollector
             process_collector = ProcessCollector(
@@ -1052,16 +1342,121 @@ def main() -> None:
             else:
                 persistence_collector = None
 
+            # Asset inventory (CIS Controls #1/#2): software / listening
+            # ports / kernel drivers. Reuses persistence_collector for the
+            # boot-items slice of a full report rather than re-detecting
+            # autostart changes it already owns. Hourly by default -- this
+            # is inventory drift, not a real-time sensor.
+            _tai = time.monotonic()
+            from .asset_inventory import AssetInventoryCollector
+            asset_inventory = AssetInventoryCollector(
+                emit=lambda ev: edr_engine.ingest_telemetry(ev),
+                persistence_collector=persistence_collector)
+            if asset_inventory.available():
+                asset_inventory.start()
+                _tick("Endpoint telemetry active (asset inventory)", _tai)
+            else:
+                asset_inventory = None
+
+            # Browser credential-store watch: flags any non-browser process
+            # holding a handle open to Chrome/Edge/Brave/Firefox's own saved-
+            # password store (T1555.003) — a userland poll of open file
+            # handles, the same honest boundary as every other sensor here
+            # (real-time capture needs the kernel driver, see docs/adr/0026).
+            _tcw = time.monotonic()
+            from .browser_cred_watch import CredentialStoreWatch
+            cred_watch = CredentialStoreWatch(
+                emit=lambda ev: edr_engine.ingest_telemetry(ev))
+            if cred_watch.available():
+                cred_watch.start()
+                _tick("Endpoint telemetry active (browser credential-store watch)", _tcw)
+            else:
+                cred_watch = None
+
+            # Sensor tamper detection (ADR 0048) — nothing previously noticed
+            # when Valkyrie's OWN sensors went dark. Watches Sysmon health
+            # (present / running / collection actually live / expected EIDs
+            # still configured) and raises a CRITICAL T1562.001 incident the
+            # moment a previously-healthy sensor stops delivering, instead of
+            # silently degrading with no signal at all.
+            _tst = time.monotonic()
+            from .sensor_tamper import SensorTamperMonitor
+            # Compensating control (valkyrie/control_taxonomy.py, IIBA §4.2.3):
+            # when Sysmon dies, actively tighten the independent psutil-based
+            # process poller instead of silently continuing at its normal
+            # cadence. Partial coverage only — see control_taxonomy.py for
+            # exactly what this does and does not substitute for.
+            _sysmon_compensations = {}
+            if process_collector is not None:
+                _sysmon_compensations["sysmon"] = (
+                    lambda: process_collector.tighten(4.0),
+                    process_collector.restore_interval,
+                )
+            sensor_tamper_monitor = SensorTamperMonitor(
+                emit=lambda ev: edr_engine.ingest_telemetry(ev),
+                compensations=_sysmon_compensations)
+            sensor_tamper_monitor.start()
+            _tick("Sensor tamper detection active", _tst)
+
             # Real-time ETW-backed sensors (PowerShell script-block today; more
             # channels next) hosted by the resilient SensorManager — watchdog,
             # de-dup, and bounded backpressure. Emits into the SAME EDR pipeline.
+            # AMSI content scanning — a real verdict from the OS antimalware
+            # provider for the script text the PowerShell sensor captures.
+            # Valkyrie ships no signature engine; this asks the engine that
+            # already has one. Self-disables when no provider is present, so a
+            # failure here costs the corroborator, never the sensor.
+            from .config import (AMSI_ENABLED, AMSI_SCAN_SCRIPTS,
+                                 AMSI_MAX_BYTES, AMSI_CACHE_SIZE)
+            if AMSI_ENABLED and not getattr(args, "no_amsi", False):
+                _ta = time.monotonic()
+                from .amsi import AmsiScanner
+                _a = AmsiScanner(enabled=True, max_bytes=AMSI_MAX_BYTES,
+                                 cache_size=AMSI_CACHE_SIZE)
+                try:
+                    if _a.start():
+                        amsi_scanner = _a
+                        _state = _a.provider_state()
+                        _tick(f"AMSI content scanning active (provider: {_state})", _ta)
+                        if _state != "resident":
+                            console.print(
+                                "[yellow]AMSI: no antimalware provider is resident — "
+                                "scans will return 'not detected' regardless of "
+                                "content until one is installed.[/yellow]")
+                except Exception as _e:      # never block startup
+                    console.print(f"[yellow]AMSI unavailable: {_e}[/yellow]")
+                    amsi_scanner = None
+
             _ts = time.monotonic()
             from .etw import (SensorManager, PowerShellSensor, WmiActivitySensor,
-                              SysmonSensor)
+                              SysmonSensor, NativeProcessSensor)
             sensor_manager = SensorManager(sink=lambda ev: edr_engine.ingest_telemetry(ev))
-            sensor_manager.register(PowerShellSensor())
+            sensor_manager.register(PowerShellSensor(
+                scanner=amsi_scanner if AMSI_SCAN_SCRIPTS else None))
             sensor_manager.register(WmiActivitySensor())
-            sensor_manager.register(SysmonSensor())   # optional; skipped if absent
+            _sysmon = SysmonSensor()
+            sensor_manager.register(_sysmon)          # optional; skipped if absent
+            # Native process-creation sensor: gives command-line detection from
+            # Windows' own Security/4688 events, so a normal user gets the good
+            # detection path with NOTHING to install. Stands down when Sysmon is
+            # present (Sysmon is the richer source), so the two never double-
+            # report. Best-effort enables 4688+cmdline auditing when we have the
+            # privilege; if it can't, the sensor simply reports unavailable and
+            # the engine falls back to the poller exactly as before.
+            try:
+                from . import native_audit
+                _en_ok, _en_detail = native_audit.enable_process_auditing()
+                console.print(f"[dim]  Native process auditing: {_en_detail}[/dim]")
+            except Exception as _exc:      # noqa: BLE001
+                console.print(f"[dim]  Native process auditing: unavailable ({_exc})[/dim]")
+            sensor_manager.register(
+                NativeProcessSensor(suppress_when=_sysmon.available))
+            # Kernel driver bridge — authoritative process lineage + LSASS
+            # credential-theft protection when the signed driver is loaded;
+            # self-disables (available()==False) otherwise, so this is safe to
+            # register unconditionally. See driver/valkyrie_km + ADR 0026.
+            from .kernel_bridge import KernelSensor
+            sensor_manager.register(KernelSensor())
             if sensor_manager.start() > 0:
                 _tick(f"Real-time sensors active ({', '.join(sensor_manager.active_sensors())})", _ts)
             else:
@@ -1100,6 +1495,27 @@ def main() -> None:
             ransomware_shield = None
 
     # ------------------------------------------------------------------
+    # 9e. Decoy honeytokens — fake passwords / keys / "confidential" files an
+    #     intruder browsing the box will trip. Detection reuses the command-line
+    #     eye: any process referencing a decoy is, by construction, recon — the
+    #     engine forces it CRITICAL + labels it 'decoy' (see edr/engine.py) and
+    #     the decision policy routes it to CONTAIN. Only when endpoint sensors
+    #     are active (nothing sees the command line otherwise).
+    # ------------------------------------------------------------------
+    if edr_engine is not None:
+        _t = time.monotonic()
+        try:
+            from .decoys import DecoyManager, set_active
+            from .config import DATA_DIR
+            _decoys = DecoyManager(manifest_path=DATA_DIR / "decoys.json")
+            _decoys.load()
+            _n = _decoys.deploy()
+            set_active(_decoys)
+            _tick(f"Decoy honeytokens planted ({len(_decoys.tokens())} tripwires)", _t)
+        except Exception as _e:   # never block startup
+            console.print(f"[dim]Decoys unavailable ({_e})[/dim]")
+
+    # ------------------------------------------------------------------
     # 9e. Component registry — the uniform plugin contract over every
     #     subsystem (register/health/metrics/config/restart/events). It
     #     ADAPTS the services built above; nothing is rewritten. See
@@ -1119,11 +1535,15 @@ def main() -> None:
         ("process_collector", process_collector, "sensor"),
         ("network_collector", network_collector, "sensor"),
         ("persistence_collector", persistence_collector, "sensor"),
+        ("cred_watch", cred_watch, "sensor"),
+        ("amsi", amsi_scanner, "detection"),
         ("ransomware_shield", ransomware_shield, "response"),
         ("siem", siem_exporter, "integration"),
         ("playbooks", playbook_engine, "response"),
         ("mac_randomizer", mac_randomizer, "privacy"),
         ("zero_log", zero_log, "privacy"),
+        ("content_watch", content_watch, "detection"),
+        ("process_watcher", proc_watcher, "sensor"),
     ]
     for _cname, _csvc, _ckind in _reg_specs:
         if _csvc is not None:
@@ -1155,6 +1575,7 @@ def main() -> None:
             process_collector = process_collector,
             network_collector = network_collector,
             persistence_collector = persistence_collector,
+            cred_watch      = cred_watch,
             sensor_manager = sensor_manager,
             heartbeat      = heartbeat,
             ransomware_shield = ransomware_shield,
@@ -1162,6 +1583,13 @@ def main() -> None:
             siem           = siem_exporter,
             playbooks      = playbook_engine,
             registry       = registry,
+            amsi           = amsi_scanner,
+            content_watch  = content_watch,
+            doh            = doh,
+            asset_inventory = asset_inventory,
+            # tls_inspector is created further down (it needs the store and a
+            # started engine), so it is attached to the context after start()
+            # rather than here — see the assignment below.
         )
         if args.web_host not in ("127.0.0.1", "::1", "localhost"):
             console.print(
@@ -1178,6 +1606,37 @@ def main() -> None:
             name="web-dashboard",
         )
         web_thread.start()
+
+        # Wait for the socket to actually be listening before the main thread
+        # goes on to the Rich dashboard render loop. Python has one GIL: that
+        # render loop is CPU-bound and, on a busy/constrained host, was starving
+        # uvicorn's bind badly enough that the API took MINUTES to come up (or
+        # appeared hung) — measured directly on a VM, where --no-ui made it
+        # instant. Blocking here in a poll (time.sleep releases the GIL, handing
+        # uvicorn the CPU it needs to finish binding) makes startup deterministic
+        # regardless of what the main thread does next. Bounded so a genuinely
+        # failed bind still surfaces instead of hanging forever.
+        def _web_listening() -> bool:
+            import socket as _sock
+            probe_host = "127.0.0.1" if args.web_host in ("0.0.0.0", "::", "") else args.web_host
+            try:
+                with _sock.create_connection((probe_host, args.web_port), timeout=0.5):
+                    return True
+            except OSError:
+                return False
+
+        _wt = time.monotonic()
+        _bound = False
+        while time.monotonic() - _wt < 30.0:
+            if _web_listening():
+                _bound = True
+                break
+            time.sleep(0.25)
+        if _bound:
+            _tick("Web dashboard listening", _wt)
+        else:
+            console.print("[yellow]Web dashboard slow to bind (>30s) — "
+                          "continuing; it may still come up.[/yellow]")
         if args.debug:
             console.print(
                 f"[green]✓[/green] Web dashboard  "
@@ -1203,14 +1662,27 @@ def main() -> None:
                 dns_server.start()
             healer.register("dns_interceptor", dns_server.is_listening, _recover_dns)
 
-        healer.register("store_writer", store.is_writing)
+        # store.restart_writer is the RECOVERY action. Without it the watchdog
+        # could detect a dead event writer and do nothing — which is what it
+        # did, while every DNS decision, detection and response went unrecorded.
+        healer.register("store_writer", store.is_writing, store.restart_writer)
 
         if args.web:
             def _check_web() -> bool:
+                # /api/ping, NOT /api/stats. This probe used to hit /api/stats
+                # -- a five-query 24h aggregate measured at 2.5s alone and
+                # 6.3s under concurrent polling -- with a 3s timeout. On a
+                # perfectly healthy server the check timed out, declared
+                # "web_dashboard unhealthy", and logged that to the event store
+                # every 30s forever. Worse, it was self-reinforcing: each log
+                # line is an events row, and a bigger events table makes
+                # /api/stats slower, which makes the next check likelier to
+                # time out. /api/ping touches no state, so it measures the one
+                # thing a liveness probe should: is the server answering.
                 import urllib.request
                 try:
                     with urllib.request.urlopen(
-                        f"http://127.0.0.1:{args.web_port}/api/stats", timeout=3
+                        f"http://127.0.0.1:{args.web_port}/api/ping", timeout=10
                     ) as resp:
                         return resp.status == 200
                 except Exception:
@@ -1253,54 +1725,88 @@ def main() -> None:
                             sensor_manager.is_healthy,
                             sensor_manager.start)
 
+        # Page-content analysis: a dead worker would leave the feature looking
+        # enabled while analysing nothing, which is precisely the silent-failure
+        # class this project keeps finding. Watch it like everything else.
+        if content_watch is not None:
+            healer.register("content_watch",
+                            content_watch.is_running,
+                            content_watch.start)
+
+        # Process attribution. Its refresh thread used to die on any single
+        # psutil/OS exception, freezing the port->process table and making every
+        # subsequent DNS event attribute to whatever process held that port at
+        # the moment of death — wrong attribution, reported as fact, forever.
+        # is_running() now covers both "thread alive" and "table not stale", so
+        # the watchdog can catch either failure.
+        if proc_watcher is not None:
+            healer.register("process_watcher",
+                            proc_watcher.is_running,
+                            proc_watcher.start)
+
         healer.start()
         if args.web:
             web_state.self_heal = healer
 
     # ------------------------------------------------------------------
-    # 10c. Fleet agent (optional) — report this device to a control plane.
-    #      Sends status METADATA only (counts + component health), never
-    #      domains; see valkyrie/fleet/protocol.py.
+    # 10c. Enforcement-lease sweeper — the half of the lease design that
+    #      makes time-boxing real.
+    #
+    #      Every autonomous enforcement Valkyrie applies is granted a lease
+    #      with a deadline (valkyrie/edr/leases.py). A real threat renews its
+    #      lease through recurring evidence; a false positive simply stops
+    #      producing evidence and its enforcement expires on its own, without
+    #      anyone having to notice it happened. None of that is true unless
+    #      something actually calls the sweeper on a clock -- until now
+    #      nothing did, so leases were granted and never swept, and a
+    #      "time-boxed" block was in practice a permanent one.
+    #
+    #      Reverse actions are restorative BY CONSTRUCTION (unblock_domain,
+    #      release_isolation): a sweep can only ever remove enforcement, never
+    #      add it, so a bug in this loop fails toward the host being LESS
+    #      constrained. That asymmetry is why this is safe to run unattended.
     # ------------------------------------------------------------------
-    fleet_agent = None
-    if args.fleet_agent:
-        import os as _os
-        from .fleet.agent import FleetAgent
+    if edr_engine is not None:
+        import logging as _logging
+        _sweep_log = _logging.getLogger("valkyrie.leases")
 
-        def _fleet_status() -> dict:
-            s = dict(store.stats())
-            s["components"] = {
-                "dns":          dns_server.is_listening() if dns_server is not None else False,
-                "firewall":     not args.no_firewall,
-                "intelligence": intelligence is not None,
-            }
-            return s
+        # Coverage is the oracle for authority's coverage gate: a detector
+        # whose sensors are dark must not buy the same authority as one whose
+        # sensors are live. TTL-cached and refreshed off the detection path —
+        # check_all() costs ~3.3s and must never run inside the path that has
+        # to react to an attack. Before the registry-backed probes landed this
+        # gate would have reported "degraded" for 50 of 57 controls and
+        # throttled everything for no real reason.
+        from .edr import coverage_state as _cov_state
+        from .coverage import CoverageContext as _CovCtx
+        _cov_state.install(_cov_state.CoverageStateProvider(
+            lambda: _CovCtx(
+                firewall=firewall,
+                sensor_tamper=sensor_tamper_monitor,
+                playbook_engine=playbook_engine,
+                sensor_manager=sensor_manager,
+                component_registry=registry,
+                responder_registry=edr_engine,
+            )))
 
-        # Remote response: a verified fleet command runs through the local EDR
-        # responder (real apply, audited). Inert unless the fleet policy public
-        # key is pinned via $VALKYRIE_FLEET_POLICY_PUBKEY.
-        def _fleet_command_runner(action: str, target: str):
-            if edr_engine is None:
-                return ("skipped", "EDR not enabled on this device")
-            r = edr_engine.respond(action, target, dry_run=False, operator="fleet")
-            return (r.get("status", "failed"), r.get("result", ""))
+        def _lease_sweep_loop() -> None:
+            while True:
+                time.sleep(LEASE_SWEEP_INTERVAL)
+                try:
+                    swept = edr_engine.sweep_expired_leases()
+                except Exception as exc:            # noqa: BLE001
+                    # Never kill the thread: the next sweep must still run, or
+                    # enforcement quietly becomes permanent again.
+                    _sweep_log.warning("lease sweep failed: %s: %s",
+                                       type(exc).__name__, exc)
+                    continue
+                for act in swept:
+                    _sweep_log.info("lease expired -> %s %s: %s",
+                                    act.get("action"), act.get("target"),
+                                    act.get("status"))
 
-        fleet_agent = FleetAgent(
-            server_url      = args.fleet_agent,
-            status_provider = _fleet_status,
-            console         = console,
-            policy_public_key_hex = _os.environ.get("VALKYRIE_FLEET_POLICY_PUBKEY", ""),
-            command_runner  = _fleet_command_runner,
-        )
-        enroll_tok = args.fleet_enroll_token or _os.environ.get(
-            "VALKYRIE_FLEET_ENROLL_TOKEN", "")
-        if fleet_agent.is_enrolled() or fleet_agent.enroll(enroll_tok):
-            fleet_agent.start()
-            console.print(f"[green]✓[/green] Fleet agent reporting to {args.fleet_agent}")
-        else:
-            console.print("[yellow]Fleet agent not started (enrollment failed — "
-                          "check --fleet-enroll-token and server URL)[/yellow]")
-            fleet_agent = None
+        threading.Thread(target=_lease_sweep_loop, daemon=True,
+                         name="lease-sweeper").start()
 
     # ------------------------------------------------------------------
     # 11. TLS inspection (optional — disabled by default)
@@ -1308,7 +1814,8 @@ def main() -> None:
     tls_inspector = None
     if args.tls and not args.no_tls:
         from .tls_inspector import TLSInspector
-        tls_inspector = TLSInspector(store=store, blocklist=blocklist, behavioral=behavioral, rules=rules)
+        tls_inspector = TLSInspector(store=store, blocklist=blocklist, behavioral=behavioral,
+                                     rules=rules, threat_intel=threat_intel)
         if tls_inspector.start():
             ca_path = tls_inspector.setup_ca()
             console.print(f"[green]✓[/green] TLS inspector on port {tls_inspector.port}")
@@ -1321,59 +1828,32 @@ def main() -> None:
             )
             tls_inspector = None
 
+    # Attach to the dashboard context only if it actually started. /api/stats
+    # keys the "Trackers Cleaned" counter off this: when TLS inspection is not
+    # running, nothing can ever write a page_clean row, so the API reports null
+    # (rendered as "off") instead of a 0 that looks like a live-but-idle count.
+    if web_state is not None:
+        web_state.tls_inspector = tls_inspector
+        web_state.sensor_tamper = sensor_tamper_monitor
+
     # ------------------------------------------------------------------
     # 12. Startup status box (real values) + auto-open dashboard
     # ------------------------------------------------------------------
-    status_rows: list[tuple[str, bool, str]] = []
-
-    if not args.no_dns:
-        if dns_server is not None:
-            status_rows.append(("DNS Sinkhole", True, f"port {args.port}"))
-        else:
-            status_rows.append(("DNS Sinkhole", False, f"could not bind port {args.port}"))
-    if not args.no_firewall:
-        status_rows.append(("Firewall", True, f"{firewall.count():,} IP ranges"))
-    status_rows.append(("Behavioral AI", True, "active"))
-    if edr_engine is not None:
-        _es = edr_engine.stats()
-        status_rows.append(("EDR", True,
-                            f"{_es['plugins']} plugins, {_es['incidents_open']} open incidents"))
-    if intelligence is not None:
-        _ist = intelligence.status()
-        if _ist["learning"]:
-            status_rows.append(("Intelligence", True,
-                                f"learning (day {_ist['learning_day']} of "
-                                f"{_ist['learning_days_total']})"))
-        else:
-            status_rows.append(("Intelligence", True,
-                                f"active — {_ist['threats_learned']:,} threats learned"))
-    if unbound_ok:
-        status_rows.append(("Recursive DNS", True, f"Unbound {dns_upstream_host}:{dns_upstream_port}"))
-    else:
-        status_rows.append(("Upstream DNS", True, f"{dns_upstream_host}:{dns_upstream_port}"))
-    if not allow_external_fallback:
-        status_rows.append(("DNS Leak Guard", True, "local resolver only (fail-closed)"))
-    else:
-        status_rows.append(("DNS Leak Guard", False, "public-DNS fallback ENABLED (install Unbound)"))
-    if zero_log is not None and zero_log.is_active():
-        status_rows.append(("Zero Log", True, "RAM only (no disk)"))
-    else:
-        status_rows.append(("Logging", True, "disk (persistent)"))
-    if mac_randomizer is not None:
-        status_rows.append(("MAC Random", True, "auto on reconnect"))
-    if tls_inspector is not None:
-        status_rows.append(("TLS Inspect", True, f"port {tls_inspector.port}"))
-    if heartbeat is not None:
-        status_rows.append(("Heartbeat", True, "self-check every 15s"))
+    status_rows = build_status_rows(
+        args=args, dns_server=dns_server, firewall=firewall,
+        edr_engine=edr_engine, intelligence=intelligence,
+        unbound_ok=unbound_ok, dns_upstream_host=dns_upstream_host,
+        dns_upstream_port=dns_upstream_port,
+        allow_external_fallback=allow_external_fallback, zero_log=zero_log,
+        mac_randomizer=mac_randomizer, tls_inspector=tls_inspector,
+        heartbeat=heartbeat, sysmon_result=sysmon_result,
+    )
     web_url = f"http://localhost:{args.web_port}"
-    if args.web:
-        status_rows.append(("Dashboard", True, f"localhost:{args.web_port}"))
 
     _print_status_box(console, status_rows)
 
-    all_ok = all(ok for _, ok, _ in status_rows)
     console.print()
-    if all_ok:
+    if protection_state(status_rows) == "ACTIVE":
         console.print("  [bold]Protection:[/bold] [bold green]ACTIVE[/bold green]")
     else:
         console.print("  [bold]Protection:[/bold] [bold yellow]DEGRADED[/bold yellow] — see ✗ above")
@@ -1417,12 +1897,25 @@ def main() -> None:
             mac_randomizer.stop()
         if healer:
             healer.stop()
-        if fleet_agent is not None:
-            fleet_agent.stop()
+        # Stopped after the healer, so its recovery hook cannot restart the
+        # worker we are in the middle of shutting down.
+        if content_watch is not None:
+            content_watch.stop()
+        if deception is not None:
+            deception.stop()
         if persistence_collector is not None:
             persistence_collector.stop()
+        if asset_inventory is not None:
+            asset_inventory.stop()
+        if cred_watch is not None:
+            cred_watch.stop()
+        if sensor_tamper_monitor is not None:
+            sensor_tamper_monitor.stop()
         if sensor_manager is not None:
             sensor_manager.stop()
+        # After the sensors that use it, so no scan is in flight at teardown.
+        if amsi_scanner is not None:
+            amsi_scanner.stop()
         if ransomware_shield is not None:
             ransomware_shield.stop()
         if playbook_engine is not None:

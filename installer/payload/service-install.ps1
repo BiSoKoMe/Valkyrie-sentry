@@ -51,8 +51,11 @@ if ($LASTEXITCODE -eq 0) {
 Write-Host "[*] Installing service '$svc' (frozen engine)..."
 # --endpoint turns on the process / network / persistence telemetry collectors
 # so the EDR pipeline sees endpoint activity, not just DNS.
+# --privacy turns on the privacy pillar at every boot: randomise the MAC and
+# spoof the TCP/IP fingerprint (both reversible, both need the SYSTEM rights the
+# service already has).
 & $nssm install $svc $exe
-& $nssm set $svc AppParameters '--port 53 --web --no-ui --web-port 8090 --endpoint'
+& $nssm set $svc AppParameters '--port 53 --web --no-ui --web-port 8090 --endpoint --privacy'
 & $nssm set $svc AppDirectory $Root
 & $nssm set $svc DisplayName 'Valkyrie Privacy Shield'
 & $nssm set $svc Description 'Local privacy gateway - DNS sinkhole, firewall and EDR.'
