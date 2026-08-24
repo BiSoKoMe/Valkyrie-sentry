@@ -1,4 +1,4 @@
-"""Command-line normalization — defeat obfuscation BEFORE the rules run.
+"""Command-line normalization - defeat obfuscation BEFORE the rules run.
 
 THE PROBLEM THIS SOLVES
 -----------------------
@@ -17,14 +17,14 @@ creation or a shadow-copy deletion and match NOTHING:
 clean command line in a decade, so the honest reading is that the measured
 detection rate was against unobfuscated inputs only.
 
-Adding more rules cannot fix this — the evasion is upstream of matching. One
+Adding more rules cannot fix this - the evasion is upstream of matching. One
 normalization pass in front of the engine is worth more than several hundred
 additional rules, because it restores EVERY existing rule against EVERY
 obfuscated variant at once.
 
 DESIGN CONTRACT
 ---------------
-  * **Pure and total.** No I/O, no clock, no OS calls. Never raises — a
+  * **Pure and total.** No I/O, no clock, no OS calls. Never raises - a
     normalizer that throws on hostile input is itself the vulnerability.
   * **Bounded.** Input is capped, the transform loop is capped, and every
     expansion is length-limited, so a crafted command line cannot cause
@@ -33,9 +33,9 @@ DESIGN CONTRACT
     the normalized string and unions the hits. Normalization can only ever add
     detections, so a rule that depends on raw syntax cannot be broken by it.
   * **Obfuscation is itself a signal.** Transforms are split into `COSMETIC`
-    (whitespace, case, environment variables — completely normal) and
+    (whitespace, case, environment variables - completely normal) and
     `EVASIVE` (caret, backtick, token-splitting quotes, char arithmetic,
-    concatenation — these have no legitimate reason to appear). Only EVASIVE
+    concatenation - these have no legitimate reason to appear). Only EVASIVE
     transforms set `obfuscated`, so ordinary commands are not labeled.
 
 HONEST BOUNDARY
@@ -54,7 +54,7 @@ import re
 from dataclasses import dataclass
 
 # Hot-path bounds. A command line longer than this is truncated for matching
-# purposes — real ones are far shorter, and the cap is what keeps a hostile
+# purposes - real ones are far shorter, and the cap is what keeps a hostile
 # 2 MB argument from turning process creation into a regex denial of service.
 MAX_INPUT = 8192
 MAX_DECODED = 8192
@@ -62,13 +62,13 @@ MAX_ROUNDS = 3          # decoding can reveal further obfuscation; bounded
 
 # Transform classes. COSMETIC appears in normal commands constantly; EVASIVE
 # does not, so only EVASIVE contributes to the obfuscation verdict.
-# "concat_benign" is a join of meaningfully-sized fragments — ordinary string
+# "concat_benign" is a join of meaningfully-sized fragments - ordinary string
 # building in program text (python -c, a git commit message). The join is still
 # performed for matching; it just is not evidence of evasion.
 COSMETIC = frozenset({"env_expand", "whitespace", "shortpath", "concat_benign",
                       "format_op_benign"})
 # unicode_fold is EVASIVE, not cosmetic: nobody types `ｎｅｔ` (full-width
-# Latin) or embeds a zero-width joiner mid-keyword by accident — both exist
+# Latin) or embeds a zero-width joiner mid-keyword by accident - both exist
 # only to break string matching. Caveat: U+3000 (ideographic space) can appear
 # legitimately in CJK filenames, so this signal alone is MEDIUM, never a block.
 EVASIVE = frozenset({"caret", "backtick", "split_quotes", "char_arith",
@@ -76,7 +76,7 @@ EVASIVE = frozenset({"caret", "backtick", "split_quotes", "char_arith",
 
 # Environment variables worth expanding: the ones attackers actually use to
 # hide a binary path. Values are the canonical defaults, NOT read from this
-# machine's environment — normalization must stay pure and deterministic.
+# machine's environment - normalization must stay pure and deterministic.
 _ENV = {
     "comspec": r"c:\windows\system32\cmd.exe",
     "systemroot": r"c:\windows",
@@ -108,14 +108,14 @@ _RE_PSENV = re.compile(r"\$\{?env:([a-z0-9_()]+)\}?", re.I)
 # 'abc' + "def" + 'ghi'  ->  abcdefghi
 # Optional wrapping parens are consumed too: PowerShell writes the evasion as
 # `& ('ne'+'t') user /add`, and leaving the parens behind yields "(net) user",
-# which still fails a "net user" substring match — i.e. the concat transform
+# which still fails a "net user" substring match - i.e. the concat transform
 # would fire but recover nothing. The parens are grouping syntax, not part of
 # the resolved command token.
 _RE_CONCAT = re.compile(
     r"""\(?\s*(['"])([^'"]{0,64})\1(?:\s*\+\s*(['"])([^'"]{0,64})\3)+\s*\)?""")
 _RE_CONCAT_PART = re.compile(r"""(['"])([^'"]{0,64})\1""")
 # [char]110 + [char]101 ...  and  [char[]](110,101,116). Codepoints may be
-# decimal (110) OR hex (0x6e) — obfuscators use both, and a decimal-only matcher
+# decimal (110) OR hex (0x6e) - obfuscators use both, and a decimal-only matcher
 # leaves `[char]0x6e+[char]0x65+[char]0x74` (=>"net") fully un-normalized.
 _CODE = r"(?:0x[0-9a-f]{1,6}|\d{1,7})"
 _RE_CHAR_ARITH = re.compile(
@@ -138,7 +138,7 @@ _RE_FROMB64 = re.compile(
     r"frombase64string\s*\(\s*['\"]([A-Za-z0-9+/=]{16,})['\"]", re.I)
 _RE_WS = re.compile(r"\s+")
 # A quote is TOKEN-SPLITTING (obfuscation) only when it sits BETWEEN TWO WORD
-# CHARACTERS: n"e"t. Requiring \w on both sides — not merely \S — is what
+# CHARACTERS: n"e"t. Requiring \w on both sides - not merely \S - is what
 # keeps option-value quoting safe: `findstr /C:"net user"` has ':' before the
 # quote, so it is left alone. An earlier \S version stripped it and turned a
 # benign findstr into a T1136.001 hit; the benign corpus caught it.
@@ -149,7 +149,7 @@ _RE_SPLIT_QUOTE = re.compile(r"(?<=\w)['\"]+(?=\w)")
 # A concatenation is EVASIVE only when a fragment is short enough to have no
 # purpose but evasion. `'ne'+'t'` fragments a single keyword; `'hello' +
 # 'world'` inside `python -c "..."` is ordinary source code and must NOT be
-# flagged. The JOIN still happens either way (it can only help matching) —
+# flagged. The JOIN still happens either way (it can only help matching) -
 # this threshold governs only whether it counts as obfuscation.
 _EVASIVE_FRAGMENT_LEN = 3
 # Zero-width and BOM characters used to break up keywords invisibly.
@@ -170,7 +170,7 @@ class Normalized:
 
     @property
     def obfuscated(self) -> bool:
-        """True only when an EVASIVE transform fired — a command that merely
+        """True only when an EVASIVE transform fired - a command that merely
         used an environment variable or extra whitespace is not obfuscated."""
         return any(t in EVASIVE for t in self.transforms)
 
@@ -189,6 +189,58 @@ def _fold_unicode(s: str) -> str:
         if 0xFF01 <= o <= 0xFF5E:
             out.append(chr(o - 0xFEE0))
         elif o == 0x3000:            # ideographic space
+            out.append(" ")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _fold_delimiters(s: str) -> str:
+    """cmd.exe accepts `,` and `;` as argument delimiters equivalent to a
+    space, so `whoami,/priv` and `net;user` run exactly like their spaced
+    forms - but a rule keying on the contiguous `whoami /priv` string never
+    sees them. Fold UNQUOTED `,`/`;` to a space so the spaced canonical form
+    is matchable.
+
+    Structure-aware: a comma is a delimiter only at the TOP LEVEL. Commas
+    inside `"a,b"` (a quoted argument value), inside `(...)` (a `[char[]]`
+    array like `(0x76,0x73)` or PowerShell arithmetic) and inside `%...%` (an
+    env-substring spec like `%COMSPEC:~0,1%`) are STRUCTURAL - folding them
+    breaks the very transforms char-arith and env-expand exist to unwind, which
+    is exactly the regression the first draft of this caused. So this skips any
+    comma/semicolon that is inside a quote, inside parentheses, or inside a
+    percent pair, and folds only the rest.
+
+    Even outside those, `classify_behavior` matches the ORIGINAL string too, so
+    the normalized alternative can only ADD detections, never remove one - the
+    same safety property the rest of this module relies on. Runs BEFORE quote
+    stripping so its quote-awareness still has quotes to see.
+
+    Found by the comma_delimit plate in redteam/evaluation/evasion_harness.py
+    (4 techniques evaded at 80.8% resistance); generalizes the fix rather than
+    listing the four."""
+    out = []
+    quote = ""
+    depth = 0          # parenthesis nesting
+    in_pct = False     # inside a %...% pair
+    for ch in s:
+        if quote:
+            out.append(ch)
+            if ch == quote:
+                quote = ""
+        elif ch in "'\"":
+            quote = ch
+            out.append(ch)
+        elif ch == "%":
+            in_pct = not in_pct
+            out.append(ch)
+        elif ch == "(":
+            depth += 1
+            out.append(ch)
+        elif ch == ")":
+            depth = max(0, depth - 1)
+            out.append(ch)
+        elif ch in ",;" and depth == 0 and not in_pct:
             out.append(" ")
         else:
             out.append(ch)
@@ -219,7 +271,7 @@ def _expand_env(s: str) -> str:
 def _join_concat(s: str) -> tuple[str, bool]:
     """'ne'+'t' -> net. Returns (text, was_evasive).
 
-    The join always happens — recovering the plaintext can only help matching.
+    The join always happens - recovering the plaintext can only help matching.
     `was_evasive` is True only when some fragment is <= _EVASIVE_FRAGMENT_LEN,
     i.e. a keyword was chopped into pieces too small to be meaningful source
     code. That distinction is what separates `('ne'+'t')` (evasion) from
@@ -238,7 +290,7 @@ def _join_concat(s: str) -> tuple[str, bool]:
 
 
 def _code_to_int(tok: str):
-    """Parse a codepoint token — decimal (110) or hex (0x6e) — or None."""
+    """Parse a codepoint token - decimal (110) or hex (0x6e) - or None."""
     tok = tok.strip()
     try:
         return int(tok, 16) if tok.lower().startswith("0x") else int(tok)
@@ -279,7 +331,7 @@ def _resolve_format(s: str) -> tuple[str, bool]:
     The substitution always happens (recovering the string can only help
     matching); `was_evasive` is True only when a resolved fragment is short
     enough (<= _EVASIVE_FRAGMENT_LEN) to be keyword-splitting rather than
-    ordinary formatting — mirrors the concat design so `"{0:N2}" -f 'total'`
+    ordinary formatting - mirrors the concat design so `"{0:N2}" -f 'total'`
     (one long literal) is not flagged as obfuscation."""
     evasive = False
 
@@ -368,10 +420,19 @@ def normalize_cmdline(cmdline: str) -> Normalized:
                     fired.append("backtick")
                 cur = s
 
+            # Delimiter fold is quote-aware and must run BEFORE quote stripping
+            # (which discards the quote state it depends on) and before concat
+            # (whose `+` joins are never commas), so a `,`/`;` between tokens
+            # becomes a space without touching a comma inside a quoted value.
+            s = _fold_delimiters(cur)
+            if s != cur:
+                fired.append("delimiter_fold")
+            cur = s
+
             # ORDER MATTERS: concat and char-arithmetic are QUOTE-DELIMITED, so
             # they must run BEFORE quote stripping. Running split_quotes first
             # turned ('ne'+'t') into (ne+t) and the concat transform then had
-            # nothing to join — the evasion survived. Found by test [1].
+            # nothing to join - the evasion survived. Found by test [1].
             s, concat_evasive = _join_concat(cur)
             if s != cur:
                 fired.append("concat" if concat_evasive else "concat_benign")

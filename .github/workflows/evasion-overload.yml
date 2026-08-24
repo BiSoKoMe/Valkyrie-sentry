@@ -1,0 +1,105 @@
+name: Evasion Overload (progressive-overload loop)
+
+# The progressive-overload loop (ADR 0053), run on GitHub's disposable VM so it
+# happens on a cadence instead of only when someone remembers to run it.
+#
+# Unlike redteam-tierb.yml this is entirely OFFLINE and host-pure: it obfuscates
+# every command-line technique and scores the variants through the REAL
+# classifiers on synthetic input (Tier A class). No service, no network, no
+# Sysmon, no firewall - so it runs on the cheap/fast ubuntu-latest runner, not
+# windows-latest, and cannot touch anything on the runner.
+#
+# THE RATCHET CONTRACT (why this gates):
+#   * redteam/evaluation/evasion_ratchet.json is the committed HIGH-WATER MARK.
+#   * This job runs `overload.py --no-save`, which compares a fresh run against
+#     that committed ledger and EXITS 1 if any technique that was once resisted
+#     now evades (a regression) - turning the build red.
+#   * Gains are NOT auto-committed here. A real improvement is locked by a human
+#     running `python redteam/evaluation/overload.py` locally (which rewrites
+#     the ledger) and committing the new evasion_ratchet.json. CI enforces the
+#     floor; people ratchet it up. That keeps CI from committing to its own repo.
+#
+# The schedule is the actual "loop": it re-checks the floor weekly even with no
+# code change, so a dependency bump that silently weakens a classifier is caught.
+
+on:
+  # The loop. Weekly, Monday 06:00 UTC.
+  schedule:
+    - cron: "0 6 * * 1"
+  # Gate real changes to the classifier or the harness on every push/PR.
+  push:
+    paths:
+      - "valkyrie/cmdline_normalize.py"
+      - "valkyrie/behavioral_rules.py"
+      - "redteam/evaluation/evasion_harness.py"
+      - "redteam/evaluation/ratchet.py"
+      - "redteam/evaluation/overload.py"
+      - "redteam/evaluation/evasion_ratchet.json"
+      - ".github/workflows/evasion-overload.yml"
+  pull_request:
+    paths:
+      - "valkyrie/cmdline_normalize.py"
+      - "valkyrie/behavioral_rules.py"
+      - "redteam/evaluation/evasion_harness.py"
+      - "redteam/evaluation/ratchet.py"
+      - "redteam/evaluation/overload.py"
+      - "redteam/evaluation/evasion_ratchet.json"
+  # Manual button (appears once this workflow reaches the default branch).
+  workflow_dispatch:
+    inputs:
+      fail_on_headroom:
+        description: "Fail if ANY variant still evades, not only on a regression"
+        type: boolean
+        default: false
+
+jobs:
+  overload:
+    name: Evasion ratchet (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements_modular.txt
+
+      - name: Ratchet logic tests (must pass before the gate is trusted)
+        run: PYTHONUTF8=1 python redteam/evaluation/test_ratchet.py
+
+      - name: Attribution logic tests
+        run: PYTHONUTF8=1 python redteam/evaluation/test_attribute.py
+
+      - name: Progressive-overload rep (harness -> ratchet gate)
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          # --no-save: the committed ledger is the floor; CI enforces it and
+          # never rewrites it. Exit 1 (red build) on a regression below that
+          # floor. The optional fail_on_headroom input additionally fails while
+          # any variant still evades - use it to keep the loop nagging until the
+          # newest plate is lifted.
+          EXTRA=""
+          if [ "${{ github.event.inputs.fail_on_headroom }}" = "true" ]; then
+            EXTRA="--fail-on-headroom"
+          fi
+          python redteam/evaluation/overload.py --no-save $EXTRA
+
+      - name: Upload evasion result
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: evasion-results
+          path: |
+            redteam/evaluation/results/*__evasion.json
+            redteam/evaluation/evasion_ratchet.json
+          if-no-files-found: warn
+          retention-days: 30
