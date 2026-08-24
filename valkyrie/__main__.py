@@ -1,4 +1,4 @@
-"""Entry point — python -m valkyrie.
+"""Entry point - python -m valkyrie.
 
 
 Wires all components together and starts the engine.
@@ -28,7 +28,7 @@ import webbrowser
 
 
 # ---------------------------------------------------------------------------
-# Dependency check — fail loudly before importing anything
+# Dependency check - fail loudly before importing anything
 # ---------------------------------------------------------------------------
 
 _REQUIRED = {
@@ -77,7 +77,7 @@ from .resolver import UnboundManager
 from .rules import RulesLoader
 from .store import Store
 from .ui import Dashboard
-# wireguard / multihop / fleet / mcp / compliance moved to experimental/ —
+# wireguard / multihop / fleet / mcp / compliance moved to experimental/ -
 # frozen, not deleted. See experimental/README.md and ADR 0044.
 
 
@@ -124,8 +124,13 @@ def _add_windows_firewall_rule(port: int, console=None) -> None:
         if "remoteport" in rule:
             args.append(f"remoteport={rule['remoteport']}")
         try:
-            subprocess.run(args, check=True, capture_output=True)
+            # Startup must not be able to hang here: this runs before the
+            # engine finishes coming up, so a netsh call that never returns
+            # means the service never starts and never says why.
+            subprocess.run(args, check=True, capture_output=True, timeout=60)
             _say(f"[green]✓[/green] Firewall rule: {rule['name']}")
+        except subprocess.TimeoutExpired:
+            _say(f"[dim]Firewall rule skipped ({rule['name']}): timed out[/dim]")
         except subprocess.CalledProcessError as exc:
             _say(f"[dim]Firewall rule skipped ({rule['name']}): "
                  f"{exc.stderr.decode(errors='replace').strip()}[/dim]")
@@ -157,7 +162,7 @@ def _test_upstream() -> bool:
             sock.recvfrom(4096)
             return True
         except OSError:
-            # Unreachable/timeout for this upstream — try the next one.
+            # Unreachable/timeout for this upstream - try the next one.
             continue
         finally:
             if sock is not None:
@@ -177,7 +182,7 @@ def _print_status_box(console, rows) -> None:
 
     Args:
         console: Rich console to print to.
-        rows:    list of (label, ok, detail) tuples — ok=False renders a red ✗.
+        rows:    list of (label, ok, detail) tuples - ok=False renders a red ✗.
     """
     from rich import box as _box
     from rich.panel import Panel
@@ -215,7 +220,7 @@ def build_status_rows(
     as ``self_test.HeartbeatMonitor``: a bug that renders a component green
     while it is down is worse than a crash, because the user acts on it.
 
-    Pure — reads only its arguments and returns rows. Kept as a free function
+    Pure - reads only its arguments and returns rows. Kept as a free function
     rather than a method precisely so a test can hand it a dead DNS server and
     assert the row goes red, without starting anything.
 
@@ -282,7 +287,7 @@ def build_status_rows(
     if heartbeat is not None:
         rows.append(("Heartbeat", True, "self-check every 15s"))
     if sysmon_result is not None:
-        # Degraded is a MAIN path, not an edge case (ADR 0048) — this row
+        # Degraded is a MAIN path, not an edge case (ADR 0048) - this row
         # goes red on it deliberately, the same way every other row here
         # does, rather than being hidden or softened into a footnote.
         rows.append(("Sysmon", not sysmon_result.degraded,
@@ -692,7 +697,7 @@ def main() -> None:
         return
 
     def _tick(label: str, t0: float) -> None:
-        """Print a timed per-component startup line — only in --debug mode.
+        """Print a timed per-component startup line - only in --debug mode.
 
         In normal mode startup output is just the final status box, so these
         progress lines (and the sub-component chatter routed through
@@ -708,7 +713,7 @@ def main() -> None:
     _verbose = console if args.debug else None
 
     # ------------------------------------------------------------------
-    # Startup self-test — refuse to announce "protected" from a broken state
+    # Startup self-test - refuse to announce "protected" from a broken state
     # ------------------------------------------------------------------
     if not args.skip_selftest:
         from .self_test import preflight, critical_failures
@@ -752,21 +757,21 @@ def main() -> None:
                           "(would leave a domain trace on the terminal).[/dim]")
 
     # ------------------------------------------------------------------
-    # 0. Secret hygiene — re-assert file permissions before anything runs.
+    # 0. Secret hygiene - re-assert file permissions before anything runs.
     #
     #    A single audit found FOUR secrets written world-readable on Windows
     #    (TLS CA private key, MAC install key, API control token, fleet
     #    enrolment token), all for the same reason: DATA_DIR inherits a
     #    BUILTIN\Users:read ACE from %ProgramData%, so anything written there
     #    is readable by every local account unless something prevents it.
-    #    Each write site is now fixed, but this sweep is the backstop — it
+    #    Each write site is now fixed, but this sweep is the backstop - it
     #    heals a secret left exposed by an older build, and catches a future
     #    write site that forgets. Idempotent and cheap; already-restricted
     #    files are skipped.
     # ------------------------------------------------------------------
     # Run OFF the startup critical path. verify() shells out to `powershell
     # Get-Acl` once per secret with a 20s timeout each (secure_file._TIMEOUT);
-    # on a host where spawning powershell is slow — measured on a VM under load —
+    # on a host where spawning powershell is slow - measured on a VM under load -
     # those calls TIME OUT, so a sweep of 4+ secrets added up to ~80s of dead
     # wait before the store even started and the web server bound. The comment
     # below always claimed "never block startup", but only exceptions were
@@ -782,7 +787,7 @@ def main() -> None:
                 else:
                     console.print(f"[yellow]  ! {_label} ({_p.name}) is readable "
                                   f"by other local accounts: {_detail}[/yellow]")
-        except Exception as _exc:      # noqa: BLE001 — never block startup
+        except Exception as _exc:      # noqa: BLE001 - never block startup
             console.print(f"[yellow]  ! secret permission sweep failed: {_exc}[/yellow]")
 
     threading.Thread(target=_harden_secrets_bg, name="secret-hardening",
@@ -804,13 +809,58 @@ def main() -> None:
     _tick("SQLite store ready", _t)
 
     # ------------------------------------------------------------------
+    # 1b. Web dashboard - BOUND EARLY (liveness before readiness).
+    # ------------------------------------------------------------------
+    # The web server used to be created dead-last, after every subsystem below
+    # had initialised - so /api/health could not answer until the whole heavy
+    # startup finished. On a constrained host that took minutes, and every Tier B
+    # run died at the readiness gate before a technique fired. This is the
+    # liveness/readiness split: bind the health endpoint NOW, in ~1s, with a
+    # context that holds only the store, and let each subsystem ATTACH itself to
+    # web_state as it comes up (see section 10 below). Every route already
+    # tolerates a not-yet-ready (None) field, and /api/health needs none of them,
+    # so "is the process alive?" is answerable immediately while "is protection
+    # fully warmed up?" fills in behind it. web_state is a plain mutable
+    # AppContext shared by reference with the running server, so later attribute
+    # assignments are seen live.
+    web_state = None
+    web_thread = None
+    if args.web:
+        from .web.server import run_server as _run_server
+        from .context import AppContext as _AppContext
+        web_state = _AppContext(store=store, start_time=time.time(),
+                                dns_port=args.port, web_port=args.web_port)
+        web_thread = threading.Thread(
+            target=_run_server,
+            kwargs={"host": args.web_host, "port": args.web_port, "ctx": web_state},
+            daemon=True, name="web-dashboard")
+        web_thread.start()
+        # Confirm the socket is listening before heavy init begins (time.sleep
+        # releases the GIL so uvicorn gets the CPU to finish binding). Bounded so
+        # a genuinely failed bind still surfaces.
+        def _web_up() -> bool:
+            import socket as _sock
+            probe = "127.0.0.1" if args.web_host in ("0.0.0.0", "::", "") else args.web_host
+            try:
+                with _sock.create_connection((probe, args.web_port), timeout=0.5):
+                    return True
+            except OSError:
+                return False
+        _wt0 = time.monotonic()
+        while time.monotonic() - _wt0 < 15.0:
+            if _web_up():
+                break
+            time.sleep(0.25)
+        _tick("Web dashboard listening (early bind)", _t)
+
+    # ------------------------------------------------------------------
     # 2. Blocklist
     # ------------------------------------------------------------------
     _t = time.monotonic()
     blocklist = BlocklistManager()
     # --update / --download-lists force a download; --no-download-lists forces
     # the opposite (stay on the built-in seed list + cache only, no fetches);
-    # otherwise defer to config.USE_EXTERNAL_LISTS (default True — see config.py).
+    # otherwise defer to config.USE_EXTERNAL_LISTS (default True - see config.py).
     _dl = (True if (args.update or args.download_lists)
            else (False if args.no_download_lists else None))
     # PROTECTION MUST NEVER WAIT ON THE NETWORK. Startup always loads from
@@ -820,7 +870,7 @@ def main() -> None:
     # because there the user explicitly asked to refresh and exit.
     #
     # Enabling downloads by default without this made the engine block on a
-    # ~500k-domain fetch before protecting anything — minutes on a slow link,
+    # ~500k-domain fetch before protecting anything - minutes on a slow link,
     # indistinguishable from a hang, and a hard failure in the offline /
     # air-gapped environments this product specifically targets.
     # `test_startup_smoke` caught it: 9/9 passing -> timing out.
@@ -853,7 +903,7 @@ def main() -> None:
     threat_intel.start(allow_download=_dl)   # periodic refresh (no-op if downloads off)
 
     # ------------------------------------------------------------------
-    # 3. Firewall (IP-level blocking — optional, non-fatal)
+    # 3. Firewall (IP-level blocking - optional, non-fatal)
     # ------------------------------------------------------------------
     _t = time.monotonic()
     firewall = FirewallManager(console=_verbose)
@@ -864,7 +914,7 @@ def main() -> None:
         console.print("[yellow]Firewall disabled (--no-firewall)[/yellow]")
 
     # ------------------------------------------------------------------
-    # 4. Unbound local resolver (optional — degrades to external DNS)
+    # 4. Unbound local resolver (optional - degrades to external DNS)
     # ------------------------------------------------------------------
     unbound: UnboundManager | None = None
     unbound_ok = False
@@ -895,7 +945,7 @@ def main() -> None:
                           "no public-DNS fallback [dim](Unbound active)[/dim]")
         else:
             # Forced fail-closed with no local resolver present: queries will
-            # SERVFAIL rather than leak — the safe choice when the user asked.
+            # SERVFAIL rather than leak - the safe choice when the user asked.
             console.print("[yellow]No-leak DNS forced (--no-dns-leak) but no local "
                           "resolver is active — queries will SERVFAIL until Unbound "
                           "is available (no external fallback).[/yellow]")
@@ -960,7 +1010,7 @@ def main() -> None:
         from .mac_randomizer import MacRandomizer
         mac_randomizer = MacRandomizer(store=store)
         # Randomise NOW (every boot) so each start presents a fresh hardware
-        # identity; the original is backed up so the UI can show original → new.
+        # identity; the original is backed up so the UI can show original -> new.
         new_mac = mac_randomizer.randomize()
         if new_mac:
             console.print(f"[green]✓[/green] MAC randomised: [cyan]{new_mac}[/cyan]")
@@ -971,7 +1021,7 @@ def main() -> None:
     elif args.debug:
         console.print("[dim]MAC randomizer: disabled (use --mac-rand / --privacy to enable)[/dim]")
 
-    # 7c-2. TCP/IP fingerprint spoofing (privacy pillar) — runs on start, not
+    # 7c-2. TCP/IP fingerprint spoofing (privacy pillar) - runs on start, not
     # only via the --fingerprint early-exit. Makes the box present a generic
     # (TTL 64, no TCP timestamps) stack instead of an identifiable Windows one,
     # so MAC randomisation isn't undone by an obvious OS fingerprint. Fully
@@ -985,7 +1035,7 @@ def main() -> None:
                 _tick("TCP/IP fingerprint spoofed (generic stack: TTL 64, no timestamps)", _t)
             elif getattr(_fp, "last_error", ""):
                 console.print(f"[dim]TCP/IP fingerprint spoof skipped: {_fp.last_error}[/dim]")
-        except Exception as _exc:      # noqa: BLE001 — privacy is best-effort
+        except Exception as _exc:      # noqa: BLE001 - privacy is best-effort
             console.print(f"[dim]TCP/IP fingerprint spoof unavailable ({_exc})[/dim]")
 
     # ------------------------------------------------------------------
@@ -1013,13 +1063,13 @@ def main() -> None:
     # ------------------------------------------------------------------
     # 9f. Background page-content analysis.
     #     site_analyzer.py has always been able to judge a page by what it
-    #     actually loads and runs — cryptominers, fingerprinting, packed JS,
-    #     phishing — which is how an unknown domain gets a real verdict rather
+    #     actually loads and runs - cryptominers, fingerprinting, packed JS,
+    #     phishing - which is how an unknown domain gets a real verdict rather
     #     than a blocklist lookup. Until now its ONLY caller was the manual
     #     `--analyze <url>` command, so the capability shipped switched off.
     #     ContentWatcher runs it continuously off the DNS path (never inline:
     #     _decide is synchronous with a live query waiting). Auto-blocking is
-    #     deliberately limited to near-certain categories — see the FP policy
+    #     deliberately limited to near-certain categories - see the FP policy
     #     in content_watch.py.
     # ------------------------------------------------------------------
     _t = time.monotonic()
@@ -1031,7 +1081,7 @@ def main() -> None:
         _tick("Page-content analysis started", _t)
 
     # ------------------------------------------------------------------
-    # 9e. Resolution log — records ALLOWED DNS answers (dns_interceptor.py)
+    # 9e. Resolution log - records ALLOWED DNS answers (dns_interceptor.py)
     #     so the list-free network scorer (network_score.py S2) can ask "was
     #     this destination ever resolved here?" without any feed or list. A
     #     hardcoded-IP C2 skips DNS entirely, which is exactly what this
@@ -1044,10 +1094,10 @@ def main() -> None:
     _set_active_resolution_log(ResolutionLog())
 
     # ------------------------------------------------------------------
-    # 9h. Sysmon — a first-class dependency, not an optional extra. See
+    # 9h. Sysmon - a first-class dependency, not an optional extra. See
     #     docs/adr/0048-sysmon-dependency.md: without it, T1055/T1003.001 are
     #     undetectable and command-line detection falls back to a racy 2s
-    #     poller. install_or_verify() never raises and never blocks startup —
+    #     poller. install_or_verify() never raises and never blocks startup -
     #     a blocked/failed install (measured live: a mainstream consumer AV's
     #     self-defense can silently remove the driver with no uninstall
     #     trail) degrades detection and is reported plainly, it does not
@@ -1059,7 +1109,7 @@ def main() -> None:
         from .sysmon_manager import install_or_verify
         try:
             sysmon_result = install_or_verify()
-        except Exception as exc:      # noqa: BLE001 — belt-and-suspenders on
+        except Exception as exc:      # noqa: BLE001 - belt-and-suspenders on
             # top of install_or_verify()'s own internal guards: this step must
             # be able to fail in a way nobody anticipated without taking the
             # whole agent down with it. Reported exactly like any other
@@ -1076,12 +1126,12 @@ def main() -> None:
             _tick(f"Sysmon verified ({sysmon_result.mode})", _t)
 
     # ------------------------------------------------------------------
-    # 9g. Deception endpoint — DECEIVE answers a tracker beacon instead of
+    # 9g. Deception endpoint - DECEIVE answers a tracker beacon instead of
     #     resolving it to a dead end (0.0.0.0), which was a relabelled block
     #     that still fingerprinted the machine as "runs a blocker". Loopback
     #     only (DeceptionEndpoint enforces this in its constructor); a failed
     #     bind (port in use) leaves `deception` None and DNSInterceptor falls
-    #     back to the sinkhole exactly as before — this can only ever improve
+    #     back to the sinkhole exactly as before - this can only ever improve
     #     on the old behaviour, never regress it. See deception.py / persona.py.
     # ------------------------------------------------------------------
     _t = time.monotonic()
@@ -1183,7 +1233,7 @@ def main() -> None:
         # store.build_baselines() does substantial SQLite work and can raise
         # (locked database, disk full, a schema surprise). Unguarded, the first
         # such failure killed this thread and baselines were never rebuilt again
-        # for the life of the process — the anomaly detector would keep scoring
+        # for the life of the process - the anomaly detector would keep scoring
         # against an ageing baseline while everything looked normal.
         while True:
             time.sleep(3600)    # check every hour
@@ -1204,7 +1254,7 @@ def main() -> None:
         threading.Thread(target=_baseline_loop, daemon=True, name="baseline").start()
 
     # ------------------------------------------------------------------
-    # 9b. Protection heartbeat — continuously re-verify the sinkhole answers
+    # 9b. Protection heartbeat - continuously re-verify the sinkhole answers
     # ------------------------------------------------------------------
     heartbeat = None
     if dns_server is not None:
@@ -1226,7 +1276,7 @@ def main() -> None:
         heartbeat.start()
 
     # ------------------------------------------------------------------
-    # 9c. EDR layer — detection → incident → response on top of the sensors.
+    # 9c. EDR layer - detection -> incident -> response on top of the sensors.
     #     Subscribes to the live event stream and correlates detections into
     #     incidents. Stays entirely local (state lives in the same DB).
     # ------------------------------------------------------------------
@@ -1262,7 +1312,7 @@ def main() -> None:
 
         # SIEM export (opt-in): stream incidents (and, with --siem-dns, DNS
         # blocks) to the operator's log pipeline in CEF or JSON Lines. The
-        # exporter is queue-buffered and reconnecting — SIEM downtime never
+        # exporter is queue-buffered and reconnecting - SIEM downtime never
         # touches the protection pipeline.
         if args.siem:
             _ts = time.monotonic()
@@ -1289,7 +1339,7 @@ def main() -> None:
             _tick(f"SOAR playbooks active ({n_pb})", _t)
 
         # Endpoint telemetry + real-time sensors are ON BY DEFAULT so a shipped
-        # install actually protects the endpoint however it was launched — a
+        # install actually protects the endpoint however it was launched - a
         # launch script that forgets to pass --endpoint must NOT silently drop
         # the client to DNS-only (no process/persistence detection, no
         # command-line sensor). Pass --no-endpoint for explicit DNS-only. (This
@@ -1310,7 +1360,7 @@ def main() -> None:
                               "(psutil not installed)[/yellow]")
 
             # Network connection telemetry: flag outbound connections to
-            # threat-intel IPs — the hard-coded-IP C2 case DNS never sees (and
+            # threat-intel IPs - the hard-coded-IP C2 case DNS never sees (and
             # that the Windows in-process firewall does not block). Reuses the
             # firewall's is_blocked_ip reputation set.
             _tn = time.monotonic()
@@ -1331,7 +1381,7 @@ def main() -> None:
                 network_collector = None
 
             # Persistence (ASEP) telemetry: registry Run keys, services,
-            # scheduled tasks, startup folders → the same correlation pipeline.
+            # scheduled tasks, startup folders -> the same correlation pipeline.
             _tpr = time.monotonic()
             from .persistence_telemetry import PersistenceCollector
             persistence_collector = PersistenceCollector(
@@ -1360,7 +1410,7 @@ def main() -> None:
 
             # Browser credential-store watch: flags any non-browser process
             # holding a handle open to Chrome/Edge/Brave/Firefox's own saved-
-            # password store (T1555.003) — a userland poll of open file
+            # password store (T1555.003) - a userland poll of open file
             # handles, the same honest boundary as every other sensor here
             # (real-time capture needs the kernel driver, see docs/adr/0026).
             _tcw = time.monotonic()
@@ -1373,7 +1423,7 @@ def main() -> None:
             else:
                 cred_watch = None
 
-            # Sensor tamper detection (ADR 0048) — nothing previously noticed
+            # Sensor tamper detection (ADR 0048) - nothing previously noticed
             # when Valkyrie's OWN sensors went dark. Watches Sysmon health
             # (present / running / collection actually live / expected EIDs
             # still configured) and raises a CRITICAL T1562.001 incident the
@@ -1384,7 +1434,7 @@ def main() -> None:
             # Compensating control (valkyrie/control_taxonomy.py, IIBA §4.2.3):
             # when Sysmon dies, actively tighten the independent psutil-based
             # process poller instead of silently continuing at its normal
-            # cadence. Partial coverage only — see control_taxonomy.py for
+            # cadence. Partial coverage only - see control_taxonomy.py for
             # exactly what this does and does not substitute for.
             _sysmon_compensations = {}
             if process_collector is not None:
@@ -1399,9 +1449,9 @@ def main() -> None:
             _tick("Sensor tamper detection active", _tst)
 
             # Real-time ETW-backed sensors (PowerShell script-block today; more
-            # channels next) hosted by the resilient SensorManager — watchdog,
+            # channels next) hosted by the resilient SensorManager - watchdog,
             # de-dup, and bounded backpressure. Emits into the SAME EDR pipeline.
-            # AMSI content scanning — a real verdict from the OS antimalware
+            # AMSI content scanning - a real verdict from the OS antimalware
             # provider for the script text the PowerShell sensor captures.
             # Valkyrie ships no signature engine; this asks the engine that
             # already has one. Self-disables when no provider is present, so a
@@ -1451,7 +1501,7 @@ def main() -> None:
                 console.print(f"[dim]  Native process auditing: unavailable ({_exc})[/dim]")
             sensor_manager.register(
                 NativeProcessSensor(suppress_when=_sysmon.available))
-            # Kernel driver bridge — authoritative process lineage + LSASS
+            # Kernel driver bridge - authoritative process lineage + LSASS
             # credential-theft protection when the signed driver is loaded;
             # self-disables (available()==False) otherwise, so this is safe to
             # register unconditionally. See driver/valkyrie_km + ADR 0026.
@@ -1466,7 +1516,7 @@ def main() -> None:
         console.print("[yellow]EDR layer disabled (--no-edr)[/yellow]")
 
     # ------------------------------------------------------------------
-    # 9d. Ransomware Shield — behavioral, local. Plants canary tripwires,
+    # 9d. Ransomware Shield - behavioral, local. Plants canary tripwires,
     #     confirms encryption by entropy, attributes the writer by disk I/O and
     #     suspends it, raising a CRITICAL incident through the EDR pipeline.
     # ------------------------------------------------------------------
@@ -1495,9 +1545,9 @@ def main() -> None:
             ransomware_shield = None
 
     # ------------------------------------------------------------------
-    # 9e. Decoy honeytokens — fake passwords / keys / "confidential" files an
+    # 9e. Decoy honeytokens - fake passwords / keys / "confidential" files an
     #     intruder browsing the box will trip. Detection reuses the command-line
-    #     eye: any process referencing a decoy is, by construction, recon — the
+    #     eye: any process referencing a decoy is, by construction, recon - the
     #     engine forces it CRITICAL + labels it 'decoy' (see edr/engine.py) and
     #     the decision policy routes it to CONTAIN. Only when endpoint sensors
     #     are active (nothing sees the command line otherwise).
@@ -1516,7 +1566,7 @@ def main() -> None:
             console.print(f"[dim]Decoys unavailable ({_e})[/dim]")
 
     # ------------------------------------------------------------------
-    # 9e. Component registry — the uniform plugin contract over every
+    # 9e. Component registry - the uniform plugin contract over every
     #     subsystem (register/health/metrics/config/restart/events). It
     #     ADAPTS the services built above; nothing is rewritten. See
     #     docs/adr/0021-component-registry.md.
@@ -1551,46 +1601,46 @@ def main() -> None:
     _tick(f"Component registry ({len(registry.names())} plugins)", time.monotonic())
 
     # ------------------------------------------------------------------
-    # 10. Web dashboard (optional)
+    # 10. Web dashboard - ATTACH subsystems to the early-bound context.
     # ------------------------------------------------------------------
-    web_thread = None
-    web_state = None
-    if args.web:
-        from .web.server import run_server
-        from .context import AppContext
-        # __main__ is the composition root: build the context, wire services in,
-        # and inject it into the web server (create_app/run_server), rather than
-        # mutating a module-global singleton.
-        web_state = AppContext(
-            store          = store,
-            firewall       = firewall,
-            blocklist      = blocklist,
-            start_time     = time.time(),
-            mac_randomizer = mac_randomizer,
-            zero_log       = zero_log,
-            dns_port       = args.port,
-            web_port       = args.web_port,
-            intelligence   = intelligence,
-            edr            = edr_engine,
-            process_collector = process_collector,
-            network_collector = network_collector,
-            persistence_collector = persistence_collector,
-            cred_watch      = cred_watch,
-            sensor_manager = sensor_manager,
-            heartbeat      = heartbeat,
-            ransomware_shield = ransomware_shield,
-            threat_intel   = threat_intel,
-            siem           = siem_exporter,
-            playbooks      = playbook_engine,
-            registry       = registry,
-            amsi           = amsi_scanner,
-            content_watch  = content_watch,
-            doh            = doh,
-            asset_inventory = asset_inventory,
-            # tls_inspector is created further down (it needs the store and a
-            # started engine), so it is attached to the context after start()
-            # rather than here — see the assignment below.
-        )
+    # The server is already running (bound early in section 1b) with a
+    # store-only context. Now that every subsystem exists, attach them to the
+    # SAME web_state object the server holds by reference, so the full dashboard
+    # and API light up at once - exactly the state the old all-at-once context
+    # had, just delivered after the health endpoint was already answering.
+    if args.web and web_state is not None:
+        web_state.firewall              = firewall
+        web_state.blocklist             = blocklist
+        web_state.mac_randomizer        = mac_randomizer
+        web_state.zero_log              = zero_log
+        web_state.intelligence          = intelligence
+        web_state.edr                   = edr_engine
+        web_state.process_collector     = process_collector
+        web_state.network_collector     = network_collector
+        web_state.persistence_collector = persistence_collector
+        web_state.cred_watch            = cred_watch
+        web_state.sensor_manager        = sensor_manager
+        web_state.heartbeat             = heartbeat
+        web_state.ransomware_shield     = ransomware_shield
+        web_state.threat_intel          = threat_intel
+        web_state.siem                  = siem_exporter
+        web_state.playbooks             = playbook_engine
+        web_state.registry              = registry
+        web_state.amsi                  = amsi_scanner
+        web_state.content_watch         = content_watch
+        web_state.doh                   = doh
+        web_state.asset_inventory       = asset_inventory
+        # The lifespan subscribed the STORE's live feed at early bind (store
+        # existed then); the EDR engine did not exist yet, so subscribe its
+        # incident stream to the dashboard WebSocket now that it is attached.
+        # Without this, early-bind would silently drop live EDR incident
+        # streaming to the dashboard.
+        if edr_engine is not None:
+            try:
+                from .web.server import manager as _ws_manager
+                edr_engine.subscribe(_ws_manager.broadcast_sync)
+            except Exception:
+                pass
         if args.web_host not in ("127.0.0.1", "::1", "localhost"):
             console.print(
                 f"[yellow]⚠ Web dashboard bound to {args.web_host} (off-loopback).[/yellow]\n"
@@ -1599,44 +1649,6 @@ def main() -> None:
                 f"token in [cyan]data/control_token.txt[/cyan] "
                 f"(header X-Valkyrie-Token or ?token=…)."
             )
-        web_thread = threading.Thread(
-            target=run_server,
-            kwargs={"host": args.web_host, "port": args.web_port, "ctx": web_state},
-            daemon=True,
-            name="web-dashboard",
-        )
-        web_thread.start()
-
-        # Wait for the socket to actually be listening before the main thread
-        # goes on to the Rich dashboard render loop. Python has one GIL: that
-        # render loop is CPU-bound and, on a busy/constrained host, was starving
-        # uvicorn's bind badly enough that the API took MINUTES to come up (or
-        # appeared hung) — measured directly on a VM, where --no-ui made it
-        # instant. Blocking here in a poll (time.sleep releases the GIL, handing
-        # uvicorn the CPU it needs to finish binding) makes startup deterministic
-        # regardless of what the main thread does next. Bounded so a genuinely
-        # failed bind still surfaces instead of hanging forever.
-        def _web_listening() -> bool:
-            import socket as _sock
-            probe_host = "127.0.0.1" if args.web_host in ("0.0.0.0", "::", "") else args.web_host
-            try:
-                with _sock.create_connection((probe_host, args.web_port), timeout=0.5):
-                    return True
-            except OSError:
-                return False
-
-        _wt = time.monotonic()
-        _bound = False
-        while time.monotonic() - _wt < 30.0:
-            if _web_listening():
-                _bound = True
-                break
-            time.sleep(0.25)
-        if _bound:
-            _tick("Web dashboard listening", _wt)
-        else:
-            console.print("[yellow]Web dashboard slow to bind (>30s) — "
-                          "continuing; it may still come up.[/yellow]")
         if args.debug:
             console.print(
                 f"[green]✓[/green] Web dashboard  "
@@ -1644,7 +1656,7 @@ def main() -> None:
             )
 
     # ------------------------------------------------------------------
-    # 10b. Self-healing watchdog — checks components every 30s, attempts
+    # 10b. Self-healing watchdog - checks components every 30s, attempts
     #      recovery on failure, isolates faults so nothing takes the
     #      whole system down.
     # ------------------------------------------------------------------
@@ -1663,7 +1675,7 @@ def main() -> None:
             healer.register("dns_interceptor", dns_server.is_listening, _recover_dns)
 
         # store.restart_writer is the RECOVERY action. Without it the watchdog
-        # could detect a dead event writer and do nothing — which is what it
+        # could detect a dead event writer and do nothing - which is what it
         # did, while every DNS decision, detection and response went unrecorded.
         healer.register("store_writer", store.is_writing, store.restart_writer)
 
@@ -1736,7 +1748,7 @@ def main() -> None:
         # Process attribution. Its refresh thread used to die on any single
         # psutil/OS exception, freezing the port->process table and making every
         # subsequent DNS event attribute to whatever process held that port at
-        # the moment of death — wrong attribution, reported as fact, forever.
+        # the moment of death - wrong attribution, reported as fact, forever.
         # is_running() now covers both "thread alive" and "table not stale", so
         # the watchdog can catch either failure.
         if proc_watcher is not None:
@@ -1749,7 +1761,7 @@ def main() -> None:
             web_state.self_heal = healer
 
     # ------------------------------------------------------------------
-    # 10c. Enforcement-lease sweeper — the half of the lease design that
+    # 10c. Enforcement-lease sweeper - the half of the lease design that
     #      makes time-boxing real.
     #
     #      Every autonomous enforcement Valkyrie applies is granted a lease
@@ -1772,7 +1784,7 @@ def main() -> None:
 
         # Coverage is the oracle for authority's coverage gate: a detector
         # whose sensors are dark must not buy the same authority as one whose
-        # sensors are live. TTL-cached and refreshed off the detection path —
+        # sensors are live. TTL-cached and refreshed off the detection path -
         # check_all() costs ~3.3s and must never run inside the path that has
         # to react to an attack. Before the registry-backed probes landed this
         # gate would have reported "degraded" for 50 of 57 controls and
@@ -1809,7 +1821,7 @@ def main() -> None:
                          name="lease-sweeper").start()
 
     # ------------------------------------------------------------------
-    # 11. TLS inspection (optional — disabled by default)
+    # 11. TLS inspection (optional - disabled by default)
     # ------------------------------------------------------------------
     tls_inspector = None
     if args.tls and not args.no_tls:
@@ -1862,7 +1874,7 @@ def main() -> None:
     console.print("  [dim]Press Ctrl-C to stop.[/dim]\n")
 
     # Auto-open the dashboard in the browser, but only for an interactive
-    # session with the web UI enabled — never when headless (--no-ui) or when
+    # session with the web UI enabled - never when headless (--no-ui) or when
     # running under the Service Control Manager (no desktop session).
     if args.web and not args.no_ui:
         from .service_manager import is_running_as_service
