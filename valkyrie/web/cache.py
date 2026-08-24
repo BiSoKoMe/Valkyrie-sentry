@@ -1,4 +1,4 @@
-"""Response cache for the API — the fix for a self-inflicted availability bug.
+"""Response cache for the API - the fix for a self-inflicted availability bug.
 
 WHAT WAS ACTUALLY WRONG
 -----------------------
@@ -21,7 +21,7 @@ actually does:
     /api/health              11,175 ms   <-- the trivial one is the SLOWEST
 
 That last line is the whole diagnosis. ``/api/health`` does essentially no
-work, so 11.2 seconds is not its cost — it is time spent waiting behind other
+work, so 11.2 seconds is not its cost - it is time spent waiting behind other
 requests. Every one of server.py's 57 route handlers is declared ``async
 def``, and FastAPI runs an ``async def`` handler ON the event loop rather than
 in a threadpool. A handler that blocks therefore blocks *the entire server*,
@@ -30,19 +30,54 @@ the queue only grows: that is the accept-backlog exhaustion that wedged the
 engine, and it is why the wedged socket stayed in LISTEN while connections
 were reset.
 
-Two separate faults, needing two separate fixes, both here:
+Two separate faults, needing two separate fixes:
 
 1. **Blocking the loop.** Work is handed to ``asyncio.to_thread`` so a slow
    probe can never again starve every other endpoint. This alone decouples
    ``/api/health`` from ``/api/controls/coverage``.
 
+   NOTE: doing this HERE only ever covered the four endpoints that route
+   through this cache. The other ~45 handlers stayed ``async def`` with
+   synchronous bodies, so the fault above was still live for all of them --
+   and it wedged the engine again, in exactly the shape described above (1
+   LISTEN socket, 202 CLOSE_WAIT, new connections refused). The real fix is in
+   server.py, where every handler without an ``await`` is now a plain ``def``
+   and runs in the threadpool. See the async rule documented above its routes.
+
 2. **Recomputing per request.** Coverage genuinely costs ~3.3 s of host
    probing (``secure_file`` 1.74 s, ``dns_sinkhole`` 0.52 s,
    ``killchain_correlator`` 0.44 s, ``etw_sysmon`` 0.43 s). No amount of
    threading makes that cheap enough to run every 1.5 s. It has to be
-   computed once and served many times — the precedent set by
+   computed once and served many times - the precedent set by
    ``sensor_tamper.current_status()`` and by the asset-inventory fix in
    dfee807, which took that endpoint from 33.9 s to 0.1 s the same way.
+
+WHAT THE NUMBERS ABOVE ARE NOT
+------------------------------
+Read the first table as *observed latency on a contended server*, never as the
+cost of the endpoint. Re-measured 2026-08-21 against a copy of the live 91 MB
+database (57,204 detections, 47,407 events, all hot columns indexed), calling
+the producers directly with nothing else running:
+
+    store.stats()                    67.5 ms
+    store.top_blocked_domains(5)      5.9 ms
+    store.recent_events(200)          1.5 ms
+    store.scanner_decision_count()    0.9 ms
+    store.doh_bypass_stats()          0.8 ms
+
+That is the whole SQL cost of ``_build_stats`` -- about 75 ms, not 2,530 ms.
+The non-SQL work in it is cheaper still: ``firewall.count()`` is an in-memory
+``len()``, ``is_running_as_service()`` is one ``GetConsoleWindow()`` call,
+``_dns_active()`` reads an in-memory component snapshot, and
+``MeetingMode().status()`` reads one small JSON file. So ``/api/stats`` was
+never a 2.5-second endpoint; that figure was queue time, the same artifact as
+``/api/health``'s 11.2 s, and the "alone, sequentially" framing hid it because
+the engine under test still had its sinkhole, sensors and EDR running
+alongside. Coverage is the one number in that table that was mostly real work.
+
+This matters for anyone tuning the TTLs below: the case for TTL_STATS is
+single-flight collapsing concurrent pollers, NOT skipping an expensive query.
+Optimising the stats SQL further would be optimising the wrong thing.
 
 WHAT THIS DELIBERATELY DOES NOT DO
 ----------------------------------
@@ -125,7 +160,7 @@ class ResponseCache:
         """Return ``producer()``'s value, computing it at most every ``ttl_s``.
 
         ``producer`` is a plain synchronous callable and is ALWAYS run in a
-        worker thread — never inline on the event loop.
+        worker thread - never inline on the event loop.
 
         Raises whatever ``producer`` raises, but only when there is no
         previously good value to fall back on. See the module docstring: an
@@ -192,7 +227,7 @@ class ResponseCache:
         return None if entry is None else self._clock() - entry.computed_at
 
     def snapshot(self) -> dict:
-        """Per-key age and last refresh error — for /api/cache/stats.
+        """Per-key age and last refresh error - for /api/cache/stats.
 
         Exposed because a cache that silently stops refreshing looks exactly
         like a system where nothing is happening, and those must be
@@ -214,7 +249,7 @@ class ResponseCache:
 
         Stale-while-revalidate deliberately returns before its refresh
         finishes, so there is otherwise no way to observe "the refresh
-        landed" — a caller that spins on ``asyncio.sleep(0)`` yields to the
+        landed" - a caller that spins on ``asyncio.sleep(0)`` yields to the
         event loop but never waits for the worker-thread round trip, which
         makes it a race that passes under light load and fails under heavy
         load. Also useful on shutdown, to avoid abandoning a refresh midway.
@@ -247,10 +282,19 @@ CACHE = ResponseCache()
 #                    concurrent duplicate pollers, not skipping the query.
 #   events      1s : same shape as stats; it is a LIMIT 200 read.
 #   components  2s : registry snapshot of subsystem health.
+#   mac        10s : adapter enumeration, measured 356-1164 ms steady state
+#                    (3,465 ms on the first cold call) against the rebuilt
+#                    engine. The privacy view polls it every 3 s as one of
+#                    seven parallel calls, so uncached it is the single most
+#                    expensive thing the dashboard does repeatedly. A MAC only
+#                    changes on an explicit randomise/restore or a network
+#                    reconnect, and both mutating routes invalidate this key,
+#                    so the TTL costs the UI nothing in freshness.
 TTL_COVERAGE = 30.0
 TTL_STATS = 1.0
 TTL_EVENTS = 1.0
 TTL_COMPONENTS = 2.0
+TTL_MAC = 10.0
 
 # A cold producer that hangs must not hang the request forever -- that is the
 # failure this whole module exists to prevent. Generous enough that a genuinely
