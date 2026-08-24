@@ -86,11 +86,24 @@ jobs:
           # crash, just deaf). The run that passed used the SAME commit and the
           # same flags, so this is runner variance, not a code path.
           # Restarting the engine costs ~1 minute; losing the run costs ~40.
+          #
+          # --no-intelligence added 2026-08-24 to cure the "deaf after 2 OK"
+          # readiness failure. The web dashboard binds LAST in startup and is
+          # single-threaded; the intelligence self-learning layer runs
+          # CPU-heavy background threads (baseline loop, threat-graph, memory)
+          # that starve the web thread of GIL time on a 2-vCPU runner, so
+          # /api/health answers a couple of probes then goes deaf. The offline
+          # live_safe harness runs with --no-intelligence and NEVER goes deaf,
+          # which is the evidence this is the cause, not a guess. Intelligence is
+          # the ADAPTIVE/self-learning layer; every ATT&CK technique in the
+          # catalog is detected by behavioral_rules / behavioral_sequences /
+          # IOAs, NOT by intelligence, so turning it off costs zero catalog
+          # coverage while removing the background load that caused the strand.
           function Start-Engine {
             $proc = Start-Process -FilePath python `
               -ArgumentList "-m", "valkyrie", "--web", "--web-port", "8090", `
                 "--no-dns", "--no-firewall", "--no-unbound", "--no-tls", "--no-sysmon-setup", `
-                "--no-download-lists" `
+                "--no-download-lists", "--no-intelligence" `
               -RedirectStandardOutput "valkyrie_stdout.log" `
               -RedirectStandardError "valkyrie_stderr.log" `
               -PassThru -WindowStyle Hidden
