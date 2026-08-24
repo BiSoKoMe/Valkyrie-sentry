@@ -511,7 +511,6 @@ def create_app(ctx: Optional[AppContext] = None):
         global state
         state = ctx
 
-    @asynccontextmanager
     async def _loop_stall_monitor():
         """Diagnostic: measure the event loop's OWN responsiveness from inside
         it. This coroutine expects to wake every 1s; if it wakes much later, the
@@ -538,6 +537,7 @@ def create_app(ctx: Optional[AppContext] = None):
                       f"BLOCKED for {drift:.1f}s (health would have been deaf this "
                       f"whole time)", file=_sys.stderr, flush=True)
 
+    @asynccontextmanager
     async def _lifespan(app: FastAPI):
         # Startup: capture loop, register live-event subscriber
         global _loop
