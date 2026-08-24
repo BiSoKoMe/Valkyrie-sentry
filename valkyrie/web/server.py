@@ -33,7 +33,7 @@ from urllib.parse import urlparse
 from ..config import DATA_DIR, WEB_HOST, WEB_PORT
 from ..context import AppContext
 from .cache import (CACHE, COLD_TIMEOUT_S, TTL_COMPONENTS, TTL_COVERAGE,
-                    TTL_EVENTS, TTL_STATS)
+                    TTL_EVENTS, TTL_MAC, TTL_STATS)
 
 _WEB_DIR = Path(__file__).parent
 _PROJECT_ROOT = _WEB_DIR.parent.parent   # .../valkyrie/web -> .../valkyrie -> repo root
