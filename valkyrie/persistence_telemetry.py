@@ -1,25 +1,25 @@
-"""Persistence (ASEP) telemetry collector — endpoint visibility for the places
+"""Persistence (ASEP) telemetry collector - endpoint visibility for the places
 attackers establish persistence.
 
 Auto-Start Extension Points (ASEPs) are where malware survives reboot: registry
 Run keys, Windows services, Scheduled Tasks and Startup folders. This collector
 snapshots those locations and emits a normalized ``TelemetryEvent`` (category
-``persistence``) whenever a NEW entry appears — the highest-signal, lowest-noise
+``persistence``) whenever a NEW entry appears - the highest-signal, lowest-noise
 endpoint telemetry available without a kernel sensor.
 
 Scope and honesty:
   * **Read-only pollers** over the registry (stdlib ``winreg``) and the
-    filesystem — no ETW, no kernel, no external process, no console window. It
+    filesystem - no ETW, no kernel, no external process, no console window. It
     detects persistence shortly after it is written (poll interval), not at the
     instant of the write. Real-time capture (ETW registry/file providers) is the
     documented next increment; it plugs into the same schema and pipeline.
   * The first poll establishes a silent baseline, so the hundreds of legitimate
-    pre-existing ASEPs are not reported — only entries created *after* start.
+    pre-existing ASEPs are not reported - only entries created *after* start.
   * Degrades gracefully to a no-op on non-Windows or when a key is unreadable;
     never raises into the caller.
 
-Every event carries a MITRE-ish label (run key → T1547, service → T1543, task →
-T1053, startup folder → T1547) that the EDR engine maps to a technique, and a
+Every event carries a MITRE-ish label (run key -> T1547, service -> T1543, task ->
+T1053, startup folder -> T1547) that the EDR engine maps to a technique, and a
 suspicious command line (encoded PowerShell, download cradle, temp path) escalates
 the severity via the same heuristics the process collector uses.
 """
@@ -57,18 +57,18 @@ _ACTIVITY_LABEL = {
 }
 
 def _enum_loaded_user_sids() -> list[str]:
-    """SIDs of currently-LOADED user hives under HKEY_USERS — i.e. actual
+    """SIDs of currently-LOADED user hives under HKEY_USERS - i.e. actual
     logged-on interactive users.
 
     Valkyrie ships as a Windows service with no configured logon account, so
     nssm runs it as LocalSystem. From that process, HKEY_CURRENT_USER is
-    LocalSystem's OWN hive (effectively HKU\\.DEFAULT) — NOT the interactive
+    LocalSystem's OWN hive (effectively HKU\\.DEFAULT) - NOT the interactive
     desktop user's. A registry Run-key write via the interactive user's HKCU
     (by far the most common real-world persistence path, since it needs no
     admin rights) was therefore structurally invisible: the poller was reading
     the wrong hive, not failing to detect in time. HKEY_USERS instead lists
     every hive actually loaded (i.e. every logged-on user), so a service can
-    read them directly — the same capability every real EDR/AV agent relies on.
+    read them directly - the same capability every real EDR/AV agent relies on.
     Mirrors _startup_dirs() below, which already solves the identical
     service-vs-interactive-user problem for the filesystem case by enumerating
     C:\\Users explicitly instead of trusting "current user" context.
@@ -95,7 +95,7 @@ def _run_key_specs() -> list:
         (H.HKEY_CURRENT_USER,  r"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce", "HKCU\\...\\RunOnce"),
         (H.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon", "HKLM\\...\\Winlogon"),
     ]
-    # Per-user Run/RunOnce via HKEY_USERS\<SID> — see _enum_loaded_user_sids.
+    # Per-user Run/RunOnce via HKEY_USERS\<SID> - see _enum_loaded_user_sids.
     # The static HKEY_CURRENT_USER entries above are kept too: harmless, and
     # meaningful in the (less common) case Valkyrie runs interactively rather
     # than as a service.
@@ -182,8 +182,8 @@ def _persistence_severity(activity: str, command: str) -> tuple[str, list[str], 
     """New persistence is inherently notable (medium); a suspicious command line
     or temp-dir target escalates to high.
 
-    OS self-maintenance — Windows Update (TrustedInstaller), Defender, Edge's
-    updater, signed drivers — legitimately creates autostart entries constantly,
+    OS self-maintenance - Windows Update (TrustedInstaller), Defender, Edge's
+    updater, signed drivers - legitimately creates autostart entries constantly,
     and on real hardware that was the largest single source of persistence false
     positives. When the entry's target is a trusted OS binary, start at INFO so
     it is OBSERVED (logged, no alert) rather than flagged. Escalation below still
@@ -236,17 +236,17 @@ class PersistenceCollector:
             for hive, subkey, loc in _run_key_specs():
                 for name, data in _read_values(hive, subkey).items():
                     snap[PERSIST_RUN_KEY][f"{loc}::{name}"] = data
-            # Services — track names cheaply; ImagePath is read lazily on emit.
+            # Services - track names cheaply; ImagePath is read lazily on emit.
             for svc in _subkeys(winreg.HKEY_LOCAL_MACHINE, _SERVICES_KEY) if _WINREG else []:
                 snap[PERSIST_SERVICE][svc] = ""
-            # Scheduled tasks — file names under the Tasks tree.
+            # Scheduled tasks - file names under the Tasks tree.
             if os.path.isdir(_TASKS_DIR):
                 for root, _dirs, files in os.walk(_TASKS_DIR):
                     for f in files:
                         full = os.path.join(root, f)
                         rel = os.path.relpath(full, _TASKS_DIR)
                         snap[PERSIST_SCHEDULED_TASK][rel] = ""
-            # Startup folders — files.
+            # Startup folders - files.
             for d in _startup_dirs():
                 try:
                     for f in os.listdir(d):
@@ -321,6 +321,22 @@ class PersistenceCollector:
             if not self._running:
                 break
             try:
+                # Diagnostic timing (2026-08-24): a full snapshot enumerates every
+                # HKLM service subkey + os.walk of the Tasks tree + registry run
+                # keys - GIL-heavy Python work. The first poll lands at ~15s,
+                # exactly when the uvicorn event loop goes deaf under Tier B
+                # (valkyrie_startup_deafness). Log each poll's duration to stderr
+                # so the CI transcript shows whether THIS is the loop-stall's GIL
+                # hog. If a poll takes several seconds and the [loop-stall] line
+                # fires at the same moment, the collector is confirmed as the
+                # cause. Cheap; safe to leave on.
+                _t0 = time.monotonic()
                 self.poll_once()
+                _dur = time.monotonic() - _t0
+                if _dur > 1.0:
+                    import sys as _sys
+                    print(f"[persist-poll] {time.strftime('%H:%M:%S')} snapshot "
+                          f"held the thread for {_dur:.1f}s", file=_sys.stderr,
+                          flush=True)
             except Exception:
                 pass
