@@ -108,6 +108,10 @@ def _run_key_specs() -> list:
     return specs
 
 _SERVICES_KEY = r"SYSTEM\CurrentControlSet\Services"
+# How often the cooperative snapshot yields the GIL. Small enough that the web
+# loop never starves (the 253s-freeze bug), large enough that the yields add
+# negligible overhead to a normal, fast snapshot.
+_YIELD_EVERY = 128
 _TASKS_DIR = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "Tasks")
 
 
@@ -215,12 +219,18 @@ def _persistence_severity(activity: str, command: str) -> tuple[str, list[str], 
 class PersistenceCollector:
     """Polls ASEP locations and emits a TelemetryEvent per newly-created entry."""
 
-    def __init__(self, emit: Callable[[TelemetryEvent], None], interval: float = 15.0) -> None:
+    def __init__(self, emit: Callable[[TelemetryEvent], None], interval: float = 15.0,
+                 snapshot_budget: float = 8.0) -> None:
         self._emit = emit
         self._interval = max(2.0, float(interval))
         self._last: Optional[dict] = None      # {activity: {identity: value}}
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        # Wall-clock cap on a single snapshot so it can never freeze the process
+        # the way the unbounded version froze the web loop for 253s (see
+        # snapshot() docstring). Truncated sections are recorded here.
+        self._snapshot_budget = max(1.0, float(snapshot_budget))
+        self._truncated: list[str] = []
 
     def available(self) -> bool:
         return os.name == "nt" and _WINREG
@@ -228,35 +238,93 @@ class PersistenceCollector:
     # -- snapshot -----------------------------------------------------------
     def snapshot(self) -> dict:
         """Return {activity: {identity: command}} across all ASEP classes.
-        Never raises."""
+        Never raises.
+
+        COOPERATIVE + BOUNDED (2026-08-24). Measured on a CI runner, a naive
+        snapshot held the thread for **253 seconds** enumerating the services
+        registry and the Tasks tree - and because it never released the GIL, it
+        froze the web server's asyncio loop for that whole time, so /api/health
+        went deaf and every Tier B run failed at the readiness gate (confirmed by
+        the [loop-stall]/[persist-poll] instrumentation; see
+        valkyrie_startup_deafness). Two guarantees fix that here:
+
+          1. GIL yield: every _YIELD_EVERY items we call time.sleep(0) so the
+             event-loop thread (and everything else) gets to run. A snapshot can
+             never again monopolise the interpreter.
+          2. Time budget: the whole snapshot is capped at self._snapshot_budget
+             seconds. A section that would run away is truncated and the fact is
+             recorded (self._truncated). A partial persistence snapshot is
+             vastly better than a multi-minute freeze - and a persistence
+             monitor that takes minutes is useless anyway (it would report the
+             change long after the attacker used it)."""
         snap = {PERSIST_RUN_KEY: {}, PERSIST_SERVICE: {},
                 PERSIST_SCHEDULED_TASK: {}, PERSIST_STARTUP_FOLDER: {}}
+        deadline = time.monotonic() + self._snapshot_budget
+        truncated: list[str] = []
+        n = 0
+
+        def _tick() -> bool:
+            """Yield the GIL periodically; return True when the budget is spent."""
+            nonlocal n
+            n += 1
+            if n % _YIELD_EVERY == 0:
+                time.sleep(0)                 # release the GIL to the web loop
+            return time.monotonic() >= deadline
+
         try:
-            # Run / RunOnce / Winlogon values.
+            # Run / RunOnce / Winlogon values (cheap; always completes).
             for hive, subkey, loc in _run_key_specs():
                 for name, data in _read_values(hive, subkey).items():
                     snap[PERSIST_RUN_KEY][f"{loc}::{name}"] = data
-            # Services - track names cheaply; ImagePath is read lazily on emit.
-            for svc in _subkeys(winreg.HKEY_LOCAL_MACHINE, _SERVICES_KEY) if _WINREG else []:
-                snap[PERSIST_SERVICE][svc] = ""
-            # Scheduled tasks - file names under the Tasks tree.
-            if os.path.isdir(_TASKS_DIR):
+                    _tick()
+            # Services - enumerated INLINE (not via _subkeys) so the GIL yield
+            # and the budget apply to the enumeration itself, which is a prime
+            # suspect for the runaway. ImagePath is still read lazily on emit.
+            if _WINREG:
+                try:
+                    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _SERVICES_KEY) as k:
+                        i = 0
+                        while True:
+                            try:
+                                svc = winreg.EnumKey(k, i)
+                            except OSError:
+                                break
+                            snap[PERSIST_SERVICE][svc] = ""
+                            i += 1
+                            if _tick():
+                                truncated.append("services")
+                                break
+                except OSError:
+                    pass
+            # Scheduled tasks - file names under the Tasks tree (os.walk is
+            # incremental, so the yield/budget bite per file).
+            if time.monotonic() < deadline and os.path.isdir(_TASKS_DIR):
+                stop = False
                 for root, _dirs, files in os.walk(_TASKS_DIR):
                     for f in files:
                         full = os.path.join(root, f)
                         rel = os.path.relpath(full, _TASKS_DIR)
                         snap[PERSIST_SCHEDULED_TASK][rel] = ""
-            # Startup folders - files.
+                        if _tick():
+                            truncated.append("scheduled_tasks")
+                            stop = True
+                            break
+                    if stop:
+                        break
+            # Startup folders - files (cheap).
             for d in _startup_dirs():
                 try:
                     for f in os.listdir(d):
                         if f.lower() == "desktop.ini":
                             continue
                         snap[PERSIST_STARTUP_FOLDER][os.path.join(d, f)] = os.path.join(d, f)
+                        _tick()
                 except OSError:
                     continue
         except Exception:
             pass
+
+        self._truncated = truncated
         return snap
 
     # -- emit helpers -------------------------------------------------------
