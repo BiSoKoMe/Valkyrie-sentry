@@ -49,6 +49,30 @@ class Rule:
                                    # (any B), e.g. (any download verb) AND (any
                                    # executable extension), which one cmd_any
                                    # alone cannot express.
+    cmd_any3: tuple = ()           # a THIRD ANY-group, same rationale. Needed to
+                                   # separate "wrote a payload INTO Startup" from
+                                   # "ran normally FROM Startup": both mention the
+                                   # folder and an executable extension, and only
+                                   # the write VERB tells them apart.
+    cmd_not: tuple = ()            # EXCLUSIONS - if any is present, do not fire.
+                                   #
+                                   # Every mature vendor rule is mostly exclusions;
+                                   # Valkyrie had no way to express one, so its
+                                   # rules were structurally more false-positive
+                                   # prone than the content it wanted to import.
+                                   #
+                                   # DANGER, and the standard for adding one: an
+                                   # exclusion is an attacker-visible bypass. If a
+                                   # rule skips anything containing "\sysvol\",
+                                   # an attacker who knows that hosts their payload
+                                   # under a share called sysvol. So an exclusion
+                                   # must key on something the attacker does NOT
+                                   # control, or must be narrow enough that forging
+                                   # it costs more than the detection is worth. An
+                                   # exclusion that is trivially forgeable AND
+                                   # guards a high-value signal must not be added
+                                   # at all - accept the false positive or fix the
+                                   # rule some other way.
     path_any: tuple = ()           # ANY of these substrings in the image path
 
     def matches(self, image: str, parent: str, cmd: str, path: str) -> bool:
@@ -71,12 +95,21 @@ class Rule:
             _, _, _args = cmd.partition(" ")
             if not any(t in _args for t in self.cmd_any2):
                 return False
+        if self.cmd_any3 and not any(t in cmd for t in self.cmd_any3):
+            return False
+        # Exclusions are evaluated LAST and on the same normalised command line
+        # the positive terms saw, so an exclusion cannot be smuggled past by the
+        # obfuscation the normaliser already undoes.
+        if self.cmd_not and any(t in cmd for t in self.cmd_not):
+            return False
         if self.path_any and not any(t in path for t in self.path_any):
             return False
         # A rule with no POSITIVE condition never fires (guards against typos;
-        # images_not alone is not enough - it must pair with a positive match).
+        # images_not/cmd_not alone are not enough - they must pair with a
+        # positive match).
         return bool(self.images or self.parents or self.cmd_all
-                    or self.cmd_any or self.cmd_any2 or self.path_any)
+                    or self.cmd_any or self.cmd_any2 or self.cmd_any3
+                    or self.path_any)
 
 
 @dataclass(frozen=True)
@@ -136,16 +169,31 @@ RULES: tuple = (
          parents=("wmiprvse.exe",),
          images_not=("wmiprvse.exe", "wmiadap.exe", "scrcons.exe", "mofcomp.exe",
                      "wmic.exe", "unsecapp.exe")),
+    # DELIBERATELY NOT NARROWED. Elastic's corpus contains one benign exclusion
+    # here - an app using `mshta vbscript:close(CreateObject(...).Popup(...))`
+    # to show a notification. Excluding ".popup(" would clear that single false
+    # positive and simultaneously hand every attacker a two-word bypass, because
+    # the string costs nothing to add to a hostile command line. `mshta` running
+    # inline vbscript:/javascript: is a high-value, hard-to-fake signal, so the
+    # false positive is ACCEPTED rather than traded for a public bypass. Not
+    # every finding should be fixed; this is what the exclusion standard on
+    # Rule.cmd_not means in practice.
     Rule("mshta-remote", "T1218.005 — Mshta", SEV_HIGH,
          "mshta_exec", "mshta executed a remote or inline script",
          images=("mshta.exe",), cmd_any=("http://", "https://", "javascript:", "vbscript:")),
     Rule("regsvr32-scriptlet", "T1218.010 — Regsvr32 (Squiblydoo)", SEV_HIGH,
          "regsvr32_scriptlet", "regsvr32 loaded a remote scriptlet (Squiblydoo)",
          images=("regsvr32.exe",), cmd_any=("/i:http", "scrobj", "/i:https")),
+    # `mshtml` as a bare token matched mshtml.dll,PrintHTML - printing a web page
+    # - which Elastic's fleet exclusions show is ordinary user activity. The
+    # actual proxy-execution vector is the RunHTMLApplication export, so key on
+    # that instead. Not an exclusion: a narrower positive, which an attacker
+    # cannot sidestep because RunHTMLApplication IS the technique.
     Rule("rundll32-proxy", "T1218.011 — Rundll32", SEV_HIGH,
          "rundll32_proxy", "rundll32 proxied script/remote execution",
          images=("rundll32.exe",),
-         cmd_any=("javascript:", "http://", "https://", "mshtml", "url.dll,openurl")),
+         cmd_any=("javascript:", "http://", "https://", "url.dll,openurl",
+                  "mshtml.dll,runhtmlapplication", "mshtml,runhtmlapplication")),
     # The other half of T1218.011, and the one the rule above missed: rundll32
     # loading a DLL from a USER-WRITABLE directory. Legitimate rundll32 use
     # loads DLLs out of System32/SysWOW64/Program Files - a signed OS binary
@@ -154,11 +202,19 @@ RULES: tuple = (
     # entry point after the comma is what a normal Windows operation never has
     # in those paths. Found by the red-team evaluation (exec-rundll32-proxy
     # replayed the DLL form, not the remote-script form, and nothing fired).
+    # DROP ZONES, not application directories. The original list included bare
+    # \appdata\ and \programdata\, which are where legitimate software INSTALLS
+    # itself - Elastic's fleet exclusions caught WebEx
+    # (\appdata\local\webex\...\atasctrl.dll,StartHostLauncher) and Admin By
+    # Request (\programdata\fasttrack software\...\shellhelper32.dll,#1) doing
+    # exactly this. A staging directory a payload is dropped into is the signal;
+    # a vendor's install directory is not.
     Rule("rundll32-lowtrust-dll", "T1218.011 — Rundll32", SEV_HIGH,
          "rundll32_proxy", "rundll32 loaded a DLL from a user-writable directory",
          images=("rundll32.exe",), cmd_all=(".dll,",),
-         cmd_any=("\\users\\public\\", "\\appdata\\", "\\temp\\", "\\downloads\\",
-                  "\\programdata\\", "\\windows\\temp\\", "\\perflogs\\")),
+         cmd_any=("\\users\\public\\", "\\temp\\", "\\downloads\\",
+                  "\\appdata\\local\\temp\\", "\\appdata\\roaming\\microsoft\\windows\\",
+                  "\\windows\\temp\\", "\\perflogs\\", "\\$recycle.bin\\")),
     # LOW, not MEDIUM: "an executable ran from temp/downloads" is not by itself
     # an attack - installers, updaters and uninstallers do it constantly, and as
     # a standalone MEDIUM this false-positived on Valkyrie's own installer and on
@@ -203,7 +259,14 @@ RULES: tuple = (
     Rule("usn-journal-delete", "T1070 — Indicator Removal", SEV_HIGH,
          "usn_deleted", "USN change journal deleted (anti-forensics)",
          images=("fsutil.exe",), cmd_all=("usn", "deletejournal")),
-    Rule("execpolicy-bypass", "T1059.001 — PowerShell (ExecutionPolicy Bypass)", SEV_MEDIUM,
+    # LOW, not MEDIUM, for the same reason as suspicious-path-exec: this is a
+    # CONTEXT signal, not a detection. Elastic's fleet exclusions show
+    # -ExecutionPolicy Bypass on winget's own updater, Windows Auto-Update
+    # notifiers and Azure AD SSO logon scripts - it is how a large amount of
+    # legitimate enterprise tooling invokes PowerShell at all. At LOW it still
+    # carries its label and T1059.001 mapping when it CO-OCCURS with a real
+    # signal, but it no longer raises an incident on its own.
+    Rule("execpolicy-bypass", "T1059.001 — PowerShell (ExecutionPolicy Bypass)", SEV_LOW,
          "execpolicy_bypass", "PowerShell execution policy bypassed",
          cmd_any=("-executionpolicy bypass", "-ep bypass", "-exec bypass")),
     # Base64 -EncodedCommand payload. The label 'encoded_powershell' is also
@@ -215,7 +278,16 @@ RULES: tuple = (
     # token set so the two never disagree. Precision: `-enc`/`-ec` on
     # powershell.exe's own command line is EncodedCommand; a bare `-e` is not
     # included (it collides with unrelated args).
-    Rule("powershell-encoded-command", "T1059.001 — PowerShell (EncodedCommand)", SEV_MEDIUM,
+    # LOW, and this one is safe to demote because it is REDUNDANT for the
+    # malicious case: cmdline_normalize decodes the base64 before rules run, so
+    # a hostile payload is caught by the rules that match its DECODED content
+    # (verified: an encoded IEX download cradle fires ps-download-cradle-exec,
+    # remote-download-iex, clickfix-run-dialog-exec and
+    # remote-fetch-executable-generic). What is left when those do not fire is
+    # an encoded command whose contents are benign - which is what Elastic's
+    # exclusions are full of. So the encoding alone stays as context, and the
+    # payload is what raises the incident.
+    Rule("powershell-encoded-command", "T1059.001 — PowerShell (EncodedCommand)", SEV_LOW,
          "encoded_powershell", "PowerShell ran a base64 -EncodedCommand payload",
          images=("powershell.exe", "pwsh.exe"),
          cmd_any=("-enc ", "-enc:", "-encodedcommand", "-ec ")),
@@ -345,10 +417,15 @@ RULES: tuple = (
     # to admin shares too (per the redteam-evaluation lat-tool-transfer finding),
     # so this is a real but modest signal - a plain UNC path to a NORMAL share
     # (no $) never matches, which keeps ordinary file-server copies clear.
+    # The loopback exclusion is semantic, not a concession: \\127.0.0.1\ADMIN$
+    # and \\localhost\C$ are the LOCAL machine, so by definition no lateral
+    # movement happened. Safe against forgery too - an attacker who reroutes
+    # their transfer through loopback has not moved laterally either.
     Rule("lateral-tool-transfer", "T1570 — Lateral Tool Transfer", SEV_MEDIUM,
          "lateral_tool_transfer", "A file was copied to a remote administrative share",
          images=("cmd.exe", "powershell.exe", "pwsh.exe", "robocopy.exe", "xcopy.exe"),
-         cmd_all=("\\\\",), cmd_any=("c$", "d$", "admin$", "ipc$")),
+         cmd_all=("\\\\",), cmd_any=("c$", "d$", "admin$", "ipc$"),
+         cmd_not=("\\\\127.0.0.1\\", "\\\\localhost\\", "\\\\.\\", "\\\\::1\\")),
 
     # ---
     # Extended LOLBin / trusted-utility execution (T1218 family, T1127).
@@ -371,9 +448,13 @@ RULES: tuple = (
     # regasm/regsvcs call operates on a .dll, so ".dll" alone is not a signal.
     Rule("regasm-regsvcs-exec", "T1218.009 — Regsvcs/Regasm", SEV_HIGH,
          "lolbin_dotnet_exec", "Regasm/Regsvcs used to execute a .NET assembly (unregister/temp-path)",
+         # \programdata\ dropped for the same reason as rundll32-lowtrust-dll:
+         # it is an application INSTALL root, not a staging directory, and
+         # Elastic's exclusions show real installers registering assemblies from
+         # under it. The genuine drop zones are kept.
          images=("regasm.exe", "regsvcs.exe"),
          cmd_any=("/u", "\\users\\public\\", "\\temp\\", "\\appdata\\local\\temp",
-                  "\\downloads\\", "\\programdata\\", "\\windows\\temp")),
+                  "\\downloads\\", "\\windows\\temp")),
     # The REGSVR action string is the DLL-loading vector; plain DSN configuration
     # (/a {CONFIGSYSDSN ...}) is routine, so match REGSVR specifically, not /a.
     Rule("odbcconf-regsvr", "T1218.008 — Odbcconf", SEV_HIGH,
@@ -382,10 +463,20 @@ RULES: tuple = (
     Rule("cmstp-exec", "T1218.003 — CMSTP", SEV_HIGH,
          "lolbin_inf_exec", "CMSTP silent-install of an INF (proxy exec / UAC bypass)",
          images=("cmstp.exe",), cmd_any=("/s", "/ns", "/au")),
+    # \SYSVOL\ is Group Policy software installation - present in every Active
+    # Directory domain on earth, and the single highest-volume false positive
+    # this rule can produce. Elastic ships this same exclusion to their fleet.
+    #
+    # It IS forgeable (an attacker could name a share "sysvol"), and that is
+    # accepted deliberately rather than silently: forging it requires the
+    # attacker to already control a reachable share AND get msiexec pointed at
+    # it, while NOT forging it means alerting on routine domain administration
+    # on every managed machine. The http/https/ftp arms are untouched.
     Rule("msiexec-remote", "T1218.007 — Msiexec (remote package)", SEV_HIGH,
          "lolbin_remote_msi", "msiexec installing a package from a remote/UNC source",
          images=("msiexec.exe",),
-         cmd_any=("http://", "https://", "\\\\", "ftp://")),
+         cmd_any=("http://", "https://", "\\\\", "ftp://"),
+         cmd_not=("\\sysvol\\",)),
     Rule("wuauclt-proxy", "T1218 — Signed Binary Proxy (wuauclt)", SEV_HIGH,
          "lolbin_proxy_exec", "wuauclt UpdateDeploymentProvider used to load a DLL",
          images=("wuauclt.exe",),
@@ -561,7 +652,14 @@ RULES: tuple = (
          images=("reg.exe", "powershell.exe", "pwsh.exe"),
          cmd_any=("uselogoncredential",)),
     # Credential Manager UI / keymgr credential access.
-    Rule("keymgr-creds", "T1555 — Credentials from Password Stores (keymgr)", SEV_MEDIUM,
+    # LOW: rundll32 keymgr.dll,KRShowKeyMgr opens the Stored User Names and
+    # Passwords DIALOG. It is a UI action a user performs deliberately, not an
+    # automated credential-theft primitive - it cannot exfiltrate anything
+    # without a human at the keyboard, which is why Elastic treat it as benign.
+    # Kept as context (it is genuinely interesting next to other credential
+    # signals) but it must not raise an incident when somebody opens Credential
+    # Manager.
+    Rule("keymgr-creds", "T1555 — Credentials from Password Stores (keymgr)", SEV_LOW,
          "credential_store_access", "Credential Manager accessed via keymgr.dll",
          images=("rundll32.exe",), cmd_any=("keymgr", "krshowkeymgr")),
     # Fileless: reflective .NET assembly load from bytes/base64 (in-memory, no
@@ -763,10 +861,19 @@ RULES: tuple = (
     # autorun locations only (Start Menu\Programs\Startup, shell:startup); .lnk
     # shortcuts (what installers legitimately drop) are excluded, executable
     # payload extensions are required.
+    # A WRITE verb is now required. Without it the rule could not tell "dropped
+    # a payload INTO Startup" (persistence) from "ran normally FROM Startup"
+    # (every autorun on every machine, every boot) - both name the folder and
+    # both name an executable extension. Elastic's exclusions caught the second
+    # shape: cscript.exe running a .bat that already lived in Startup.
     Rule("startup-folder-drop", "T1547.001 — Startup Folder", SEV_HIGH,
          "persistence_startup", "An executable payload was written to a Startup folder",
          cmd_any=("start menu\\programs\\startup", "shell:startup"),
-         cmd_any2=(".exe", ".bat", ".cmd", ".vbs", ".js", ".jse", ".ps1", ".scr", ".hta")),
+         cmd_any2=(".exe", ".bat", ".cmd", ".vbs", ".js", ".jse", ".ps1", ".scr", ".hta"),
+         cmd_any3=("copy", "move", "xcopy", "robocopy", "out-file", "set-content",
+                   "add-content", "new-item", "writealltext", "writeallbytes",
+                   "downloadfile", "invoke-webrequest", "iwr ", "curl", "wget",
+                   ">", "echo ", "certutil")),
 
     # Credential access - browser credential/cookie store theft. Copying the
     # named SQLite stores (Chrome/Edge "Login Data", Firefox logins.json/key4.db,

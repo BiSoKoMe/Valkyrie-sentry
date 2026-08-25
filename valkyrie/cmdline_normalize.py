@@ -195,6 +195,33 @@ def _fold_unicode(s: str) -> str:
     return "".join(out)
 
 
+# Module types whose comma is EXPORT SYNTAX, not an argument delimiter:
+# `rundll32 evil.dll,EntryPoint`, `control foo.cpl,,2`. Note `.exe` is
+# deliberately ABSENT - `powershell.exe,-EncodedCommand` IS the comma-delimiter
+# evasion this normaliser exists to defeat, so that comma must still fold.
+_MODULE_EXTS = (".dll", ".cpl", ".ocx", ".sys", ".drv")
+
+
+def _is_module_export_comma(out: list, ch: str) -> bool:
+    """Is this comma the separator in `module.dll,ExportName`?
+
+    Folding it destroys the `.dll,` token, and that is not a theoretical
+    concern: it silently killed rundll32-lowtrust-dll in the live engine. The
+    rule fired on the raw command line and missed on the normalised one, so the
+    detection looked present in the source and was absent in production.
+
+    This module's docstring promises normalisation can only ADD detections and
+    never remove one. That promise holds for classify_behavior, which also sees
+    the original string, but NOT for the behavioural rule engine, which is given
+    the normalised text alone. Until that asymmetry is closed, every fold has to
+    be checked against the syntax it might be destroying.
+    """
+    if ch != ",":
+        return False
+    tail = "".join(out[-4:]).lower()
+    return any(tail.endswith(ext) for ext in _MODULE_EXTS)
+
+
 def _fold_delimiters(s: str) -> str:
     """cmd.exe accepts `,` and `;` as argument delimiters equivalent to a
     space, so `whoami,/priv` and `net;user` run exactly like their spaced
@@ -240,7 +267,8 @@ def _fold_delimiters(s: str) -> str:
         elif ch == ")":
             depth = max(0, depth - 1)
             out.append(ch)
-        elif ch in ",;" and depth == 0 and not in_pct:
+        elif ch in ",;" and depth == 0 and not in_pct \
+                and not _is_module_export_comma(out, ch):
             out.append(" ")
         else:
             out.append(ch)
