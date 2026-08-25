@@ -25,15 +25,34 @@ on:
         description: "Skip the genuinely destructive atomics (Defender/firewall disable, shadow-copy delete, event-log clear, service stop, account create)"
         type: boolean
         default: true
+      enable_network_layer:
+        description: "Start the DNS + threat-intelligence layers so the C2 techniques are actually testable (they are scored as MISSED today because their detectors are switched off)"
+        type: boolean
+        default: false
   # Auto-run when this evaluation setup itself changes on the working branch, so
   # a live Tier B pass fires without needing the manual button (which GitHub only
   # exposes once the workflow reaches the default branch). The push-triggered run
   # ALWAYS skips destructive atomics — the safe subset — regardless of inputs.
+  # THE DETECTION ENGINE ITSELF IS NOW A TRIGGER, not just the harness.
+  #
+  # Until 2026-08-25 this only fired on changes to redteam/**, which meant the
+  # scoreboard measured the MEASURING APPARATUS and never the thing being
+  # measured. 109 imported vendor rules, a code-signature layer and a causal
+  # detector all shipped without a single live number, and the run that finally
+  # checked them found they were worth exactly +1 technique (29 -> 30 of 52).
+  # Weeks of work went into an axis that evidence would have shown was nearly
+  # exhausted, because nothing forced the evidence to appear.
+  #
+  # A stale number is worse than no number: it lets you believe you are
+  # improving. So every change to the engine now measures itself. This is a
+  # process fix, not a discipline fix - remembering to run it is exactly what
+  # failed.
   push:
     branches: [feat/efficacy-etw-coverage]
     paths:
       - ".github/workflows/redteam-tierb.yml"
       - "redteam/**"
+      - "valkyrie/**"
 
 jobs:
   tier-b:
@@ -99,11 +118,34 @@ jobs:
           # catalog is detected by behavioral_rules / behavioral_sequences /
           # IOAs, NOT by intelligence, so turning it off costs zero catalog
           # coverage while removing the background load that caused the strand.
+          # THE DENOMINATOR PROBLEM.
+          #
+          # Four catalog techniques (c2-dga-domain, c2-dns-tracker-domain,
+          # c2-dns-tunneling, c2-hardcoded-ip) are scored MISSED on every run,
+          # and none of them is a detection gap. Their detectors are
+          # dga.py, dns_tunnel.py and the DNS interceptor pipeline - all dead
+          # under --no-dns - plus network_telemetry's threat-intel IP feed,
+          # dead under --no-intelligence. The harness has been marking Valkyrie
+          # down for failing to catch things it was never allowed to look at.
+          #
+          # Kept OFF by default so the known-good baseline stays reproducible and
+          # comparable to every previous run. Turned on deliberately, as a
+          # labelled variant, so the effect is measured rather than assumed.
+          # Safe here specifically because a GitHub runner is destroyed after the
+          # job: pointing its resolver at loopback cannot strand anyone's network
+          # the way it once stranded the developer's own.
+          $netArgs = @("--no-dns", "--no-unbound", "--no-intelligence")
+          if ("${{ inputs.enable_network_layer }}" -eq "true") {
+            $netArgs = @("--no-unbound")
+            Write-Host "[cfg] NETWORK LAYER ENABLED - DNS + threat intel live; C2 techniques are testable this run"
+          } else {
+            Write-Host "[cfg] network layer OFF (baseline config) - the 4 C2 techniques are NOT_TESTED, not missed"
+          }
           function Start-Engine {
             $proc = Start-Process -FilePath python `
-              -ArgumentList "-m", "valkyrie", "--web", "--web-port", "8090", `
-                "--no-dns", "--no-firewall", "--no-unbound", "--no-tls", "--no-sysmon-setup", `
-                "--no-download-lists", "--no-intelligence" `
+              -ArgumentList (@("-m", "valkyrie", "--web", "--web-port", "8090") + `
+                $netArgs + `
+                @("--no-firewall", "--no-tls", "--no-sysmon-setup", "--no-download-lists")) `
               -RedirectStandardOutput "valkyrie_stdout.log" `
               -RedirectStandardError "valkyrie_stderr.log" `
               -PassThru -WindowStyle Hidden
