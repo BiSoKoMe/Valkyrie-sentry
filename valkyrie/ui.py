@@ -1,13 +1,13 @@
 """Rich terminal dashboard.
 
 Layout:
-  ┌─────────────────── header ───────────────────────┐
+  ┌--- header ---┐
   │  stat cards (total / blocked / flagged / allowed) │
-  ├──── recent events table ─────────────────────────┤
+  ├--- recent events table ---┤
   │  scrolling live feed of the last N DNS decisions  │
-  ├──── DoH alerts ──────────────────────────────────┤
+  ├--- DoH alerts ---┤
   │  any DoH bypass events logged in this session     │
-  └──── status bar ──────────────────────────────────┘
+  └--- status bar ---┘
 
 All rendering happens on the main thread via Rich's Live context.
 The Store read API is called at UI_REFRESH_RATE Hz.
@@ -33,7 +33,7 @@ from .config import UI_MAX_TABLE_ROWS, UI_REFRESH_RATE
 from .firewall import FirewallManager
 from .store import Store
 
-# Decision → colour mapping
+# Decision -> colour mapping
 _DECISION_STYLE = {
     "blocked":    "bold red",
     "behavioral": "bold magenta",
@@ -99,7 +99,7 @@ class Dashboard:
             # subsystem, so a transient error there (a closed DB handle during
             # shutdown, a subsystem mid-restart) could raise. Unguarded, that
             # killed the render thread and the terminal dashboard froze on its
-            # last frame — still showing numbers, no longer updating, with no
+            # last frame - still showing numbers, no longer updating, with no
             # indication the display had stopped.
             while self._running:
                 try:

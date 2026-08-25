@@ -19,7 +19,7 @@ from valkyrie.ransomware_shield import (  # noqa: E402
 )
 
 
-# ── entropy ────────────────────────────────────────────────────────────────
+# --- entropy ---
 def test_entropy_extremes():
     assert shannon_entropy(b"") == 0.0
     assert shannon_entropy(b"\x00" * 4096) == 0.0
@@ -28,7 +28,7 @@ def test_entropy_extremes():
     assert shannon_entropy(_CANARY_BODY) < 5.0      # readable text is low-entropy
 
 
-# ── canary lifecycle ───────────────────────────────────────────────────────
+# --- canary lifecycle ---
 def test_canary_deploy_verify_restore():
     with tempfile.TemporaryDirectory() as td:
         d = Path(td)
@@ -61,7 +61,7 @@ def test_manifest_persistence():
         assert reloaded.verify() == []                # matches on-disk state
 
 
-# ── detection path (safe simulation) ───────────────────────────────────────
+# --- detection path (safe simulation) ---
 def test_simulate_detects_encryption():
     shield = RansomwareShield(Path(tempfile.gettempdir()) / "rw_manifest.json",
                               response_mode="monitor")
@@ -109,7 +109,7 @@ def test_trip_raises_critical_incident():
     assert shield.stats["detections"] >= 1
 
 
-# ── observability + safety ──────────────────────────────────────────────────
+# --- observability + safety ---
 def test_status_shape():
     shield = RansomwareShield(Path(tempfile.gettempdir()) / "rw_status.json",
                               response_mode="suspend")
@@ -126,7 +126,7 @@ def test_invalid_response_mode_defaults_safe():
     assert shield.response_mode == "suspend"          # never an unsafe/unknown mode
 
 
-# ── performance benchmark ───────────────────────────────────────────────────
+# --- performance benchmark ---
 def test_verify_is_cheap():
     with tempfile.TemporaryDirectory() as td:
         d = Path(td)
@@ -140,7 +140,7 @@ def test_verify_is_cheap():
         assert elapsed < 1.0, f"verify too slow: {elapsed:.3f}s for 50 passes"
 
 
-# ── standalone runner ───────────────────────────────────────────────────────
+# --- standalone runner ---
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

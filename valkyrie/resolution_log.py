@@ -1,4 +1,4 @@
-"""Resolution history — what IPs did Valkyrie actually hand out?
+"""Resolution history - what IPs did Valkyrie actually hand out?
 
 This is the small piece that unlocks Valkyrie's strongest LIST-FREE network
 signal, and it exists only because Valkyrie owns both layers: it is the DNS
@@ -10,12 +10,12 @@ The question it answers:
     Did anything on this machine ever ASK for that address by name?
 
 Legitimate software resolves a name, gets an answer, then connects. Malware
-carrying a hardcoded C2 address does not — which is precisely why the DNS
+carrying a hardcoded C2 address does not - which is precisely why the DNS
 sinkhole never sees it. So "this destination was never resolved here" is a
 strong, intrinsic signal that needs no blocklist, no feed, and no cloud.
 
 Design:
-  * Bounded (`max_entries`) with LRU-ish eviction — an unbounded map of every
+  * Bounded (`max_entries`) with LRU-ish eviction - an unbounded map of every
     IP ever seen is a memory leak on a long-running agent.
   * TTL-aware: an answer is only evidence for as long as it could plausibly
     still be in use. A resolution from three days ago does not justify a
@@ -27,7 +27,7 @@ Design:
 HONEST BOUNDARY: absence of a resolution is *suspicion, not proof*. NTP,
 Windows Update, P2P, games, and anything with a literal IP in its config
 legitimately connect without a lookup. This module produces one signal for
-`network_score.py` to weigh — it never decides anything by itself.
+`network_score.py` to weigh - it never decides anything by itself.
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ class ResolutionLog:
     def record(self, domain: str, ips, ts: Optional[float] = None) -> int:
         """Remember that `domain` resolved to `ips`. Returns how many recorded.
 
-        Called for ALLOWED resolutions only — a sinkholed answer (0.0.0.0)
+        Called for ALLOWED resolutions only - a sinkholed answer (0.0.0.0)
         is not evidence that a real destination was expected.
         """
         d = (domain or "").strip().rstrip(".").lower()

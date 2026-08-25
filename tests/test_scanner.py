@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from valkyrie.site_scanner import SiteScanner
 
-scanner = SiteScanner(store=None)   # no cache — every call runs full analysis
+scanner = SiteScanner(store=None)   # no cache - every call runs full analysis
 
 
 # ---------------------------------------------------------------------------

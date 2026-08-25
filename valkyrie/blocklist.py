@@ -1,14 +1,14 @@
-"""Blocklist loader — seed-first, downloads opt-in.
+"""Blocklist loader - seed-first, downloads opt-in.
 
 On startup:
   1. The built-in seed blocklist (seed_blocklist.py, ~500 of the most
-     egregious tracker domains) is ALWAYS loaded.  No network needed —
+     egregious tracker domains) is ALWAYS loaded.  No network needed -
      day-one protection works fully offline.
   2. Downloaded lists are opt-in (``--download-lists`` or
      USE_EXTERNAL_LISTS=True).  Only then is blocklist.txt refreshed
      from BLOCKLIST_SOURCES when older than BLOCKLIST_MAX_AGE_DAYS.
   3. A previously downloaded blocklist.txt on disk is still honoured if
-     present (it is local data — using it requires no network).
+     present (it is local data - using it requires no network).
 
 Beyond the seed, ongoing protection comes from the intelligence layer,
 which learns threats from this machine's own traffic.
@@ -35,7 +35,7 @@ from .seed_blocklist import SEED_DOMAINS
 
 # Matches lines like "0.0.0.0 tracker.example.com" or "127.0.0.1 ..."
 _HOSTS_PATTERN = re.compile(r"^\s*(?:0\.0\.0\.0|127\.0\.0\.1)\s+([a-zA-Z0-9.\-_]+)")
-# Matches raw domain lines (no IP prefix) — for OISD domainswild format
+# Matches raw domain lines (no IP prefix) - for OISD domainswild format
 _DOMAIN_PATTERN = re.compile(r"^\s*([a-zA-Z0-9.\-_*]+)\s*$")
 # Skip localhost / self-references
 _SKIP = {"localhost", "localhost.localdomain", "local", "broadcasthost", "0.0.0.0"}
@@ -192,8 +192,8 @@ class BlocklistManager:
 
         WHY THIS EXISTS: `load(allow_download=True)` calls `update_blocklist`
         synchronously, which fetches ~500k domains over the network. Putting
-        that on the startup path means the engine blocks — for minutes on a
-        slow link — before it protects anything, looks like a hang, and fails
+        that on the startup path means the engine blocks - for minutes on a
+        slow link - before it protects anything, looks like a hang, and fails
         outright in the offline/air-gapped environments this product
         specifically targets. Measured: `test_startup_smoke` went from 9/9
         passing to timing out the moment feed downloads were enabled by
@@ -210,7 +210,7 @@ class BlocklistManager:
             return False
         age = _file_age_days(BLOCKLIST_PATH)
         if age is not None and age <= BLOCKLIST_MAX_AGE_DAYS:
-            return False                     # cache is fresh — nothing to do
+            return False                     # cache is fresh - nothing to do
 
         def _run() -> None:
             try:
@@ -236,7 +236,7 @@ class BlocklistManager:
 
         Tolerates a non-string argument rather than raising. This runs on the
         synchronous DNS path inside `_decide`, where an exception does not
-        merely skip a blocklist check — it breaks name resolution for the whole
+        merely skip a blocklist check - it breaks name resolution for the whole
         machine. Defensive rather than a known-reachable bug: every current
         caller passes a parsed string. The cost of being wrong about that is
         far higher than the cost of two lines.
@@ -247,7 +247,7 @@ class BlocklistManager:
         with self._lock:
             if d in self._exact:
                 return True
-            # Check wildcard parents: sub.tracker.com → tracker.com, com
+            # Check wildcard parents: sub.tracker.com -> tracker.com, com
             parts = d.split(".")
             for i in range(1, len(parts)):
                 parent = ".".join(parts[i:])

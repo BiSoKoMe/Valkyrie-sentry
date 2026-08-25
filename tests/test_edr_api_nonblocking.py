@@ -3,11 +3,11 @@
 
 During the first Tier B live-fire run the server logged "web_dashboard
 unhealthy (health check returned False)" in a tight loop, and the eval harness's
-own reads timed out — even though detection was working and incidents existed.
+own reads timed out - even though detection was working and incidents existed.
 Root cause: ``/api/edr/incidents`` and ``/api/edr/incidents/{id}`` were
 ``async def`` handlers that called SYNCHRONOUS SQLite reads directly on the
-event loop. While one ran, every other request — including the self-heal
-``/api/ping`` liveness probe — was stalled, so a busy server declared ITSELF
+event loop. While one ran, every other request - including the self-heal
+``/api/ping`` liveness probe - was stalled, so a busy server declared ITSELF
 dead and the harness couldn't read the incidents it was scoring against.
 
 The fix runs those blocking reads in a threadpool. This test pins it: a slow
@@ -34,7 +34,11 @@ SLOW_DB_S = 0.80
 class _SlowEdr:
     """Stand-in EDR facade whose reads block like a slow SQLite query."""
 
-    def list_incidents(self, status=None, severity=None, limit=200):
+    def list_incidents(self, status=None, severity=None, limit=200, brief=False):
+        # `brief` must stay in this signature: the route passes it through, and
+        # a stub that omits it raises TypeError *inside the threadpool*, which
+        # aborts the whole test rather than failing a check -- so this file
+        # silently stopped guarding anything the day the route grew the param.
         time.sleep(SLOW_DB_S)
         return [{"id": "inc_test", "technique": "T1218.010", "severity": "high",
                  "category": "process", "updated_at": "2026-08-11T07:00:00+00:00"}]

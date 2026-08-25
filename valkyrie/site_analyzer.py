@@ -1,30 +1,30 @@
-"""Site content analyzer — Valkyrie genuinely *reads the page*, not a list.
+"""Site content analyzer - Valkyrie genuinely *reads the page*, not a list.
 
 The DNS layer judges a domain by its NAME and behaviour (tracker SLDs, DGA
 structure, query-stream shape). Powerful, but it never looks at what the site
 actually *contains*. This module is the missing half: fetch the page and score
-the real content — the same way a human analyst decides "this site is sketchy"
+the real content - the same way a human analyst decides "this site is sketchy"
 by looking at what it loads and runs, not by checking a blocklist.
 
 It scores genuine, list-free content signals:
 
-  * **Cryptomining** — in-browser miner signatures (CoinHive/CryptoNight/WASM
+  * **Cryptomining** - in-browser miner signatures (CoinHive/CryptoNight/WASM
     hashers).
-  * **Browser fingerprinting** — canvas/WebGL/AudioContext/font-enumeration/
+  * **Browser fingerprinting** - canvas/WebGL/AudioContext/font-enumeration/
     hardware-probe techniques. One is normal; several *together* is the
     signature of a fingerprinting library.
-  * **Obfuscated / packed JavaScript** — eval-packers, `eval(atob(...))`,
-    `String.fromCharCode` chains, `document.write(unescape(...))` — the shapes
+  * **Obfuscated / packed JavaScript** - eval-packers, `eval(atob(...))`,
+    `String.fromCharCode` chains, `document.write(unescape(...))` - the shapes
     malware uses to hide payloads.
-  * **Credential harvesting / phishing** — a password field whose form posts to
+  * **Credential harvesting / phishing** - a password field whose form posts to
     a DIFFERENT origin, or a brand impersonated by an unrelated domain.
-  * **Tracker density** — how many distinct third-party hosts the page pulls
+  * **Tracker density** - how many distinct third-party hosts the page pulls
     from (behavioural ad-tech signature, no name list needed).
-  * **Hidden cross-origin iframes** — 0-size/invisible frames to another origin.
+  * **Hidden cross-origin iframes** - 0-size/invisible frames to another origin.
 
 The SCORER (`analyze_content`) is pure and unit-tested against real page shapes.
 The FETCH (`SiteAnalyzer.analyze_url`) is a thin, isolated, opt-in layer over
-httpx with tight timeouts, a size cap, and a cache — because fetching is slow
+httpx with tight timeouts, a size cap, and a cache - because fetching is slow
 and makes Valkyrie's own requests, it never runs on the DNS hot path.
 
 Honest boundaries (see ADR 0034):
@@ -33,7 +33,7 @@ Honest boundaries (see ADR 0034):
     can be missed.
   * **Cloaking beats it.** A site can serve benign content to Valkyrie's fetcher
     and malware to real browsers (bot detection). Static fetch can't defeat that.
-  * **It complements, never replaces** the name/behaviour layers — it is one
+  * **It complements, never replaces** the name/behaviour layers - it is one
     more genuine signal, precision-tuned so a normal site scores clean.
 """
 
@@ -61,7 +61,7 @@ BLOCK = 0.70
 FLAG = 0.40
 
 
-# ── helpers ──────────────────────────────────────────────────────────────────
+# --- helpers ---
 
 def _registrable(host: str) -> str:
     parts = (host or "").lower().strip(".").split(".")
@@ -105,7 +105,7 @@ def third_party_hosts(html: str, page_host: str) -> set:
     return out
 
 
-# ── content signal detectors (each returns (score, reason) ) ─────────────────
+# --- content signal detectors (each returns (score, reason) ) ---
 
 _MINER_SIGNS = ("coinhive", "coin-hive", "cryptonight", "crypto-loot", "cryptoloot",
                 "jsecoin", "minero", "webminepool", "deepminer", "coinimp",
@@ -154,7 +154,7 @@ def _sig_obfuscation(text: str, low: str) -> tuple:
     reasons = []
     score = 0.0
     if "eval(function(p,a,c,k,e,d)" in low.replace(" ", ""):
-        # A packer alone is only flag-worthy — legit sites minify/pack too.
+        # A packer alone is only flag-worthy - legit sites minify/pack too.
         score = max(score, 0.55); reasons.append("packed/obfuscated JS (Dean-Edwards packer)")
     if "eval(atob(" in low.replace(" ", "") or "eval(window.atob(" in low.replace(" ", ""):
         # Decode-and-execute a base64 blob: a strong malware tell, rarely benign.
@@ -164,7 +164,7 @@ def _sig_obfuscation(text: str, low: str) -> tuple:
     if "document.write(unescape(" in low.replace(" ", ""):
         score = max(score, 0.45); reasons.append("document.write(unescape()) obfuscation")
     # NOTE: a standalone large high-entropy base64 token is deliberately NOT a
-    # signal — legit minified/bundled JS and inlined data-URI assets look
+    # signal - legit minified/bundled JS and inlined data-URI assets look
     # identical, and it mislabelled real sites (e.g. cnn.com) as malware. The
     # dangerous case (decode AND execute) is already caught by eval(atob()).
     return score, "; ".join(reasons)
@@ -220,7 +220,7 @@ def _sig_meta_redirect(text: str, page_host: str) -> tuple:
 
 
 def analyze_content(html: str, url: str) -> ContentVerdict:
-    """Score a page's ACTUAL CONTENT. Pure — no network. This is the analyst's
+    """Score a page's ACTUAL CONTENT. Pure - no network. This is the analyst's
     eye: what does the page load and run, regardless of its name."""
     text = html or ""
     low = text.lower()
@@ -254,10 +254,10 @@ def analyze_content(html: str, url: str) -> ContentVerdict:
     if s:
         _strong(s, r, "malware")
 
-    # Tracker density — behavioural ad-tech signature. Graduated so ordinary
+    # Tracker density - behavioural ad-tech signature. Graduated so ordinary
     # ad-supported sites (a handful of third parties) stay allow-with-a-note and
     # only genuinely tracker-heavy pages (15+) reach a flag on density alone.
-    # Density is INFORMATIONAL — it annotates the category and contributes a
+    # Density is INFORMATIONAL - it annotates the category and contributes a
     # capped weak score, but never flags a page on its own (a site's own CDN
     # domains count as "third party" here, so density alone is too noisy to
     # block/flag). The strong content signals do the flagging.
@@ -289,7 +289,7 @@ def analyze_content(html: str, url: str) -> ContentVerdict:
         decision = "allow"
     # Category must reflect the verdict: a page pushed to flag/block by the weak
     # privacy signals (no strong content verdict) is "tracker" when third-party
-    # density drove it, else a generic "suspicious" — never "clean".
+    # density drove it, else a generic "suspicious" - never "clean".
     if category == "clean":
         if len(tp) >= 8:
             category = "tracker"
@@ -300,7 +300,7 @@ def analyze_content(html: str, url: str) -> ContentVerdict:
                           category=category, reasons=reasons, signals=signals)
 
 
-# ── fetch + cache layer (isolated; opt-in; never on the DNS hot path) ────────
+# --- fetch + cache layer (isolated; opt-in; never on the DNS hot path) ---
 
 class SiteAnalyzer:
     """Fetches a URL and analyzes its content. Results cached by host."""
@@ -313,7 +313,7 @@ class SiteAnalyzer:
 
     def analyze_url(self, url: str) -> ContentVerdict:
         """Fetch and analyze. Returns a not-fetched clean verdict on any network
-        failure — analysis can only ever ADD signal, never break browsing."""
+        failure - analysis can only ever ADD signal, never break browsing."""
         if "//" not in url:
             url = "http://" + url
         host = _host_of(url)

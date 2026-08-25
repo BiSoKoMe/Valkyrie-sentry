@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""AI assistant seam — offline tests with a fake, vendor-neutral provider.
+"""AI assistant seam - offline tests with a fake, vendor-neutral provider.
 
 The philosophy under test: AI explains, it never detects. The offline
 heuristic analyst must always produce a complete report; LLM output is
 additive, structured, evidence-grounded, and every failure mode falls back
-cleanly. The backend is abstracted behind ``ai_provider.AIProvider`` — this
+cleanly. The backend is abstracted behind ``ai_provider.AIProvider`` - this
 test injects a fake provider, so it is vendor-neutral (no SDK, no network).
 
   [1] Offline analyst always works (no provider, no network)

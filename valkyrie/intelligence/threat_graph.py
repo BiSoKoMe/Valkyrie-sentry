@@ -1,17 +1,17 @@
-"""ThreatGraph — maps relationships between known threats so that new
+"""ThreatGraph - maps relationships between known threats so that new
 domains sharing infrastructure with a confirmed threat are caught
 automatically, before they ever appear on any list.
 
 Relations scored by ``is_related``:
     exact domain already recorded          1.0
-    shares base domain with a threat       0.65  (flag range — see note)
+    shares base domain with a threat       0.65  (flag range - see note)
     IP in same /24 subnet as a threat      0.6
     same tracker-style subdomain prefix    0.5
 
 Note on base-domain sharing: the spec example is
-``telemetry.acme.com`` known bad → ``analytics.acme.com`` auto-FLAGGED.
+``telemetry.acme.com`` known bad -> ``analytics.acme.com`` auto-FLAGGED.
 A shared base alone therefore lands in the flag band, not the block
-band — blocking every subdomain of a large mixed-use domain because one
+band - blocking every subdomain of a large mixed-use domain because one
 subdomain tracked you would break real sites.  Combined with anomaly
 signals the classifier can still push a related domain over the block
 threshold.
@@ -85,12 +85,12 @@ class ThreatGraph:
                 "SELECT domain, ip, base_domain, prefix FROM intel_threats"
             ).fetchall()
             # SELF-HEAL: a popular/known-legitimate domain must never sit in the
-            # threat graph — see record_threat for why (base-domain self-
+            # threat graph - see record_threat for why (base-domain self-
             # poisoning of large multi-tenant domains like microsoft.com, found
             # live: array508.prod.do.dsp.mp.microsoft.com had been recorded,
             # making every microsoft.com query "share infrastructure" with
             # itself). Purge at startup so an already-poisoned install is cured
-            # the moment this build runs, no manual cleanup needed — same
+            # the moment this build runs, no manual cleanup needed - same
             # pattern as IntelligenceMemory's popular/tracker self-heals.
             stale = [d for (d, _ip, _b, _p) in rows if is_popular(d)]
             if stale:
@@ -111,7 +111,7 @@ class ThreatGraph:
         # NEVER index a reverse-DNS / local name's "base" (in-addr.arpa,
         # ip6.arpa). Their registrable base is the whole PTR namespace, so one
         # bad reverse lookup would make EVERY reverse lookup on the machine
-        # "share infrastructure" with it — which is exactly the false positive
+        # "share infrastructure" with it - which is exactly the false positive
         # seen on real hardware (0.65 suspicion on every x.in-addr.arpa). The
         # exact domain is still recorded; only the poisonous base bucket is not.
         if not is_infrastructure_domain(domain):
@@ -133,13 +133,13 @@ class ThreatGraph:
         if not domain:
             return
         # A popular/known-legitimate domain (or any subdomain of one) must never
-        # enter the graph — not even indirectly via its BASE-domain bucket. This
+        # enter the graph - not even indirectly via its BASE-domain bucket. This
         # was previously unconditional here, so one odd-looking subdomain under
         # a huge multi-tenant domain (e.g. a Microsoft delivery-optimization
         # host whose name happened to read as ad-tech) poisoned "microsoft.com"
         # itself: every future microsoft.com query then "shared infrastructure"
         # with its own sibling subdomain and got flagged. Mirrors the identical
-        # guard IntelligenceMemory.remember_bad already applies — a popular
+        # guard IntelligenceMemory.remember_bad already applies - a popular
         # domain's own subdomain being weird is not evidence its apex, or its
         # OTHER subdomains, are compromised infrastructure.
         if is_popular(domain):
@@ -171,7 +171,7 @@ class ThreatGraph:
         """Remove domains from the threat graph and rebuild the in-RAM index.
 
         Used to un-poison tracker/telemetry domains that an old bug wrongly
-        recorded as threats — otherwise legitimate sites keep 'sharing
+        recorded as threats - otherwise legitimate sites keep 'sharing
         infrastructure' with them (the microsoft.com 0.65 false flag). Returns
         the number of domains removed. Best-effort; never raises.
         """
@@ -206,7 +206,7 @@ class ThreatGraph:
         return removed
 
     def is_related(self, domain: str, ip: str = "") -> float:
-        """0.0–1.0 relatedness of a NEW domain/IP to known threats."""
+        """0.0-1.0 relatedness of a NEW domain/IP to known threats."""
         domain = domain.lower().rstrip(".")
         # Reverse-DNS / local names have no meaningful "shared infrastructure":
         # their base is the whole PTR namespace. The IP-subnet relation below is

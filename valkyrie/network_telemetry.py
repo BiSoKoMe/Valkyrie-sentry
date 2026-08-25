@@ -1,4 +1,4 @@
-"""Network connection telemetry — catch what DNS can't see.
+"""Network connection telemetry - catch what DNS can't see.
 
 The DNS sinkhole only sees traffic that *resolves a name first*. Malware that
 connects to a hard-coded IP skips DNS entirely, and on Windows the IP blocklist
@@ -8,7 +8,7 @@ an IP on the threat-intel blocklist, emits a high-severity ``network`` telemetry
 event that the EDR correlator turns into an incident.
 
 Same shape and honesty as the process collector: a userland poller (psutil), not
-a kernel flow sensor — it samples connections on an interval and can miss very
+a kernel flow sensor - it samples connections on an interval and can miss very
 short-lived ones. It needs no privileges for the current user's sockets, degrades
 to a no-op without psutil, and never raises into the caller.
 """
@@ -39,7 +39,7 @@ except ImportError:
 class NetworkBaseline:
     """Per-process-image count of prior outbound connections (S4's baseline).
 
-    Pure in-memory, like behavior_score.AncestryBaseline — the caller decides
+    Pure in-memory, like behavior_score.AncestryBaseline - the caller decides
     persistence. No warmup gate: unlike ancestry-pair rarity (which needs
     enough history to know what's normal FOR THIS HOST), "this binary has
     connected before" is unambiguous from the very first observation.
@@ -62,7 +62,7 @@ def classify_connection(ip: str, port: int,
     """Return (severity, labels, reason) for an outbound connection.
 
     Pure and deterministic. The high-value, low-noise signal is a connection to a
-    known threat-intel IP — precisely the hard-coded-IP-C2 case DNS misses.
+    known threat-intel IP - precisely the hard-coded-IP-C2 case DNS misses.
     """
     if blocked:
         return (SEV_HIGH, ["threat_intel_ip"],
@@ -83,7 +83,7 @@ class ConnInfo:
 
     def to_event(self, blocked: bool, anomaly: Optional[dict] = None) -> TelemetryEvent:
         """Build the telemetry event. `anomaly` (network_score's list-free
-        verdict, if it fired) is additive to the list-based `blocked` check —
+        verdict, if it fired) is additive to the list-based `blocked` check -
         either can raise severity/labels, neither can suppress the other."""
         severity, labels, reason = classify_connection(
             self.raddr_ip, self.raddr_port, blocked)
@@ -112,7 +112,7 @@ class NetworkCollector:
     ``ip_reputation(ip) -> bool`` decides whether a destination is known-bad
     (typically ``FirewallManager.is_blocked_ip``). Only *flagged* connections are
     emitted by default, so a busy host's normal traffic doesn't flood the
-    pipeline — set ``emit_all=True`` to emit every new connection (visibility).
+    pipeline - set ``emit_all=True`` to emit every new connection (visibility).
     The first poll seeds a baseline silently.
     """
 
@@ -129,7 +129,7 @@ class NetworkCollector:
         # behavior_score.AncestryBaseline.
         self._baseline = baseline if baseline is not None else NetworkBaseline()
         # None = no baseline yet. Using a sentinel (not truthiness) means an
-        # empty snapshot is a valid baseline — otherwise an empty first poll
+        # empty snapshot is a valid baseline - otherwise an empty first poll
         # would keep re-seeding and never diff.
         self._last: Optional[dict] = None
         self._running = False
@@ -167,7 +167,7 @@ class NetworkCollector:
                         # Best-effort: AccessDenied on many system processes
                         # from a non-elevated context. Missing path just means
                         # network_score treats actor_trusted as unknown (None),
-                        # never as untrusted — an access failure must not read
+                        # never as untrusted - an access failure must not read
                         # as a signal.
                         paths[pid] = proc.exe() if proc is not None else ""
                     except Exception:

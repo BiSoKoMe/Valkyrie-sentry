@@ -1,4 +1,4 @@
-"""Risk profiles — the user's current posture, which the decision policy reads.
+"""Risk profiles - the user's current posture, which the decision policy reads.
 
 A high-risk user is not always in the same situation: at the office they want
 minimal disruption; travelling through a hostile network, or in a "clean room"
@@ -6,10 +6,10 @@ handling a sensitive source, they want everything locked down. The profile is a
 single switch that shifts Valkyrie's block-vs-deceive trade-off (see
 :mod:`valkyrie.decision`).
 
-  * standard    — minimal disruption; deceive trackers, block only clear threats
-  * high_risk   — block non-essential telemetry/uploads by default; alert more
-  * travel      — high_risk + treat unusual network patterns as hostile
-  * clean_room  — most aggressive: any targeted signal steps up toward contain
+  * standard    - minimal disruption; deceive trackers, block only clear threats
+  * high_risk   - block non-essential telemetry/uploads by default; alert more
+  * travel      - high_risk + treat unusual network patterns as hostile
+  * clean_room  - most aggressive: any targeted signal steps up toward contain
 
 Persistence is a tiny JSON file in the data dir so the choice survives restarts.
 Reading never raises; an unreadable/absent file means Standard.

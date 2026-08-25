@@ -1,20 +1,20 @@
-"""Real-time domain analysis — positive-signal-only tracker detection.
+"""Real-time domain analysis - positive-signal-only tracker detection.
 
 Default is ALLOW.  Only domains with confirmed positive tracker evidence
 get flagged or blocked.  Unknown / never-heard-of sites always load fine.
 
 Signal weights:
-  S1a known tracker SLD (ad-tech)     +0.7  → block alone
-  S1b analytics SLD                   +0.4  → flag alone
-  S2  tracker subdomain prefix        +0.7  → block alone
-  S3  high-entropy random subdomain   +0.3  → combined
-  S4  query-burst rate                +0.2  → combined
-  S5  OS process + tracker prefix     +0.2  → combined with S2
+  S1a known tracker SLD (ad-tech)     +0.7  -> block alone
+  S1b analytics SLD                   +0.4  -> flag alone
+  S2  tracker subdomain prefix        +0.7  -> block alone
+  S3  high-entropy random subdomain   +0.3  -> combined
+  S4  query-burst rate                +0.2  -> combined
+  S5  OS process + tracker prefix     +0.2  -> combined with S2
 
 Decision thresholds:
-  >= SCANNER_BLOCK_THRESHOLD (0.7) → block
-  >= SCANNER_FLAG_THRESHOLD  (0.4) → flag
-  else                             → allow  ← DEFAULT
+  >= SCANNER_BLOCK_THRESHOLD (0.7) -> block
+  >= SCANNER_FLAG_THRESHOLD  (0.4) -> flag
+  else                             -> allow  <- DEFAULT
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ from .dns_tunnel import (
 @dataclass
 class ScanResult:
     decision:   str             # "allow" | "block" | "flag"
-    confidence: float           # 0.0 – 1.0
+    confidence: float           # 0.0 - 1.0
     reasons:    list[str]       = field(default_factory=list)
     category:   str             = "unknown"
 
@@ -100,7 +100,7 @@ class SiteScanner:
         domain  = domain.lower().rstrip(".")
         process = (process or "").lower()
 
-        # Cache read (domain-only key; rate + flood signals always run live —
+        # Cache read (domain-only key; rate + flood signals always run live -
         # both score the query *stream*, which a per-domain cache can't see)
         if self._store is not None:
             cached = self._store.get_cached_scan(domain)
@@ -136,7 +136,7 @@ class SiteScanner:
         return result
 
     # ------------------------------------------------------------------
-    # Scoring — only positive tracker signals contribute
+    # Scoring - only positive tracker signals contribute
     # ------------------------------------------------------------------
 
     def _score(self, domain: str, process: str) -> ScanResult:
@@ -148,20 +148,20 @@ class SiteScanner:
         score:   float     = 0.0
         reasons: list[str] = []
 
-        # S1a — pure ad-tech tracker SLD (+0.7, block alone)
+        # S1a - pure ad-tech tracker SLD (+0.7, block alone)
         if sld in TRACKER_SLDS:
             score += 0.7
             reasons.append(f"tracker SLD: {sld}")
 
-        # S1b — analytics / monitoring SLD (+0.4, flag alone)
+        # S1b - analytics / monitoring SLD (+0.4, flag alone)
         elif sld in ANALYTICS_SLDS:
             score += 0.4
             reasons.append(f"analytics SLD: {sld}")
 
-        # S1c — compound SLD: a hyphen-joined component exactly matches a
+        # S1c - compound SLD: a hyphen-joined component exactly matches a
         # known tracker/analytics SLD (e.g. "browser-intake-datadoghq"
-        # contains "datadoghq"). Exact-word match on each component only —
-        # never a substring match — so this can't collide with an unrelated
+        # contains "datadoghq"). Exact-word match on each component only -
+        # never a substring match - so this can't collide with an unrelated
         # domain that merely contains similar-looking text.
         elif "-" in sld and any(c in TRACKER_SLDS for c in sld.split("-")):
             score += 0.7
@@ -170,15 +170,15 @@ class SiteScanner:
             score += 0.4
             reasons.append(f"analytics SLD component: {sld}")
 
-        # S1d — SLD starts with a known distinctive tracker/analytics brand
+        # S1d - SLD starts with a known distinctive tracker/analytics brand
         # name (e.g. "segmentapis" -> "segment", "taboolasyndication" ->
-        # "taboola") — companies that register a variant apex domain for
+        # "taboola") - companies that register a variant apex domain for
         # infra/CDN use. Curated prefix list excludes generic English words.
         elif any(sld.startswith(p) for p in TRACKER_SLD_PREFIXES):
             score += 0.7
             reasons.append(f"tracker SLD prefix match: {sld}")
 
-        # S2 — tracker subdomain prefix (+0.7, block alone)
+        # S2 - tracker subdomain prefix (+0.7, block alone)
         # Only fires when the FIRST label exactly matches a known tracker prefix
         # AND the domain has at least 3 parts (subdomain.domain.tld).
         s2_fired = False
@@ -187,7 +187,7 @@ class SiteScanner:
             reasons.append(f"tracker subdomain prefix: {first}")
             s2_fired = True
 
-        # S3 — high-entropy random subdomain (+0.3, combined signal only)
+        # S3 - high-entropy random subdomain (+0.3, combined signal only)
         # Only meaningful when there is already a subdomain (3+ parts).
         if parts >= 3:
             e_score, e_reason = entropy_score(domain)
@@ -195,13 +195,13 @@ class SiteScanner:
                 score += 0.3
                 reasons.append(e_reason)
 
-        # S4 — query burst from single process (+0.2, always live)
+        # S4 - query burst from single process (+0.2, always live)
         r_score, r_reason = self._rate.record_and_score(process or "unknown")
         if r_score > 0:
             score += 0.2
             reasons.append(r_reason)
 
-        # S5 — system process hitting a tracker-prefix subdomain (+0.2)
+        # S5 - system process hitting a tracker-prefix subdomain (+0.2)
         # Requires S2 to have fired so that system processes reaching normal
         # websites are not penalised.
         if (s2_fired
@@ -210,11 +210,11 @@ class SiteScanner:
             score += 0.2
             reasons.append(f"system process {process} on tracker subdomain")
 
-        # S6 — short/cryptic first label (<=2 alpha chars) on a subdomain
+        # S6 - short/cryptic first label (<=2 alpha chars) on a subdomain
         # (3+ parts), e.g. "tr.snapchat.com", "cs.media.net", "l.sharethis.com".
         # Real trackers often use terse, meaningless-looking labels to stay
         # inconspicuous. WEAK combining signal only (0.25 alone stays under
-        # the 0.4 flag threshold) — a single one-off query to a short-labeled
+        # the 0.4 flag threshold) - a single one-off query to a short-labeled
         # subdomain is still allowed by default; this only tips the balance
         # together with rate-burst or entropy evidence. Restricted to alpha-
         # only labels so numeric/alphanumeric infra shards (e.g. "s3", "c1")
@@ -223,24 +223,24 @@ class SiteScanner:
             score += 0.25
             reasons.append(f"short cryptic subdomain label: {first}")
 
-        # S7 — confirmed DGA registrable label (T1568.002 — C2). This is a
+        # S7 - confirmed DGA registrable label (T1568.002 - C2). This is a
         # different threat class from trackers (algorithmic malware C2, not
-        # ad-tech), and is a corroborated, precision-first verdict — length +
-        # entropy + bigram-implausibility must all agree — so it is strong
+        # ad-tech), and is a corroborated, precision-first verdict - length +
+        # entropy + bigram-implausibility must all agree - so it is strong
         # enough to block on its own. Evaluated on the REGISTRABLE label, so a
-        # gibberish CDN hostname under a real parent (d1anzk….cloudfront.net)
+        # gibberish CDN hostname under a real parent (d1anzk....cloudfront.net)
         # never triggers it. See valkyrie/dga.py for the honest boundary.
         dga = classify_dga(domain)
         if dga.is_dga:
             score = max(score, dga.confidence)
             reasons.append(dga.reason)
 
-        # S8 — wildcard IP-echo DNS provider (nip.io family). The registrable
+        # S8 - wildcard IP-echo DNS provider (nip.io family). The registrable
         # base belongs to the provider, so S7's registrable-label analysis is
         # structurally blind here; re-run DGA on the LEFTMOST label (the only
         # slot an attacker controls) and add a combining signal for the
-        # provider itself. A hostname that embeds a loopback/private IP —
-        # publicly resolving into the caller's own network — adds more.
+        # provider itself. A hostname that embeds a loopback/private IP -
+        # publicly resolving into the caller's own network - adds more.
         dyndns_fired = is_dyndns_root(domain)
         if dyndns_fired:
             score += 0.35
@@ -257,10 +257,10 @@ class SiteScanner:
                 score += 0.2
                 reasons.append("loopback/private IP embedded in hostname")
 
-        # S9 — unique-subdomain flood (DNS tunnelling shape, T1048.003).
+        # S9 - unique-subdomain flood (DNS tunnelling shape, T1048.003).
         # Aggregate signal no single query can show: many never-seen
         # machine-generated labels under one base inside the window. Runs
-        # live on every query, like S4 — never from cache.
+        # live on every query, like S4 - never from cache.
         t_score, t_reason = self._tunnel.record_and_score(domain)
         tunnel_fired = t_score >= 0.75
         if t_score > 0:
@@ -269,10 +269,10 @@ class SiteScanner:
 
         score = min(1.0, score)
 
-        # Decision — default is ALLOW. Category priority mirrors evidence
+        # Decision - default is ALLOW. Category priority mirrors evidence
         # strength: a flood verdict is "tunnel" (T1048.003), a DGA verdict
         # "dga" (T1568.002), a wildcard-provider-driven verdict "dyndns"
-        # (T1568 — Dynamic Resolution), otherwise a positive is a "tracker".
+        # (T1568 - Dynamic Resolution), otherwise a positive is a "tracker".
         threat_category = ("tunnel" if tunnel_fired
                            else "dga" if dga.is_dga
                            else "dyndns" if dyndns_fired else "tracker")

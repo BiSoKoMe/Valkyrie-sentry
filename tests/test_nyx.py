@@ -1,11 +1,11 @@
-"""Tests for nyx.py — the data-guard brain (SEE & REPORT, observe-only).
+"""Tests for nyx.py - the data-guard brain (SEE & REPORT, observe-only).
 
 Nyx has two jobs in this slice and both are tested here as invariants:
 
-  IT MUST SEE  — personal data (device ID, location, contact, fingerprint
+  IT MUST SEE  - personal data (device ID, location, contact, fingerprint
       bundle) crossing to a THIRD party is reported, by data-shape, with no
       domain list involved.
-  IT MUST NOT LIE ABOUT SEEING — the two failure modes that would make Nyx
+  IT MUST NOT LIE ABOUT SEEING - the two failure modes that would make Nyx
       untrustworthy are false positives (flagging your own first-party data, or
       a benign request) and, above all, TOUCHING the request. Observe-only is
       not a promise in a docstring; the wiring test proves flow.response is left
@@ -35,7 +35,7 @@ def _cats(obs):
 def main() -> int:
     c = Checks("nyx", expect_min=45)
 
-    # ── IT MUST SEE: each category, crossing to a third party ────────────────
+    # --- IT MUST SEE: each category, crossing to a third party ---
     print("\n[1] sees personal data leaving to a THIRD party")
     ident = nyx.inspect_outbound(
         "POST", THIRD, HDR, b"adid=550e8400-e29b-41d4-a716-446655440000&n=1")
@@ -79,19 +79,19 @@ def main() -> int:
         "GET", THIRD + "?idfa=550e8400-e29b-41d4-a716-446655440000", {"Referer": FP})
     c.check("reads the URL query, not only the body", nyx.CAT_IDENTIFIER in _cats(q))
 
-    # ── IT MUST NOT LIE: false-positive guards ───────────────────────────────
+    # --- IT MUST NOT LIE: false-positive guards ---
     print("\n[2] does NOT flag your own data or benign traffic (FP guards)")
-    # Same request, but going to the FIRST party (the site you're on) → yours.
+    # Same request, but going to the FIRST party (the site you're on) -> yours.
     first_party_post = nyx.inspect_outbound(
         "POST", "https://news.example/login", HDR, b"user=alice%40example.com")
     c.check("first-party data (your own login) is NOT flagged", first_party_post == [])
 
-    # A cross-site request carrying nothing personal → silence.
+    # A cross-site request carrying nothing personal -> silence.
     benign = nyx.inspect_outbound(
         "POST", THIRD, HDR, b"page=3&sort=asc&q=shoes")
     c.check("benign third-party request is NOT flagged", benign == [])
 
-    # No Referer/Origin → no first party to compare → stay silent, don't guess.
+    # No Referer/Origin -> no first party to compare -> stay silent, don't guess.
     no_ref = nyx.inspect_outbound(
         "POST", THIRD, {"Content-Type": "application/x-www-form-urlencoded"},
         b"adid=550e8400-e29b-41d4-a716-446655440000")
@@ -105,7 +105,7 @@ def main() -> int:
     one_fp = nyx.inspect_outbound("POST", THIRD, HDR, b"lang=en-US")
     c.check("a single surface is not a fingerprint bundle", nyx.CAT_FINGERPRINT not in _cats(one_fp))
 
-    # A random 16-digit id is not a card — Luhn is the precision boundary.
+    # A random 16-digit id is not a card - Luhn is the precision boundary.
     non_luhn = nyx.inspect_outbound("POST", THIRD, HDR, b"session=1234567890123456")
     c.check("a non-Luhn 16-digit id is NOT flagged as a card",
             nyx.CAT_FINANCIAL not in _cats(non_luhn))
@@ -121,7 +121,7 @@ def main() -> int:
     c.check("a per-request trace header (X-Request-Id) is NOT flagged",
             nyx.CAT_IDENTIFIER not in _cats(trace_hdr))
 
-    # ── The report is human and does not leak the raw value ──────────────────
+    # --- The report is human and does not leak the raw value ---
     print("\n[3] the observation is human-readable and never stores the raw value")
     ob = ident[0]
     c.check("sentence names the first party and the destination",
@@ -134,7 +134,7 @@ def main() -> int:
     c.check("email is masked, not echoed whole",
             "alice@example.com" not in contact[0].masked_sample)
 
-    # ── OBSERVE-ONLY WIRING: the addon logs, and NEVER touches the flow ──────
+    # --- OBSERVE-ONLY WIRING: the addon logs, and NEVER touches the flow ---
     print("\n[4] wired into the addon: it records, and leaves the request untouched")
     from valkyrie.tls_addon import ValkyrieAddon
 
@@ -178,7 +178,7 @@ def main() -> int:
     c.check("the request still went through the normal 'allowed' path",
             any(getattr(e, "raw_category", "") == "https" for e in store.events))
 
-    # ── ACT MODE: feed fake data, keep the request working, never touch benign ─
+    # --- ACT MODE: feed fake data, keep the request working, never touch benign -
     print("\n[5] ACT mode: rewrites third-party leaks into consistent persona fakes")
     from valkyrie.persona import current_persona
     persona = current_persona()
@@ -211,7 +211,7 @@ def main() -> int:
             and f"{persona.screen_width}x{persona.screen_height}".encode() in bdy)
 
     # Consistency: the SAME persona value across two different requests (the tell
-    # a sloppy spoof would fail — two requests must not disagree about the user).
+    # a sloppy spoof would fail - two requests must not disagree about the user).
     _, b1, _ = nyx.fake_outbound("POST", THIRD, HDR, b"adid=550e8400-e29b-41d4-a716-446655440000", persona)
     _, b2, _ = nyx.fake_outbound("POST", "https://other.tracker.example/x", HDR,
                                  b"deviceid=550e8400-e29b-41d4-a716-446655440000", persona)
@@ -270,7 +270,7 @@ def main() -> int:
     finally:
         _cfg.NYX_ACT = _saved
 
-    # ── self-test: the live demo runs the whole pipeline end to end ─────────
+    # --- self-test: the live demo runs the whole pipeline end to end ---
     print("\n[7] self-test runs the whole guard on synthetic leaks")
     st = nyx.self_test()
     c.check("self-test catches every synthetic leak",
@@ -280,7 +280,7 @@ def main() -> int:
             any(r["case"] == "payment card" and r["before"] != r["after"]
                 for r in st["cases"]))
 
-    # ── ROBUSTNESS: a component in front of ALL traffic must never crash ────
+    # --- ROBUSTNESS: a component in front of ALL traffic must never crash ---
     print("\n[8] never crashes on malformed / hostile input")
     _edge = [
         ("POST", THIRD, HDR, None),
@@ -301,9 +301,9 @@ def main() -> int:
             crashes += 1
     c.check("inspect_outbound + fake_outbound never crash on edge input", crashes == 0)
 
-    # ── PERFORMANCE: a huge body must be BOUNDED, never a hang ──────────────
+    # --- PERFORMANCE: a huge body must be BOUNDED, never a hang ---
     # Nyx is on the request hot path; without a scan cap + length-bounded
-    # regexes a big upload took 13 seconds (O(n^2) backtracking) — a stall on
+    # regexes a big upload took 13 seconds (O(n^2) backtracking) - a stall on
     # the user's own browsing. This guards the fix stays in.
     print("\n[9] a huge body is bounded, not a hang")
     import time as _time
@@ -320,9 +320,9 @@ def main() -> int:
     c.check("a leak in the first 16KB is still caught under the cap",
             nyx.CAT_IDENTIFIER in _cats(lead))
 
-    # ── END-TO-END: ACT through the REAL _handle_request pipeline ────────────
+    # --- END-TO-END: ACT through the REAL _handle_request pipeline ---
     # Unit tests prove the pieces; this proves the whole request path in ACT
-    # mode — the decision steps run, Nyx rewrites the body IN PLACE, the request
+    # mode - the decision steps run, Nyx rewrites the body IN PLACE, the request
     # is NOT blocked, and it proceeds. Catches wiring bugs between the pipeline
     # and _nyx_observe that isolated tests miss.
     print("\n[10] end-to-end: ACT through the real request pipeline")

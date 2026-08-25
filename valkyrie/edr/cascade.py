@@ -1,4 +1,4 @@
-"""Enforcement budget — a cascade detector, not a rate limit.
+"""Enforcement budget - a cascade detector, not a rate limit.
 
 WHY A FLAT CAP IS THE WRONG TOOL
 --------------------------------

@@ -1,15 +1,15 @@
-"""AMSI content scanning — a real malware verdict from the OS antimalware engine.
+"""AMSI content scanning - a real malware verdict from the OS antimalware engine.
 
 Valkyrie ships no signature engine and will not fake one: an internet-scale
 signature cloud is rank-6 "needs infra" in ``docs/GAP_ANALYSIS.md``. But the
-honest local path has always been documented there too — *ask the engine that
+honest local path has always been documented there too - *ask the engine that
 already has one*. On Windows that surface is *AMSI*, the Antimalware Scan
 Interface: the OS-documented API that the registered antimalware provider
 (Microsoft Defender by default, or a third-party AV) answers with a real verdict
 on arbitrary content.
 
 **What this adds that Valkyrie did not have.** Until now every endpoint verdict
-was a heuristic — a rule matched a command line, a scorer found a shape, an
+was a heuristic - a rule matched a command line, a scorer found a shape, an
 entropy check crossed a threshold. Valkyrie had *zero* content conviction: it
 could say "this script looks obfuscated" but never "this content is
 Trojan:PowerShell/Malgent". Two concrete gains:
@@ -22,23 +22,23 @@ Trojan:PowerShell/Malgent". Two concrete gains:
     touched LSASS" becomes ONE incident with one timeline. Defender alone does
     not feed Valkyrie's graph; that correlation is the added value.
 
-**Honest boundaries — read these before believing a verdict.**
+**Honest boundaries - read these before believing a verdict.**
 
   * ``not_detected`` is NOT proof of clean. It means no registered provider had
     an opinion. Absence of a signature is not absence of malware.
   * If Defender is the provider, script content Valkyrie scans here was very
     likely *already* scanned by Defender's own AMSI hook when PowerShell ran it.
-    Valkyrie is not a second scanner and does not claim to add detection there —
+    Valkyrie is not a second scanner and does not claim to add detection there -
     it adds the file-path scanning Defender never surfaces to us, and the
     correlation above.
   * With **no** provider registered, AMSI initializes fine and every scan
     returns ``not_detected`` forever. ``available()`` reports only that the API
     initialized. The single honest proof that a provider actually answers is
-    ``self_test()`` — see its docstring.
+    ``self_test()`` - see its docstring.
   * A conviction is the *provider's* verdict, not Valkyrie's. We report the
     result and the provider; we do not second-guess or re-score it.
 
-Stdlib-only ctypes, matching ``etw/wineventlog.py`` — no new dependency, no
+Stdlib-only ctypes, matching ``etw/wineventlog.py`` - no new dependency, no
 console window, and it imports cleanly on non-Windows (where ``available()`` is
 simply False and every entry point degrades to a no-op).
 """
@@ -63,7 +63,7 @@ IS_WINDOWS = sys.platform == "win32"
 # AMSI_RESULT (amsi.h)
 # ---------------------------------------------------------------------------
 # The documented ``AmsiResultIsMalware`` macro is ``result >= AMSI_RESULT_DETECTED``.
-# The 0x4000–0x4FFF band is an *administrative policy* block (WDAC/AppLocker) —
+# The 0x4000-0x4FFF band is an *administrative policy* block (WDAC/AppLocker) -
 # that is a block, not a malware conviction, and we keep the two distinct.
 AMSI_RESULT_CLEAN                  = 0
 AMSI_RESULT_NOT_DETECTED           = 1
@@ -71,11 +71,11 @@ AMSI_RESULT_BLOCKED_BY_ADMIN_START = 0x4000      # 16384
 AMSI_RESULT_BLOCKED_BY_ADMIN_END   = 0x4FFF      # 20479
 AMSI_RESULT_DETECTED               = 0x8000      # 32768
 
-# Dispositions — Valkyrie's vocabulary over the raw enum.
+# Dispositions - Valkyrie's vocabulary over the raw enum.
 DISP_MALWARE      = "malware"           # provider convicted the content
 DISP_BLOCKED      = "blocked_by_admin"  # policy block (WDAC/AppLocker), not a conviction
 DISP_CLEAN        = "clean"             # provider explicitly vouched for it
-DISP_NOT_DETECTED = "not_detected"      # no provider opinion — NOT "safe"
+DISP_NOT_DETECTED = "not_detected"      # no provider opinion - NOT "safe"
 DISP_UNKNOWN      = "unknown"           # a result the spec does not define
 DISP_SKIPPED      = "skipped"           # we chose not to scan (empty/oversized)
 DISP_ERROR        = "error"             # the scan call itself failed
@@ -90,7 +90,7 @@ def classify_amsi_result(result: int) -> str:
     """Map a raw ``AMSI_RESULT`` to a Valkyrie disposition. Pure; unit-tested.
 
     Deliberately conservative at the edges: an undefined result is ``unknown``
-    and is never treated as a conviction. Precision over aggression — a false
+    and is never treated as a conviction. Precision over aggression - a false
     "malware" verdict on a user's own script is the cardinal sin.
     """
     try:
@@ -113,7 +113,7 @@ def classify_amsi_result(result: int) -> str:
 # ---------------------------------------------------------------------------
 # Assembled at runtime from parts rather than written as one literal. Defender
 # recognises this marker, and a scanner that reads it *in this source file*
-# could quarantine Valkyrie's own code — a self-inflicted outage. The value is
+# could quarantine Valkyrie's own code - a self-inflicted outage. The value is
 # byte-identical at scan time; only the on-disk representation differs.
 _TEST_PREFIX = "AMSI Test Sample: "
 _TEST_PARTS  = ("7e72c3ce", "861b", "4339", "8740", "0ac1484c1386")
@@ -129,7 +129,7 @@ def amsi_test_sample() -> str:
     McAfee registered: both provider DLLs loaded and answered, and both returned
     ``not_detected`` for this marker *and* for EICAR. See ``AmsiScanner.self_test``.
 
-    It is a *marker*, not malware — it does nothing when executed.
+    It is a *marker*, not malware - it does nothing when executed.
     """
     return _TEST_PREFIX + "-".join(_TEST_PARTS)
 
@@ -139,8 +139,8 @@ def amsi_test_sample() -> str:
 # ---------------------------------------------------------------------------
 # AMSI providers are in-process COM servers: ``AmsiInitialize`` loads each
 # registered provider DLL into the *calling* process. That makes "is a provider
-# actually here?" a question we can answer factually — check the registry for
-# what is registered, then ask the loader what is resident — instead of
+# actually here?" a question we can answer factually - check the registry for
+# what is registered, then ask the loader what is resident - instead of
 # inferring it from a scan result, which cannot tell "no provider" apart from
 # "provider with no opinion".
 
@@ -198,7 +198,7 @@ def registered_providers() -> list[dict]:
     return out
 
 
-# Self-test conclusions — deliberately tri-state.
+# Self-test conclusions - deliberately tri-state.
 SELFTEST_CONFIRMED   = "confirmed"      # a provider convicted the marker: path proven
 SELFTEST_INCONCLUSIVE = "inconclusive"  # provider loaded but doesn't know this marker
 SELFTEST_NO_PROVIDER = "no_provider"    # nothing registered/loaded: AMSI is a no-op here
@@ -241,7 +241,7 @@ class AmsiVerdict:
 
     @property
     def is_malware(self) -> bool:
-        """True only for a real conviction — an admin-policy block is not one."""
+        """True only for a real conviction - an admin-policy block is not one."""
         return self.disposition == DISP_MALWARE
 
     @property
@@ -285,7 +285,7 @@ class AmsiScanner:
 
     Lifecycle mirrors every other Valkyrie subsystem (``start``/``stop``/
     ``available``/``is_healthy``/``stats``) so the component registry adapts it
-    with no special-casing. Every failure path degrades to a no-op verdict —
+    with no special-casing. Every failure path degrades to a no-op verdict -
     a scanner that cannot scan must never take the engine down with it.
     """
 
@@ -324,7 +324,7 @@ class AmsiScanner:
     def available(self) -> bool:
         """Can AMSI run on this host at all? (Windows + ``amsi.dll`` loadable.)
 
-        This is capability, not state — it does NOT mean a provider will answer.
+        This is capability, not state - it does NOT mean a provider will answer.
         See ``self_test()`` for the only honest proof of that.
         """
         if self._available is not None:
@@ -379,7 +379,7 @@ class AmsiScanner:
     def is_healthy(self) -> bool:
         """Healthy when initialized and not failing more often than it succeeds."""
         if not self.available():
-            return True          # not applicable on this host — not a fault
+            return True          # not applicable on this host - not a fault
         if self._ctx is None:
             return False
         errs, scans = self.stats["errors"], self.stats["scans"]
@@ -434,7 +434,7 @@ class AmsiScanner:
 
     def scan_bytes(self, data: bytes, content_name: str = "",
                    *, use_cache: bool = True) -> AmsiVerdict:
-        """Scan a byte buffer. Never raises — failures come back as verdicts."""
+        """Scan a byte buffer. Never raises - failures come back as verdicts."""
         if not self._enabled:
             return AmsiVerdict(DISP_UNAVAILABLE, content_name=content_name,
                                error="AMSI scanning disabled by configuration")
@@ -501,7 +501,7 @@ class AmsiScanner:
         return self.scan_bytes(data, name, use_cache=use_cache)
 
     def _scan_call(self, data: bytes, content_name: str) -> AmsiVerdict:
-        """The actual AMSI round trip: open session → scan → close session."""
+        """The actual AMSI round trip: open session -> scan -> close session."""
         import ctypes
         from ctypes import byref, c_int, c_void_p
 
@@ -550,15 +550,15 @@ class AmsiScanner:
 
         Scanning Microsoft's test marker can only ever *prove a positive*. A
         conviction means the whole path works end to end. A non-conviction is
-        genuinely ambiguous, so this does not report it as failure — it checks
+        genuinely ambiguous, so this does not report it as failure - it checks
         what providers are actually resident and reports one of:
 
-          * ``confirmed``    — a provider convicted the marker. Path proven.
-          * ``inconclusive`` — a provider DLL is loaded and answering, but did
+          * ``confirmed``    - a provider convicted the marker. Path proven.
+          * ``inconclusive`` - a provider DLL is loaded and answering, but did
             not recognise this marker. Expected for non-Defender AV: the marker
             is a Defender signature. Scanning may still work on real content;
             this test simply cannot tell you.
-          * ``no_provider``  — nothing registered or resident. Every scan on
+          * ``no_provider``  - nothing registered or resident. Every scan on
             this host will return ``not_detected`` forever, and AMSI adds
             nothing until an antimalware provider is installed.
 
@@ -594,7 +594,7 @@ class AmsiScanner:
         """Factual provider presence, independent of any scan result.
 
         ``resident`` (a provider DLL is loaded in this process and answering),
-        ``registered`` (registered but not yet loaded — call ``start()`` first),
+        ``registered`` (registered but not yet loaded - call ``start()`` first),
         ``none`` (AMSI is a no-op on this host), or ``unsupported``.
         """
         if not self.available():

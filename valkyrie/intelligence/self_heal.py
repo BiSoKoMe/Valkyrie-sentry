@@ -1,11 +1,11 @@
-"""SelfHealing — background watchdog that keeps Valkyrie's components
+"""SelfHealing - background watchdog that keeps Valkyrie's components
 alive without ever crashing the system itself.
 
 Components register a ``check_fn`` (returns True when healthy) and an
 optional ``recover_fn``.  Every SELF_HEAL_INTERVAL seconds each check
 runs inside its own try/except; on failure the recovery is attempted
 (also isolated) and the incident is logged to the Store as a
-``self_heal`` event.  One component failing — or one check raising —
+``self_heal`` event.  One component failing - or one check raising -
 never affects the others.
 """
 
@@ -19,7 +19,7 @@ from ..config import SELF_HEAL_INTERVAL
 
 
 def _should_log_failure(consecutive: int) -> bool:
-    """Log failure 1, 2, 4, 8, 16, ... — never every single cycle.
+    """Log failure 1, 2, 4, 8, 16, ... - never every single cycle.
 
     A component that stays down writes one ``self_heal`` row per check
     forever. At a 30s interval that is 2,880 rows a day, and the events table
@@ -129,7 +129,7 @@ class SelfHealing:
         try:
             healthy = bool(comp.check_fn())
         except BaseException as exc:              # a broken check is a failure,
-            error = f"check raised: {exc}"        # not a crash — catch BaseException
+            error = f"check raised: {exc}"        # not a crash - catch BaseException
         comp.last_check = time.time()             # (not just Exception) so a stray
                                                     # SystemExit/KeyboardInterrupt raised
                                                     # inside a check/recover callback can
@@ -187,7 +187,7 @@ class SelfHealing:
             try:
                 self.check_now()
             except BaseException:
-                pass    # the watchdog itself must never die — a check_fn/recover_fn
+                pass    # the watchdog itself must never die - a check_fn/recover_fn
                          # is untrusted third-party-ish code (dns_server.start(), etc.)
                          # and _check_one already isolates ordinary exceptions, but this
                          # outer guard is the last line of defence for anything that

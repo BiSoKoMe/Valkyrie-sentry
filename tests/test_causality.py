@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Causality graph tests — process ancestry as a queryable structure.
+"""Causality graph tests - process ancestry as a queryable structure.
 
 SCOPE STATEMENT (read before quoting any number from this file): these are
 STRUCTURAL CORRECTNESS tests. They prove the graph builds the right shape from
-a given event stream — the right CGO, the right chain order, no fabricated
+a given event stream - the right CGO, the right chain order, no fabricated
 edges, honest flags on guessed data, hard bounds on memory. They say NOTHING
 about detection rate, and no result here is evidence Valkyrie detects anything.
 Detection efficacy is measured only by a live Atomic Red Team run on a VM; the
 only real Tier B figure on record remains 1/40. Nothing in this file changes it,
-because the causality graph raises no detections at all — it explains the ones
+because the causality graph raises no detections at all - it explains the ones
 other layers already raised.
 
   [1] Terminators: the path-aware rule that makes a CGO meaningful, and the
@@ -87,7 +87,7 @@ def main() -> int:
     # ------------------------------------------------------------------
     print("\n[3] Chain + CGO")
     g = CausalityGraph()
-    # explorer → winword → cmd → powershell : the canonical phishing shape.
+    # explorer -> winword -> cmd -> powershell : the canonical phishing shape.
     g.observe_process(10, "explorer.exe", ppid=4, create_time=1.0,
                       path=r"C:\Windows\explorer.exe", ts=1.0)
     g.observe_process(20, "winword.exe", ppid=10, create_time=2.0,
@@ -114,7 +114,7 @@ def main() -> int:
     _check("descendants exclude the root", "winword.exe" not in kids)
 
     # Masquerade: the same tree, but 'explorer.exe' runs from %TEMP%. Because it
-    # is no longer a terminator, the chain must extend THROUGH it and name it —
+    # is no longer a terminator, the chain must extend THROUGH it and name it -
     # the exact ancestry a name-only terminator list would have hidden.
     gm = CausalityGraph()
     gm.observe_process(10, "explorer.exe", ppid=4, create_time=1.0,
@@ -159,7 +159,7 @@ def main() -> int:
     _check("subgraph counts the guess",
            gi.subgraph(30)["inferred_nodes"] == 1)
     # Promotion: the real winword is later observed. The placeholder must be
-    # absorbed, not forked — chain() and descendants() must agree afterwards.
+    # absorbed, not forked - chain() and descendants() must agree afterwards.
     gi.observe_process(20, "winword.exe", ppid=10, create_time=2.0,
                        path=r"C:\Program Files\winword.exe", ts=6.0)
     pc = gi.chain(30)
@@ -171,7 +171,7 @@ def main() -> int:
            [n.name for n in gi.descendants(20)] == ["cmd.exe"])
     _check("no orphan placeholder left behind",
            gi.stats()["nodes"] == 2)
-    # Name mismatch → pid reuse, so promotion must NOT merge the two.
+    # Name mismatch -> pid reuse, so promotion must NOT merge the two.
     gn = CausalityGraph()
     gn.observe_process(30, "cmd.exe", ppid=20, create_time=3.0,
                        parent_name="winword.exe", ts=3.0)
@@ -247,7 +247,7 @@ def main() -> int:
     # ------------------------------------------------------------------
     print("\n[9] Cycle guards (corrupt / spoofed ppid data)")
     gc = CausalityGraph()
-    # A claims B is its parent and B claims A — identical create_times so the
+    # A claims B is its parent and B claims A - identical create_times so the
     # pid-reuse guard cannot be what saves us; only the seen-set can.
     gc.observe_process(1, "a.exe", ppid=2, create_time=5.0, ts=5.0)
     gc.observe_process(2, "b.exe", ppid=1, create_time=5.0, ts=5.0)
@@ -285,7 +285,7 @@ def main() -> int:
                            "cmdline": cmdline},
             })
 
-        # The ancestry is entirely INFO severity — every one of these is below
+        # The ancestry is entirely INFO severity - every one of these is below
         # the gate that decides what becomes an incident, and none of them
         # should raise one. The graph must record them anyway.
         _proc(10, "explorer.exe", 4, base + 1, path=r"C:\Windows\explorer.exe")
@@ -304,7 +304,7 @@ def main() -> int:
               cmdline="powershell -nop -w hidden -enc SQBFAFgA",
               severity="high", action="flagged")
         # A blocked DNS query from the same process: low severity, so the gate
-        # drops it — but it must still be attributed as an artifact.
+        # drops it - but it must still be attributed as an artifact.
         engine.ingest_telemetry({
             "category": "dns", "activity": "query", "action": "blocked",
             "severity": "low", "source": "dns_interceptor",

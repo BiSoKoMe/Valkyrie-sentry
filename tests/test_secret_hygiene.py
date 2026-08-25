@@ -2,25 +2,25 @@
 
 This is the systemic guard for a bug class found FOUR times in one audit:
 
-  * `valkyrie-ca.key`      — TLS CA private key. Read it and you can mint a
+  * `valkyrie-ca.key`      - TLS CA private key. Read it and you can mint a
     trusted certificate for any domain and impersonate it to this machine.
-  * `mac_key.bin`          — MAC install key. Every per-network address is
+  * `mac_key.bin`          - MAC install key. Every per-network address is
     HMAC(key, network), so reading it predicts and links every address the
     machine will ever use.
-  * `control_token.txt`    — the credential for every state-changing API
+  * `control_token.txt`    - the credential for every state-changing API
     route: isolate the host, kill a process, disable telemetry protection.
-  * `fleet_agent.json`     — the device's fleet enrolment token.
+  * `fleet_agent.json`     - the device's fleet enrolment token.
 
 All four had the same root cause: `DATA_DIR` sits under `%ProgramData%`,
 which inherits a `BUILTIN\\Users: read` ACE, so anything written there is
 world-readable unless something actively prevents it. Two of them shipped
-code that protected the file on POSIX and *explicitly skipped Windows* —
-one with the comment "POSIX only; no-op on Windows" — meaning the secret was
+code that protected the file on POSIX and *explicitly skipped Windows* -
+one with the comment "POSIX only; no-op on Windows" - meaning the secret was
 knowingly left readable on the platform the product actually ships on.
 
 Fixing the four write sites is necessary but not sufficient: the next secret
 added inherits the same default. So this file tests the INVARIANT rather
-than the four instances — if someone adds a secret to the registry without
+than the four instances - if someone adds a secret to the registry without
 protecting it, or a future build regresses one, this fails.
 """
 
@@ -40,7 +40,7 @@ from valkyrie import secure_file as sf
 def main() -> int:
     c = Checks("secret hygiene", expect_min=10)
 
-    # ── The registry itself ─────────────────────────────────────────────
+    # --- The registry itself ---
     print("\n[1] the secret registry covers what it should")
     reg = sf.known_secrets()
     names = {label for label, _ in reg}
@@ -51,7 +51,7 @@ def main() -> int:
     c.check("registry includes the WireGuard configs (they carry PrivateKey)",
             any("WireGuard" in n for n in names))
 
-    # ── The invariant, on this machine ──────────────────────────────────
+    # --- The invariant, on this machine ---
     print("\n[2] every secret PRESENT on this machine is protected")
     audit = sf.audit_secrets()
     if not audit:
@@ -66,7 +66,7 @@ def main() -> int:
             for label, p, detail in exposed:
                 print(f"    !! {label}: {p} — {detail}")
 
-    # ── The backstop actually fixes an exposed secret ───────────────────
+    # --- The backstop actually fixes an exposed secret ---
     print("\n[3] harden_known_secrets() heals an exposed secret")
     with tempfile.TemporaryDirectory() as td:
         f = Path(td) / "secret.bin"
@@ -88,7 +88,7 @@ def main() -> int:
         after_ok, detail = sf.verify(f)
         c.check(f"harden() fixes it ({detail[:45]})", after_ok is True)
 
-    # ── Idempotence, because this runs on every launch ──────────────────
+    # --- Idempotence, because this runs on every launch ---
     print("\n[4] the startup sweep is safe to run repeatedly")
     first = sf.harden_known_secrets()
     second = sf.harden_known_secrets()

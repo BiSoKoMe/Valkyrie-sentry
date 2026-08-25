@@ -1,4 +1,4 @@
-"""Asset inventory — CIS Controls #1 (Enterprise Assets) & #2 (Software
+"""Asset inventory - CIS Controls #1 (Enterprise Assets) & #2 (Software
 Assets), applied to a single endpoint.
 
 Clinton's *Cybersecurity for Business* (ch. 9) and the CIS Controls both
@@ -6,23 +6,23 @@ start from the same premise: you cannot protect what you don't know you
 have. Before this module, Valkyrie could not answer three basic questions
 about its own host: what software is installed, what is listening for
 inbound connections, and what kernel drivers are loaded. Boot-time
-autostart entries are the one asset class Valkyrie already tracked —
+autostart entries are the one asset class Valkyrie already tracked -
 ``persistence_telemetry.py`` owns that signal at its own (usually higher)
 severity, and this module REUSES it (calling ``PersistenceCollector.
 snapshot()`` for completeness of a full inventory report) rather than
 re-detecting the same change twice.
 
 **The delta IS the detector**, same idea as ``sensor_tamper.py``'s
-healthy→unhealthy transition and ``process_telemetry.classify_discovery``'s
+healthy->unhealthy transition and ``process_telemetry.classify_discovery``'s
 weak Discovery-tactic labels: a single snapshot is just a fact; a NEW
 listener, a NEWLY installed unsigned binary, or a NEW kernel driver since
 the last snapshot is the actual signal. Every change is reported at
-``SEV_INFO`` and ``ACT_OBSERVED`` — never a standalone incident, always
-correlation input — because on its own "a new program was installed" is
+``SEV_INFO`` and ``ACT_OBSERVED`` - never a standalone incident, always
+correlation input - because on its own "a new program was installed" is
 exactly as weak a signal as a single ``whoami`` call, and Windows Update /
 ordinary app installs make this happen constantly. ``is_trusted_os_path``
 (the same helper ``persistence_telemetry``'s own benign-OS-churn check
-uses) labels — never suppresses — changes from a trusted Microsoft-owned
+uses) labels - never suppresses - changes from a trusted Microsoft-owned
 path, so correlation can weigh "new driver from System32" differently than
 "new driver from a user-writable temp folder" without this module making
 that judgement call itself.
@@ -66,7 +66,7 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# Read-only enumeration — one function per asset class
+# Read-only enumeration - one function per asset class
 # ---------------------------------------------------------------------------
 
 def _uninstall_key_specs() -> list[tuple]:
@@ -87,7 +87,7 @@ def snapshot_software() -> dict:
 
     Skips entries with no DisplayName (registry components/patches, not a
     user-facing "install") and KBxxxxxxx hotfix entries (Windows Update
-    churn, not new software — the exact "benign control" CIS #2 and the
+    churn, not new software - the exact "benign control" CIS #2 and the
     task both call out as required). Never raises.
     """
     out: dict = {}
@@ -118,7 +118,7 @@ def snapshot_listening_ports() -> dict:
     no listen state, but a bound local address IS "accepting datagrams",
     the functional equivalent). Degrades to {} without psutil or without
     permission to enumerate (non-admin sees only this user's own sockets on
-    Windows — a real, honest limitation, not hidden here).
+    Windows - a real, honest limitation, not hidden here).
     """
     out: dict = {}
     if not _PSUTIL:
@@ -149,7 +149,7 @@ def snapshot_listening_ports() -> dict:
 
 
 def snapshot_kernel_drivers() -> dict:
-    """{driver_name: {"image_path", "start"}} — SYSTEM\\...\\Services entries
+    """{driver_name: {"image_path", "start"}} - SYSTEM\\...\\Services entries
     whose Type marks them a kernel-mode (1) or file-system (2) driver, not
     an ordinary Win32 service. Read-only registry enumeration; never
     raises."""
@@ -251,14 +251,14 @@ def diff_snapshots(old: AssetSnapshot, new: AssetSnapshot) -> AssetDelta:
 
 
 # ---------------------------------------------------------------------------
-# Collector — periodic snapshot + diff + emit-on-change
+# Collector - periodic snapshot + diff + emit-on-change
 # ---------------------------------------------------------------------------
 
 class AssetInventoryCollector:
     """Periodic snapshot+diff. Every ADDED item emits one INFO-severity
     TelemetryEvent (CAT_ASSET); removals are never emitted (safe direction
     of change, pure noise for a delta feed). First poll seeds the baseline
-    silently — same contract as ProcessCollector.poll_once()."""
+    silently - same contract as ProcessCollector.poll_once()."""
 
     # Same reasoning as ChangeType's cap elsewhere: a UI-facing recency
     # feed needs "the last N", not an unbounded history -- that belongs in
@@ -289,18 +289,18 @@ class AssetInventoryCollector:
         return os.name == "nt" and (_WINREG or _PSUTIL)
 
     def current_snapshot(self) -> AssetSnapshot:
-        """A FRESH, synchronous snapshot — real registry/socket enumeration,
+        """A FRESH, synchronous snapshot - real registry/socket enumeration,
         confirmed to take over 30 SECONDS on a real host (474 kernel driver
         registry keys, ~250 installed-software keys). NEVER call this from
         a request handler; it will block the caller (and, if that caller is
         an async event loop, every OTHER request too) for that long. Use
-        ``last_snapshot()`` instead — same cache-not-probe contract as
+        ``last_snapshot()`` instead - same cache-not-probe contract as
         ``sensor_tamper.SensorTamperMonitor.current_status()``, which
         documents the identical tradeoff for the identical reason."""
         return take_snapshot(self._persistence_collector)
 
     def last_snapshot(self) -> Optional[AssetSnapshot]:
-        """The most recent poll's snapshot — cheap, does not touch the
+        """The most recent poll's snapshot - cheap, does not touch the
         registry or the network. Populated synchronously by start() before
         it returns, so by the time anything can be serving requests this is
         already non-None; still Optional so a caller cannot be surprised if

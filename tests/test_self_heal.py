@@ -1,7 +1,7 @@
 """Tests for valkyrie/intelligence/self_heal.py
 
 Regression coverage for the watchdog that keeps Valkyrie's components alive.
-The component previously shipped with ZERO dedicated tests — the exact
+The component previously shipped with ZERO dedicated tests - the exact
 blind-spot pattern that let the MAC randomizer's silent failure ship (see
 docs/VPN_SELFHEAL_AUDIT_REPORT.md). These tests lock in:
 
@@ -12,7 +12,7 @@ docs/VPN_SELFHEAL_AUDIT_REPORT.md). These tests lock in:
   4. all_ok() / status() reflect a failed component instead of freezing.
   5. One component failing never stops the others' checks (fault isolation).
 
-No network, no real components — everything is exercised with tiny callables.
+No network, no real components - everything is exercised with tiny callables.
 Usage: python tests/test_self_heal.py
 """
 
@@ -50,7 +50,7 @@ def _raise(exc):
     return _fn
 
 
-# ── Test 1: check_now() isolates a check raising SystemExit ───────────────────
+# --- Test 1: check_now() isolates a check raising SystemExit ---
 print("\n-- BaseException isolation in check_now() -------------")
 h = SelfHealing(store=None, interval=0.05)
 h.register("boom", _raise(SystemExit("boom")))
@@ -69,7 +69,7 @@ check("healthy sibling still checked and ok", st["fine"]["ok"] is True)
 check("all_ok() is False when one component failed", h.all_ok() is False)
 
 
-# ── Test 2: the watchdog THREAD survives a SystemExit in a check ──────────────
+# --- Test 2: the watchdog THREAD survives a SystemExit in a check ---
 print("\n-- Watchdog thread survives SystemExit in check_fn ----")
 h2 = SelfHealing(store=None, interval=0.02)
 h2.register("suicidal", _raise(SystemExit))
@@ -82,7 +82,7 @@ check("component still marked failed after repeated SystemExit",
 h2.stop()
 
 
-# ── Test 3: recover_fn raising BaseException does not kill the thread ─────────
+# --- Test 3: recover_fn raising BaseException does not kill the thread ---
 print("\n-- Watchdog survives KeyboardInterrupt in recover_fn --")
 h3 = SelfHealing(store=None, interval=0.02)
 h3.register("bad_recover", lambda: False, _raise(KeyboardInterrupt))
@@ -95,7 +95,7 @@ check("recovery failure is recorded in last_error",
 h3.stop()
 
 
-# ── Test 4: recover_fn is invoked on failure; recoveries increments ──────────
+# --- Test 4: recover_fn is invoked on failure; recoveries increments ---
 print("\n-- Recovery is actually invoked ----------------------")
 recovered = {"n": 0}
 healthy = {"v": False}
@@ -121,7 +121,7 @@ check("component reports ok after successful recovery",
 check("all_ok() True once the only component recovered", h4.all_ok() is True)
 
 
-# ── Test 5: fault isolation across many components ───────────────────────────
+# --- Test 5: fault isolation across many components ---
 print("\n-- Fault isolation across components -----------------")
 h5 = SelfHealing(store=None, interval=0.05)
 order = []
@@ -135,7 +135,7 @@ check("raiser marked failed", h5.status()["b"]["ok"] is False)
 check("neighbours stay ok", h5.status()["a"]["ok"] and h5.status()["c"]["ok"])
 
 
-# ── Summary ──────────────────────────────────────────────────────────────────
+# --- Summary ---
 print(f"\n{'=' * 50}")
 print(f"  {PASS} passed  /  {FAIL} failed")
 if FAIL:

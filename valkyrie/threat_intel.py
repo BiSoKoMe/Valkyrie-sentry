@@ -1,4 +1,4 @@
-"""Threat-intelligence feed engine — real IOCs, matched locally.
+"""Threat-intelligence feed engine - real IOCs, matched locally.
 
 The seed/downloaded blocklists cover ads and trackers; the firewall CIDR
 feeds cover network hygiene ranges. What neither covers is *active threat
@@ -7,14 +7,14 @@ distribution sites, which rotate in hours, not weeks. This module closes
 that gap with curated public IOC feeds (abuse.ch) and purely local
 matching:
 
-  feodo_c2      — Feodo Tracker botnet C2 IPs (Emotet/Dridex/QakBot class)
-  urlhaus       — URLhaus malware-distribution domains (hosts format)
-  urlhaus_url   — URLhaus malware-distribution FULL URLs (path-level)
-  sslbl_c2      — SSL Blacklist botnet C2 IPs (TLS-fingerprinted)
+  feodo_c2      - Feodo Tracker botnet C2 IPs (Emotet/Dridex/QakBot class)
+  urlhaus       - URLhaus malware-distribution domains (hosts format)
+  urlhaus_url   - URLhaus malware-distribution FULL URLs (path-level)
+  sslbl_c2      - SSL Blacklist botnet C2 IPs (TLS-fingerprinted)
 
 Three indicator kinds, three enforcement seams: an ``ip`` matches at the
 firewall/network-collector, a ``domain`` matches at DNS, and a ``url``
-matches only where a full URL is visible — the TLS inspector. URL matching
+matches only where a full URL is visible - the TLS inspector. URL matching
 is what distinguishes a compromised-but-legitimate host (block the one
 malicious path) from a wholly malicious domain (block the name); see
 ``ThreatIntelManager.match_url``.
@@ -23,14 +23,14 @@ Design contract (same posture as blocklist.py / firewall.py):
 
   * Downloads are opt-in (``USE_EXTERNAL_LISTS`` / --download-lists) and the
     only network traffic this module ever produces is the periodic feed
-    fetch. Matching is O(1) set lookup on-box — no indicator, domain, or IP
+    fetch. Matching is O(1) set lookup on-box - no indicator, domain, or IP
     ever leaves the machine. There is no per-query cloud lookup, ever.
   * A previously downloaded cache on disk is always honoured offline.
   * Every fetch failure is contained: the stale cache stays in force and
     the caller never sees an exception (fault isolation).
   * Guard rails: private/loopback/reserved IPs and dotless or localhost
     names can never enter the match sets, even from a poisoned or corrupt
-    cache — feeds are untrusted input like any other.
+    cache - feeds are untrusted input like any other.
 
 A hit is *incident-grade* signal, distinct from an ad-domain block:
 ``match_domain``/``match_ip`` return the feed and category so the DNS
@@ -76,7 +76,7 @@ class IntelFeed:
 
 @dataclass(frozen=True)
 class IntelMatch:
-    """A confirmed indicator hit — carries provenance for the incident."""
+    """A confirmed indicator hit - carries provenance for the incident."""
     indicator: str
     feed:      str
     category:  str
@@ -87,7 +87,7 @@ class IntelMatch:
 
 
 # ---------------------------------------------------------------------------
-# Parsing (pure functions — unit-testable offline)
+# Parsing (pure functions - unit-testable offline)
 # ---------------------------------------------------------------------------
 
 def _valid_public_ip(token: str) -> Optional[str]:
@@ -121,13 +121,13 @@ def normalize_url(token: str) -> Optional[str]:
 
     Both sides of a comparison (the feed indicator and the live request) run
     through this, so a match is insensitive to scheme, case, a default port,
-    a fragment, and a trailing slash — the differences that are noise, not
+    a fragment, and a trailing slash - the differences that are noise, not
     identity. The QUERY IS KEPT: for malware distribution the query string is
     frequently the payload selector, so dropping it would over-match.
 
     Returns None for anything whose host fails the same guard rails as every
     other indicator (private/loopback/reserved IPs, dotless or localhost
-    names) — a poisoned feed must never be able to make Valkyrie block
+    names) - a poisoned feed must never be able to make Valkyrie block
     internal infrastructure.
     """
     t = (token or "").strip()
@@ -151,7 +151,7 @@ def normalize_url(token: str) -> Optional[str]:
         return None
     if port in ("80", "443"):
         port = ""                                # default ports carry no identity
-    # Same guard rails as the other indicator kinds — an IP host must be
+    # Same guard rails as the other indicator kinds - an IP host must be
     # public and routable, a name host must be a real dotted domain.
     if _valid_public_ip(host) is None and _valid_domain(host) is None:
         return None
@@ -165,9 +165,9 @@ def normalize_url(token: str) -> Optional[str]:
 def parse_feed(text: str, kind: str) -> set[str]:
     """Extract indicators of ``kind`` from one feed body.
 
-    Tolerant of the formats these feeds actually use — bare-value lines
+    Tolerant of the formats these feeds actually use - bare-value lines
     (Feodo), hosts format ``127.0.0.1<tab>domain`` (URLhaus hostfile), and
-    CSV rows with the indicator in some column (SSLBL) — plus ``#``
+    CSV rows with the indicator in some column (SSLBL) - plus ``#``
     comments. Anything that fails validation is silently dropped; a feed
     can only ever contribute well-formed public indicators.
     """
@@ -180,7 +180,7 @@ def parse_feed(text: str, kind: str) -> set[str]:
         line = raw.split("#", 1)[0].strip()
         if not line:
             continue
-        # A URL feed is one full URL per line — splitting on whitespace/commas
+        # A URL feed is one full URL per line - splitting on whitespace/commas
         # would shred a URL that legitimately contains a comma in its query.
         if kind == "url":
             v = validate(line.strip('"'))
@@ -195,7 +195,7 @@ def parse_feed(text: str, kind: str) -> set[str]:
         for tok in tokens:
             tok = tok.strip('"')
             v = validate(tok)
-            # ThreatFox CSV carries "ip:port" — strip the port and retry.
+            # ThreatFox CSV carries "ip:port" - strip the port and retry.
             # One colon only: an IPv6 literal has several and must not be
             # truncated into a bogus address.
             if v is None and kind == "ip" and tok.count(":") == 1:
@@ -215,7 +215,7 @@ class ThreatIntelManager:
 
     Thread-safe: match sets are swapped atomically under a lock; a refresh
     never leaves a partially updated view. All failures degrade to the last
-    good cache — this component can lose freshness but never break DNS or
+    good cache - this component can lose freshness but never break DNS or
     telemetry.
     """
 
@@ -284,7 +284,7 @@ class ThreatIntelManager:
             self._thread = None
 
     # ------------------------------------------------------------------
-    # Matching (hot path — O(1) set membership, no I/O, no locks held long)
+    # Matching (hot path - O(1) set membership, no I/O, no locks held long)
     # ------------------------------------------------------------------
 
     def match_ip(self, ip: str) -> Optional[IntelMatch]:
@@ -320,7 +320,7 @@ class ThreatIntelManager:
         distribution is overwhelmingly hosted on otherwise-innocent
         compromised sites, so a hit on ``example.com/wp/uploads/x.exe`` says
         nothing about ``example.com`` itself. Matching the whole path is what
-        makes it safe to act on — blocking the parent domain from a URL
+        makes it safe to act on - blocking the parent domain from a URL
         indicator would take down the legitimate site with it.
 
         Requires the TLS inspector (the only component that sees a full HTTPS
@@ -373,7 +373,7 @@ class ThreatIntelManager:
                 indicators = parse_feed(text, feed.kind)
                 if not indicators:
                     # An empty parse of a live fetch is a format change or an
-                    # outage page — keep the stale cache rather than wiping
+                    # outage page - keep the stale cache rather than wiping
                     # protection (fail-safe, no silent success).
                     _print(f"  [yellow]threat intel {feed.name}: 0 indicators "
                            f"parsed — keeping previous cache[/yellow]")
@@ -410,7 +410,7 @@ class ThreatIntelManager:
         return age > THREAT_INTEL_MAX_AGE_HOURS * 3600
 
     def _rebuild_from_cache(self) -> None:
-        """Re-derive the match sets from disk. Revalidates every line —
+        """Re-derive the match sets from disk. Revalidates every line -
         the cache is untrusted input (defense in depth)."""
         ips: set[str] = set()
         domains: set[str] = set()
@@ -449,13 +449,13 @@ class ThreatIntelManager:
     # Seconds to wait before the FIRST background refresh. Long enough for
     # startup to finish (so the fetch never competes with bringing protection
     # up), short enough that a machine which has been offline for weeks gets
-    # current IOCs within a minute of booting — not in six hours.
+    # current IOCs within a minute of booting - not in six hours.
     _INITIAL_REFRESH_DELAY = 20.0
 
     def _refresh_loop(self) -> None:
         # First pass runs on a SHORT delay, not the full 6h interval. Startup
         # deliberately loads cache-only (protection must never wait on the
-        # network — an offline box would otherwise stall for up to 30s per
+        # network - an offline box would otherwise stall for up to 30s per
         # feed on urllib timeouts), so without this the first refresh of a
         # stale cache would be six hours away.
         first = True

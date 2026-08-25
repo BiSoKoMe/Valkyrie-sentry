@@ -1,4 +1,4 @@
-"""IntelligenceMemory — Valkyrie's self-built threat intelligence.
+"""IntelligenceMemory - Valkyrie's self-built threat intelligence.
 
 Every confirmed decision is remembered so it never has to be re-derived:
 ``check()`` is an O(1) in-memory lookup that answers "we already decided
@@ -12,7 +12,7 @@ Verdict rules:
   - a domain is also considered bad when a parent domain was remembered
     bad (bad "example.com" covers "cdn.example.com").
   - a reserved RFC 2606 test/documentation domain (example.com/.net/.org,
-    .test, .invalid, .example) can never be learned "good" — see
+    .test, .invalid, .example) can never be learned "good" - see
     popular_domains.is_reserved_test_domain.
 """
 
@@ -24,7 +24,7 @@ from typing import Optional
 
 from ..popular_domains import is_popular, is_reserved_test_domain
 
-# Substrings marking a stored reason as a tracker/telemetry class — a privacy
+# Substrings marking a stored reason as a tracker/telemetry class - a privacy
 # nuisance handled by the scanner + DECEIVE policy, never a hard THREAT. Kept
 # local so this leaf module has no cross-package import (mirrors
 # decision.reason_denotes_deceivable). Deliberately excludes "beacon": a C2
@@ -78,19 +78,19 @@ class IntelligenceMemory:
             # never-seen-from-process) wrongly learned domains like microsoft.com
             # / paypal.com as bad and persisted them, sinkholing real sites on
             # every launch. Purge them from the DB at startup so the fix takes
-            # effect the moment this build runs — no manual cleanup needed.
+            # effect the moment this build runs - no manual cleanup needed.
             stale_bad = [d for (d, v, _r) in rows if v == "bad" and is_popular(d)]
             # SELF-HEAL: a reserved RFC 2606 test/documentation domain
             # (example.com, .test, .invalid, ...) must never carry a learned
             # 'good' verdict either. An earlier build could durably whitelist
             # one of these purely from N clean-looking queries in a row (see
-            # is_reserved_test_domain) — exactly the shape of a red-team test
+            # is_reserved_test_domain) - exactly the shape of a red-team test
             # lookup like "malware-c2-test.example.com". Purge at startup so
             # the fix takes effect immediately, no manual cleanup needed.
             stale_good = [d for (d, v, _r) in rows if v == "good" and is_reserved_test_domain(d)]
             # SELF-HEAL: a TRACKER/telemetry domain must never carry a learned
             # 'bad' verdict. A tracker is a privacy nuisance handled by the
-            # scanner + DECEIVE policy — not a THREAT. The old duplicate-block
+            # scanner + DECEIVE policy - not a THREAT. The old duplicate-block
             # bug (a tracker logged 'deceived' AND 'blocked' in the same ms)
             # learned trackers like adnxs.com into this memory at suspicion 1.0,
             # so the fast path hard-BLOCKED them and deception never ran again.
@@ -126,7 +126,7 @@ class IntelligenceMemory:
         domain = domain.lower().rstrip(".")
         if not domain:
             return
-        # Never learn a popular legitimate domain as bad — the weak behavioural
+        # Never learn a popular legitimate domain as bad - the weak behavioural
         # signals that reach here (query burst, never-seen) false-positive on
         # exactly these high-traffic domains. Explicit user/threat-intel blocks
         # and the tracker blocklist are separate paths and are unaffected.
@@ -141,7 +141,7 @@ class IntelligenceMemory:
         domain = domain.lower().rstrip(".")
         if not domain:
             return
-        # Never learn a reserved RFC 2606 test/documentation domain as good —
+        # Never learn a reserved RFC 2606 test/documentation domain as good -
         # see is_reserved_test_domain. These are guaranteed non-real, so "N
         # clean queries in a row" is not evidence of legitimacy the way it is
         # for an actual site; it is exactly what a red-team test lookup or a
@@ -167,7 +167,7 @@ class IntelligenceMemory:
         # The guard covers the 'bad' answers ONLY. It previously returned None
         # for popular domains outright, which also threw away a legitimate
         # 'good' verdict and left the fast path permanently dead for exactly the
-        # highest-traffic domains — every lookup re-ran the full pipeline. Not a
+        # highest-traffic domains - every lookup re-ran the full pipeline. Not a
         # safety hole (the failure was toward more analysis, never less), but it
         # silently negated the cache where it mattered most.
         popular = is_popular(domain)

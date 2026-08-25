@@ -17,12 +17,12 @@ Cause: on an already-populated database every statement in _init_schema is a
 no-op (CREATE ... IF NOT EXISTS, all satisfied), so SQLite never needs a write
 lock and the call succeeds even where the process can only READ the file.
 Adding two genuinely new CREATE INDEX statements made schema init the first
-WRITE it had ever attempted there — turning a pre-existing, silent read-only
+WRITE it had ever attempted there - turning a pre-existing, silent read-only
 condition into an unhandled exception and no engine at all.
 
 The rule: a missing performance index is a slower query. It is never a reason
 to refuse to start. But the read-only condition itself must not be swallowed
-either — a store that cannot write means no audit trail, which for a security
+either - a store that cannot write means no audit trail, which for a security
 product is a real failure and has to stay visible.
 
 Uses a real SQLite file in a temp dir, made read-only by ACL/permission. Never
@@ -52,7 +52,7 @@ def _make_readonly(path: Path) -> bool:
     Uses the read-only file attribute (chmod S_IREAD on Windows), NOT an ACL
     deny. The distinction matters: an ACL deny stops SQLite opening the file at
     all ("unable to open database file"), whereas the reported crash was
-    "attempt to write a readonly database" — SQLite opened it, read it, and
+    "attempt to write a readonly database" - SQLite opened it, read it, and
     failed only on the write. Testing the harsher condition would not pin the
     bug that actually happened.
     """
@@ -64,7 +64,7 @@ def _make_readonly(path: Path) -> bool:
         con.execute("CREATE TABLE _probe_write (x INTEGER)")
         con.commit()
         con.close()
-        return False          # writes still work — the denial did not take
+        return False          # writes still work - the denial did not take
     except sqlite3.Error as exc:
         return "readonly" in str(exc).lower()
 

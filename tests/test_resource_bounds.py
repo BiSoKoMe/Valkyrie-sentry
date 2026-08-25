@@ -1,9 +1,9 @@
-"""Tier 2.12 — bounded structures stay bounded under sustained pressure.
+"""Tier 2.12 - bounded structures stay bounded under sustained pressure.
 
 An EDR agent is a long-lived process that consumes attacker-influenced volume:
 DNS queries, process events, kill-chain correlations, file contents. Every
 accumulating structure in that path is a denial-of-service surface, and the
-attack is embarrassingly cheap — not an exploit, just *more*. An agent that
+attack is embarrassingly cheap - not an exploit, just *more*. An agent that
 OOMs the machine it protects has done more damage than the malware.
 
 Declaring `maxlen=` is not evidence the bound works. These tests drive each
@@ -12,7 +12,7 @@ usual failure is a bound that exists on one path while another path appends
 directly, or an eviction branch that never runs because the check is `>` where
 it should be `>=`.
 
-Each test pushes 3–10x the limit. The assertion is on the *observed* size, not
+Each test pushes 3-10x the limit. The assertion is on the *observed* size, not
 on the constant, so raising the limit does not silently pass a broken bound.
 """
 
@@ -31,7 +31,7 @@ from harness import Checks
 def main() -> int:
     c = Checks("resource bounds", expect_min=14)
 
-    # ── 1. ETW sensor queue drops instead of growing ────────────────────────
+    # --- 1. ETW sensor queue drops instead of growing ---
     print("[1] etw/framework sensor queue")
     # The sensor base class holds a deque(maxlen=queue_max).
     import collections
@@ -45,13 +45,13 @@ def main() -> int:
             "maxlen" in Path("valkyrie/etw/framework.py").read_text(
                 encoding="utf-8"))
 
-    # ── 2. DNS tunnel base tracker ──────────────────────────────────────────
+    # --- 2. DNS tunnel base tracker ---
     print("\n[2] dns_tunnel base tracker")
     from valkyrie.dns_tunnel import SubdomainFloodDetector
     det = SubdomainFloodDetector()
     cap = det._MAX_BASES
     # Labels must be genuinely cryptic or the detector returns early without
-    # recording — an earlier draft used "data0.chunk0..." and left _seen empty,
+    # recording - an earlier draft used "data0.chunk0..." and left _seen empty,
     # so the bound looked held when nothing had been stored at all.
     now = 1_000_000.0
     for i in range(cap * 3):
@@ -65,7 +65,7 @@ def main() -> int:
     c.check("the detector still scores after eviction, rather than crashing",
             isinstance(score, float) and isinstance(reason, str))
 
-    # ── 3. Kill-chain correlator ────────────────────────────────────────────
+    # --- 3. Kill-chain correlator ---
     print("\n[3] edr/killchain correlator")
     from valkyrie.edr.killchain import KillChainCorrelator
     kc = KillChainCorrelator()
@@ -80,7 +80,7 @@ def main() -> int:
     c.check("the correlator still accepts detections past its cap",
             res is None or isinstance(res, dict))
 
-    # ── 4. Per-process baseline history ─────────────────────────────────────
+    # --- 4. Per-process baseline history ---
     print("\n[4] intelligence baseline history")
     from valkyrie.intelligence.baseline import _PairProfile
     from valkyrie.config import INTEL_HISTORY_SAMPLES
@@ -95,7 +95,7 @@ def main() -> int:
             f"({len(b.payloads)} == {INTEL_HISTORY_SAMPLES})",
             len(b.payloads) == INTEL_HISTORY_SAMPLES)
 
-    # ── 5. Rate limiter window does not grow without bound ──────────────────
+    # --- 5. Rate limiter window does not grow without bound ---
     print("\n[5] behavioural rate-limiter window")
     from valkyrie.behavioral import RateLimiter
     from valkyrie.config import RATE_WINDOW_SECONDS
@@ -112,7 +112,7 @@ def main() -> int:
     c.check(f"retained samples span at most the window ({span:.2f}s <= "
             f"{RATE_WINDOW_SECONDS}s)", span <= RATE_WINDOW_SECONDS + 1.0)
 
-    # ── 6. AMSI never reads an unbounded file ───────────────────────────────
+    # --- 6. AMSI never reads an unbounded file ---
     # The one place Valkyrie reads a file whose path an attacker can influence.
     print("\n[6] AMSI scan caps")
     from valkyrie.amsi import AmsiScanner, DISP_MALWARE, DISP_SKIPPED
@@ -152,7 +152,7 @@ def main() -> int:
             "self._max_bytes + 1" in Path("valkyrie/amsi.py").read_text(
                 encoding="utf-8"))
 
-    # ── 7. Forensics export is bounded ──────────────────────────────────────
+    # --- 7. Forensics export is bounded ---
     print("\n[7] forensics export bound")
     import valkyrie.forensics as forensics
     c.check(f"forensics declares an event ceiling (_MAX_EVENTS="

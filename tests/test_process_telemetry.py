@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Process telemetry collector — heuristics + diff/emit behavior (ADR-0012)."""
+"""Process telemetry collector - heuristics + diff/emit behavior (ADR-0012)."""
 
 from __future__ import annotations
 

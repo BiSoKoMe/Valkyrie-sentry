@@ -1,4 +1,4 @@
-"""Tests for valkyrie/updater.py — signed update verification.
+"""Tests for valkyrie/updater.py - signed update verification.
 
 Generates a throwaway Ed25519 keypair in-process, signs a manifest, and proves:
   - a valid signature verifies;
@@ -45,7 +45,7 @@ except ImportError:
     print("  [-] SKIP — cryptography not installed")
     sys.exit(0)
 
-# Two independent signing keys — one legitimate, one attacker's.
+# Two independent signing keys - one legitimate, one attacker's.
 priv = Ed25519PrivateKey.generate()
 pub_hex = priv.public_key().public_bytes_raw().hex()
 attacker = Ed25519PrivateKey.generate()
@@ -54,7 +54,7 @@ man = UpdateManifest(version="0.3.0", url="https://example/v0.3.0.msi",
                      sha256="a" * 64, notes="test release")
 sig = priv.sign(man.canonical_bytes())
 
-# ── Version comparison ────────────────────────────────────────────────────
+# --- Version comparison ---
 print("\n-- Version comparison --------------------------------")
 check("0.3.0 newer than 0.2.0", is_newer("0.3.0", "0.2.0"))
 check("0.2.0 not newer than 0.2.0", not is_newer("0.2.0", "0.2.0"))
@@ -62,7 +62,7 @@ check("0.2.1 newer than 0.2.0", is_newer("0.2.1", "0.2.0"))
 check("0.1.9 not newer than 0.2.0", not is_newer("0.1.9", "0.2.0"))
 check("1.0 newer than 0.9.9", is_newer("1.0", "0.9.9"))
 
-# ── Signature verification ────────────────────────────────────────────────
+# --- Signature verification ---
 print("\n-- Signature verification ----------------------------")
 try:
     verify_manifest(man, sig, pub_hex)
@@ -95,7 +95,7 @@ try:
 except UpdateError:
     check("no public key -> fail closed", True)
 
-# ── Artifact hash ─────────────────────────────────────────────────────────
+# --- Artifact hash ---
 print("\n-- Artifact hash -------------------------------------")
 import hashlib
 data = b"the real installer bytes"
@@ -111,7 +111,7 @@ try:
 except UpdateError:
     check("wrong artifact hash rejected", True)
 
-# ── check_update gate ─────────────────────────────────────────────────────
+# --- check_update gate ---
 print("\n-- check_update gate ---------------------------------")
 res = check_update("0.2.0", man, sig, pub_hex)
 check("verified upgrade reported available",
@@ -125,7 +125,7 @@ try:
 except UpdateError:
     check("unverified manifest never reported available", True)
 
-# ── Summary ──────────────────────────────────────────────────────────────
+# --- Summary ---
 print(f"\n{'=' * 50}")
 print(f"  {PASS} passed  /  {FAIL} failed")
 if FAIL:

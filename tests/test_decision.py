@@ -3,7 +3,7 @@
 
 Every automated action must be explainable AND correct, so the policy is pinned
 by scenario. These are the "every playbook has a simulated scenario" cases from
-the validation-pipeline plan: each maps a realistic signal → the action the
+the validation-pipeline plan: each maps a realistic signal -> the action the
 high-risk-user threat model requires, across profiles.
 """
 

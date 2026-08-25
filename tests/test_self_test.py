@@ -1,4 +1,4 @@
-"""Tier 3.13 — the component that says "you are protected" must not lie.
+"""Tier 3.13 - the component that says "you are protected" must not lie.
 
 `self_test.py` was 0% covered, 140 statements, and it is the module whose entire
 job is telling the user whether protection is working. TEST_PLAN puts it first
@@ -8,7 +8,7 @@ that Valkyrie has stopped working is this module saying so.
 
 The failure being tested for is specific and asymmetric. A heartbeat that cries
 wolf is annoying. A heartbeat that stays green while the DNS sinkhole is dead
-means the user browses all day believing they are protected — the module's own
+means the user browses all day believing they are protected - the module's own
 docstring names this: *"the worst failure mode is not a crash; it is silently
 not protecting while the UI still says ACTIVE."*
 
@@ -41,7 +41,7 @@ from valkyrie.config import HEALTH_PROBE_DOMAIN
 def main() -> int:
     c = Checks("self test", expect_min=20)
 
-    # ── 1. Heartbeat: green must be earned ──────────────────────────────────
+    # --- 1. Heartbeat: green must be earned ---
     print("[1] heartbeat state machine")
     original = st._probe_dns
     try:
@@ -62,7 +62,7 @@ def main() -> int:
         hb.check_once()
         c.check("a successful probe keeps it healthy", hb.is_healthy())
 
-        # One failure must NOT flip it — a single dropped UDP packet is noise.
+        # One failure must NOT flip it - a single dropped UDP packet is noise.
         probe_result["ok"] = False
         hb.check_once()
         c.check("ONE failed probe does not raise a false alarm", hb.is_healthy())
@@ -126,7 +126,7 @@ def main() -> int:
             c.check("a raising probe is NOT counted as healthy "
                     "(monitor crashed instead)", False)
 
-        # ── Staleness: a monitor that stopped monitoring is not healthy ─────
+        # --- Staleness: a monitor that stopped monitoring is not healthy ---
         # A dead heartbeat thread does not announce itself. Without a staleness
         # guard the signal freezes at its last value, and 'healthy' is the most
         # likely value to freeze at since it is the initial state.
@@ -144,7 +144,7 @@ def main() -> int:
         c.check("status() marks it stale explicitly", hb2.status()["stale"])
         c.check("status() healthy agrees with is_healthy() when stale",
                 hb2.status()["healthy"] is False)
-        # A fresh probe must clear staleness — the guard must not be one-way.
+        # A fresh probe must clear staleness - the guard must not be one-way.
         hb2.check_once()
         c.check("a fresh probe clears the stale state", hb2.is_healthy())
         c.check("status() no longer marks it stale", not hb2.status()["stale"])
@@ -153,10 +153,10 @@ def main() -> int:
         c.check("a monitor that has never probed is not called stale",
                 not hb3.status()["stale"])
 
-        # ── [1c] Startup grace: a cold boot must not cry wolf ───────────────
+        # --- [1c] Startup grace: a cold boot must not cry wolf ---
         # The heartbeat fires seconds after start(), sometimes BEFORE the DNS
         # listener has finished binding. During the grace window a failing probe
-        # means "still starting," not "protection down" — no false
+        # means "still starting," not "protection down" - no false
         # PROTECTION-FAILED. After the first success, normal rules resume.
         print("\n[1c] startup grace suppresses the cold-boot false alarm")
         st._probe_dns = lambda host, port, timeout=1.0, qname="": False   # not up yet
@@ -182,7 +182,7 @@ def main() -> int:
     finally:
         st._probe_dns = original
 
-    # ── 1d. Wire-level probe fast path answers WITHOUT a worker thread ──────
+    # --- 1d. Wire-level probe fast path answers WITHOUT a worker thread ---
     # Regression for a live bug: the heartbeat still false-failed under a burst
     # of real DNS queries (not just at cold boot) because each query spawns its
     # own worker thread, and Python's GIL can delay a freshly-spawned heartbeat-
@@ -222,7 +222,7 @@ def main() -> int:
 
     # Saturate the GIL with busy worker threads for the probe window, the same
     # shape as a real query burst (CPU-bound work, no real query dispatch needed
-    # for this check — only the health-probe's OWN latency is under test).
+    # for this check - only the health-probe's OWN latency is under test).
     stop_noise = _threading.Event()
     def _spin():
         while not stop_noise.is_set():
@@ -252,7 +252,7 @@ def main() -> int:
         interceptor._sock.close()
         loop_thread.join(timeout=2)
 
-    # ── 2. preflight: critical means critical ───────────────────────────────
+    # --- 2. preflight: critical means critical ---
     print("\n[2] preflight checks")
     checks = st.preflight(port=5399, want_dns=True, want_unbound=False,
                           want_tls=False)

@@ -1,9 +1,9 @@
-"""Windows telemetry killer — registry + service edits to cut OS-level
+"""Windows telemetry killer - registry + service edits to cut OS-level
 tracking at the source instead of only blocking it on the wire.
 
 Every change is backed up to TELEMETRY_BACKUP_PATH before being applied so
 restore() can put the machine back exactly as it was. Registry keys are
-never deleted — only individual values are set (or, on restore, removed if
+never deleted - only individual values are set (or, on restore, removed if
 they did not exist beforehand).
 
 Requires Administrator privileges; scan()/kill()/restore() degrade
@@ -194,7 +194,7 @@ class TelemetryKiller:
         # kill() used to rebuild the backup from whatever the registry held at
         # the time and write it unconditionally. Running it a SECOND time
         # therefore read back the values kill() had already written and recorded
-        # those as the "originals" — permanently destroying the user's real
+        # those as the "originals" - permanently destroying the user's real
         # Windows settings. restore() would then report success while handing
         # back the killed values, and the true originals were unrecoverable.
         #
@@ -265,7 +265,7 @@ class TelemetryKiller:
         # to overwrite an existing backup (so a second kill cannot destroy the
         # originals), which means a stale backup left here would make every
         # FUTURE kill/restore cycle restore to these same now-outdated values.
-        # Only discard it if the restore actually succeeded everywhere —
+        # Only discard it if the restore actually succeeded everywhere -
         # a partial restore must keep the backup so the user can retry.
         if results and all(results.values()):
             try:
@@ -276,7 +276,7 @@ class TelemetryKiller:
         return results
 
     # ------------------------------------------------------------------
-    # Internal — backup persistence
+    # Internal - backup persistence
     # ------------------------------------------------------------------
 
     def _save_backup(self, backup: dict) -> None:

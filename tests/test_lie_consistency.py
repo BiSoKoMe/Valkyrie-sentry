@@ -1,39 +1,39 @@
 #!/usr/bin/env python3
-"""LIE-CONSISTENCY GATE — the deception layer must never contradict itself.
+"""LIE-CONSISTENCY GATE - the deception layer must never contradict itself.
 
 This is the gate test for the deception engine (valkyrie/persona.py +
 valkyrie/deception.py). It exists because the failure mode of deception is not
-"the lie was detected" — it is "the lie was inconsistent," which is strictly
+"the lie was detected" - it is "the lie was inconsistent," which is strictly
 worse than not lying at all.
 
 Why inconsistency is worse than blocking
 ----------------------------------------
 DECEIVE used to return 0.0.0.0, which is BLOCK with a nicer label. That leaks a
 bit: a machine whose beacons reliably fail, while everything else resolves, is
-identifiable as one running a blocker — a small, stable, distinctive
+identifiable as one running a blocker - a small, stable, distinctive
 population. The user tried to disappear and joined a rarer crowd.
 
 Answering the beacon fixes that only if the answers agree with each other. A
 client reporting `America/New_York` to /collect and `Europe/Berlin` to /pixel,
 or a different advertising ID each session, is not a plausible human. It is a
-signature unique to synthetic traffic — a BETTER identifier than the one we
+signature unique to synthetic traffic - a BETTER identifier than the one we
 removed. So the properties below are not cosmetic; each one, if violated, hands
 a tracker a cleaner signal than blocking ever did.
 
 The four properties gated here
 ------------------------------
-  1. INTERNAL COHERENCE   — locale/timezone/country/language agree; screen
+  1. INTERNAL COHERENCE   - locale/timezone/country/language agree; screen
                             metrics are physically possible; deviceMemory is
                             within what a browser may report.
-  2. CROSS-FAMILY AGREEMENT — /collect, /pagead/ads, /sdk/config and a generic
+  2. CROSS-FAMILY AGREEMENT - /collect, /pagead/ads, /sdk/config and a generic
                             path must report the SAME identity. Different
                             beacon families are exactly where a second source
                             of truth would leak in.
-  3. CROSS-SESSION STABILITY — restarting the process, and rebuilding the store
+  3. CROSS-SESSION STABILITY - restarting the process, and rebuilding the store
                             from the persisted seed, must reproduce the same
                             person. Verified through a real socket, not just
                             the pure function.
-  4. THE CHECKER ACTUALLY WORKS — negative controls. A gate that has never
+  4. THE CHECKER ACTUALLY WORKS - negative controls. A gate that has never
                             rejected anything is not known to reject anything,
                             so incoherent personas are constructed on purpose
                             and must be caught.
@@ -176,7 +176,7 @@ def main() -> int:
             "persona (survives restart)", persona1 == persona2)
 
     # And a different seed file yields a different person, or the "identity"
-    # would be a constant shared by every Valkyrie install — itself a
+    # would be a constant shared by every Valkyrie install - itself a
     # fingerprint, and the exact bug farble.py was written to fix.
     other = PersonaStore(tmp / "other_seed.json").persona()
     c.check("a different machine (different seed) gets a DIFFERENT persona",
@@ -206,7 +206,7 @@ def main() -> int:
             ep.stop()
         c.check(f"session {session}: endpoint stopped cleanly", not ep.running)
 
-    # Every field, every path, every session — one value.
+    # Every field, every path, every session - one value.
     for key in _IDENTITY_KEYS:
         vals = set()
         for snap in live_ids:
@@ -218,7 +218,7 @@ def main() -> int:
                 len(vals) <= 1)
 
     # ------------------------------------------------------------------
-    # 3b. REPLAY STABILITY — mechanical proof that "the same tracker asking
+    # 3b. REPLAY STABILITY - mechanical proof that "the same tracker asking
     #     twice gets the same answer" holds under repetition, not just once.
     #     A pure-function check alone could pass while the HTTP layer (header
     #     ordering, keep-alive state, encoding) drifted between calls, so this
@@ -247,7 +247,7 @@ def main() -> int:
         ep_replay.stop()
 
     # And once more across freshly-simulated sessions (fresh process, fresh
-    # store, same persisted seed) rather than one long-lived connection — the
+    # store, same persisted seed) rather than one long-lived connection - the
     # scenario the module's stability guarantee is actually about.
     cross_session_replies = set()
     for _ in range(5):
@@ -260,7 +260,7 @@ def main() -> int:
             len(cross_session_replies) == 1)
 
     # ------------------------------------------------------------------
-    # 4. NEGATIVE CONTROLS — prove the checker rejects real contradictions.
+    # 4. NEGATIVE CONTROLS - prove the checker rejects real contradictions.
     #    Without these the whole file could be passing vacuously.
     # ------------------------------------------------------------------
     base = build_persona(b"negative-control-seed-000000000000")
@@ -311,7 +311,7 @@ def main() -> int:
                 bool(errs))
 
     # A mutated persona must also be visible THROUGH the endpoint, not just via
-    # the dataclass — otherwise the endpoint could be laundering incoherence.
+    # the dataclass - otherwise the endpoint could be laundering incoherence.
     bad = replace(base, timezone="Europe/Berlin", locale="ja-JP")
     r = build_reply("GET", "/collect", "", {}, bad)
     cb = _client_block(r.body) or {}

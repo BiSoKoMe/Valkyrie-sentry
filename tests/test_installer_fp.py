@@ -2,8 +2,8 @@
 """Installer false-positive gate (valkyrie/trust.is_reputable_app_noise).
 
 A signed, reputable, non-LOLBin app/installer spawns many child processes doing
-benign work — that must NOT correlate into a fake "N-tactic multi-stage attack"
-(the python_setup.exe → "5 tactics across 10 processes" FP). But the gate must
+benign work - that must NOT correlate into a fake "N-tactic multi-stage attack"
+(the python_setup.exe -> "5 tactics across 10 processes" FP). But the gate must
 NEVER hide a real threat: PowerShell/LOLBin chains, high-severity steps, and
 unsigned binaries all still correlate. These pin exactly that boundary.
 """
@@ -70,7 +70,7 @@ def main() -> int:
         from valkyrie.edr import EdrEngine
         from valkyrie.telemetry import TelemetryEvent, CAT_PROCESS, SEV_MEDIUM
         eng = EdrEngine(Store()); eng.start()
-        # Two different tactics from the signed installer → must NOT form a chain.
+        # Two different tactics from the signed installer -> must NOT form a chain.
         for tech in ("T1059 — Command & Scripting Interpreter",
                      "T1547.001 — Registry Run Keys / Startup Folder"):
             eng.ingest_telemetry(TelemetryEvent(

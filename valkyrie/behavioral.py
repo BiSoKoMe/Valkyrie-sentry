@@ -1,12 +1,12 @@
 """Behavioral heuristics engine.
 
 Scores every DNS query on three axes before the blocklist check:
-  1. Shannon entropy of the queried domain (high entropy → DGA / tracking pixel)
+  1. Shannon entropy of the queried domain (high entropy -> DGA / tracking pixel)
   2. Per-process query rate in a sliding window
   3. Domain age via lightweight WHOIS (optional; fails silently)
 
 Returns a (score: float, reason: str) tuple.  Score is in [0.0, 1.0].
-If score >= BEHAVIORAL_BLOCK_SCORE and domain is not allowlisted → block.
+If score >= BEHAVIORAL_BLOCK_SCORE and domain is not allowlisted -> block.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ def entropy_score(domain: str) -> tuple[float, str]:
     label = domain.split(".")[0]
     entropy = _shannon_entropy(label)
     if entropy > ENTROPY_THRESHOLD:
-        # Normalise: ENTROPY_THRESHOLD → 0.5,  6.0 → 1.0
+        # Normalise: ENTROPY_THRESHOLD -> 0.5,  6.0 -> 1.0
         partial = min(1.0, 0.5 + (entropy - ENTROPY_THRESHOLD) / (6.0 - ENTROPY_THRESHOLD) * 0.5)
         return partial, f"high subdomain entropy ({entropy:.2f} bits)"
     return 0.0, ""
@@ -62,7 +62,7 @@ class RateLimiter:
     """Sliding-window query rate tracker.  Thread-safe across concurrent DNS handler threads."""
 
     def __init__(self) -> None:
-        # process_name → deque of timestamps
+        # process_name -> deque of timestamps
         self._windows: dict[str, collections.deque] = collections.defaultdict(collections.deque)
         self._lock = threading.RLock()
 
@@ -81,19 +81,19 @@ class RateLimiter:
             count = len(dq)
         if count > RATE_MAX_QUERIES:
             ratio   = min(1.0, count / (RATE_MAX_QUERIES * 2))
-            partial = 0.4 + ratio * 0.4    # maps to 0.4–0.8
+            partial = 0.4 + ratio * 0.4    # maps to 0.4-0.8
             return partial, f"query burst ({count} queries in {RATE_WINDOW_SECONDS}s)"
         return 0.0, ""
 
 
 # ---------------------------------------------------------------------------
-# TLD reputation (offline — replaces the old WHOIS domain-age signal)
+# TLD reputation (offline - replaces the old WHOIS domain-age signal)
 # ---------------------------------------------------------------------------
 #
 # The former age signal depended on network WHOIS, which is unavailable in the
 # offline / intelligence-only posture this product ships in, so it silently
 # scored 0 on every domain while appearing active. It is replaced by a static,
-# shipped set of abuse-heavy TLDs (config.SUSPICIOUS_TLDS) — an O(1) lookup with
+# shipped set of abuse-heavy TLDs (config.SUSPICIOUS_TLDS) - an O(1) lookup with
 # no network dependency, so this signal is genuinely live offline. See the
 # config note for the sourcing and the deliberate exclusion of mainstream TLDs.
 
@@ -129,7 +129,7 @@ class BehavioralEngine:
     def score(self, domain: str, process_name: str) -> tuple[float, str]:
         """Return (combined_score, reason_string).
 
-        Scores are combined with a weighted max — a single strong signal
+        Scores are combined with a weighted max - a single strong signal
         can trip the threshold without all axes firing.
         """
         e_score, e_reason = entropy_score(domain)
@@ -138,7 +138,7 @@ class BehavioralEngine:
         # not a domain-reputation one, and it false-positived catastrophically:
         # a busy browser or svchost doing 80 lookups in 10s made EVERY legitimate
         # domain in that window (microsoft.com, bing.com, capitalone.com) inherit
-        # a "query burst" and get sinkholed — the single largest false-positive
+        # a "query burst" and get sinkholed - the single largest false-positive
         # class in live testing. Burst-of-RANDOM-domains C2 is caught by the
         # entropy / DGA signals on the DOMAIN itself, which do not false-positive
         # on popular sites, so nothing real is lost.
@@ -153,7 +153,7 @@ class BehavioralEngine:
         return combined, reason
 
     # ------------------------------------------------------------------
-    # Signal health (no silent failures — see PHASE 0)
+    # Signal health (no silent failures - see PHASE 0)
     # ------------------------------------------------------------------
 
     def signal_health(self) -> list[dict]:

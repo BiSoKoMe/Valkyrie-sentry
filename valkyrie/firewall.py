@@ -1,12 +1,12 @@
-"""Kernel-level IP firewall — Phase 2 of Valkyrie's defence stack.
+"""Kernel-level IP firewall - Phase 2 of Valkyrie's defence stack.
 
 Complements the DNS sinkhole by blocking outbound packets to known
 tracker/malware IP ranges.  Catches apps that hardcode IP addresses
 and skip DNS resolution entirely.
 
 Two rule categories:
-  DoH block  — TCP/443 to public DoH resolver IPs (always enforced)
-  IP ranges  — CIDRs from threat-intel feeds (refreshed daily)
+  DoH block  - TCP/443 to public DoH resolver IPs (always enforced)
+  IP ranges  - CIDRs from threat-intel feeds (refreshed daily)
 
 Platform implementations
 ------------------------
@@ -27,7 +27,7 @@ Both platforms require elevated privileges.
   Windows: run as Administrator
 
 If the required binary is absent or returns a permission error the
-manager logs a warning and continues — the firewall layer is optional.
+manager logs a warning and continues - the firewall layer is optional.
 """
 
 from __future__ import annotations
@@ -160,7 +160,7 @@ def load_ip_blocklist(console=None, allow_download: bool | None = None) -> set[s
     Downloads are opt-in (``--download-lists`` / USE_EXTERNAL_LISTS): only
     then are stale feeds refreshed.  Otherwise a previously downloaded
     cache on disk is used when present, and the firewall falls back to
-    DoH-only blocking when there is no cache — fully offline.
+    DoH-only blocking when there is no cache - fully offline.
     """
     if allow_download is None:
         allow_download = USE_EXTERNAL_LISTS
@@ -211,14 +211,14 @@ class _PyIPSet:
 
     Lookups are a hot path: dns_interceptor screens every allowed answer IP
     against this set. The previous implementation scanned the network list
-    linearly — with ~12k threat-intel ranges that measured ~1.6 ms *per lookup*,
+    linearly - with ~12k threat-intel ranges that measured ~1.6 ms *per lookup*,
     which collapses under any real DNS query rate.
 
     Instead we bucket networks by prefix length. To test an address we mask it to
     each distinct prefix length present and probe a hash set of network integers.
     There are at most 32 distinct IPv4 prefix lengths, so a lookup is
-    O(distinct lengths) ≤ 32 hash probes, *independent of how many ranges are
-    loaded*. Memory is just the network integers — none of the node explosion a
+    O(distinct lengths) <= 32 hash probes, *independent of how many ranges are
+    loaded*. Memory is just the network integers - none of the node explosion a
     binary trie would incur, which matters on a Raspberry Pi / router.
 
     Public API (load / contains / count) and semantics are unchanged.
@@ -277,7 +277,7 @@ class _PyIPSet:
 # (``valkyrie_accel``, a Rust/PyO3 extension) is installed we use it; otherwise
 # we fall back to the pure-Python implementation above. The accelerator is a
 # drop-in with identical semantics (pinned by tests/test_rust_accel.py's
-# differential check) and is NEVER a hard dependency — a source or Raspberry-Pi
+# differential check) and is NEVER a hard dependency - a source or Raspberry-Pi
 # install with no compiled extension simply runs the Python path.
 try:
     from valkyrie_accel import IpSet as _IPSet   # type: ignore
@@ -291,7 +291,7 @@ except Exception:
 # Platform helpers
 # ---------------------------------------------------------------------------
 
-_NETSH_TIMEOUT = 5   # seconds per netsh call — hangs without this on Windows
+_NETSH_TIMEOUT = 5   # seconds per netsh call - hangs without this on Windows
 
 
 def _run(args: list[str], check: bool = False, timeout: int = _NETSH_TIMEOUT) -> subprocess.CompletedProcess:
@@ -348,7 +348,7 @@ class _LinuxFirewall:
             )
             return len(cidrs) if r.returncode == 0 else 0
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-            # iptables-restore unavailable — fall back to one-by-one (slower)
+            # iptables-restore unavailable - fall back to one-by-one (slower)
             ok = 0
             for cidr in cidrs:
                 try:
@@ -375,7 +375,7 @@ class _WindowsFirewall:
     """netsh advfirewall implementation.
 
     Windows Firewall becomes unstable with thousands of individual rules and
-    each `netsh` call takes 0.3–1s under UAC/policy checks — 12 k rules
+    each `netsh` call takes 0.3-1s under UAC/policy checks - 12 k rules
     would take hours.  On Windows we therefore:
       - Install only the 10 DoH block rules (TCP/443 to known resolvers)
       - Rely entirely on the in-process _IPSet for all other IP-range checks
@@ -389,7 +389,7 @@ class _WindowsFirewall:
     def __init__(self) -> None:
         # Set when a netsh call fails (non-zero return code, missing binary,
         # or timeout) so callers can distinguish "0 rules because nothing to
-        # do" from "0 rules because every netsh call failed silently" — the
+        # do" from "0 rules because every netsh call failed silently" - the
         # same class of gap identified in mac_randomizer.py's adapter cycle.
         self.last_error: str | None = None
 
@@ -409,7 +409,7 @@ class _WindowsFirewall:
         """Add one outbound block rule per DoH IP (TCP/443 only).
 
         Returns count of rules CONFIRMED installed by netsh's own return
-        code — a non-zero return code (e.g. elevation denied, malformed
+        code - a non-zero return code (e.g. elevation denied, malformed
         rule, firewall service down) is NOT counted as success.  On any
         failure, ``self.last_error`` is set with the last diagnostic seen
         so the caller does not mistake a silent failure for success.
@@ -433,7 +433,7 @@ class _WindowsFirewall:
         return ok
 
     def add_cidr_rules_batch(self, cidrs: set[str]) -> int:
-        """No-op on Windows — _IPSet handles in-process CIDR blocking."""
+        """No-op on Windows - _IPSet handles in-process CIDR blocking."""
         return 0
 
     def teardown(self) -> None:
@@ -450,7 +450,7 @@ class _WindowsFirewall:
 
 
 # ---------------------------------------------------------------------------
-# FirewallManager — public interface
+# FirewallManager - public interface
 # ---------------------------------------------------------------------------
 
 class FirewallManager:
@@ -489,11 +489,11 @@ class FirewallManager:
 
         On Linux:   installs DoH rules + all CIDR ranges via iptables-restore.
         On Windows: installs only the 10 DoH rules via netsh; CIDR ranges are
-                    enforced in-process by _IPSet (no kernel rules — avoids
+                    enforced in-process by _IPSet (no kernel rules - avoids
                     the multi-hour hang of running 12k netsh commands).
 
         ``allow_download`` gates feed downloads (default: USE_EXTERNAL_LISTS).
-        DoH blocking always works — the resolver IPs are hardcoded.
+        DoH blocking always works - the resolver IPs are hardcoded.
 
         Returns total count of IP ranges loaded into _IPSet.
         """
@@ -528,7 +528,7 @@ class FirewallManager:
         cidr_ok = 0
 
         if kernel_ok:
-            # 3. DoH kernel rules — small fixed set, fast on both platforms
+            # 3. DoH kernel rules - small fixed set, fast on both platforms
             doh_ok = self._platform.add_doh_rules(FIREWALL_DOH_IPS)
 
             # 4. CIDR kernel rules
@@ -537,7 +537,7 @@ class FirewallManager:
             cidr_ok = self._platform.add_cidr_rules_batch(cidrs)
 
             # Surface a partial/total DoH install failure instead of letting
-            # it look identical to full success — mirrors the netsh
+            # it look identical to full success - mirrors the netsh
             # return-code check added to mac_randomizer's adapter cycle.
             expected_doh = len(FIREWALL_DOH_IPS)
             if doh_ok < expected_doh:
@@ -598,7 +598,7 @@ class FirewallManager:
 
     def is_blocked_ip(self, ip: str) -> bool:
         """Return True if ip falls within any blocked range (in-process check)."""
-        # Public DNS resolvers (Google/Cloudflare/Quad9) are never blocked — an
+        # Public DNS resolvers (Google/Cloudflare/Quad9) are never blocked - an
         # over-broad range must not knock out DNS or flag Valkyrie's own upstream.
         from .trust import is_public_resolver_ip
         if is_public_resolver_ip(ip):

@@ -1,4 +1,4 @@
-"""Detection-efficacy corpus — technique-representative inputs + benign controls.
+"""Detection-efficacy corpus - technique-representative inputs + benign controls.
 
 Each case exercises a REAL Valkyrie classifier (no mocks). A malicious case
 represents an attacker technique (MITRE ATT&CK id) that SHOULD fire; a benign
@@ -8,7 +8,7 @@ detection code and scores recall + false-positive rate.
 
 HONEST BOUNDARY (read this): these inputs reflect the author's understanding
 of each technique. Passing this corpus proves the detection *logic*
-discriminates the represented behaviors — it is NOT the same as detonating
+discriminates the represented behaviors - it is NOT the same as detonating
 live malware in a VM. It cannot reveal blind spots the author didn't think to
 write. It is the in-repo measurement instrument; live-sample lab testing (the
 Atomic Red Team / real-beacon path) remains the gold standard this complements.
@@ -32,7 +32,7 @@ class Case:
     note: str = ""
 
 
-# ── Malicious cases (should fire) ──────────────────────────────────────────
+# --- Malicious cases (should fire) ---
 MALICIOUS: list[Case] = [
     # Command-line execution heuristics (process_telemetry.classify_cmdline)
     Case("ps-enc", "cmdline", True, "T1027", "defense-evasion",
@@ -70,7 +70,7 @@ MALICIOUS: list[Case] = [
          "::Copy($sc,0,$h,$sc.Length); CreateThread 0 0 $h 0 0 0",
          "process injection primitives"),
 
-    # Persistence (ASEP) — malicious auto-starts escalate to high
+    # Persistence (ASEP) - malicious auto-starts escalate to high
     Case("run-key-temp", "persistence", True, "T1547.001", "persistence",
          ("registry_run", "C:\\Users\\v\\AppData\\Local\\Temp\\svchost.exe"),
          "Run key from temp dir"),
@@ -78,7 +78,7 @@ MALICIOUS: list[Case] = [
          ("registry_run", "powershell -enc SQBFAFgA..."),
          "Run key with encoded payload"),
 
-    # Ransomware — encrypted-content entropy (ransomware_shield.shannon_entropy)
+    # Ransomware - encrypted-content entropy (ransomware_shield.shannon_entropy)
     Case("entropy-encrypted", "entropy", True, "T1486", "impact",
          b"", "high-entropy (encrypted) blob"),   # inp filled by harness generator
 
@@ -90,11 +90,11 @@ MALICIOUS: list[Case] = [
     Case("intel-c2-ip", "intel_ip", True, "T1071", "command-and-control",
          "45.9.148.99", "known C2 IP"),
 
-    # Tracker/ad infrastructure (site_scanner) — privacy detection
+    # Tracker/ad infrastructure (site_scanner) - privacy detection
     Case("tracker-doubleclick", "scanner", True, "T1071", "command-and-control",
          "doubleclick.net", "known ad-tech tracker"),
 
-    # CNAME-cloaked trackers (cname_uncloak) — first-party-disguised trackers a
+    # CNAME-cloaked trackers (cname_uncloak) - first-party-disguised trackers a
     # DNS blocklist can't see because they only appear as a CNAME target. inp =
     # the CNAME target host the uncloaker inspects.
     Case("cname-eulerian", "cname", True, "T1071", "command-and-control",
@@ -104,7 +104,7 @@ MALICIOUS: list[Case] = [
     Case("cname-atinternet", "cname", True, "T1071", "command-and-control",
          "collect.ati-host.net", "AT Internet / Piano Analytics CNAME cloak"),
 
-    # ── DNS tunnelling / exfil (site_scanner S8/S9 + dns_tunnel.py) ──────────
+    # --- DNS tunnelling / exfil (site_scanner S8/S9 + dns_tunnel.py) ---
     # inp = a STREAM of hostnames (tunnelling is an aggregate shape). These
     # pin the exact miss that let an Atomic Red Team DNS burst through as
     # "allowed" before the flood/wildcard-provider signals existed.
@@ -123,7 +123,7 @@ MALICIOUS: list[Case] = [
                              "bW9yZWRhdGFoZXJl", "ZmluYWxjaHVua3oz", "dGhlbGFzdG9uZTQ0")),
          "base64 DNS tunnel (dnscat-style)"),
 
-    # ── Behavioral IOA rules (behavioral_rules.py) ─ representative sample;
+    # --- Behavioral IOA rules (behavioral_rules.py) - representative sample;
     #    the exhaustive per-rule + benign-control coverage is in
     #    tests/test_behavioral_rules.py. inp = (image, parent, cmdline, path).
     Case("beh-comsvcs-lsass", "behavior", True, "T1003.001", "credential-access",
@@ -145,9 +145,9 @@ MALICIOUS: list[Case] = [
          ("powershell.exe", "winword.exe", "powershell -nop -w hidden", ""),
          "Office spawned a hidden PowerShell"),
 
-    # ── Behavioral anomaly scorer (behavior_score.py) ─ the GENERALIZING nose.
+    # --- Behavioral anomaly scorer (behavior_score.py) - the GENERALIZING nose.
     #    inp = (image, parent, cmdline, path). Every case here is a shape the
-    #    behavioral_rules.py rule list does NOT match — they prove the nose
+    #    behavioral_rules.py rule list does NOT match - they prove the nose
     #    catches intrinsic malicious scent no rule was written for. Paths are
     #    kept outside the rules' generic suspicious-path fragments on purpose.
     Case("anom-svchost-masquerade", "anomaly", True, "T1036.005", "defense-evasion",
@@ -174,8 +174,8 @@ MALICIOUS: list[Case] = [
           r"C:\Users\v\AppData\Local\Temp\svch0st.exe"),
          "typosquat of a system process name from a low-trust dir"),
 
-    # ── Multi-stage kill-chain correlation (edr/killchain.py) ───────────────
-    # inp = (actor, [(technique, title), ...]) — a sequence on ONE process.
+    # --- Multi-stage kill-chain correlation (edr/killchain.py) ---
+    # inp = (actor, [(technique, title), ...]) - a sequence on ONE process.
     # These pin the correlation win: the base same-category correlator would
     # leave these as scattered single-tactic incidents; the chain correlator
     # escalates them to one multi-stage attack. Tactic = the chain's endpoint.
@@ -194,8 +194,8 @@ MALICIOUS: list[Case] = [
              ("T1486", "mass file encryption")]),      # impact
          "execution → defense-evasion → impact (ransomware chain)"),
 
-    # ── Named behavioural sequences / ESP IOAs (behavioral_sequences.py) ────
-    # inp = (actor, [(technique, [labels]), ...]) — an ORDERED behaviour stream
+    # --- Named behavioural sequences / ESP IOAs (behavioral_sequences.py) ---
+    # inp = (actor, [(technique, [labels]), ...]) - an ORDERED behaviour stream
     # on ONE actor that completes a specific named attack pattern. This is the
     # CrowdStrike-style Event Stream Processing IOA the generic kill-chain
     # (which only counts distinct tactics) cannot name.
@@ -212,8 +212,8 @@ MALICIOUS: list[Case] = [
                              ("T1105 — Ingress Tool Transfer", ["download_cradle"])]),
          "document-spawned shell → remote payload fetch (macro dropper)"),
 
-    # ── ETW Sysmon sensor classification (etw/sysmon.classify_sysmon) ───────
-    # Each case is (Sysmon EventID, EventData dict) — the same shape the real
+    # --- ETW Sysmon sensor classification (etw/sysmon.classify_sysmon) ---
+    # Each case is (Sysmon EventID, EventData dict) - the same shape the real
     # sensor parses from Microsoft-Windows-Sysmon/Operational XML.
     Case("sysmon-inject", "sysmon", True, "T1055", "defense-evasion",
          (8, {"SourceImage": r"C:\Users\v\AppData\Local\Temp\loader.exe",
@@ -250,7 +250,7 @@ MALICIOUS: list[Case] = [
                "ProcessId": "3300"}),
          "file dropped in Startup folder (EID 11)"),
 
-    # ── WMI event-subscription persistence (etw/wmi.classify_wmi) ───────────
+    # --- WMI event-subscription persistence (etw/wmi.classify_wmi) ---
     Case("wmi-activescript", "wmi", True, "T1546.003", "persistence",
          "__FilterToConsumerBinding ActiveScriptEventConsumer "
          "ScriptText=\"CreateObject(\\\"WScript.Shell\\\").Run payload\" "
@@ -261,7 +261,7 @@ MALICIOUS: list[Case] = [
          "CommandLineTemplate=\"powershell -nop -w hidden -enc SQBFAFgA\"",
          "CommandLine WMI consumer with encoded payload"),
 
-    # ── Process-relationship heuristics (process_telemetry.classify_process) ─
+    # --- Process-relationship heuristics (process_telemetry.classify_process) -
     Case("proc-office-shell", "process", True, "T1204.002", "execution",
          ("powershell.exe", r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
           "winword.exe"),
@@ -270,13 +270,13 @@ MALICIOUS: list[Case] = [
          ("rundll32.exe", r"C:\Users\v\AppData\Local\Temp\a.exe", "explorer.exe"),
          "LOLBin executed from a temp directory"),
 
-    # ── Network connection to threat-intel IP (network_telemetry) ──────────
+    # --- Network connection to threat-intel IP (network_telemetry) ---
     # DNS misses hard-coded-IP C2; the network collector + intel is the seam.
     Case("net-c2-ip", "network", True, "T1071", "command-and-control",
          ("45.9.148.99", 443), "outbound connection to known C2 IP"),
 
-    # ── DGA C2 domains (dga.classify_dga → scanner block) ──────────────────
-    # Algorithmic malware rendezvous domains — the blind spot ADR 0023 measured
+    # --- DGA C2 domains (dga.classify_dga -> scanner block) ---
+    # Algorithmic malware rendezvous domains - the blind spot ADR 0023 measured
     # and this cycle closed. Long-label PRNG style (the target family class).
     Case("dga-necurs", "dga", True, "T1568.002", "command-and-control",
          "xjkqvw92hd8skwlqz3ty.com", "PRNG-style DGA registrable label"),
@@ -287,7 +287,7 @@ MALICIOUS: list[Case] = [
 ]
 
 
-# ── Benign cases (must NOT fire) — the false-positive control set ───────────
+# --- Benign cases (must NOT fire) - the false-positive control set ---
 BENIGN: list[Case] = [
     Case("b-normal-ps", "cmdline", False, inp=(
         "powershell.exe", "powershell Get-ChildItem C:\\Projects -Recurse"),
@@ -332,7 +332,7 @@ BENIGN: list[Case] = [
     Case("b-scanner-unknown", "scanner", False, inp="some-small-blog-42.dev",
          note="unknown site — default allow"),
 
-    # CNAME uncloak FALSE-POSITIVE controls — legitimate CDN CNAME targets that
+    # CNAME uncloak FALSE-POSITIVE controls - legitimate CDN CNAME targets that
     # must NEVER be mistaken for cloaked trackers (blocking these breaks the web).
     Case("b-cname-akamai", "cname", False, inp="brand.com.edgekey.net",
          note="Akamai CDN CNAME target — legitimate"),
@@ -341,7 +341,7 @@ BENIGN: list[Case] = [
     Case("b-cname-fastly", "cname", False, inp="brand.map.fastly.net",
          note="Fastly CDN CNAME target — legitimate"),
 
-    # DNS-tunnel FALSE-POSITIVE controls — legitimate high-fan-out subdomain
+    # DNS-tunnel FALSE-POSITIVE controls - legitimate high-fan-out subdomain
     # traffic that must NOT be flagged as a tunnel. The cost of a miss here is
     # broken video / storage / dev tooling for the user.
     Case("b-tunnel-googlevideo", "tunnel", False,
@@ -358,7 +358,7 @@ BENIGN: list[Case] = [
          inp=("myapp.127.0.0.1.nip.io", "myapp.127.0.0.1.nip.io"),
          note="legit local dev over nip.io — flagged at most, never blocked"),
 
-    # Behavioral-rule FALSE-POSITIVE controls — ordinary admin/user commands.
+    # Behavioral-rule FALSE-POSITIVE controls - ordinary admin/user commands.
     Case("b-beh-reg-query", "behavior", False,
          inp=("reg.exe", "cmd.exe", "reg query hklm\\software", ""),
          note="reg query (read) — not add/save"),
@@ -372,7 +372,7 @@ BENIGN: list[Case] = [
          inp=("net.exe", "cmd.exe", "net view", ""),
          note="network view — not user /add"),
 
-    # Behavioral-anomaly FALSE-POSITIVE controls — the benign look-alikes a
+    # Behavioral-anomaly FALSE-POSITIVE controls - the benign look-alikes a
     # naive "temp=bad / lolbin=bad / weird-name=bad" scorer wrongly flags. These
     # are the whole point of the nose's precision discipline.
     Case("b-anom-real-svchost", "anomaly", False,
@@ -392,7 +392,7 @@ BENIGN: list[Case] = [
               r"C:\Program Files\Microsoft Visual Studio\MSBuild\Current\Bin\msbuild.exe"),
          note="LOLBin (msbuild) run legitimately by Visual Studio"),
 
-    # Kill-chain FALSE-POSITIVE controls — must NOT raise a multi-stage chain.
+    # Kill-chain FALSE-POSITIVE controls - must NOT raise a multi-stage chain.
     Case("b-chain-single-tactic", "killchain", False,
          inp=("chrome.exe", [
              ("T1071", "https"), ("T1071.004", "dns"), ("T1105", "update download")]),
@@ -402,7 +402,7 @@ BENIGN: list[Case] = [
              ("T1059.001", "admin script"), ("T1059", "another cmd")]),
          note="ordinary admin PowerShell — repeated Execution only, no second tactic"),
 
-    # Behavioural-sequence FALSE-POSITIVE controls — the pieces present but NOT
+    # Behavioural-sequence FALSE-POSITIVE controls - the pieces present but NOT
     # as a completed named pattern (wrong order / incomplete). Must NOT fire.
     Case("b-seq-reversed", "sequence", False,
          inp=("a.exe", [("T1003.001 — LSASS Memory", ["lsass_access"]),
@@ -413,7 +413,7 @@ BENIGN: list[Case] = [
                         ("T1082 — System Information Discovery", ["system_info"])]),
          note="injection then benign discovery — sequence never completes"),
 
-    # Sysmon benign controls — ordinary endpoint activity must not fire.
+    # Sysmon benign controls - ordinary endpoint activity must not fire.
     Case("b-sysmon-signed-proc", "sysmon", False, inp=(
         1, {"Image": r"C:\Windows\System32\notepad.exe",
             "ParentImage": r"C:\Windows\explorer.exe", "ProcessId": "1200"}),
@@ -440,12 +440,12 @@ BENIGN: list[Case] = [
             "Initiated": "true", "ProcessId": "1200"}),
         note="ordinary outbound HTTPS connection (EID 3) — info, not a threat"),
 
-    # WMI benign control — a non-persistence provider event must not fire.
+    # WMI benign control - a non-persistence provider event must not fire.
     Case("b-wmi-provider", "wmi", False, inp=(
         "Win32_Process provider started; ESS query executed normally"),
         note="benign WMI provider activity (no consumer binding)"),
 
-    # Process benign controls — normal signed apps must not fire.
+    # Process benign controls - normal signed apps must not fire.
     Case("b-proc-chrome", "process", False, inp=(
         "chrome.exe", r"C:\Program Files\Google\Chrome\chrome.exe", "explorer.exe"),
         note="browser launched from Program Files"),
@@ -453,11 +453,11 @@ BENIGN: list[Case] = [
         "svchost.exe", r"C:\Windows\System32\svchost.exe", "services.exe"),
         note="service host from System32"),
 
-    # Network benign control — connection to a clean public IP must not fire.
+    # Network benign control - connection to a clean public IP must not fire.
     Case("b-net-public-ip", "network", False, inp=("140.82.112.3", 443),
          note="outbound to a legitimate IP (GitHub), not in intel feeds"),
 
-    # DGA benign controls — the hard cases a naive entropy detector breaks on.
+    # DGA benign controls - the hard cases a naive entropy detector breaks on.
     Case("b-dga-cdn", "dga", False, inp="d1anzknqnc1kmb.cloudfront.net",
          note="gibberish CDN SUBDOMAIN under a real parent — must not fire"),
     Case("b-dga-longword", "dga", False, inp="nationalgeographic.com",

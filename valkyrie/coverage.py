@@ -1,11 +1,11 @@
-"""Coverage — what fraction of Valkyrie's intended defenses are actually live.
+"""Coverage - what fraction of Valkyrie's intended defenses are actually live.
 
 Generalizes ``sensor_tamper.py``'s Sysmon-only health check into a coverage
 report over EVERY control in ``valkyrie/control_taxonomy.py``. IIBA's
 *Cybersecurity Analysis* handbook (§4.8.3) and Clinton's *Cybersecurity for
 Business* (ch. 9) both make the same point Valkyrie's own incident record
 already proves: coverage is not a yes/no fact. Sysmon can be *installed* and
-still deliver nothing — a state that is not "protected" no matter what an
+still deliver nothing - a state that is not "protected" no matter what an
 installer's exit code says.
 
 **Three states, not two:**
@@ -15,26 +15,26 @@ installer's exit code says.
                independent way to verify it's actually running (this
                module refuses to call something EFFECTIVE it cannot prove)
     ABSENT     missing outright, OR present-but-stopped (Sysmon installed
-               but not delivering events lands here, NOT in effective —
+               but not delivering events lands here, NOT in effective -
                this is the exact case that motivated this module)
 
 **How a verdict is reached, per control:**
 
   * A handful of controls have a REAL, standalone liveness probe reusing
     code that already exists for another purpose (Sysmon via
-    ``sysmon_manager.probe_sysmon()`` — the same probe ``sensor_tamper.py``
+    ``sysmon_manager.probe_sysmon()`` - the same probe ``sensor_tamper.py``
     already calls; decoys via ``decoys._ACTIVE``; secrets via
     ``secure_file.audit_secrets()``; rules/playbook policy via a real
     parse). These get an honest EFFECTIVE/DEGRADED/ABSENT verdict.
   * Passing a :class:`CoverageContext` with live singletons (the firewall
     manager, the sensor-tamper monitor, the EDR engine) upgrades several
-    more controls from the generic fallback to a real verdict — this is how
+    more controls from the generic fallback to a real verdict - this is how
     a running Valkyrie process gets a materially more accurate report than
     a cold, standalone one.
   * Everything else falls back categorically, honestly:
       - DIRECTIVE controls (pure policy/config code, no independent runtime
         state to probe beyond "does it load") are EFFECTIVE if importable.
-      - Every other category defaults to DEGRADED — "implemented... but
+      - Every other category defaults to DEGRADED - "implemented... but
         only somewhat effective / unverified" is IIBA §4.8.3's own
         definition, and a bare successful import is exactly that: it
         proves the code exists, not that it is running. This module does
@@ -42,7 +42,7 @@ installer's exit code says.
   * A control whose module cannot even be imported is ABSENT.
 
 This is a classification of the same 56 entries in ``control_taxonomy.py``
-by a different axis (is it LIVE, vs. what KIND of control it is) — the two
+by a different axis (is it LIVE, vs. what KIND of control it is) - the two
 modules are deliberately separate so a taxonomy edit and a liveness-probe
 edit are independent changes.
 """
@@ -58,6 +58,12 @@ from .control_taxonomy import CONTROLS, DIRECTIVE, Control
 EFFECTIVE = "effective"
 DEGRADED  = "degraded"
 ABSENT    = "absent"
+# A control whose state could not be ESTABLISHED -- distinct from one observed
+# to be absent. Mirrors `edr.sensor_deps.STATE_UNKNOWN`, which the policy layer
+# already treats exactly as `degraded` ("I do not know" is never allowed to read
+# as "fine"). Before this existed, an unprivileged probe had nowhere honest to
+# land and reported ABSENT, i.e. asserted a negative it had not observed.
+UNKNOWN   = "unknown"
 
 STATES = (EFFECTIVE, DEGRADED, ABSENT)
 
@@ -88,7 +94,7 @@ class CoverageContext:
 def _module_importable(module_path: str) -> tuple[bool, str]:
     """Resolve a Control.module path: the longest importable prefix, then
     getattr() for any trailing .ClassName/.method segments. A prefix that
-    imports but leaves unresolved trailing segments is NOT success — e.g.
+    imports but leaves unresolved trailing segments is NOT success - e.g.
     'valkyrie.nonexistent_xyz' must not report OK just because the parent
     package 'valkyrie' imports fine."""
     parts = module_path.split(".")
@@ -116,6 +122,14 @@ def _module_importable(module_path: str) -> tuple[bool, str]:
 def _check_sysmon() -> CoverageResult:
     from .sysmon_manager import _EID_RULE_SECTION, probe_sysmon
     env = probe_sysmon()
+    if not env.determinable:
+        # The probe was refused, not answered. Reporting ABSENT here asserts a
+        # negative we did not observe -- on 2026-08-23 that told a human the
+        # host was blind while Sysmon was collecting 49,000 events. UNKNOWN
+        # degrades authority exactly as `degraded` does (so nothing unsafe is
+        # granted) while staying truthful about what is actually known.
+        return CoverageResult("etw_sysmon", "detective", UNKNOWN,
+                              env.detail or "Sysmon state could not be determined")
     if not env.present:
         return CoverageResult("etw_sysmon", "detective", ABSENT,
                               env.detail or "Sysmon not installed/running")

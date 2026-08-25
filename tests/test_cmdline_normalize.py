@@ -7,9 +7,9 @@ catches unobfuscated commands catches nothing real.
 
   [1] Each transform recovers the plaintext it targets
   [2] EVASIVE vs COSMETIC classification (obfuscation is itself a signal)
-  [3] EVASION CORPUS — obfuscated attacks must still hit their real rule
-  [4] BENIGN CONTROLS — normalization must not invent detections
-  [5] Purity/robustness — never raises, bounded, deterministic
+  [3] EVASION CORPUS - obfuscated attacks must still hit their real rule
+  [4] BENIGN CONTROLS - normalization must not invent detections
+  [5] Purity/robustness - never raises, bounded, deterministic
   [6] Obfuscation alone (no rule) still reports T1027
 """
 
@@ -66,7 +66,7 @@ EVASION_CORPUS = [
 ]
 
 # Command lines that are NOT attacks. Normalization must not turn any of these
-# into a detection — this is the false-positive boundary and the reason
+# into a detection - this is the false-positive boundary and the reason
 # token-splitting quotes are removed surgically rather than globally.
 BENIGN_CONTROLS = [
     ("chrome.exe", r'"C:\Program Files\Google\Chrome\chrome.exe" --profile-directory=Default'),
@@ -80,7 +80,7 @@ BENIGN_CONTROLS = [
     ("python.exe", r'python -c "print(\'hello\' + \'world\')"'),
     ("cmd.exe", r'findstr /C:"net user" audit_policy.txt'),
     # Benign -f format strings: a variable arg is unresolvable (placeholder
-    # stays), and a long-literal format is cosmetic, not evasion — neither may
+    # stays), and a long-literal format is cosmetic, not evasion - neither may
     # be turned into a detection.
     ("powershell.exe", 'Write-Host ("{0} files in {1}s" -f $count, $secs)'),
     ("powershell.exe", '("{0}-{1}" -f "Production","WebServer") | Out-Host'),
@@ -214,7 +214,7 @@ def main() -> int:
 
     print("\n[8] Randomized stacked-obfuscation fuzz (seeded, deterministic)")
     # Hit real attacks with random STACKS of transforms the normalizer claims to
-    # defeat — caret, backtick, token-split quotes, hex-[char] per keyword, case,
+    # defeat - caret, backtick, token-split quotes, hex-[char] per keyword, case,
     # whitespace. Any evasion is a residual systemic gap. Seeded so it is a stable
     # regression, not a flaky test.
     import random as _random

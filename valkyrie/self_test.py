@@ -8,7 +8,7 @@ Two independent roles:
    directory). Non-critical problems are reported but do not block startup.
 
 2. :class:`HeartbeatMonitor` runs AFTER startup. It re-checks, on an interval,
-   that protection is *actually live* — the DNS sinkhole is still answering —
+   that protection is *actually live* - the DNS sinkhole is still answering -
    so a silent mid-session failure flips the dashboard into a loud DEGRADED
    state instead of continuing to claim everything is fine. For a privacy tool
    the worst failure mode is not a crash; it is silently not protecting while
@@ -61,7 +61,7 @@ def _probe_dns(host: str, port: int, timeout: float = 1.0,
     Hand-builds the wire packet so it works with or without dnspython and never
     depends on the rest of the app. The default name is a real domain (used by
     the preflight Unbound check); the heartbeat passes HEALTH_PROBE_DOMAIN, which
-    the interceptor answers locally without upstream — so this probe confirms the
+    the interceptor answers locally without upstream - so this probe confirms the
     sinkhole is answering even on an offline machine, instead of timing out
     against dead upstreams and raising a false "protection failed" alarm.
     """
@@ -69,7 +69,7 @@ def _probe_dns(host: str, port: int, timeout: float = 1.0,
     wire = header + _encode_qname(qname) + b"\x00\x01\x00\x01"   # QTYPE=A, QCLASS=IN
     # Socket creation is inside the guard on purpose. It was outside, where an
     # OSError from fd exhaustion escaped this function, propagated through
-    # check_once() and killed the heartbeat thread — after which is_healthy()
+    # check_once() and killed the heartbeat thread - after which is_healthy()
     # kept returning the last state (typically True) forever while nothing was
     # being probed at all. That is the failure this module's own docstring
     # calls the worst one: silently not protecting while the UI says ACTIVE.
@@ -147,7 +147,7 @@ def preflight(
         critical=True,
     ))
 
-    # 2. data/ directory writable (critical — we cannot log or cache otherwise).
+    # 2. data/ directory writable (critical - we cannot log or cache otherwise).
     writable, detail = True, str(DATA_DIR)
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -158,13 +158,13 @@ def preflight(
         writable, detail = False, f"{DATA_DIR} not writable: {exc}"
     checks.append(Check("Data directory", writable, detail, critical=True))
 
-    # 3. DNS port bindable (advisory — the real bind has its own handling, and
+    # 3. DNS port bindable (advisory - the real bind has its own handling, and
     #    a false abort would be worse than letting it try).
     if want_dns:
         ok, detail = _port_bindable(host, port)
         checks.append(Check(f"DNS port {port}", ok, detail, critical=False))
 
-    # 4. Blocklist present and non-empty (advisory — the scanner still blocks
+    # 4. Blocklist present and non-empty (advisory - the scanner still blocks
     #    trackers without it, just with less coverage).
     bl_ok, bl_detail = False, "not found (will download on first run)"
     try:
@@ -175,7 +175,7 @@ def preflight(
         pass
     checks.append(Check("Blocklist", bl_ok, bl_detail, critical=False))
 
-    # 5. Unbound reachable if we intend to adopt it (advisory — falls back to
+    # 5. Unbound reachable if we intend to adopt it (advisory - falls back to
     #    public upstream when absent).
     if want_unbound:
         up = _probe_dns("127.0.0.1", 53, timeout=0.8)
@@ -185,7 +185,7 @@ def preflight(
             critical=False,
         ))
 
-    # 6. TLS CA present if TLS inspection requested (advisory — mitmproxy
+    # 6. TLS CA present if TLS inspection requested (advisory - mitmproxy
     #    generates one on first run).
     if want_tls:
         ca_ok = TLS_CA_CERT_PATH.exists()
@@ -214,7 +214,7 @@ def preflight(
                          f"impersonate any HTTPS site to this machine",
                     critical=True,
                 ))
-        except Exception as exc:      # noqa: BLE001 — never break the self-test
+        except Exception as exc:      # noqa: BLE001 - never break the self-test
             checks.append(Check("TLS CA private key protected", False,
                                 f"could not verify: {exc}", critical=False))
 
@@ -254,7 +254,7 @@ class HeartbeatMonitor:
             store:     optional Store for logging health-change events.
             on_change: optional callback(healthy: bool) fired on each transition.
             startup_grace: seconds after start() during which a failed probe is
-                treated as "still starting", not "failed" — the sinkhole may not
+                treated as "still starting", not "failed" - the sinkhole may not
                 have finished binding yet, and a cold boot otherwise logs a false
                 PROTECTION-FAILED before the first successful probe.
         """
@@ -338,13 +338,13 @@ class HeartbeatMonitor:
         """True if no probe has landed recently enough to trust the answer.
 
         Without this, a heartbeat thread that dies for any reason freezes the
-        signal at its last value — and 'healthy' is the value it is most likely
+        signal at its last value - and 'healthy' is the value it is most likely
         to be frozen at, since that is the starting state. The user would see
         ACTIVE indefinitely while nothing was being checked. Absence of a
         recent check is not evidence of health.
         """
         if not self._last_check:
-            return False          # never probed yet — start() has not run
+            return False          # never probed yet - start() has not run
         return (now - self._last_check) > (self._interval * self._STALE_INTERVALS)
 
     def status(self) -> dict:
@@ -370,7 +370,7 @@ class HeartbeatMonitor:
     def _loop(self) -> None:
         # Defense in depth over check_once()'s own guard: this thread must
         # outlive ANY failure, because a dead heartbeat does not report itself
-        # as dead — is_healthy() simply keeps returning whatever it last saw.
+        # as dead - is_healthy() simply keeps returning whatever it last saw.
         # A monitor that stops monitoring must never look like a healthy one.
         try:
             self.check_once()      # probe immediately so status is meaningful

@@ -31,7 +31,7 @@ def check(label: str, cond: bool, detail: str = "") -> None:
 print("Valkyrie MAC randomizer test")
 print("=" * 50)
 
-# ── Test 1: Valid MAC format ──────────────────────────────────────────────────
+# --- Test 1: Valid MAC format ---
 print("\n-- MAC format ----------------------------------------")
 for _ in range(20):
     mac = _generate_mac()
@@ -41,9 +41,9 @@ for _ in range(20):
 else:
     check("20 generated MACs all pass format check (XX:XX:XX:XX:XX:XX)", True)
 
-# ── Test 2: Default style is spec-compliant locally-administered ──────────────
+# --- Test 2: Default style is spec-compliant locally-administered ---
 # The default (no vendor blend) must be a proper LA random address: LA bit SET,
-# multicast bit CLEAR, on the FIRST octet — the iOS/Android style. It must NOT
+# multicast bit CLEAR, on the FIRST octet - the iOS/Android style. It must NOT
 # carry a real vendor OUI (a vendor OUI + LA bit is a combination real hardware
 # never has, so it would itself be a fingerprint).
 print("\n-- Default style: locally-administered random --------")
@@ -63,21 +63,21 @@ check("50 default MACs are locally-administered + unicast",
 check("default MACs do not systematically wear a real vendor OUI",
       vendor_leak <= 2, f"vendor-looking: {vendor_leak}/50")
 
-# ── Test 3: Vendor-blend mode — real OUI, LA bit CLEAR ────────────────────────
+# --- Test 3: Vendor-blend mode - real OUI, LA bit CLEAR ---
 print("\n-- Vendor-blend style: real OUI, universally-admin ---")
 blend_bad = []
 for _ in range(50):
     mac = generate_mac(vendor_blend=True)
     p = mac.upper().split(":")
     oui_match = (p[1], p[2]) in oui_prefixes
-    # Blend mode impersonates a real vendor → LA bit must be CLEAR (UAA),
+    # Blend mode impersonates a real vendor -> LA bit must be CLEAR (UAA),
     # multicast clear (unicast).
     if not (oui_match and (not is_locally_administered(mac)) and is_unicast(mac)):
         blend_bad.append(mac)
 check("50 vendor-blend MACs use a real OUI with LA bit clear + unicast",
       len(blend_bad) == 0, str(blend_bad[:2]))
 
-# ── Test 2b: CSPRNG — no repeats, high entropy across many draws ──────────────
+# --- Test 2b: CSPRNG - no repeats, high entropy across many draws ---
 print("\n-- CSPRNG uniqueness ---------------------------------")
 draws = [generate_mac() for _ in range(2000)]
 check("2000 CSPRNG MACs are (essentially) all unique",
@@ -85,7 +85,7 @@ check("2000 CSPRNG MACs are (essentially) all unique",
 check("all generated MACs pass strict format validation",
       all(_is_valid_mac(m) for m in draws))
 
-# ── Test 2c: Per-network derivation — stable, unlinkable, key-dependent ───────
+# --- Test 2c: Per-network derivation - stable, unlinkable, key-dependent ---
 print("\n-- Per-network stable address (iOS/Android model) ----")
 key_a = b"\x11" * 32
 key_b = b"\x22" * 32
@@ -106,12 +106,12 @@ check("derived address is valid + locally-administered + unicast",
 check("derived address is not a visible slice of the network id",
       "484f6d65" not in mac_home_1.replace(":", "").lower())
 
-# ── Test 2d: Backward-compat _generate_mac still returns a valid address ──────
+# --- Test 2d: Backward-compat _generate_mac still returns a valid address ---
 print("\n-- Backward-compat _generate_mac ---------------------")
 check("_generate_mac() still yields a valid unicast MAC",
       _is_valid_mac(_generate_mac()) and is_unicast(_generate_mac()))
 
-# ── Test 4: Backup/restore roundtrip ─────────────────────────────────────────
+# --- Test 4: Backup/restore roundtrip ---
 print("\n-- Backup / restore ----------------------------------")
 import tempfile, json
 from pathlib import Path
@@ -141,23 +141,23 @@ finally:
     _cfg.MAC_BACKUP_PATH = orig_backup
     tmp_backup.unlink(missing_ok=True)
 
-# ── Test 5: Never-randomise list respected ────────────────────────────────────
+# --- Test 5: Never-randomise list respected ---
 print("\n-- Never-randomise list ------------------------------")
 mac_inst2 = MacRandomizer(store=None)
 for iface in MAC_NEVER_RANDOMIZE:
     result = mac_inst2._resolve_interfaces(iface)
     check(f"Interface '{iface}' excluded by MAC_NEVER_RANDOMIZE", result == [], str(result))
 
-# ── Test 6: Status dict structure ─────────────────────────────────────────────
+# --- Test 6: Status dict structure ---
 print("\n-- Status dict ---------------------------------------")
 st = MacRandomizer(store=None).status()
 check("status() returns a dict", isinstance(st, dict))
 
-# ── Test 7: _apply_windows apply/cycle path (mocked — no real hardware) ───────
+# --- Test 7: _apply_windows apply/cycle path (mocked - no real hardware) ---
 # This is the exact path MAC_DIAGNOSIS_REPORT.md found silently broken (netsh
 # failures/timeouts were swallowed, live-mismatch was never checked). None of
 # tests 1-6 exercise it at all. These mock subprocess.run, winreg (via
-# sys.modules — safe on any OS, the real registry is never touched) and
+# sys.modules - safe on any OS, the real registry is never touched) and
 # time.sleep (so timeout-path tests don't actually wait), and call
 # _apply_windows directly so no admin rights or real adapter are needed.
 print("\n-- Windows apply/cycle path (mocked, no real hardware) --")
@@ -207,7 +207,7 @@ check("enable failure sets an 'enable failed' last_error", "enable failed" in er
 check("enable failure attempts a best-effort retry-enable (3 netsh calls)",
       calls == 3, str(calls))
 
-# 7b2. same, but the best-effort retry ALSO fails — must not raise, still False
+# 7b2. same, but the best-effort retry ALSO fails - must not raise, still False
 result, err, calls = _run_apply_windows([_ok(0), _ok(1), _ok(1)])
 check("enable failure + failed retry still returns False", result is False)
 check("enable failure + failed retry still attempts the retry (3 netsh calls)",
@@ -227,7 +227,7 @@ check("enable timeout returns False", result is False)
 check("enable timeout sets a timeout last_error", "enable timed out" in err, err)
 
 # 7e. both netsh calls succeed, but live MAC readback does NOT match what was
-# written — this is the exact silent-failure class MAC_DIAGNOSIS_REPORT.md
+# written - this is the exact silent-failure class MAC_DIAGNOSIS_REPORT.md
 # found: registry write succeeds, cycle "succeeds", but the adapter never
 # actually picked up the new address.
 result, err, calls = _run_apply_windows([_ok(0), _ok(0)], readback_mac="11:22:33:44:55:66")
@@ -235,11 +235,11 @@ check("live-readback mismatch returns False (not a silent success)", result is F
 check("live-readback mismatch sets a 'did not apply' last_error",
       "did not apply" in err, err)
 
-# 7f. Happy path — both netsh calls succeed and live readback matches
+# 7f. Happy path - both netsh calls succeed and live readback matches
 result, err, calls = _run_apply_windows([_ok(0), _ok(0)], readback_mac="AA:BB:CC:DD:EE:FF")
 check("full success path (netsh OK + readback matches) returns True", result is True)
 
-# ── Summary ───────────────────────────────────────────────────────────────────
+# --- Summary ---
 print(f"\n{'=' * 50}")
 print(f"  {PASS} passed  /  {FAIL} failed")
 if FAIL:

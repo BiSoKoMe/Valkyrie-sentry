@@ -1,4 +1,4 @@
-"""Process attribution — map a UDP source (ip, port) to a running process.
+"""Process attribution - map a UDP source (ip, port) to a running process.
 
 DNS queries arrive as stateless UDP datagrams.  They never appear as
 persistent connections, so the old approach of reading psutil TCP/UDP
@@ -63,7 +63,7 @@ _UNKNOWN = ProcessInfo(name="unknown", pid=0, path="")
 
 
 # ---------------------------------------------------------------------------
-# Linux: /proc/net/udp  →  inode  →  /proc/<pid>/fd
+# Linux: /proc/net/udp  ->  inode  ->  /proc/<pid>/fd
 # ---------------------------------------------------------------------------
 
 def _hex_to_ip4(hex_addr: str) -> str:
@@ -142,7 +142,7 @@ def _pid_to_info(pid: int) -> ProcessInfo:
 
 
 def _build_table_linux() -> dict[tuple[str, int], ProcessInfo]:
-    """Build (ip, port) → ProcessInfo table on Linux via /proc."""
+    """Build (ip, port) -> ProcessInfo table on Linux via /proc."""
     inode_map: dict[tuple[str, int], int] = {}
     inode_map.update(_parse_proc_net_udp("/proc/net/udp",  ipv6=False))
     inode_map.update(_parse_proc_net_udp("/proc/net/udp6", ipv6=True))
@@ -165,11 +165,11 @@ def _build_table_linux() -> dict[tuple[str, int], ProcessInfo]:
 
 
 # ---------------------------------------------------------------------------
-# Windows: psutil UDP connections  →  table; heuristic fallback
+# Windows: psutil UDP connections  ->  table; heuristic fallback
 # ---------------------------------------------------------------------------
 
 def _build_table_windows() -> dict[tuple[str, int], ProcessInfo]:
-    """Build (ip, port) → ProcessInfo table on Windows."""
+    """Build (ip, port) -> ProcessInfo table on Windows."""
     if not _PSUTIL:
         return {}
 
@@ -181,7 +181,7 @@ def _build_table_windows() -> dict[tuple[str, int], ProcessInfo]:
             info = _pid_to_info(conn.pid)
             table[(conn.laddr.ip, conn.laddr.port)] = info
     except psutil.AccessDenied:
-        # No admin — table stays empty; lookup() will use heuristic fallback
+        # No admin - table stays empty; lookup() will use heuristic fallback
         pass
     return table
 
@@ -238,7 +238,7 @@ def _build_table() -> dict[tuple[str, int], ProcessInfo]:
 # ---------------------------------------------------------------------------
 
 class ProcessWatcher:
-    """Resolves (src_ip, src_port) → ProcessInfo for UDP DNS datagrams.
+    """Resolves (src_ip, src_port) -> ProcessInfo for UDP DNS datagrams.
 
     Refreshes the platform-specific table every REFRESH_INTERVAL seconds
     so per-query lookup is O(1) dict access.
@@ -267,12 +267,12 @@ class ProcessWatcher:
         Restartability is not a nicety here: the self-healing watchdog's
         recovery action for this component is literally ``start``, so if a
         second call raised, the watchdog could detect a dead watcher and never
-        be able to revive it — self-healing that cannot heal. A Python thread
+        be able to revive it - self-healing that cannot heal. A Python thread
         object cannot be started twice, so a fresh one is created whenever the
         previous has finished.
         """
         self._running = True
-        # A failure here must not stop the watcher from starting — the loop can
+        # A failure here must not stop the watcher from starting - the loop can
         # recover on a later tick, and an empty table degrades to "unknown
         # process" rather than to no monitoring at all.
         try:
@@ -296,7 +296,7 @@ class ProcessWatcher:
         Both halves matter. A dead thread leaves `_table` frozen at whatever it
         last held, and `lookup()` would keep confidently attributing every DNS
         query to whichever process happened to own that port at the moment of
-        death — wrong attribution reported as fact, with nothing to indicate
+        death - wrong attribution reported as fact, with nothing to indicate
         it. Exposed so the self-healing watchdog can restart this like every
         other subsystem.
         """
@@ -322,7 +322,7 @@ class ProcessWatcher:
             info = self._table.get((src_ip, src_port))
         if info is not None:
             return info
-        # On Windows without admin, table may be empty — use heuristic
+        # On Windows without admin, table may be empty - use heuristic
         if _SYSTEM == "Windows":
             return _windows_heuristic_fallback()
         return _UNKNOWN
@@ -353,7 +353,7 @@ class ProcessWatcher:
         self._last_refresh = time.time()
 
     def _refresh_loop(self) -> None:
-        # _build_table() reaches into psutil, /proc parsing and Windows APIs —
+        # _build_table() reaches into psutil, /proc parsing and Windows APIs -
         # all of which can raise transiently (a process exiting mid-enumeration
         # is routine). Without this guard a single such raise killed the thread
         # permanently and froze the table, which was verified, not assumed.

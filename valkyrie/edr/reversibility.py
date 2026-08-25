@@ -17,14 +17,14 @@ Valkyrie has failed this twice for real, on this machine, not hypothetically:
   * A live-firewall isolate/release cycle left this host's WiFi cut, because
     ``release_isolation`` reset the firewall to a *hardcoded* policy
     (``blockinbound,allowoutbound``) instead of whatever policy actually
-    existed before isolation — restoring the wrong state is not a rollback.
+    existed before isolation - restoring the wrong state is not a rollback.
 
 This module is the single place that answers, for every enforcement action
 Valkyrie can take: is it reversible, by what *exact* call, what does it leave
 behind if the process dies mid-action, and what happens if it fires on a
 false positive. ``tests/test_responder_reversibility.py`` enumerates every
 registered responder action and fails the build if one is missing an entry
-here — an audited responder cannot go undocumented by accident.
+here - an audited responder cannot go undocumented by accident.
 
 Nothing in this module executes anything. It is a data registry.
 """
@@ -40,7 +40,7 @@ class Reversibility:
     """The reversibility contract for one enforcement action.
 
     ``min_severity`` is the hard floor :class:`~valkyrie.edr.response.ResponseManager`
-    enforces before it will run this action for real (``dry_run=False``) — see
+    enforces before it will run this action for real (``dry_run=False``) - see
     ``ResponseManager._floor_check``. Irreversible actions get a stricter floor
     than reversible ones by construction (see ``register()``).
     """
@@ -49,7 +49,7 @@ class Reversibility:
     reversible: bool
     #  Exact call/action that undoes this one. Required when reversible=True;
     #  for reversible=False this documents the *closest* mitigation available
-    #  (e.g. "none — see backup/restore snapshot" or "" when truly nothing
+    #  (e.g. "none - see backup/restore snapshot" or "" when truly nothing
     #  can be done), so it is allowed to be non-empty either way but the
     #  invariant below only requires it when reversible.
     rollback: str
@@ -95,7 +95,7 @@ class Reversibility:
 _REGISTRY: dict[str, Reversibility] = {}
 
 # Actions marked reversible=False must clear a strictly higher bar than the
-# responder's own advertised floor — an author cannot quietly ship an
+# responder's own advertised floor - an author cannot quietly ship an
 # irreversible action at "medium" by only setting min_severity on the entry.
 _IRREVERSIBLE_MIN_FLOOR = "critical"
 _REVERSIBLE_MIN_FLOOR = "low"
@@ -104,7 +104,7 @@ _REVERSIBLE_MIN_FLOOR = "low"
 def register(r: Reversibility) -> Reversibility:
     """Add *r* to the registry. Raises if the floor doesn't match its class.
 
-    Called at import time by every module that defines a responder — see
+    Called at import time by every module that defines a responder - see
     ``valkyrie/edr/response.py`` bottom and ``valkyrie/mac_randomizer.py``'s
     entries registered from ``valkyrie/edr/reversibility_audit.py``.
     """

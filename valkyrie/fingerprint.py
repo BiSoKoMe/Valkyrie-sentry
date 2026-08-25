@@ -1,7 +1,7 @@
 """Network (TCP/IP) fingerprint normalization.
 
 Even after the MAC address is randomized, a machine is still identifiable by
-its TCP/IP stack fingerprint — default TTL, TCP options, timestamps. This
+its TCP/IP stack fingerprint - default TTL, TCP options, timestamps. This
 module normalizes the two highest-signal, lowest-risk, fully reversible knobs
 on Windows:
 
@@ -12,7 +12,7 @@ on Windows:
 
 Window scaling / IP-ID behaviour are *reported* by :meth:`status` but not
 forced, because changing them can hurt throughput or connectivity for little
-fingerprinting gain — normalization should never trade privacy for a broken
+fingerprinting gain - normalization should never trade privacy for a broken
 connection.
 
 Every change is backed up to ``data/fingerprint_backup.json`` first, so

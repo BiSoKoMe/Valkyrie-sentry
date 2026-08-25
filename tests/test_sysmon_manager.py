@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Sysmon as a first-class dependency (ADR 0048) — install/verify/uninstall.
+"""Sysmon as a first-class dependency (ADR 0048) - install/verify/uninstall.
 
-Every branch here is mocked (subprocess, urllib, the filesystem marker) —
+Every branch here is mocked (subprocess, urllib, the filesystem marker) -
 this file NEVER touches a real Sysmon installation, downloads anything, or
 runs Sysmon64.exe for real. That is deliberate: the whole point of this
 module is to behave correctly when Sysmon is missing, broken, blocked, or
@@ -161,7 +161,7 @@ def main() -> int:
                     mark.called)
 
         # THE finding this whole ADR is about: install "succeeds" (rc=0) but
-        # the driver never actually comes up — must be reported as a distinct,
+        # the driver never actually comes up - must be reported as a distinct,
         # named outcome, never a generic error.
         probes2 = iter([_env(present=False), _env(present=False)])
         with mock.patch.object(sm, "probe_sysmon", lambda: next(probes2)), \

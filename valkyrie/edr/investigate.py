@@ -6,20 +6,20 @@ writeup: what happened, why it matters, and what to do about it.
 Two modes:
 
   * **Offline heuristic (default, always available).** A deterministic,
-    fully-local analyst built from the incident's own detections — severity
+    fully-local analyst built from the incident's own detections - severity
     rationale, observed MITRE techniques, affected process/entities, a timeline
     digest, and concrete recommended response actions. No network, no key.
 
-  * **LLM-assisted (opt-in, off by default).** If — and only if — the operator
+  * **LLM-assisted (opt-in, off by default).** If - and only if - the operator
     explicitly enables it AND an AI provider is configured, the incident is
     summarised by an LLM for a richer narrative. The backend is vendor-neutral
-    (see ``ai_provider.py`` — Anthropic, OpenAI, a local OpenAI-compatible
+    (see ``ai_provider.py`` - Anthropic, OpenAI, a local OpenAI-compatible
     server, or offline); this module never depends on a specific vendor. A
     network provider SENDS incident details (including domains) to the
     configured endpoint, so it is deliberately gated: it respects the same
     "opt-in, off by default, clearly disclosed" rule the platform roadmap sets
     for any telemetry that leaves the machine. Any error (no provider, network
-    blocked) silently falls back to the offline analyst — the investigation
+    blocked) silently falls back to the offline analyst - the investigation
     always returns something useful. Use the ``local`` provider to keep
     everything on-box.
 """
@@ -50,7 +50,7 @@ _MEANING = {
                     "— unusual, though not necessarily malicious.",
     "tracker":      "Known advertising/tracking infrastructure was blocked — a "
                     "privacy signal rather than a compromise.",
-    # Endpoint (telemetry-path) categories — CAT_PROCESS / CAT_PERSISTENCE /
+    # Endpoint (telemetry-path) categories - CAT_PROCESS / CAT_PERSISTENCE /
     # CAT_NETWORK. These carry Valkyrie's most severe detections and previously
     # fell through to the generic fallback with no meaning and no recommended
     # action (see tests/test_explainability.py, the gate that now prevents this).
@@ -98,7 +98,7 @@ _MEANING = {
 
 # Category -> which response actions the analyst recommends, in priority order.
 # Every action here MUST be a shipped responder in edr/response.py
-# (block_domain, kill_process, isolate_host) — never an aspirational one.
+# (block_domain, kill_process, isolate_host) - never an aspirational one.
 _RECOMMEND = {
     "firewall_ip":  ["isolate_host", "kill_process", "block_domain"],
     "intelligence": ["block_domain", "kill_process"],
@@ -121,12 +121,12 @@ _RECOMMEND = {
     # A confirmed multi-stage chain is the strongest reason to contain the
     # host outright, then stop the offending process.
     "attack_chain": ["isolate_host", "kill_process", "block_domain"],
-    # A named behavioural sequence is a specific, high-confidence attack —
+    # A named behavioural sequence is a specific, high-confidence attack -
     # contain the host and kill the offending process.
     "attack_sequence": ["isolate_host", "kill_process", "block_domain"],
 }
 
-# The canonical set of categories an incident can carry — the single source of
+# The canonical set of categories an incident can carry - the single source of
 # truth the explainability gate checks. DNS-path categories are the normalized
 # Detection.category values set by the built-in plugins (edr/builtin.py); the
 # endpoint categories are telemetry CAT_PROCESS/CAT_PERSISTENCE/CAT_NETWORK
@@ -227,7 +227,7 @@ class Investigator:
                 rec_actions.append({"action": act, "target": target,
                                     "rationale": rationale})
 
-        # Timeline digest — most recent first, capped.
+        # Timeline digest - most recent first, capped.
         timeline = [
             {"timestamp": d.timestamp, "severity": d.severity,
              "title": d.title, "entity": d.entity, "source": d.source}
@@ -268,12 +268,12 @@ class Investigator:
         derived (no raw event dump, no browsing history) and must return a
         structured verdict: an assessment, a confidence level, and ONE
         recommended action drawn from the response actions Valkyrie actually
-        ships — with the evidence lines (quoted from the provided facts) that
+        ships - with the evidence lines (quoted from the provided facts) that
         justify it. Structured output makes every conclusion auditable; any
         failure returns None and the offline analysis stands alone. The
         ``provider`` is any vendor-neutral backend (see ai_provider.py).
         """
-        # Compact, structured facts for the model — no raw event dump.
+        # Compact, structured facts for the model - no raw event dump.
         facts = {
             "title": inc.title,
             "severity": inc.severity,

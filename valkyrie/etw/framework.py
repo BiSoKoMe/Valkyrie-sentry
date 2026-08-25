@@ -1,20 +1,20 @@
-"""Sensor framework — the resilient host for real-time endpoint sensors.
+"""Sensor framework - the resilient host for real-time endpoint sensors.
 
 A ``Sensor`` produces ``TelemetryEvent``s from some source (an ETW-backed event-
 log channel today; a kernel ETW session later). The ``SensorManager`` owns them
 and provides the production-grade properties every sensor needs but none should
 re-implement:
 
-  * **Lifecycle** — start/stop all sensors, clean shutdown that drains in flight.
-  * **Failure isolation** — one sensor raising never affects the others or the host.
-  * **Watchdog** — a dead sensor is automatically restarted (bounded, backoff),
+  * **Lifecycle** - start/stop all sensors, clean shutdown that drains in flight.
+  * **Failure isolation** - one sensor raising never affects the others or the host.
+  * **Watchdog** - a dead sensor is automatically restarted (bounded, backoff),
     and the manager exposes ``is_healthy()`` for the global self-heal loop.
-  * **Backpressure** — sensors submit into a *bounded* queue; a single dispatcher
+  * **Backpressure** - sensors submit into a *bounded* queue; a single dispatcher
     thread forwards to the sink. On overload the oldest event is dropped and
     counted, so memory stays bounded and a burst never blocks a sensor.
-  * **De-duplication** — a bounded LRU of recent event fingerprints collapses
+  * **De-duplication** - a bounded LRU of recent event fingerprints collapses
     repeats (channels re-deliver; multiple sensors can see the same act).
-  * **Observability** — per-sensor and aggregate metrics via ``stats()``.
+  * **Observability** - per-sensor and aggregate metrics via ``stats()``.
 
 Nothing here knows about ETW specifics; that lives in the sensors. This module
 is pure Python + threads and is fully unit-testable with a fake sensor.
@@ -63,7 +63,7 @@ class Sensor:
         if self._submit is not None:
             self._submit(event)
 
-    # Availability — a sensor that can't run on this host returns False so the
+    # Availability - a sensor that can't run on this host returns False so the
     # manager skips it cleanly (e.g. non-Windows, channel disabled).
     def available(self) -> bool:
         return True
@@ -150,8 +150,8 @@ class SensorManager:
         self._sensors.append(sensor)
         self._restarts[sensor.name] = self._max_restarts
 
-    # Producer side: sensors call this (via Sensor.submit → bind). Bounded and
-    # non-blocking — a full queue drops the OLDEST event (deque maxlen) so a
+    # Producer side: sensors call this (via Sensor.submit -> bind). Bounded and
+    # non-blocking - a full queue drops the OLDEST event (deque maxlen) so a
     # sensor is never blocked and memory is bounded.
     def _submit(self, event: TelemetryEvent) -> None:
         self.metrics["submitted"] += 1
@@ -161,7 +161,7 @@ class SensorManager:
             self._q.append(event)
         self._q_event.set()
 
-    # Dedup fingerprint — an event may carry an explicit key in fields["_dedup"],
+    # Dedup fingerprint - an event may carry an explicit key in fields["_dedup"],
     # else derive from its identifying core fields.
     @staticmethod
     def _fingerprint(ev: TelemetryEvent) -> str:
@@ -190,7 +190,7 @@ class SensorManager:
                 self._dedup_keys.pop(old, None)
         return False
 
-    # Consumer side: single dispatcher drains the queue → sink, deduped.
+    # Consumer side: single dispatcher drains the queue -> sink, deduped.
     def _dispatch_loop(self) -> None:
         while self._running or self._pending():
             self._q_event.wait(timeout=0.5)

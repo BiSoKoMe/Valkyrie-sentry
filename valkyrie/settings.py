@@ -14,11 +14,11 @@ without editing code, with clear precedence and validation:
 
 Design invariants:
   * With no file and no matching env vars, resolution returns the defaults
-    **unchanged** — a stock deployment behaves exactly as before.
+    **unchanged** - a stock deployment behaves exactly as before.
   * An *explicitly provided* value that is the wrong type or out of range raises
     ``ConfigError`` and stops startup. A security tool must not silently run on a
     misconfiguration; but a missing file or unset var is never an error.
-  * Only the overlaid values are coerced/validated — trusted code defaults pass
+  * Only the overlaid values are coerced/validated - trusted code defaults pass
     through untouched, so a schema range mistake can never brick the defaults.
 
 Stdlib-only except for the optional YAML parse (pyyaml is already a dependency;
@@ -99,36 +99,36 @@ class Spec:
 
 _PORT = dict(type="int", minv=1, maxv=65535)
 
-# The curated set of overridable settings. Defaults are NOT stored here — they
-# come from config.py — so there is a single source of truth for defaults.
+# The curated set of overridable settings. Defaults are NOT stored here - they
+# come from config.py - so there is a single source of truth for defaults.
 SPECS: list[Spec] = [
-    # ── DNS ──────────────────────────────────────────────────────────────
+    # --- DNS ---
     Spec("DNS_LISTEN_HOST", "str", "Address the DNS sinkhole binds to"),
     Spec("DNS_LISTEN_PORT", **_PORT, help="DNS sinkhole listen port"),
     Spec("DNS_UPSTREAM", "str", "Primary upstream resolver (e.g. local Unbound)"),
     Spec("DNS_UPSTREAM_PORT", **_PORT, help="Upstream resolver port"),
     Spec("DNS_TIMEOUT", "float", "Upstream query timeout (seconds)", minv=0.1, maxv=60.0),
     Spec("DNS_LOCAL_ONLY", "bool", "Fail closed: never fall back to public resolvers"),
-    # ── Web dashboard ────────────────────────────────────────────────────
+    # --- Web dashboard ---
     Spec("WEB_HOST", "str", "Dashboard bind address (127.0.0.1 = loopback-only)"),
     Spec("WEB_PORT", **_PORT, help="Dashboard port"),
-    # ── Fleet control plane ──────────────────────────────────────────────
+    # --- Fleet control plane ---
     # FLEET_* specs removed 2026-08-04: the fleet control plane moved to
     # experimental/ (ADR 0044). Leaving a user-settable knob for a subsystem
-    # that no longer loads is a SILENT NO-OP — the operator sets it, validation
+    # that no longer loads is a SILENT NO-OP - the operator sets it, validation
     # accepts it, and nothing happens. That is precisely the failure mode this
     # project's no-silent-success rule exists to prevent. The underlying
     # constants remain in config.py because experimental/fleet still imports
     # them; restoring these specs is part of the unfreeze checklist.
-    # ── Behavioral heuristics ────────────────────────────────────────────
+    # --- Behavioral heuristics ---
     Spec("ENTROPY_THRESHOLD", "float", "Domain entropy above which it is suspicious", minv=0.0, maxv=8.0),
     Spec("RATE_WINDOW_SECONDS", "int", "Sliding window for per-process query rate", minv=1, maxv=3600),
     Spec("RATE_MAX_QUERIES", "int", "Queries per window per process before suspicious", minv=1, maxv=1_000_000),
     Spec("BEHAVIORAL_BLOCK_SCORE", "float", "Suspicion score at/above which to block", minv=0.0, maxv=1.0),
-    # ── Updaters / caches ────────────────────────────────────────────────
+    # --- Updaters / caches ---
     Spec("BLOCKLIST_MAX_AGE_DAYS", "int", "Refresh domain blocklist after this many days", minv=0, maxv=365),
     Spec("FIREWALL_MAX_AGE_DAYS", "int", "Refresh IP blocklist after this many days", minv=0, maxv=365),
-    # ── Store tuning ─────────────────────────────────────────────────────
+    # --- Store tuning ---
     Spec("STORE_QUEUE_SIZE", "int", "Async event write-queue depth", minv=100, maxv=10_000_000),
     Spec("STORE_FLUSH_EVERY", "int", "Rows to batch before a DB commit", minv=1, maxv=100_000),
 ]
@@ -188,7 +188,7 @@ def load(base: dict, *, config_dir: Path, environ=None) -> tuple[dict, list[Over
     Args:
         base: {key: default_value} taken from config.py's current constants.
         config_dir: directory searched for valkyrie.yaml/.yml.
-        environ: mapping (defaults to os.environ) — injectable for tests.
+        environ: mapping (defaults to os.environ) - injectable for tests.
 
     Returns:
         (resolved, overrides) where ``resolved`` is ``base`` with file+env

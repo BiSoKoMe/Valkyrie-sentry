@@ -1,4 +1,4 @@
-"""Threat hunting — structured queries over Valkyrie's event history.
+"""Threat hunting - structured queries over Valkyrie's event history.
 
 A hunter never runs arbitrary SQL. Callers describe *what* they want with a
 small, validated filter spec and the hunter compiles it to a parameterised
@@ -6,7 +6,7 @@ query. That keeps the feature safe to expose on the (localhost) web API while
 still being expressive enough for real hunting: pivot by process, category,
 decision, entropy/suspicion, and time window.
 
-It also ships a set of **saved hunts** — canned queries for the questions a
+It also ships a set of **saved hunts** - canned queries for the questions a
 defender actually asks ("what looks like a beacon?", "which process is the
 noisiest talker?", "what did we block in the last hour?").
 """
@@ -115,7 +115,7 @@ class ThreatHunter:
         return {"count": len(rows), "rows": rows, "filters": filters}
 
     # ------------------------------------------------------------------
-    # Facets — quick pivots for the console's summary strip
+    # Facets - quick pivots for the console's summary strip
     # ------------------------------------------------------------------
 
     def facets(self, since_hours: float = 24.0) -> dict:

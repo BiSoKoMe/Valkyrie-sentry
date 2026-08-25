@@ -1,16 +1,16 @@
-"""Sensor tamper detection — notice when Valkyrie's OWN sensors go dark.
+"""Sensor tamper detection - notice when Valkyrie's OWN sensors go dark.
 
 Nothing in this codebase previously watched for this. On 2026-08-04, on the
 machine this module was written on, a mainstream consumer AV silently
-removed SysmonDrv.sys from disk with no clean-uninstall trail — no Service
-Control Manager removal event, no uninstall command in any shell history —
+removed SysmonDrv.sys from disk with no clean-uninstall trail - no Service
+Control Manager removal event, no uninstall command in any shell history -
 and Sysmon64 crashed 25 seconds after the next boot trying to reach its now-
 missing driver. Nothing noticed. The engine kept running, reported healthy,
 and quietly lost command-line, process-injection, and credential-dump
 detection until a human went looking for an unrelated reason.
 
-A detection sensor disappearing is itself an attack technique — T1562.001,
-Impair Defenses: Disable or Modify Tools — whether the cause is malware
+A detection sensor disappearing is itself an attack technique - T1562.001,
+Impair Defenses: Disable or Modify Tools - whether the cause is malware
 disabling Valkyrie on purpose or, as measured here, a THIRD PARTY security
 product's self-defense module colliding with it by accident. Either way the
 right response is the same: notice, and raise it as loudly as any other
@@ -20,21 +20,21 @@ Scope, honestly: this watches Sysmon specifically (present / running /
 collection actually live / the exact event types Valkyrie's detectors read
 still configured), because Sysmon is the sensor this session found silently
 dying. It is deliberately shaped so another sensor's health check could be
-added the same way later — see `_CHECKS` — not because more are needed
+added the same way later - see `_CHECKS` - not because more are needed
 today, but so "add a check" stays a one-function change rather than a new
 watchdog class each time.
 
 **Compensating control (valkyrie/control_taxonomy.py, IIBA §4.2.3).** Before
 this pass, a Sysmon failure was detective-only: an incident was raised, and
 detection quality silently fell back to whatever ran independently of
-Sysmon (`process_telemetry.ProcessCollector`'s 2-second psutil poll — see
+Sysmon (`process_telemetry.ProcessCollector`'s 2-second psutil poll - see
 `docs/adr/0048-sysmon-dependency.md`). Nothing actively responded to the
 loss. `SensorTamperMonitor` now accepts an optional `compensations` map so a
-sensor's health transition can trigger a real substitute action — e.g.
-tightening that poller's interval on the healthy→unhealthy transition, and
+sensor's health transition can trigger a real substitute action - e.g.
+tightening that poller's interval on the healthy->unhealthy transition, and
 reverting it on recovery. This is honest about its limits: a userland poll
 can partially cover process-creation visibility, but it cannot see the
-ETW-only signals (process injection, LSASS access, image-load hashes) —
+ETW-only signals (process injection, LSASS access, image-load hashes) -
 see `docs/adr/0048-sysmon-dependency.md` and `control_taxonomy.py` for what
 is and is not compensated.
 """
@@ -84,7 +84,7 @@ class SensorTamperMonitor:
 
     Fires on the HEALTHY -> UNHEALTHY transition only. A host that never had
     Sysmon (or has it deliberately disabled) is a known, already-reported
-    degraded mode (see sysmon_manager.SysmonInstallResult) — alerting on that
+    degraded mode (see sysmon_manager.SysmonInstallResult) - alerting on that
     forever would be noise, not signal. What must never be silent is a sensor
     that WAS working and then stopped, because that is the tamper signature.
     """
@@ -93,8 +93,8 @@ class SensorTamperMonitor:
                  interval: float = 300.0,
                  compensations: Optional[dict] = None) -> None:
         """``compensations`` maps a sensor name (e.g. ``"sysmon"``) to a
-        ``(activate, deactivate)`` pair of zero-arg callables — the real
-        compensating-control action to run on that sensor's healthy→unhealthy
+        ``(activate, deactivate)`` pair of zero-arg callables - the real
+        compensating-control action to run on that sensor's healthy->unhealthy
         transition, and the reverting action to run on recovery. Both are
         called defensively (a broken compensation must never take the
         monitor down, same discipline as a broken health check)."""
@@ -124,7 +124,7 @@ class SensorTamperMonitor:
         return dict(self._compensated)
 
     def current_status(self) -> dict:
-        """The last-known health per sensor, from the most recent poll — not
+        """The last-known health per sensor, from the most recent poll - not
         a fresh probe. Cheap on purpose: probe_sysmon() shells out to
         PowerShell several times, so a status API a dashboard might poll
         frequently reads this cache instead of paying that cost per request.
@@ -233,7 +233,7 @@ class SensorTamperMonitor:
         # Baseline seeding runs INSIDE the monitor thread (see _loop), not here.
         # Each check() shells out (sc query, Get-Acl, driver probe); on a host
         # where spawning those is slow this seeding measured ~60s, and doing it
-        # in start() blocked the whole agent — including the web server bind —
+        # in start() blocked the whole agent - including the web server bind -
         # for that entire time. The "no false first-alert" guarantee is
         # preserved: the first real poll cannot fire before one _interval has
         # elapsed anyway, and _loop seeds the baseline before that first sleep.
@@ -262,7 +262,7 @@ class SensorTamperMonitor:
 
     def _loop(self) -> None:
         # Seed the baseline first (was in start(); moved here so its slow
-        # subprocess checks never block agent startup — see start()).
+        # subprocess checks never block agent startup - see start()).
         try:
             self._seed_baseline()
         except Exception:

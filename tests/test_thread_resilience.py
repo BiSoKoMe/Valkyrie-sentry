@@ -1,25 +1,25 @@
-"""Background threads must not die silently — enforced structurally.
+"""Background threads must not die silently - enforced structurally.
 
 This codebase has now produced the same bug four separate times: a worker
 thread whose loop body was unguarded, so the first transient exception killed
 it permanently while the subsystem went on *looking* healthy.
 
-  * `self_test.HeartbeatMonitor`  — froze reporting "protected" forever.
-  * `process_watcher._refresh_loop` — froze the port->process table, so every
+  * `self_test.HeartbeatMonitor`  - froze reporting "protected" forever.
+  * `process_watcher._refresh_loop` - froze the port->process table, so every
     DNS event was attributed to whichever process held that port at death.
-  * `zero_log._integrity_loop`    — stopped verifying log integrity while
+  * `zero_log._integrity_loop`    - stopped verifying log integrity while
     status() still answered "verified".
-  * `fleet.agent._loop`           — endpoint silently dropped off fleet
+  * `fleet.agent._loop`           - endpoint silently dropped off fleet
     management; on the server it just looks like a quiet machine.
 
 Each was found by reading one file. That does not scale and it does not stop
 the fifth. So this file tests the INVARIANT two ways:
 
-  1. STRUCTURALLY — every function used as a `threading.Thread(target=...)`
+  1. STRUCTURALLY - every function used as a `threading.Thread(target=...)`
      must have its loop body guarded. This is an AST check over the whole
      package, so a NEW unguarded worker fails here the moment it is added,
      without anyone having to notice.
-  2. BEHAVIOURALLY — the specific workers above are driven with a
+  2. BEHAVIOURALLY - the specific workers above are driven with a
      deliberately exploding work function and must keep running, keep
      counting the failures, and (where they report health) must refuse to
      claim a healthy state they cannot substantiate.
@@ -92,7 +92,7 @@ def _unguarded_loops() -> list[str]:
 def main() -> int:
     c = Checks("thread resilience", expect_min=10)
 
-    # ── 1. STRUCTURAL: no worker loop may be unguarded ──────────────────
+    # --- 1. STRUCTURAL: no worker loop may be unguarded ---
     print("\n[1] STRUCTURAL: every thread loop body is exception-guarded")
     targets = _thread_targets()
     total = sum(len(v) for v in targets.values())
@@ -104,7 +104,7 @@ def main() -> int:
         print(f"    UNGUARDED: {b}")
     c.check(f"no unguarded worker loop exists ({len(bad)} found)", not bad)
 
-    # ── 2. BEHAVIOURAL: zero-log integrity checker ─────────────────────
+    # --- 2. BEHAVIOURAL: zero-log integrity checker ---
     print("\n[2] zero-log integrity checker survives, and stays honest")
     import valkyrie.zero_log as zl
     z = zl.ZeroLogMode.__new__(zl.ZeroLogMode)
@@ -138,7 +138,7 @@ def main() -> int:
     finally:
         zl.INTEGRITY_CHECK_INTERVAL = old_interval
 
-    # ── 3. BEHAVIOURAL: DoH detector ───────────────────────────────────
+    # --- 3. BEHAVIOURAL: DoH detector ---
     print("\n[3] DoH-bypass detector survives, counts, and restarts")
     import valkyrie.doh_detector as dd
     d = dd.DoHDetector(store=None)
@@ -170,7 +170,7 @@ def main() -> int:
     finally:
         dd.DOH_SCAN_INTERVAL = old_scan
 
-    # [4] (fleet agent resilience) retired with the fleet code — ADR 0044.
+    # [4] (fleet agent resilience) retired with the fleet code - ADR 0044.
     # The loop-survives-errors invariant it protected is still covered for
     # core workers by sections 1-3 above; the fleet agent is no longer part
     # of the product, so a test for it is no longer part of the gate.

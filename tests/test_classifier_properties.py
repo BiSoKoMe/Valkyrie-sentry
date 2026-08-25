@@ -1,20 +1,20 @@
-"""Tier 2.11 — invariants the pure classifiers must hold for ALL inputs.
+"""Tier 2.11 - invariants the pure classifiers must hold for ALL inputs.
 
 Example-based tests ask "does this input give that answer". They are necessary
 and this repo has plenty. They are also blind in a specific way: they only check
 the inputs someone thought of, which is the same weakness as the efficacy corpus
 scoring 100% on examples we chose ourselves.
 
-Property tests ask something different — "is this statement true for every input
-in the domain" — and they catch the cases nobody imagined. The properties below
+Property tests ask something different - "is this statement true for every input
+in the domain" - and they catch the cases nobody imagined. The properties below
 are chosen so that a violation is a real defect rather than a taste difference:
 
-  * **totality** — never raises, for any input, including empty and absurd
-  * **determinism** — same input, same answer, every time
-  * **idempotence** — classifying a result twice changes nothing
-  * **range** — a score claimed to be 0..1 is actually 0..1
-  * **monotonicity** — more of the thing being measured never scores lower
-  * **conservatism at the edges** — the product's stated precision-over-
+  * **totality** - never raises, for any input, including empty and absurd
+  * **determinism** - same input, same answer, every time
+  * **idempotence** - classifying a result twice changes nothing
+  * **range** - a score claimed to be 0..1 is actually 0..1
+  * **monotonicity** - more of the thing being measured never scores lower
+  * **conservatism at the edges** - the product's stated precision-over-
     aggression rule: empty or unknown input must never yield a conviction
 
 That last one is the security-relevant property. A classifier that returns
@@ -59,7 +59,7 @@ def main() -> int:
     rng = random.Random(SEED)
     print(f"seed={SEED}  samples={N} per property\n")
 
-    # ── classify_amsi_result ────────────────────────────────────────────────
+    # --- classify_amsi_result ---
     from valkyrie.amsi import classify_amsi_result, DISP_MALWARE
     print("[1] classify_amsi_result")
 
@@ -90,7 +90,7 @@ def main() -> int:
     c.check("32768 itself IS a conviction (the gate is not stuck closed)",
             classify_amsi_result(32768) == DISP_MALWARE)
 
-    # ── shannon_entropy ─────────────────────────────────────────────────────
+    # --- shannon_entropy ---
     from valkyrie.dga import shannon_entropy
     print("\n[2] shannon_entropy")
 
@@ -117,7 +117,7 @@ def main() -> int:
     c.check("entropy is invariant under reordering",
             abs(shannon_entropy("abcd") - shannon_entropy("dcba")) < 1e-9)
 
-    # ── classify_dga ────────────────────────────────────────────────────────
+    # --- classify_dga ---
     from valkyrie.dga import classify_dga
     print("\n[3] classify_dga")
 
@@ -156,7 +156,7 @@ def main() -> int:
     fp = [d for d in benign if getattr(classify_dga(d), "is_dga", False)]
     c.check(f"no ordinary domain is classified DGA ({fp})", not fp)
 
-    # ── behavior_score.score_process ────────────────────────────────────────
+    # --- behavior_score.score_process ---
     from valkyrie.behavior_score import score_process
     print("\n[4] behavior_score.score_process")
 

@@ -2,15 +2,15 @@
 
 Consumes Microsoft-Windows-PowerShell/Operational **4104** (script-block logging)
 and **4103** (module/pipeline). 4104 records the *deobfuscated* script text the
-engine is about to run — the single highest-value real-time signal on Windows
+engine is about to run - the single highest-value real-time signal on Windows
 that polling cannot obtain. Each script block is classified with explainable
 heuristics and emitted as a normalized ``TelemetryEvent`` into the same
-EventBus → EDR pipeline as every other collector.
+EventBus -> EDR pipeline as every other collector.
 
 Honesty: script-block logging must be enabled (it is by default on modern
 Windows; the channel is checked at start). This sensor sees what PowerShell
 logs; a caller that disables logging is out of scope (a hardening detection in
-its own right — a separate concern from this collector).
+its own right - a separate concern from this collector).
 """
 
 from __future__ import annotations
@@ -28,13 +28,13 @@ from ..telemetry import (
 )
 
 _CHANNEL = "Microsoft-Windows-PowerShell/Operational"
-_EVENT_IDS = (4104,)          # script-block; 4103 is pipeline, noisier — omit for now
+_EVENT_IDS = (4104,)          # script-block; 4103 is pipeline, noisier - omit for now
 
 # Script blocks shorter than this are prompt fragments and tab-completion noise;
 # submitting them to AMSI costs a round trip per keystroke for no signal.
 _AMSI_MIN_SCRIPT_LEN = 24
 
-# ── pure classifier (unit-tested; no OS calls) ─────────────────────────────
+# --- pure classifier (unit-tested; no OS calls) ---
 # Each rule: (compiled regex, label, severity, MITRE technique, human reason).
 _RULES: list[tuple[re.Pattern, str, str, str, str]] = [
     (re.compile(r"-e(nc(odedcommand)?)?\b\s+[A-Za-z0-9+/=]{40,}", re.I),
@@ -67,7 +67,7 @@ _RULES: list[tuple[re.Pattern, str, str, str, str]] = [
 
 def classify_powershell(script: str) -> tuple[str, list[str], str, str]:
     """Return (severity, labels, technique, reason) for a script block.
-    Pure and deterministic — the entire heuristic surface for unit testing."""
+    Pure and deterministic - the entire heuristic surface for unit testing."""
     text = script or ""
     severity = SEV_INFO
     labels: list[str] = []
@@ -87,7 +87,7 @@ def classify_powershell(script: str) -> tuple[str, list[str], str, str]:
     return severity, labels, technique, "; ".join(reasons)
 
 
-# ── the sensor ─────────────────────────────────────────────────────────────
+# --- the sensor ---
 class PowerShellSensor(Sensor):
     name = "powershell"
     interval = 1.5
@@ -98,7 +98,7 @@ class PowerShellSensor(Sensor):
         When supplied, each script block is also submitted to the OS antimalware
         provider, so a heuristic "this looks obfuscated" can be upgraded to an
         engine-backed conviction. Absent (or unavailable), the sensor behaves
-        exactly as before — the corroborator is additive, never load-bearing.
+        exactly as before - the corroborator is additive, never load-bearing.
         """
         super().__init__()
         self._reader = ChannelReader(_CHANNEL, _EVENT_IDS)
@@ -131,7 +131,7 @@ class PowerShellSensor(Sensor):
 
         # Corroborate with the OS antimalware provider. A conviction is an
         # external engine's verdict on the *deobfuscated* text PowerShell was
-        # about to run — stronger evidence than any shape heuristic, so it
+        # about to run - stronger evidence than any shape heuristic, so it
         # overrides severity and re-categorizes the event as malware.
         verdict = self._amsi_verdict(script, path)
         if verdict is not None:

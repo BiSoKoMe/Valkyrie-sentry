@@ -2,7 +2,7 @@
 """Coverage metric tests (valkyrie/coverage.py, IIBA §4.8.3 + Clinton ch. 9).
 
 Pins the exact case that motivated this module: Sysmon INSTALLED but
-STOPPED must report ABSENT, never EFFECTIVE — a binary
+STOPPED must report ABSENT, never EFFECTIVE - a binary
 installed/not-installed check would get this wrong; the three-state model
 (effective/degraded/absent) is what makes it possible to get it right.
 """
@@ -27,11 +27,25 @@ c = Checks("coverage metric", expect_min=15)
 
 
 class _FakeSysmonEnv:
-    def __init__(self, present, collection_live, configured_eids, detail=""):
+    """Stand-in for sysmon_manager.probe_sysmon()'s return value.
+
+    STALE-CONTRACT FIX: `determinable` was added to the real probe on
+    2026-08-23, after a run reported the host BLIND while Sysmon was happily
+    collecting 49,000 events - the probe had been REFUSED, not answered, and
+    ABSENT asserted a negative nobody observed. _check_sysmon tests it first,
+    and this fake never grew the field, so every case here fell through the
+    `not env.determinable` branch into UNKNOWN and the four state assertions
+    failed. The fake now mirrors the real contract; default True so existing
+    cases mean what they read as, with the refused case set explicitly.
+    """
+
+    def __init__(self, present, collection_live, configured_eids, detail="",
+                 determinable=True):
         self.present = present
         self.collection_live = collection_live
         self.configured_eids = configured_eids
         self.detail = detail
+        self.determinable = determinable
 
 
 def test_sysmon_three_states() -> None:

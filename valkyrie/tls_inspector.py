@@ -1,4 +1,4 @@
-"""TLS inspection — runs mitmproxy in-process to intercept HTTPS traffic.
+"""TLS inspection - runs mitmproxy in-process to intercept HTTPS traffic.
 
 mitmproxy terminates TLS using a locally-generated root CA, lets the
 ValkyrieAddon (tls_addon.py) inspect/block/strip each request, then
@@ -80,7 +80,7 @@ class TLSInspector:
         secure_file.harden(TLS_MITMPROXY_CONF_DIR, is_dir=True)
         generated = TLS_MITMPROXY_CONF_DIR / "mitmproxy-ca-cert.pem"
         if generated.exists() and not TLS_CA_CERT_PATH.exists():
-            # The .pem here is the CERTIFICATE only — public by design. It must
+            # The .pem here is the CERTIFICATE only - public by design. It must
             # stay readable: the user has to be able to open it to install it
             # into the trust store, and it grants nothing on its own.
             TLS_CA_CERT_PATH.write_bytes(generated.read_bytes())
@@ -88,7 +88,7 @@ class TLSInspector:
             if key_src.exists():
                 from .config import TLS_CA_KEY_PATH
                 # This one contains the PRIVATE KEY. Restrict it the moment it
-                # is written — a copy of a protected key into an unprotected
+                # is written - a copy of a protected key into an unprotected
                 # location would silently undo the directory hardening above.
                 TLS_CA_KEY_PATH.write_bytes(key_src.read_bytes())
                 ok, detail = secure_file.harden(TLS_CA_KEY_PATH)
@@ -120,7 +120,7 @@ class TLSInspector:
 
         NOTE ON A REAL PAST BUG: this used to call ready.set() immediately
         after constructing DumpMaster and adding the addon, i.e. BEFORE
-        loop.run_until_complete(master.run()) had even started — meaning
+        loop.run_until_complete(master.run()) had even started - meaning
         before mitmproxy's proxyserver addon had called setup_servers() to
         actually bind the listening socket. That made start() return True
         (and is_running() report True) even when the bind hadn't happened
@@ -132,7 +132,7 @@ class TLSInspector:
         died ~1s later. See docs/TLS_ZEROLOG_AUDIT_REPORT.md. Fixed by
         waiting for mitmproxy's own proxyserver.is_running flag (set inside
         Proxyserver.running(), which mitmproxy calls only after
-        setup_servers() succeeds) before signalling ready — bounded so a
+        setup_servers() succeeds) before signalling ready - bounded so a
         stuck bind can't hang start() forever.
         """
         try:
@@ -149,7 +149,7 @@ class TLSInspector:
         # mitmproxy creates its CA (mitmproxy-ca.pem, which CONTAINS the
         # private key) inside confdir on first start. On Windows the engine's
         # data dir lives under %ProgramData%, whose default ACL grants
-        # BUILTIN\Users read — so without this the CA key would be readable by
+        # BUILTIN\Users read - so without this the CA key would be readable by
         # every local account on the machine. Whoever has that key can mint a
         # trusted certificate for any domain and impersonate it to this host
         # with a valid padlock, which turns the security product into the
@@ -213,7 +213,7 @@ class TLSInspector:
                     # mitmproxy.addons.proxyserver). Startup errors (e.g.
                     # port already in use) surface via mitmproxy's
                     # ErrorCheck addon calling sys.exit(1) from *inside*
-                    # this same event loop — that raises SystemExit on the
+                    # this same event loop - that raises SystemExit on the
                     # task running master.run(), which is handled below by
                     # the outer except; should_exit is also checked here in
                     # case a future mitmproxy version signals failure that
@@ -239,7 +239,7 @@ class TLSInspector:
                 # BaseException (not just Exception): mitmproxy's ErrorCheck
                 # addon reports startup failures (e.g. "port already in
                 # use") by calling sys.exit(1) from within the running
-                # coroutine, which raises SystemExit — a BaseException
+                # coroutine, which raises SystemExit - a BaseException
                 # subclass that a plain `except Exception` does NOT catch.
                 # Missing this previously meant the poller above had to hit
                 # its full timeout to notice the bind had failed, since

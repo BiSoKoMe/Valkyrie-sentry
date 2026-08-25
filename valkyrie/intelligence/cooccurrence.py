@@ -1,4 +1,4 @@
-"""CoOccurrenceTracker — Bucket-B third-party co-occurrence signal.
+"""CoOccurrenceTracker - Bucket-B third-party co-occurrence signal.
 
 Catches tracker subdomains on mixed-use parents (tr.snapchat.com,
 events.reddit.com) that cannot be listed by parent SLD without breaking the
@@ -12,24 +12,24 @@ parties. This tracker treats the first host of each burst as the anchor and, for
 every later host in the burst whose registrable domain differs from the anchor's,
 records the anchor in that host's anchor-set. A host that accumulates many
 *distinct* anchors across separate page loads is riding behind many unrelated
-first parties — the behavioural signature of a third-party tracker, which is
+first parties - the behavioural signature of a third-party tracker, which is
 exactly how EasyPrivacy classifies by hand.
 
 Guards (all required to hold the zero-FP result)
 ------------------------------------------------
-G1  infra/functional-third-party allowlist (config.INFRA_ALLOWLIST) — CDNs,
+G1  infra/functional-third-party allowlist (config.INFRA_ALLOWLIST) - CDNs,
     font hosts, payment/captcha/error-reporting are exempt and never scored.
-G2  known-good exemption — domains the machine has already promoted to
+G2  known-good exemption - domains the machine has already promoted to
     known-good (injected via ``exempt_fn``) are never scored.
-G3  FLAG-ONLY — the score is capped strictly below the block threshold
+G3  FLAG-ONLY - the score is capped strictly below the block threshold
     (config.COOC_SCORE_CAP < ANOMALY_BLOCK_THRESHOLD). Combined with the
     classifier applying it only as an allow->flag upgrade, this signal can never
     cause a block on its own. HARD INVARIANT.
-G4  ubiquity gate — no score until a host has been seen behind at least
+G4  ubiquity gate - no score until a host has been seen behind at least
     config.COOC_MIN_ANCHORS distinct anchors. One co-occurrence is nothing.
 
 This signal is temporal/learned: it does not fire on first contact, and in a
-single-query test (no burst) it contributes exactly 0 — by design.
+single-query test (no burst) it contributes exactly 0 - by design.
 """
 
 from __future__ import annotations
@@ -115,7 +115,7 @@ class CoOccurrenceTracker:
             n = len(self._anchors.get(domain, ()))
         if n < COOC_MIN_ANCHORS:                       # G4
             return 0.0, ""
-        # G3: bounded strictly below the block threshold — flag-only.
+        # G3: bounded strictly below the block threshold - flag-only.
         s = min(COOC_SCORE_CAP, COOC_SCORE_BASE + (n - COOC_MIN_ANCHORS) * COOC_SCORE_STEP)
         return s, f"third-party across {n} distinct first-party sites (co-occurrence)"
 

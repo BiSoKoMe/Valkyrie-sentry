@@ -4,7 +4,7 @@
 Discovered plugins execute with Valkyrie's privileges. This pins the SHA-256
 allowlist behavior: with an allowlist in force only approved modules load
 (fail-closed), and without one modules still load but are flagged unverified with
-full provenance — never silent arbitrary execution.
+full provenance - never silent arbitrary execution.
 """
 
 from __future__ import annotations

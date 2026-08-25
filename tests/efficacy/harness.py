@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Detection-efficacy harness — drives Valkyrie's REAL classifiers and scores.
+"""Detection-efficacy harness - drives Valkyrie's REAL classifiers and scores.
 
 Runs every corpus case (tests/efficacy/corpus.py) through the actual
-detection code — no mocks, no reimplementation — and reports:
+detection code - no mocks, no reimplementation - and reports:
 
   * Recall (true-positive rate): of the malicious cases, how many fired.
   * False-positive rate: of the benign cases, how many wrongly fired.
@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from corpus import BENIGN, MALICIOUS, Case   # noqa: E402
 
 # Regression gate thresholds. These encode the CURRENT honest capability, not
-# an aspiration — raise them only when detection genuinely improves.
+# an aspiration - raise them only when detection genuinely improves.
 RECALL_FLOOR = 0.85     # must catch >= 85% of represented malicious techniques
 FP_CEILING = 0.05       # must wrongly flag <= 5% of benign controls
 
@@ -76,7 +76,7 @@ def _fires(case: Case, ctx: dict) -> bool:
         return severity_rank(sev) >= severity_rank(SEV_MEDIUM)
 
     if d == "process":
-        # inp = (name, path, parent_name) — process-relationship heuristics.
+        # inp = (name, path, parent_name) - process-relationship heuristics.
         from valkyrie.process_telemetry import classify_process
         name, path, parent = case.inp
         sev, _labels, _ = classify_process(name, path, parent)
@@ -84,7 +84,7 @@ def _fires(case: Case, ctx: dict) -> bool:
 
     if d == "network":
         # inp = (ip, port). Reputation comes from the REAL threat-intel manager,
-        # measuring the end-to-end network-collector → intel path DNS can't see.
+        # measuring the end-to-end network-collector -> intel path DNS can't see.
         from valkyrie.network_telemetry import classify_connection
         ip, port = case.inp
         blocked = ctx["intel"].match_ip(ip) is not None
@@ -108,7 +108,7 @@ def _fires(case: Case, ctx: dict) -> bool:
         return res.decision in ("block", "flag")
 
     if d == "tunnel":
-        # inp = tuple of hostnames — a query STREAM, because tunnelling is an
+        # inp = tuple of hostnames - a query STREAM, because tunnelling is an
         # aggregate shape no single query shows. Fresh scanner per case so the
         # flood window is isolated and cases stay order-independent. Fires
         # only if the stream produced an outright BLOCK (flag is not enough
@@ -126,7 +126,7 @@ def _fires(case: Case, ctx: dict) -> bool:
         return len(match_process(image, parent, cmd, path)) > 0
 
     if d == "sequence":
-        # inp = (actor, [(technique, [labels]), ...]) — a behaviour STREAM on one
+        # inp = (actor, [(technique, [labels]), ...]) - a behaviour STREAM on one
         # actor. "Fires" = the ESP engine completed a NAMED sequence (a specific
         # ordered attack pattern), which the generic tactic-count correlator does
         # not name. Fresh engine per case; deterministic ts.
@@ -142,7 +142,7 @@ def _fires(case: Case, ctx: dict) -> bool:
 
     if d == "cname":
         # inp = a CNAME target hostname. "Fires" = uncloaking recognises it as a
-        # known cloaked-tracker apex — the part that catches trackers general
+        # known cloaked-tracker apex - the part that catches trackers general
         # blocklists miss because they only ever appear as a CNAME target.
         from valkyrie.cname_uncloak import matches_cname_tracker
         return matches_cname_tracker(case.inp) is not None
@@ -157,7 +157,7 @@ def _fires(case: Case, ctx: dict) -> bool:
         return score_process(image, parent, cmd, path).fired()
 
     if d == "killchain":
-        # inp = (actor, [(technique, title), ...]) — a sequence of detections
+        # inp = (actor, [(technique, title), ...]) - a sequence of detections
         # on ONE actor. "Fires" = the correlator raised a multi-stage chain,
         # which is exactly the escalation the base same-category correlator
         # could not produce. Deterministic ts, fresh correlator per case.
@@ -203,7 +203,7 @@ def main() -> int:
     print("   malware; see corpus.py honest boundary)")
     print("=" * 70)
 
-    # ── Malicious: recall ──────────────────────────────────────────────
+    # --- Malicious: recall ---
     tp = fn = 0
     missed: list[Case] = []
     by_tactic: dict[str, list[int]] = {}
@@ -222,7 +222,7 @@ def main() -> int:
         mark = "DETECT" if fired else "MISS  "
         print(f"  {c.technique:<12} {c.detector:<13} {mark:<7} {c.id} — {c.note}")
 
-    # ── Benign: false positives ────────────────────────────────────────
+    # --- Benign: false positives ---
     fp = tn = 0
     false_hits: list[Case] = []
     print("\n[ Benign controls — must NOT fire ]\n")
@@ -237,7 +237,7 @@ def main() -> int:
         mark = "FP!   " if fired else "clean "
         print(f"  {c.detector:<13} {mark:<7} {c.id} — {c.note}")
 
-    # ── Scorecard ──────────────────────────────────────────────────────
+    # --- Scorecard ---
     n_mal = tp + fn
     n_ben = fp + tn
     recall = tp / n_mal if n_mal else 0.0
@@ -262,7 +262,7 @@ def main() -> int:
         for c in false_hits:
             print(f"    - {c.id}: {c.note}")
 
-    # ── Regression gate ────────────────────────────────────────────────
+    # --- Regression gate ---
     print("\n" + "=" * 70)
     ok = True
     if recall < RECALL_FLOOR:

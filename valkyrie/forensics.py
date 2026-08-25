@@ -1,22 +1,22 @@
-"""Digital forensics — one-command triage collection for an incident.
+"""Digital forensics - one-command triage collection for an incident.
 
 When an analyst decides an incident matters, the next question is always
 "preserve everything now, before it changes." This module collects a
 **triage bundle**: a zip of JSON artifacts capturing the incident record,
 its detections/responses/timeline, the surrounding event window from the
 store, a live process snapshot, the persistence (ASEP) surface, active
-network connections, and host context — each artifact SHA256-hashed into a
+network connections, and host context - each artifact SHA256-hashed into a
 signed-shape manifest for evidence integrity (chain of custody starts with
 "what was collected, when, and its hash").
 
 Design contract:
 
   * **Local only.** Bundles are written to ``DATA_DIR/forensics``; nothing
-    is uploaded anywhere. Bundles contain security-relevant host state —
+    is uploaded anywhere. Bundles contain security-relevant host state -
     treat them as sensitive, ship them only by operator action.
   * **Best-effort, never fatal.** Any single artifact that cannot be
     collected (psutil missing, access denied) records an error entry in
-    the manifest instead of failing the bundle — a partial triage beats no
+    the manifest instead of failing the bundle - a partial triage beats no
     triage, and the manifest says exactly what is and isn't inside.
   * **Deterministic + testable.** Collection functions are injectable;
     tests exercise the full bundle path offline with synthetic services.
@@ -53,7 +53,7 @@ def _utcnow() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Artifact collectors (each returns a JSON-serializable object; may raise —
+# Artifact collectors (each returns a JSON-serializable object; may raise -
 # the bundler catches and records the failure per-artifact)
 # ---------------------------------------------------------------------------
 
@@ -73,7 +73,7 @@ def collect_host_context() -> dict:
 
 
 def collect_process_tree() -> list[dict]:
-    """Live process snapshot with ancestry — the state most likely to vanish."""
+    """Live process snapshot with ancestry - the state most likely to vanish."""
     if not _PSUTIL:
         raise RuntimeError("psutil unavailable")
     out = []
@@ -159,7 +159,7 @@ class TriageCollector:
 
     def collect(self, incident_id: str) -> dict:
         """Collect and write the bundle. Returns the manifest (which includes
-        the bundle path). Raises KeyError only if the incident doesn't exist —
+        the bundle path). Raises KeyError only if the incident doesn't exist -
         every artifact failure is recorded, not raised."""
         incident = self._edr.get_incident(incident_id)
         if incident is None:
@@ -171,7 +171,7 @@ class TriageCollector:
         def _try(name: str, fn) -> None:
             try:
                 artifacts[name] = fn()
-            except Exception as exc:   # noqa: BLE001 — recorded, not raised
+            except Exception as exc:   # noqa: BLE001 - recorded, not raised
                 errors[name] = f"{type(exc).__name__}: {exc}"
 
         _try("host.json", collect_host_context)
@@ -220,7 +220,7 @@ class TriageCollector:
 def verify_bundle(path: Path) -> dict:
     """Re-hash every artifact inside a bundle against its manifest.
 
-    Returns {"ok": bool, "mismatched": [...], "missing": [...]} — the
+    Returns {"ok": bool, "mismatched": [...], "missing": [...]} - the
     integrity half of chain of custody, runnable anywhere, stdlib only.
     """
     with zipfile.ZipFile(path) as z:

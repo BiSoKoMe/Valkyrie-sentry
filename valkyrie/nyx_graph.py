@@ -1,17 +1,17 @@
-"""Nyx correlation graph — the data brain that connects the dots.
+"""Nyx correlation graph - the data brain that connects the dots.
 
 Nyx's observe/act layers each see ONE request in isolation. This is the layer
 that REMEMBERS and CORRELATES: it links a tracker's identity across every
-surface it touches — the first-party sites it rode in on, the channels it used
+surface it touches - the first-party sites it rode in on, the channels it used
 (outbound data leaks, blocked beacons, cleaned page-trackers, faked replies),
 the categories of *you* it reached for, and the different hostnames (masks) it
 wore. That turns "this one request leaked your ID" into the real picture:
 
     "adnet.example has followed you across 14 of your sites, on 3 channels,
-     wearing 4 different hostnames — reaching for your ID and location."
+     wearing 4 different hostnames - reaching for your ID and location."
 
 That is the Threat-Graph idea the commercial EDRs are famous for, pointed at
-privacy and done ENTIRELY LOCALLY — it is your own data flows correlated on your
+privacy and done ENTIRELY LOCALLY - it is your own data flows correlated on your
 own machine, so it needs no cloud (which is the whole point; the fleet-fed graph
 is the thing Valkyrie deliberately refuses).
 
@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 
 from .dns_tunnel import registrable_base
 
-# raw_category / decision → the channel a tracker was seen on.
+# raw_category / decision -> the channel a tracker was seen on.
 _CHANNEL = {
     "nyx_leak":         "data-leak",      # personal data seen leaving (observed)
     "nyx_fake":         "data-leak",      # personal data leaving, fed fake (acted)
@@ -42,7 +42,7 @@ _CHANNEL = {
 }
 
 # Nyx's own sentences are "<first_party> sent your <label> to an unrelated
-# server (<dest>)" — a format this module owns, so parsing it back is reliable.
+# server (<dest>)" - a format this module owns, so parsing it back is reliable.
 _SENTENCE = re.compile(
     r"^(?P<fp>\S+) sent your (?P<cat>.+?) to an unrelated server \((?P<dest>[^)]+)\)")
 _FAKE_SENTENCE = re.compile(

@@ -2,14 +2,14 @@
 
 Three plugin kinds, one registry:
 
-  DetectionPlugin  — turns a normalised event into zero or more Detections.
-  ResponderPlugin  — knows how to carry out response actions (block/kill/…).
-  EnrichmentPlugin — adds context to a Detection (threat-intel notes, tags…).
+  DetectionPlugin  - turns a normalised event into zero or more Detections.
+  ResponderPlugin  - knows how to carry out response actions (block/kill/...).
+  EnrichmentPlugin - adds context to a Detection (threat-intel notes, tags...).
 
 Built-in plugins are registered in code (see :mod:`valkyrie.edr.builtin`).
 Third-party plugins are discovered from a directory of ``*.py`` files, each
 exposing a top-level ``register(registry)`` function. Discovery is opt-in and
-scoped to a directory the operator controls — plugins are ordinary trusted
+scoped to a directory the operator controls - plugins are ordinary trusted
 Python (like a pytest plugin or a Django app), NOT a sandbox, and the loader
 says so plainly rather than pretending otherwise.
 
@@ -65,7 +65,7 @@ def _normalize_allowlist(allowlist: Optional[Iterable[str]]) -> Optional[set[str
 class PluginBase:
     """Common metadata for every plugin. Subclass one of the three kinds."""
 
-    #: unique, stable, dotted name — e.g. "dns.tracker"
+    #: unique, stable, dotted name - e.g. "dns.tracker"
     name: str = "unnamed"
     #: free-text version, informational only
     version: str = "1.0"
@@ -134,7 +134,7 @@ class EnrichmentPlugin(PluginBase):
 
 
 # ---------------------------------------------------------------------------
-# Plugin context — the handles plugins are allowed to touch
+# Plugin context - the handles plugins are allowed to touch
 # ---------------------------------------------------------------------------
 
 class PluginContext:
@@ -228,7 +228,7 @@ class PluginRegistry:
                 for det in produced:
                     self._run_enrichment(det, ctx)
                     out.append(det)
-            except Exception as exc:          # noqa: BLE001 — isolate plugin faults
+            except Exception as exc:          # noqa: BLE001 - isolate plugin faults
                 self._record_error(p.name, exc)
         return out
 
@@ -275,12 +275,12 @@ class PluginRegistry:
         **Trust gate.** Discovered plugins execute with Valkyrie's privileges, so
         loading is gated on a SHA-256 allowlist:
 
-          * ``allowlist`` — an explicit iterable of approved hex digests, or
+          * ``allowlist`` - an explicit iterable of approved hex digests, or
           * an ``allowed.sha256`` manifest in ``directory`` (one digest per line)
             used when ``allowlist`` is None.
 
         When an allowlist is in force, only modules whose SHA-256 matches are
-        loaded; every other ``*.py`` is skipped and recorded (fail closed —
+        loaded; every other ``*.py`` is skipped and recorded (fail closed -
         an empty allowlist loads nothing). When **no** allowlist is configured,
         modules still load (preserving existing behavior) but each is flagged
         ``verified=False`` and a single warning is recorded, so unverified code

@@ -2,18 +2,18 @@
 """Behavioral sequence IOA tests (valkyrie/behavioral_sequences.py).
 
 CrowdStrike-style Event Stream Processing: a NAMED attack pattern fires only
-when its ordered behaviours complete on ONE process lineage within the window —
+when its ordered behaviours complete on ONE process lineage within the window -
 tool-agnostically, and NOT when the pieces are out of order, too slow, or on
 unrelated processes (the precision boundary that separates a real ESP IOA from
 noise).
 
   [1] Each shipped sequence fires on its in-order behaviour chain
   [2] Every sequence's culminating technique maps to a chain-ready tactic
-  [3] Order matters — the reverse order does NOT fire
-  [4] Window matters — too slow does NOT fire
-  [5] Lineage — a child process's behaviour advances its parent's sequence
-  [6] Isolation — the same behaviours split across unrelated actors do NOT fire
-  [7] Tool-agnostic — a novel tool with the same behaviour labels still fires
+  [3] Order matters - the reverse order does NOT fire
+  [4] Window matters - too slow does NOT fire
+  [5] Lineage - a child process's behaviour advances its parent's sequence
+  [6] Isolation - the same behaviours split across unrelated actors do NOT fire
+  [7] Tool-agnostic - a novel tool with the same behaviour labels still fires
   [8] Pipeline: a completed sequence becomes one 'attack_sequence' incident
 """
 
@@ -62,7 +62,7 @@ def main() -> int:
             ("T1105 — Ingress Tool Transfer", ["certutil_download"]),
             ("T1547.001 — Registry Run Keys / Startup", ["persistence_runkey"]),
         ],
-        # Single-step, min_distinct=3: BREADTH not order — three DIFFERENT
+        # Single-step, min_distinct=3: BREADTH not order - three DIFFERENT
         # discovery techniques, any order, complete it.
         "reconnaissance-burst": [
             ("T1082 — System Information Discovery", []),

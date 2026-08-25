@@ -3,7 +3,7 @@
 
 The reported symptom was the Recent Events list filled top to bottom with:
 
-    web_dashboard unhealthy (health check returned False) — attempting recovery
+    web_dashboard unhealthy (health check returned False) - attempting recovery
 
 repeated identically, forever. Three separate faults produced that one line:
 

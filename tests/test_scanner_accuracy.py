@@ -2,15 +2,15 @@
 
 This is a MEASUREMENT, not a pass/fail test.  It drives the REAL DNS
 decision pipeline (DNSInterceptor._decide) in intelligence-only mode
-(USE_EXTERNAL_LISTS = False — seed blocklist + behavioural scanner +
+(USE_EXTERNAL_LISTS = False - seed blocklist + behavioural scanner +
 intelligence, no downloaded lists) against two labelled sets:
 
   * 15 confirmed tracker/telemetry endpoints, each independently confirmed
     by EasyPrivacy (github.com/easylist/easylist) AND deliberately absent
-    from Valkyrie's own seed_blocklist.py — so every one is genuinely novel
+    from Valkyrie's own seed_blocklist.py - so every one is genuinely novel
     to Valkyrie.
   * 15 confirmed-benign domains (OS projects, CDNs, reference sites) absent
-    from both EasyPrivacy and the seed list — a false-positive control.
+    from both EasyPrivacy and the seed list - a false-positive control.
 
 Ground truth comes from an INDEPENDENT source (EasyPrivacy), never from
 Valkyrie's own lists.  For each domain we record Valkyrie's decision
@@ -22,7 +22,7 @@ Methodology notes (why the numbers are trustworthy, not gamed):
     real DNS query would be, so nothing is decided by code inspection.
   * A single LIVE process name is used for every query.  A fake name would
     make the anomaly detector's liveness check fire "process not running
-    but still connecting" (+0.5) on every domain — a pure test artifact.
+    but still connecting" (+0.5) on every domain - a pure test artifact.
   * 30 queries in one process never trips the >30/10s rate-burst signal,
     heartbeat/beacon signals need 4+ repeats of the same pair, and the
     baseline is in its learning window, so the "never-seen"/timing signals
@@ -55,9 +55,9 @@ from valkyrie.site_scanner import SiteScanner
 from valkyrie.store import Store
 
 
-# (domain, ground-truth label) — label is the INDEPENDENT verdict.
-#   "tracker" → confirmed by EasyPrivacy, absent from Valkyrie's seed list
-#   "clean"   → absent from EasyPrivacy and from Valkyrie's seed list
+# (domain, ground-truth label) - label is the INDEPENDENT verdict.
+#   "tracker" -> confirmed by EasyPrivacy, absent from Valkyrie's seed list
+#   "clean"   -> absent from EasyPrivacy and from Valkyrie's seed list
 TRACKERS = [
     "analytics.tiktok.com",
     "analytics.pinterest.com",
@@ -143,18 +143,18 @@ def main() -> int:
     intel.stop()
     store.stop()
 
-    # ── Per-domain table ──────────────────────────────────────────────
+    # --- Per-domain table ---
     print(f"{'domain':<32} {'truth':<8} {'decision':<9} {'score':<6} reason")
     print("-" * 100)
     for domain, truth, decision, score, reason in rows:
         print(f"{domain:<32} {truth:<8} {decision:<9} {score:<6} {reason[:44]}")
 
-    # ── Confusion matrix (positive = any acted-on verdict) ────────────
+    # --- Confusion matrix (positive = any acted-on verdict) ---
     # "deceived" IS a positive detection and was missing here, which is what
     # made this measurement read 0.333 recall while the pipeline was actually
     # catching 13/15. The DECEIVE mechanism (added later) sinkholes a detected
     # tracker to a decoy dead-end (0.0.0.0) instead of hard-blocking it, so the
-    # calling app keeps working — for a TRACKER that is the *preferred*
+    # calling app keeps working - for a TRACKER that is the *preferred*
     # outcome, not a failure. This test predated that verdict and silently
     # scored every successful deception as a miss.
     #
@@ -207,7 +207,7 @@ def main() -> int:
                 print(f"    - {d}  ({dec}: {r})")
 
     # Gate. Until now this file computed the numbers above and then returned 0
-    # unconditionally — it could report 0% recall and still pass, which made it
+    # unconditionally - it could report 0% recall and still pass, which made it
     # a report wearing a test's filename. Thresholds sit just below the measured
     # values so ordinary noise doesn't flap, and FP is held at zero because a
     # false positive sinkholes a real site, which is this product's cardinal sin.

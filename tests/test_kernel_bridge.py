@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Kernel-driver bridge tests — the user-mode side of driver/valkyrie_km.
+"""Kernel-driver bridge tests - the user-mode side of driver/valkyrie_km.
 
 The kernel driver itself cannot be built/loaded here (no WDK/signing), so these
 tests exercise exactly the part that runs in user mode: the pure record PARSER
-(bytes off the device → normalised telemetry) and the graceful-absence
+(bytes off the device -> normalised telemetry) and the graceful-absence
 contract. Synthesised records use the exact shared layout
 (driver/valkyrie_km/valkyrie_shared.h).
 
-  [1] Record parsing: each event kind → correct normalised event; version
-      mismatch and short buffers rejected; FILETIME → epoch
+  [1] Record parsing: each event kind -> correct normalised event; version
+      mismatch and short buffers rejected; FILETIME -> epoch
   [2] Lineage: a kernel process-create carries ppid through for correlation
   [3] Graceful absence: the sensor self-disables with no driver loaded
   [4] Pipeline: an LSASS-block event raises a real high credential-access
@@ -52,7 +52,7 @@ def main() -> int:
     print("\n=== kernel-driver bridge ===\n")
 
     print("[1] Record parsing")
-    # LSASS access blocked — requestor mimikatz.exe, some rights left.
+    # LSASS access blocked - requestor mimikatz.exe, some rights left.
     ft = 133_000_000_000_000_000        # a plausible FILETIME
     rec = _pack(kb.VLK_PROTO_VERSION, kb.VLK_EVT_LSASS_ACCESS_BLOCKED, ft,
                 4321, 0, 0, 0x1000, extra=r"C:\tools\mimikatz.exe")
@@ -66,7 +66,7 @@ def main() -> int:
            ev and ev["actor_name"] == "mimikatz.exe")
     _check("LSASS granted_access preserved", ev and ev["fields"]["granted_access"] == 0x1000)
 
-    # Process create with parent — the lineage the correlator needs.
+    # Process create with parent - the lineage the correlator needs.
     rec = _pack(kb.VLK_PROTO_VERSION, kb.VLK_EVT_PROCESS_CREATE, ft,
                 200, 100, 0, 0, image=r"C:\Windows\System32\rundll32.exe")
     ev = kb.record_to_event(rec)
@@ -75,7 +75,7 @@ def main() -> int:
     _check("process-create actor basename", ev and ev["actor_name"] == "rundll32.exe")
     _check("process-create carries ppid for lineage", ev and ev["fields"]["ppid"] == 100)
 
-    # Image load — remote is a flagged anomaly, local is visibility.
+    # Image load - remote is a flagged anomaly, local is visibility.
     r_remote = _pack(kb.VLK_PROTO_VERSION, kb.VLK_EVT_IMAGE_LOAD, ft, 500, 0,
                      kb.VLK_FLAG_REMOTE_IMAGE, 0, extra=r"\\evil\share\eviltool.dll")
     ev = kb.record_to_event(r_remote)
@@ -87,16 +87,16 @@ def main() -> int:
     _check("local image load is visibility (info observed)",
            ev and ev["severity"] == "info" and ev["action"] == "observed")
 
-    # Process exit → no actionable signal.
+    # Process exit -> no actionable signal.
     _check("process-exit yields no event",
            kb.record_to_event(_pack(kb.VLK_PROTO_VERSION, kb.VLK_EVT_PROCESS_EXIT,
                                     ft, 200, 0, 0, 0)) is None)
-    # Version mismatch → refuse to parse (never misread kernel memory).
+    # Version mismatch -> refuse to parse (never misread kernel memory).
     _check("version mismatch rejected",
            kb.record_to_event(_pack(999, kb.VLK_EVT_PROCESS_CREATE, ft, 1, 0, 0, 0)) is None)
-    # Short buffer → None.
+    # Short buffer -> None.
     _check("short buffer rejected", kb.record_to_event(b"\x00" * 10) is None)
-    # FILETIME → epoch (2022-ish for this tick value), sane range.
+    # FILETIME -> epoch (2022-ish for this tick value), sane range.
     epoch = kb._win_filetime_to_epoch(ft)
     _check("FILETIME converts to a sane epoch", 1.5e9 < epoch < 2.5e9)
 
@@ -147,7 +147,7 @@ def main() -> int:
     _check("thread-inject carries T1055 + target pid",
            tinj and "T1055" in tinj["fields"]["technique"] and tinj["fields"]["target_pid"] == 900)
 
-    # Autostart registry write → persistence T1547.
+    # Autostart registry write -> persistence T1547.
     reg = kb.record_to_event(_pack(kb.VLK_PROTO_VERSION, kb.VLK_EVT_REGISTRY_SET,
                 ft, 700, 0, kb.VLK_FLAG_AUTOSTART, 0, image=r"C:\evil.exe",
                 extra=r"\REGISTRY\MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"))
@@ -203,7 +203,7 @@ def main() -> int:
     hashes = struct.unpack_from("<%dI" % kb.VLK_MAX_BLOCK_HASHES, pol2, 16)
     _check("first block hash matches fnv1a_32('evil.exe')",
            hashes[0] == kb.fnv1a_32("evil.exe"))
-    # Overflow safety: more than the cap → clamped, never overflows the array.
+    # Overflow safety: more than the cap -> clamped, never overflows the array.
     big = kb.build_policy(block_names=[f"m{i}.exe" for i in range(kb.VLK_MAX_BLOCK_HASHES + 50)])
     _, _, _, bigcount = struct.unpack_from("<IIII", big, 0)
     _check("block list capped at VLK_MAX_BLOCK_HASHES",

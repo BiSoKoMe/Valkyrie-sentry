@@ -1,7 +1,7 @@
 """Standalone test for the Windows telemetry killer.
 
 Checks scan() works, kill() creates a backup and applies changes, and
-restore() reverts them. Requires Administrator — without elevation it exits
+restore() reverts them. Requires Administrator - without elevation it exits
 EXIT_SKIP so the runner records the telemetry killer as **untested here**
 rather than counting it as a passing test (it previously exited 0, which is
 how a whole pillar sat at 21% coverage behind a green badge).

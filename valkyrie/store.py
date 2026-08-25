@@ -1,8 +1,8 @@
 """SQLite persistence layer.
 
 Two tables:
-  events    — every DNS decision, DoH alert, behavioral flag
-  baselines — per-process domain/rate profiles built after BASELINE_WINDOW_HOURS
+  events    - every DNS decision, DoH alert, behavioral flag
+  baselines - per-process domain/rate profiles built after BASELINE_WINDOW_HOURS
 
 Writes are non-blocking: callers push to an in-process queue; a background
 thread drains that queue and commits in batches.
@@ -44,7 +44,7 @@ class DnsEvent:
     timestamp:    str
     domain:       str
     # The FULL verdict vocabulary of dns_interceptor._decide. "deceived" was
-    # added later and this comment was not updated — the same staleness that
+    # added later and this comment was not updated - the same staleness that
     # made test_scanner_accuracy under-report recall by 60 points. Pinned by
     # tests/test_verdict_vocabulary.py.
     decision:     str           # "allowed" | "blocked" | "flagged"
@@ -56,7 +56,7 @@ class DnsEvent:
     reason:       str
     suspicion:    float = 0.0
     raw_category: str  = ""     # e.g. "doh_bypass", "anomaly", "behavioral"
-    url:          str  = ""     # full URL — populated for HTTPS/TLS-inspected events
+    url:          str  = ""     # full URL - populated for HTTPS/TLS-inspected events
 
     @classmethod
     def now(cls, **kwargs) -> "DnsEvent":
@@ -92,10 +92,10 @@ class Store:
             db_path: on-disk SQLite path (ignored when ram_uri is set).
             ram_uri: if non-empty, use this URI for an in-memory database
                      (e.g. "file::memory:?cache=shared").  All writes and
-                     reads target the RAM database — nothing touches disk.
+                     reads target the RAM database - nothing touches disk.
         """
         self._db_path = db_path
-        self._ram_uri = ram_uri          # non-empty → RAM mode
+        self._ram_uri = ram_uri          # non-empty -> RAM mode
         # RAM mode: a shared-cache in-memory database only lives while at
         # least one connection is open. Short-lived sessions now close their
         # handles, so anchor the database with one connection held for the
@@ -109,7 +109,7 @@ class Store:
         # countable, not invisible.
         self._write_errors = 0
         # Set when a performance index could not be created (read-only or
-        # locked database). Non-fatal, but never silent — see
+        # locked database). Non-fatal, but never silent - see
         # _init_optional_indexes.
         self.last_index_error: str = ""
         self._writer_thread = threading.Thread(
@@ -159,7 +159,7 @@ class Store:
         self._bus.unsubscribe(callback)
 
     # ------------------------------------------------------------------
-    # Public read API (called from UI thread — uses its own connection)
+    # Public read API (called from UI thread - uses its own connection)
     # ------------------------------------------------------------------
 
     def recent_events(self, limit: int = 200) -> list[dict]:
@@ -227,7 +227,7 @@ class Store:
         """Deception-engine counters for the UI: how many beacons were answered
         with a fabricated persona instead of hard-failed, and how many
         distinct trackers that covers. "deceived" is dns_interceptor's own
-        decision label (see DnsEvent.decision) — this reads it, it does not
+        decision label (see DnsEvent.decision) - this reads it, it does not
         redefine it, so it can never drift from what actually happened on the
         wire.
         """
@@ -258,9 +258,9 @@ class Store:
     def doh_bypass_stats(self) -> dict:
         """DoH-bypass counters for the UI: a process resolving DNS-over-HTTPS
         straight to a public resolver's IP is routing around Valkyrie's DNS
-        interception entirely — the same "escape the blocker" story as a
+        interception entirely - the same "escape the blocker" story as a
         deceived tracker, one layer down the stack. "doh_bypass" is
-        doh_detector.py's own raw_category label (see DoHDetector._scan) —
+        doh_detector.py's own raw_category label (see DoHDetector._scan) -
         this reads it, it does not redefine it.
         """
         since = (datetime.utcnow() - timedelta(hours=24)).isoformat()
@@ -308,7 +308,7 @@ class Store:
             ).fetchone()
         if row is None:
             return None
-        # Touch last_seen + increment query_count in the writer thread — lightweight fire-and-forget
+        # Touch last_seen + increment query_count in the writer thread - lightweight fire-and-forget
         try:
             self._queue.put_nowait(_ScanCacheTouch(domain))
         except Exception:
@@ -385,7 +385,7 @@ class Store:
     def is_anomaly(self, process_name: str, domain: str) -> bool:
         """Return True if domain is not in process baseline."""
         # Reverse-DNS / local-resolution names are not domains a process
-        # "reached" — they are PTR lookups the OS does constantly, and treating
+        # "reached" - they are PTR lookups the OS does constantly, and treating
         # an unseen one as anomalous produced a wall of false positives on real
         # hardware. They can never be a baseline anomaly.
         from .popular_domains import is_infrastructure_domain
@@ -393,7 +393,7 @@ class Store:
             return False
         baseline = self.get_baseline(process_name)
         if baseline is None:
-            return False    # no baseline yet — can't flag
+            return False    # no baseline yet - can't flag
         return domain not in baseline["domains"]
 
     # ------------------------------------------------------------------
@@ -404,7 +404,7 @@ class Store:
         """Open a new connection to this Store's database (disk or RAM).
 
         Used by the intelligence layer so learned state lives in the same
-        SQLite database as events — including zero-log RAM mode, where
+        SQLite database as events - including zero-log RAM mode, where
         learned intelligence correctly stays in RAM only.  Callers own the
         returned connection and must close it themselves.
         """
@@ -460,7 +460,7 @@ class Store:
     def _session(self):
         """A short-lived connection: transaction-scoped AND closed on exit.
 
-        ``with sqlite3.connect(...)`` alone only commits/rolls back — it never
+        ``with sqlite3.connect(...)`` alone only commits/rolls back - it never
         closes, and each leaked handle keeps the DB file locked on Windows
         until GC. RAM-mode state is safe: the writer thread's long-lived
         connection keeps the shared in-memory database alive.
@@ -483,7 +483,7 @@ class Store:
         # Concurrency hardening. Several engine threads (DNS interceptor, site
         # scanner, EDR) each open short-lived connections against the same file.
         # Without these, a concurrent writer raised sqlite3.OperationalError:
-        # "database is locked" — which surfaced as duplicate/failed DNS decisions.
+        # "database is locked" - which surfaced as duplicate/failed DNS decisions.
         # WAL lets readers run alongside the single writer; busy_timeout makes a
         # contending writer WAIT for the lock rather than error out immediately.
         try:
@@ -616,8 +616,8 @@ class Store:
                 # to row-at-a-time and drop only what genuinely cannot be
                 # written. Verified failure mode: a single event carrying an
                 # unbindable value (sqlite3.ProgrammingError) previously killed
-                # the writer outright, and EVERY subsequent event — every DNS
-                # decision, detection and response — was silently never
+                # the writer outright, and EVERY subsequent event - every DNS
+                # decision, detection and response - was silently never
                 # recorded for the rest of the run, while the product carried
                 # on looking healthy.
                 written = []
@@ -666,7 +666,7 @@ class Store:
         while True:
             try:
                 evt = self._queue.get(timeout=0.25)
-                if evt is None:           # sentinel → shut down
+                if evt is None:           # sentinel -> shut down
                     flush()
                     break
                 if isinstance(evt, _ScanCacheTouch):

@@ -1,15 +1,15 @@
-"""Kernel-driver bridge — user-mode side of the Valkyrie kernel driver.
+"""Kernel-driver bridge - user-mode side of the Valkyrie kernel driver.
 
 Reads fixed-size telemetry records out of the Valkyrie kernel driver
 (driver/valkyrie_km) over its control device and normalises them into the SAME
 ``TelemetryEvent`` stream every other sensor produces, so kernel signals flow
-through the existing EventBus → correlation → kill-chain pipeline with zero new
+through the existing EventBus -> correlation -> kill-chain pipeline with zero new
 plumbing. It is a ``Sensor``, hosted by the resilient ``SensorManager`` (dedup,
 backpressure, watchdog) exactly like the ETW sensors.
 
 Honest operational contract:
   * ``available()`` returns False unless the driver's device actually opens, so
-    on any machine WITHOUT the signed driver loaded (the default — see
+    on any machine WITHOUT the signed driver loaded (the default - see
     driver/README.md) this sensor cleanly does nothing and the product behaves
     exactly as it does today. There is no fake "kernel protection active".
   * The record layout is the single shared contract in
@@ -32,7 +32,7 @@ from typing import Optional
 from .etw.framework import Sensor
 from .telemetry import CAT_PROCESS, TelemetryEvent
 
-# ── Wire contract — MUST match driver/valkyrie_km/valkyrie_shared.h ──────────
+# --- Wire contract - MUST match driver/valkyrie_km/valkyrie_shared.h ---
 VLK_PROTO_VERSION = 2
 VLK_PATH_LEN = 260                     # WCHARs incl. null
 _HEADER = struct.Struct("<IIQIIII")    # version,type,ts,pid,ppid,flags,granted
@@ -70,7 +70,7 @@ VLK_USERMODE_PATH = r"\\.\ValkyrieKm"
 
 
 def fnv1a_32(name: str) -> int:
-    """FNV-1a (32-bit) over the lowercased image BASENAME — byte-for-byte
+    """FNV-1a (32-bit) over the lowercased image BASENAME - byte-for-byte
     identical to the driver's VlkHashImageBasename, so a block list built here
     matches in the kernel. Basename-only + case-fold so a full path and a bare
     name agree. Pure."""
@@ -86,7 +86,7 @@ def build_policy(agent_pid: int = 0, block_names=(), *,
                  prevention: bool = False, self_protect: bool = False) -> bytes:
     """Serialise a VLK_POLICY to push to the driver. `block_names` are image
     basenames to DENY at creation (deduped, hashed, capped at the fixed array).
-    Prevention and self-protection are OFF unless explicitly enabled — the same
+    Prevention and self-protection are OFF unless explicitly enabled - the same
     safe default the driver keeps. Pure."""
     flags = 0
     if prevention:
@@ -128,7 +128,7 @@ def _basename(path: str) -> str:
 
 
 def record_to_event(raw: bytes) -> Optional[dict]:
-    """Pure: one raw kernel record → a telemetry event dict (or None to skip).
+    """Pure: one raw kernel record -> a telemetry event dict (or None to skip).
 
     The dict shape matches what ``EdrEngine.ingest_telemetry`` consumes; lineage
     (ppid / parent) rides in ``fields`` so the kill-chain correlator links a
@@ -162,7 +162,7 @@ def record_to_event(raw: bytes) -> Optional[dict]:
 
     if etype == VLK_EVT_PROCESS_CREATE:
         # Authoritative process lineage (pid, ppid, image) straight from the
-        # kernel. Visibility, not a detection on its own — but it supplies the
+        # kernel. Visibility, not a detection on its own - but it supplies the
         # ground-truth ppid the correlator's lineage linking depends on.
         return {
             "category": CAT_PROCESS, "activity": "exec", "action": "observed",
@@ -237,7 +237,7 @@ def record_to_event(raw: bytes) -> Optional[dict]:
         }
 
     if etype == VLK_EVT_PROCESS_BLOCKED:
-        # PREVENTION: the driver DENIED this process launch. action=blocked —
+        # PREVENTION: the driver DENIED this process launch. action=blocked -
         # this is Valkyrie stopping an attack in the kernel, not just seeing it.
         name = _basename(image) or f"pid {pid}"
         return {
@@ -250,7 +250,7 @@ def record_to_event(raw: bytes) -> Optional[dict]:
         }
 
     if etype == VLK_EVT_SELF_PROTECT:
-        # Tamper attempt against the Valkyrie agent — the driver stripped the
+        # Tamper attempt against the Valkyrie agent - the driver stripped the
         # terminate/inject rights. Attempting to disable the EDR (T1562.001).
         requestor = _basename(extra) or f"pid {pid}"
         return {

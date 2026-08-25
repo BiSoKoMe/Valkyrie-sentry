@@ -5,7 +5,7 @@ The engineering doctrine requires every incident to answer, for an analyst:
 *what happened, why, what evidence, which MITRE, how confident, what next.*
 `edr/investigate.py` supplies "what/why" (`_MEANING`) and "what next"
 (`_RECOMMEND`) by looking up each incident's **category**. If a category is
-missing from those maps the analyst gets a generic sentence and — worse — **zero
+missing from those maps the analyst gets a generic sentence and - worse - **zero
 recommended actions**. That silently happened for the endpoint categories
 (`process`, `persistence`, `network`), which carry the most severe detections
 (LSASS access, injection, ransomware, persistence, hard-coded-IP C2).
@@ -14,7 +14,7 @@ This test is the regression gate that keeps coverage at 100%:
   1. every category an incident can carry has a non-empty meaning + at least one
      recommended action;
   2. every recommended action is a REAL shipped responder (derived live from the
-     response registry — never an aspirational action);
+     response registry - never an aspirational action);
   3. the endpoint telemetry categories are actually in the canonical set (so a
      new emitter category cannot escape the gate);
   4. an end-to-end investigate() of an endpoint incident yields a specific
@@ -48,7 +48,7 @@ def _check(cond: bool, msg: str) -> None:
 
 
 def _valid_actions() -> set:
-    """The set of response actions that actually ship — derived live so the
+    """The set of response actions that actually ship - derived live so the
     gate can never drift from response.py."""
     reg = PluginRegistry()
     register_responders(reg)
@@ -61,7 +61,7 @@ def main() -> int:
     valid = _valid_actions()
     print(f"\nShipped response actions (live from registry): {sorted(valid)}")
 
-    # 1 + 2 — every known category has meaning + recommendation of real actions.
+    # 1 + 2 - every known category has meaning + recommendation of real actions.
     print("\n-- coverage: meaning + recommended actions per category --")
     for cat in sorted(KNOWN_INCIDENT_CATEGORIES):
         meaning = (_MEANING.get(cat) or "").strip()
@@ -81,13 +81,13 @@ def main() -> int:
           f"= {coverage/total*100:.0f}%")
     _check(coverage == total, "explainability coverage is 100%")
 
-    # 3 — endpoint telemetry categories cannot escape the canonical set.
+    # 3 - endpoint telemetry categories cannot escape the canonical set.
     print("\n-- endpoint telemetry categories are in the canonical set --")
     for cat in (CAT_PROCESS, CAT_PERSISTENCE, CAT_NETWORK):
         _check(cat in KNOWN_INCIDENT_CATEGORIES,
                f"telemetry category '{cat}' is a known incident category")
 
-    # 4 — end-to-end: an endpoint incident explains itself (no generic fallback,
+    # 4 - end-to-end: an endpoint incident explains itself (no generic fallback,
     #     real recommended actions).
     print("\n-- end-to-end investigate() of an endpoint incident --")
     inc = Incident(

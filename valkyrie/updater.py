@@ -1,10 +1,10 @@
-"""Signed update verification — the security-critical half of auto-update.
+"""Signed update verification - the security-critical half of auto-update.
 
 An update channel is the single most dangerous feature you can add to security
 software: if an attacker can push you an "update", they own every device that
 trusts the channel. So this module does the ONE thing that has to be
-bulletproof — cryptographically verify that an update manifest was signed by
-the holder of the Valkyrie release private key — and deliberately does NOT
+bulletproof - cryptographically verify that an update manifest was signed by
+the holder of the Valkyrie release private key - and deliberately does NOT
 auto-execute anything. Applying an update (running an installer, swapping
 files) stays a separate, explicitly-gated step; this module only ever answers
 "is this update authentic and intact?".
@@ -17,7 +17,7 @@ Threat model this defends against:
 What it intentionally does NOT do (must stay human/operator-gated):
   - Download-and-run. Verify first, then a human decides to apply.
 
-Signing (offline, on a machine that has the private key — never shipped):
+Signing (offline, on a machine that has the private key - never shipped):
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     sig = priv.sign(canonical_manifest_bytes)   # detached signature over the JSON
 
@@ -41,7 +41,7 @@ RELEASE_PUBLIC_KEY_HEX = ""
 
 
 class UpdateError(Exception):
-    """Any verification failure — signature, hash, or shape."""
+    """Any verification failure - signature, hash, or shape."""
 
 
 @dataclass

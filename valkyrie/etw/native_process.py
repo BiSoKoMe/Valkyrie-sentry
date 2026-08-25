@@ -1,18 +1,18 @@
-"""Native process-creation sensor — command-line detection with NO extra install.
+"""Native process-creation sensor - command-line detection with NO extra install.
 
 THE PROBLEM THIS SOLVES
 -----------------------
 Valkyrie's strongest detection (the four-classifier stack over a process's
 image, command line, parent and ancestry) needs to SEE the command line in real
-time. Until now the only real-time source for that was **Sysmon EID 1** — and
+time. Until now the only real-time source for that was **Sysmon EID 1** - and
 Sysmon is a separate download. A normal person who installs Valkyrie will never
 install Sysmon, so for a real customer the good detection path was dark and the
 engine fell back to a racy 2-second poller that misses short-lived commands.
 
 Windows already emits exactly the event we need, for free, with no install:
 **Security event 4688 (A new process has been created)**. When the "Audit
-Process Creation" policy is on — and, crucially, the "Include command line in
-process creation events" policy — 4688 carries `NewProcessName`,
+Process Creation" policy is on - and, crucially, the "Include command line in
+process creation events" policy - 4688 carries `NewProcessName`,
 `ParentProcessName` and the full `CommandLine`. That is the same information
 Sysmon EID 1 provides. It is simply off by default; `native_audit.py` turns it
 on (a built-in Windows config change, not a download).
@@ -22,7 +22,7 @@ WHAT THIS SENSOR DOES
 Reads Security/4688 through the same `ChannelReader` the Sysmon sensor uses,
 maps each event onto the exact dict shape `classify_sysmon(1, ...)` already
 consumes, and runs the identical classifier stack. No detection logic is
-duplicated — this is a second *source* feeding the one existing brain.
+duplicated - this is a second *source* feeding the one existing brain.
 
 It stands down when Sysmon is present (Sysmon is the richer source: hashes,
 signature, integrity), so the two never double-report the same process. Sysmon
@@ -31,9 +31,9 @@ rules fire in real time.
 
 HONEST BOUNDARY
 ---------------
-4688 lacks what Sysmon adds beyond the command line — image hashes, signature
+4688 lacks what Sysmon adds beyond the command line - image hashes, signature
 status, load events, CreateRemoteThread, LSASS-access. So this closes the
-*command-line* gap (Execution / Defense-Evasion / Discovery — the tactics that
+*command-line* gap (Execution / Defense-Evasion / Discovery - the tactics that
 were 0% without Sysmon), not the memory-tradecraft gap. It is the single
 highest-value step toward "works for a real customer with nothing to install",
 not a claim of parity with a Sysmon-equipped host.
@@ -57,7 +57,7 @@ _EVENT_IDS = (4688,)
 def _hex_to_dec(text: str) -> str:
     """4688 reports PIDs as hex ('0x1f4'); classify_sysmon wants a decimal int.
 
-    Returns a decimal string, or '0' for anything unparseable — never raises,
+    Returns a decimal string, or '0' for anything unparseable - never raises,
     because every field here is attacker-influenced event text.
     """
     s = (text or "").strip()

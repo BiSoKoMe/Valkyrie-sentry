@@ -1,10 +1,10 @@
-"""Browser credential-store watch — endpoint visibility for T1555.003.
+"""Browser credential-store watch - endpoint visibility for T1555.003.
 
 A tool that steals saved browser passwords does not need to touch the
 registry or write a file that any of the other collectors would see: it just
 opens Chrome's/Edge's/Firefox's own credential-store file and reads it. Valkyrie
 has no filesystem minifilter to catch that read at the instant it happens (see
-docs/adr/0026-kernel-driver.md — the honest boundary every userland collector
+docs/adr/0026-kernel-driver.md - the honest boundary every userland collector
 in this codebase shares), but psutil CAN enumerate which processes currently
 hold a handle open to a given path. Polling that for the small, well-known set
 of credential-store files is the same class of technique the ransomware
@@ -14,12 +14,12 @@ just narrowed to a specific set of files instead of a directory tree.
 The signal is deliberately narrow and strong: the credential-store files are
 opened constantly by the OWNING browser itself (that is not a threat), so this
 watch explicitly excludes the known browser processes (and Valkyrie itself).
-Any OTHER process holding one of these files open is a real, specific tell —
+Any OTHER process holding one of these files open is a real, specific tell -
 "why does powershell.exe have Chrome's Login Data open" has essentially no
-innocent answer — so a hit is HIGH severity on its own, unlike the Discovery
+innocent answer - so a hit is HIGH severity on its own, unlike the Discovery
 LOLBins in process_telemetry.classify_discovery which must never fire alone.
 
-Honest boundary: this is a poll (default 5s), not a kernel hook — a tool that
+Honest boundary: this is a poll (default 5s), not a kernel hook - a tool that
 opens the file, copies its bytes, and closes the handle inside the poll
 interval can be missed. It also does not (and cannot, without a minifilter)
 distinguish a read from a write. Real-time, tamper-resistant capture is the
@@ -46,7 +46,7 @@ try:
 except ImportError:
     _PSUTIL = False
 
-# Processes allowed to hold their OWN credential store open — never the alert.
+# Processes allowed to hold their OWN credential store open - never the alert.
 _BROWSER_PROCS = frozenset({
     "chrome.exe", "msedge.exe", "brave.exe", "vivaldi.exe", "opera.exe",
     "firefox.exe", "librewolf.exe", "chromium.exe",
@@ -69,8 +69,8 @@ _FIREFOX_CRED_FILES = ("logins.json", "key4.db")
 
 def credential_store_paths(users_root: Optional[Path] = None) -> list[Path]:
     """Enumerate every real user profile's known browser credential-store
-    files. Enumerates C:\\Users explicitly (the engine runs as a service — no
-    single "current user" — the same reasoning already applied in decoys.py
+    files. Enumerates C:\\Users explicitly (the engine runs as a service - no
+    single "current user" - the same reasoning already applied in decoys.py
     and persistence_telemetry.py). Never raises; a path that does not exist
     on this machine is simply absent from the result, not an error."""
     root = users_root or Path(os.environ.get("SystemDrive", "C:") + "\\") / "Users"
@@ -115,7 +115,7 @@ class CredentialStoreWatch:
     """Polls running processes' open file handles for a hit against a known
     browser credential-store path. Emits a HIGH-severity TelemetryEvent
     (T1555.003) the first time a non-browser process is seen holding one open,
-    then stays quiet on that same (pid, path) until ``cooldown`` elapses —
+    then stays quiet on that same (pid, path) until ``cooldown`` elapses -
     a handle held open across several poll ticks must not spam one incident
     per tick."""
 
@@ -139,7 +139,7 @@ class CredentialStoreWatch:
             return self._explicit_paths
         return credential_store_paths()
 
-    # -- scan (overridable seam for tests — mirrors ProcessCollector.snapshot) -
+    # -- scan (overridable seam for tests - mirrors ProcessCollector.snapshot) -
     def _scan(self) -> list[dict]:
         """Return [{pid, name, path}] for every CURRENT non-browser, non-self
         process holding a handle open to a known credential-store path. Never

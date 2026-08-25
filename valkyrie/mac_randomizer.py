@@ -1,4 +1,4 @@
-"""MAC address randomizer — privacy-grade address randomisation.
+"""MAC address randomizer - privacy-grade address randomisation.
 
 Generates unlinkable MAC addresses and applies them via OS-specific commands,
 monitoring for network reconnect events to trigger auto-randomisation.
@@ -21,14 +21,14 @@ Two things make this privacy-grade rather than a toy:
 
 Address style is spec-compliant locally-administered by default (LA bit set,
 matching iOS/Android); an opt-in vendor-blend mode hides behind a real vendor
-OUI. The old behaviour — a real vendor OUI *with* the LA bit set — is a
+OUI. The old behaviour - a real vendor OUI *with* the LA bit set - is a
 combination real hardware never has and is therefore itself a fingerprint; it
 is not produced any more.
 
 Platform support:
-  Linux   — ip link set {iface} address {mac}
-  Windows — registry NetworkAddress + netsh interface disable/enable
-  macOS   — ifconfig {iface} ether {mac}
+  Linux   - ip link set {iface} address {mac}
+  Windows - registry NetworkAddress + netsh interface disable/enable
+  macOS   - ifconfig {iface} ether {mac}
 """
 
 from __future__ import annotations
@@ -58,10 +58,16 @@ from .config import (
 
 
 # ---------------------------------------------------------------------------
-# Pure address construction (CSPRNG / HMAC) — unit-tested without any hardware
+# Pure address construction (CSPRNG / HMAC) - unit-tested without any hardware
 # ---------------------------------------------------------------------------
 
 _MAC_RE = re.compile(r'^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$')
+
+# Ceiling for one adapter shell-out. Bringing an interface down/up is seconds
+# at worst; anything past this is hung, not slow. _apply() already treats an
+# exception as "did not apply" and returns False, so a timeout degrades into a
+# clean failure rather than pinning the API worker this runs on.
+_CMD_TIMEOUT_S = 30.0
 _IPV4_RE = re.compile(r'^\d{1,3}(?:\.\d{1,3}){3}$')
 
 
@@ -76,7 +82,7 @@ def _RE_IPV4(s: str) -> bool:
 def _first_octet(mac: str) -> int:
     """First octet of *mac*, accepting either separator.
 
-    `_MAC_RE` accepts BOTH ``:`` and ``-`` (Windows reports dashes — `ipconfig`,
+    `_MAC_RE` accepts BOTH ``:`` and ``-`` (Windows reports dashes - `ipconfig`,
     `getmac` and the registry all use them), so splitting on ``:`` alone raised
     ValueError on a MAC this module considers valid. Normalising here keeps the
     accepted-input set and the parsed-input set identical, which is the actual
@@ -87,7 +93,7 @@ def _first_octet(mac: str) -> int:
 
 def is_unicast(mac: str) -> bool:
     """True if the address is unicast (bit 0 of the first octet is clear).
-    A multicast source address is invalid on the wire — every address we emit
+    A multicast source address is invalid on the wire - every address we emit
     must be unicast."""
     return (_first_octet(mac) & 0x01) == 0
 
@@ -100,11 +106,11 @@ def is_locally_administered(mac: str) -> bool:
 def _mac_from_bytes(b: bytes, vendor_oui: Optional[str]) -> str:
     """Assemble a valid unicast MAC string from 6+ bytes.
 
-    vendor_oui set  → blend behind that real vendor prefix, universally
+    vendor_oui set  -> blend behind that real vendor prefix, universally
                       administered (LA bit CLEAR), just the multicast bit forced
                       clear so it is a legal unicast source address.
-    vendor_oui None → spec-compliant locally-administered random (LA bit SET,
-                      multicast bit clear) — the iOS/Android style.
+    vendor_oui None -> spec-compliant locally-administered random (LA bit SET,
+                      multicast bit clear) - the iOS/Android style.
     """
     if vendor_oui:
         oui_parts = [int(x, 16) for x in vendor_oui.split(":")]
@@ -129,7 +135,7 @@ def generate_mac(vendor_blend: bool = False) -> str:
 
 def mac_for_network(install_key: bytes, network_id: str,
                     vendor_blend: bool = False) -> str:
-    """Deterministic per-network MAC — stable for a network, unlinkable across
+    """Deterministic per-network MAC - stable for a network, unlinkable across
     networks, unpredictable without ``install_key``.
 
     HMAC-SHA256(install_key, network_id) yields the address bytes, so the same
@@ -187,7 +193,7 @@ class MacRandomizer:
         self._key         = self._load_or_create_key()
         self._monitor_thread: Optional[threading.Thread] = None
         self._monitor_stop  = threading.Event()
-        self._last_stats: dict[str, bool] = {}   # iface → was_up
+        self._last_stats: dict[str, bool] = {}   # iface -> was_up
 
     # ------------------------------------------------------------------
     # Public API
@@ -282,7 +288,7 @@ class MacRandomizer:
             self._monitor_thread.join(timeout=10)
 
     def status(self) -> dict:
-        """Return a dict mapping interface → {current, original, changed}."""
+        """Return a dict mapping interface -> {current, original, changed}."""
         try:
             import psutil
             ifaces = list(psutil.net_if_addrs().keys())
@@ -352,9 +358,12 @@ class MacRandomizer:
         return False
 
     def _apply_linux(self, iface: str, mac: str) -> bool:
-        subprocess.run(["ip", "link", "set", iface, "down"],  check=True, capture_output=True)
-        subprocess.run(["ip", "link", "set", iface, "address", mac], check=True, capture_output=True)
-        subprocess.run(["ip", "link", "set", iface, "up"],    check=True, capture_output=True)
+        subprocess.run(["ip", "link", "set", iface, "down"],  check=True,
+                       capture_output=True, timeout=_CMD_TIMEOUT_S)
+        subprocess.run(["ip", "link", "set", iface, "address", mac], check=True,
+                       capture_output=True, timeout=_CMD_TIMEOUT_S)
+        subprocess.run(["ip", "link", "set", iface, "up"],    check=True,
+                       capture_output=True, timeout=_CMD_TIMEOUT_S)
         return True
 
     def _apply_windows(self, iface: str, mac: str) -> bool:
@@ -379,12 +388,12 @@ class MacRandomizer:
 
         # Cycle the adapter so Windows actually loads the new NetworkAddress.
         # netsh matches the alias literally: it must be a bare "name=<alias>"
-        # token — the previous f'"{iface}"' sent embedded quotes and matched
+        # token - the previous f'"{iface}"' sent embedded quotes and matched
         # nothing. Check return codes AND read the live MAC back: a registry
         # write with no successful cycle otherwise looks identical to success.
         #
         # netsh can hang indefinitely on some virtual/VPN adapters instead of
-        # erroring — a timeout turns that into a reported failure for this one
+        # erroring - a timeout turns that into a reported failure for this one
         # interface instead of freezing the whole randomize() call forever.
         try:
             dis = subprocess.run(
@@ -393,7 +402,7 @@ class MacRandomizer:
                 capture_output=True, text=True, timeout=15,
             )
         except subprocess.TimeoutExpired:
-            # netsh may have taken effect despite timing out on us — best-effort
+            # netsh may have taken effect despite timing out on us - best-effort
             # re-enable so we never strand the adapter disabled with no retry.
             try:
                 subprocess.run(
@@ -428,7 +437,7 @@ class MacRandomizer:
             )
             # Reversibility gap closed here: an explicit (non-timeout) enable
             # failure previously returned False and left the adapter DISABLED
-            # with no further attempt — the exact "unreversible in practice"
+            # with no further attempt - the exact "unreversible in practice"
             # residual state audited in item 1 (a network outage with no
             # automatic recovery). The timeout branch above already retries;
             # a clean non-zero return code deserves the same best-effort retry,
@@ -456,15 +465,20 @@ class MacRandomizer:
         return True
 
     def _apply_macos(self, iface: str, mac: str) -> bool:
-        subprocess.run(["sudo", "ifconfig", iface, "ether", mac],
-                        check=True, capture_output=True)
+        # `sudo` with no cached credential blocks on a password prompt FOREVER.
+        # stdin is not a tty under the service, so nobody can ever answer it,
+        # and this runs from POST /api/mac/randomize - i.e. an API worker
+        # thread would be pinned for the life of the process. The timeout turns
+        # an unanswerable prompt into a clean failure.
+        subprocess.run(["sudo", "-n", "ifconfig", iface, "ether", mac],
+                        check=True, capture_output=True, timeout=_CMD_TIMEOUT_S)
         return True
 
     def _find_windows_adapter_key(self, iface_name: str, base_path: str) -> Optional[str]:
         """Locate the registry subkey for a Windows adapter by its interface alias.
 
         Matching against DriverDesc (e.g. "Realtek PCIe GbE Family Controller")
-        never matches a real interface alias (e.g. "Ethernet", "Wi-Fi") — the
+        never matches a real interface alias (e.g. "Ethernet", "Wi-Fi") - the
         two strings are unrelated. The correct lookup is two-step:
           1. Control\\Network\\{netclass}\\{adapterGUID}\\Connection -> "Name"
              gives the friendly alias exactly as shown by ipconfig/psutil.
@@ -523,7 +537,7 @@ class MacRandomizer:
         """Read the current MAC of *iface* via psutil or /sys.
 
         psutil reports Windows MACs hyphen-separated ("AA-BB-CC-DD-EE-FF")
-        and Linux/macOS colon-separated — normalise to colon format so the
+        and Linux/macOS colon-separated - normalise to colon format so the
         rest of the codebase (generation, backup, validation) sees one shape.
         """
         try:
@@ -560,7 +574,7 @@ class MacRandomizer:
                         continue
                     was_up  = self._last_stats.get(iface, True)
                     is_up   = info.isup
-                    # Detect down → up transition (reconnect)
+                    # Detect down -> up transition (reconnect)
                     if not was_up and is_up:
                         time.sleep(2)   # wait for link to stabilise
                         self.randomize(iface)
@@ -576,17 +590,17 @@ class MacRandomizer:
         unpredictable, so it is generated from the OS CSPRNG and restricted to
         privileged principals on every platform. If it cannot be persisted
         (read-only volume, permission error) we still return a live key so
-        randomisation works this session — only cross-session stability is
+        randomisation works this session - only cross-session stability is
         lost, never security.
 
         THIS KEY IS A SECRET, and it used to be protected only on POSIX
         (`if os.name == "posix": chmod 0600`), while the docstring claimed
-        "where the platform supports it" — implying Windows could not. Windows
+        "where the platform supports it" - implying Windows could not. Windows
         supports ACLs perfectly well; the guard simply left the key readable
         by BUILTIN\\Users under %ProgramData%. That is a real privacy defeat
         rather than a permissions nit: every per-network address is
         HMAC(key, network_id), so anyone who reads this file can compute the
-        address for EVERY network the machine joins — predicting them ahead of
+        address for EVERY network the machine joins - predicting them ahead of
         time and linking them all back to one person. That is precisely the
         cross-network unlinkability the feature exists to provide.
         """
@@ -617,7 +631,7 @@ class MacRandomizer:
             ok, detail = secure_file.harden(MAC_KEY_PATH)
             if not ok:
                 self._log(f"MAC install key could not be protected: {detail}")
-        except Exception as exc:      # noqa: BLE001 — never break randomisation
+        except Exception as exc:      # noqa: BLE001 - never break randomisation
             self._log(f"MAC install key protection error: {exc}")
 
     def current_network_id(self, iface: str) -> str:
@@ -625,7 +639,7 @@ class MacRandomizer:
 
         Prefers the Wi-Fi SSID (stable across reconnects to the same network);
         falls back to the default-gateway MAC (stable per LAN). Returns "" when
-        the network can't be identified — the caller then uses a fresh random
+        the network can't be identified - the caller then uses a fresh random
         address instead of a per-network one, so an unknown network never
         produces a predictable address.
         """
@@ -681,7 +695,7 @@ class MacRandomizer:
         sys = _platform()
         try:
             if sys == "windows":
-                # Default gateway IP → its ARP entry (MAC).
+                # Default gateway IP -> its ARP entry (MAC).
                 route = subprocess.run(["ipconfig"], capture_output=True,
                                        text=True, timeout=8).stdout
                 gw_ip = ""

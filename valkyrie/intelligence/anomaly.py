@@ -1,10 +1,10 @@
-"""AnomalyDetector — scores connections on their behavioural signature,
+"""AnomalyDetector - scores connections on their behavioural signature,
 independent of the domain name.
 
 Surveillance looks like: a background process calling the same domain on
-a metronome-regular interval with small, same-sized payloads — sometimes
-even after the app was closed — to a domain this machine has never
-contacted before.  Each of those signals contributes to a 0.0–1.0 score:
+a metronome-regular interval with small, same-sized payloads - sometimes
+even after the app was closed - to a domain this machine has never
+contacted before.  Each of those signals contributes to a 0.0-1.0 score:
 
     background process               +0.3
     regular-interval heartbeat       +0.4
@@ -115,7 +115,7 @@ class AnomalyDetector:
     # ------------------------------------------------------------------
 
     def is_heartbeat(self, process: str, domain: str) -> bool:
-        """True when queries from process→domain arrive at regular intervals."""
+        """True when queries from process->domain arrive at regular intervals."""
         profile = self._baseline.history(process, domain)
         if profile is None:
             return False
@@ -135,7 +135,7 @@ class AnomalyDetector:
 
     def score(self, process: str, domain: str, timestamp: float,
               payload: int = 0) -> float:
-        """Return a 0.0–1.0 suspicion score for this observation.
+        """Return a 0.0-1.0 suspicion score for this observation.
 
         Call AFTER BaselineLearner.record() so timing history includes the
         current query.
@@ -161,7 +161,7 @@ class AnomalyDetector:
 
         # --- WEAK CONTEXT tells: "background process", "domain never seen from
         # this process", "timing deviation". Each describes perfectly NORMAL OS
-        # behaviour on its own — every Windows service is a background process
+        # behaviour on its own - every Windows service is a background process
         # and queries new domains (updates, telemetry, CDNs) constantly. On their
         # own they were summing to 0.6 and FLAGGING thousands of legit domains
         # (the "baseline:anomaly" flood). They now only SHARPEN a score once a
@@ -189,7 +189,7 @@ class AnomalyDetector:
         return score
 
     # ------------------------------------------------------------------
-    # Signal health (no silent failures — see PHASE 0)
+    # Signal health (no silent failures - see PHASE 0)
     # ------------------------------------------------------------------
 
     def signal_health(self) -> list[dict]:
@@ -233,7 +233,7 @@ class AnomalyDetector:
         return observed < profile.avg_gap / 3.0
 
     def _asymmetric_small_out(self, process: str, domain: str, payload: int) -> bool:
-        """Repeated small, near-identical payload sizes → beacon pattern."""
+        """Repeated small, near-identical payload sizes -> beacon pattern."""
         profile = self._baseline.history(process, domain)
         if profile is None:
             return False

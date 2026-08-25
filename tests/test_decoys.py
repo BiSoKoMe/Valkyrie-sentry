@@ -2,7 +2,7 @@
 """Decoy honeytoken placement (valkyrie/decoys.py).
 
 Regression for a live VM finding: DecoyManager.target_dirs() used
-os.path.expanduser("~"), which resolves to the CALLING PROCESS's own home —
+os.path.expanduser("~"), which resolves to the CALLING PROCESS's own home -
 for Valkyrie's shipped default (a Windows service with no configured logon
 account, so nssm runs it as LocalSystem), that is
 C:\\Windows\\System32\\config\\systemprofile, a folder no real user or intruder
@@ -52,7 +52,7 @@ def main() -> int:
         (users_root / name).mkdir(parents=True, exist_ok=True)
 
     orig_sysdrive = os.environ.get("SystemDrive")
-    # target_dirs() computes Path(SystemDrive + "\\") / "Users" — point it at our
+    # target_dirs() computes Path(SystemDrive + "\\") / "Users" - point it at our
     # fake root (strip the trailing "\Users" tempfile already gave us).
     os.environ["SystemDrive"] = str(tmp)
     try:

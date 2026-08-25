@@ -2,11 +2,11 @@
 """RemovePersistenceResponder tests (valkyrie/edr/response.py).
 
 The responder rips out an attacker-created autostart entry. These tests run it
-strictly in DRY-RUN, so nothing is ever actually deleted — they verify the
+strictly in DRY-RUN, so nothing is ever actually deleted - they verify the
 descriptor parsing, the per-ASEP command shaping, and (most importantly) the
 safety rails that must refuse to touch critical Windows state.
 
-  [1] descriptor parsing: '<type>::<identity>' → the right handler
+  [1] descriptor parsing: '<type>::<identity>' -> the right handler
   [2] each ASEP type produces a dry-run description of the correct action
   [3] safety rails: protected service, system task tree, startup file outside
       recognised Startup folders, and unknown type are all refused
@@ -55,7 +55,7 @@ def test_descriptor_and_dry_run() -> None:
     _check("service names sc delete", "ValkTestSvc" in msg and "sc.exe delete" in msg.lower())
 
     status, msg = _run(r"registry_run_key::HKCU\...\Run::ValkTest")
-    # loc 'HKCU\...\Run' is a known display location → maps back cleanly.
+    # loc 'HKCU\...\Run' is a known display location -> maps back cleanly.
     _check("run_key → dry_run", status == "dry_run")
     _check("run_key names the value", "ValkTest" in msg)
 

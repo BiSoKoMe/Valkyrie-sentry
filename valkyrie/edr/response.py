@@ -1,23 +1,23 @@
-"""Response actions — the "R" in EDR.
+"""Response actions - the "R" in EDR.
 
 Every action is:
-  * dry-run by default — you see exactly what *would* happen first;
-  * audited — a ResponseAction row is written whether it ran, was simulated,
+  * dry-run by default - you see exactly what *would* happen first;
+  * audited - a ResponseAction row is written whether it ran, was simulated,
     or failed;
-  * honest about privileges — an action that needs admin/root and doesn't have
+  * honest about privileges - an action that needs admin/root and doesn't have
     it reports ``skipped`` with the reason, it does not silently no-op.
 
 Built-in responders:
-  block_domain     — add a domain to the user block rules (enforced by DNS).
-  unblock_domain   — remove it again.
-  kill_process     — terminate a PID (never a system/critical PID).
-  isolate_host     — network-contain the endpoint (block all egress except the
+  block_domain     - add a domain to the user block rules (enforced by DNS).
+  unblock_domain   - remove it again.
+  kill_process     - terminate a PID (never a system/critical PID).
+  isolate_host     - network-contain the endpoint (block all egress except the
                      local resolver + loopback). Generates the exact commands;
                      applies them only with privileges + an explicit non-dry-run.
-  release_isolation— lift containment.
+  release_isolation- lift containment.
 
 Responders are ordinary ResponderPlugins, so a third-party plugin can add new
-actions (quarantine file, disable NIC, notify SIEM, …) via the same registry.
+actions (quarantine file, disable NIC, notify SIEM, ...) via the same registry.
 """
 
 from __future__ import annotations
@@ -43,11 +43,18 @@ log = logging.getLogger("valkyrie.response")
 _SYSTEM = platform.system()
 
 # Cap what a startup-file rollback snapshot will hold inline as base64 in the
-# backup JSON — a dropped ransomware payload can be hundreds of MB; there is
+# backup JSON - a dropped ransomware payload can be hundreds of MB; there is
 # no reason a rollback snapshot for an autostart entry needs to hold that
 # much, and an unbounded read would make remove_persistence's latency depend
 # on attacker-controlled file size.
 _MAX_SNAPSHOT_FILE_BYTES = 5 * 1024 * 1024
+
+# Ceiling for a single response shell-out (netsh / firewall rule application).
+# Generous on purpose: these can be genuinely slow on a loaded host with
+# hundreds of existing rules, and a false timeout on an isolate action is worse
+# than a slow one. What it rules out is the unbounded case - a command that
+# never returns and pins an API worker thread forever.
+_CMD_TIMEOUT_S = 60.0
 
 
 # ---------------------------------------------------------------------------
@@ -138,8 +145,8 @@ class BlockDomainResponder(ResponderPlugin):
     def execute(self, action, target, *, dry_run, ctx):
         # Valkyrie keeps NO human-authored block/allow list. A block from the EDR
         # (a confirmed-C2 playbook, or a manual "block this") is recorded in the
-        # ANALYSIS memory — the same learned-intelligence store the DNS engine
-        # consults — so it is enforced on the next lookup without any rules file.
+        # ANALYSIS memory - the same learned-intelligence store the DNS engine
+        # consults - so it is enforced on the next lookup without any rules file.
         domain = (target or "").strip().lower()
         if not domain or not all(c.isalnum() or c in ".-_*" for c in domain):
             return ("failed", f"invalid domain: {target!r}")
@@ -220,7 +227,7 @@ class IsolateHostResponder(ResponderPlugin):
 
     A prior version of ``release_isolation`` reset the firewall to a
     HARDCODED policy (``blockinbound,allowoutbound``) instead of whatever
-    policy existed before isolation — on this project's own machine, a live
+    policy existed before isolation - on this project's own machine, a live
     isolate/release cycle left the host's WiFi cut, because "restore" and
     "reset to a guessed default" are not the same operation. ``isolate_host``
     now snapshots the FULL pre-isolation firewall state first (``netsh
@@ -247,7 +254,7 @@ class IsolateHostResponder(ResponderPlugin):
         """Return the exact platform commands this action would run.
 
         For release_isolation these are the FALLBACK ONLY, used when no
-        pre-isolation snapshot exists — see execute(). They no longer are the
+        pre-isolation snapshot exists - see execute(). They no longer are the
         primary rollback mechanism.
         """
         if _SYSTEM == "Windows":
@@ -275,7 +282,7 @@ class IsolateHostResponder(ResponderPlugin):
     def _backup_state(self) -> tuple[bool, str]:
         """Snapshot the FULL current firewall state before isolating.
 
-        Returns (ok, detail) — detail is the snapshot path on success, or a
+        Returns (ok, detail) - detail is the snapshot path on success, or a
         diagnostic on failure. Never raises.
         """
         import subprocess
@@ -365,10 +372,25 @@ class IsolateHostResponder(ResponderPlugin):
                 # this path installs live firewall rules and cannot be exercised
                 # safely outside a VM, so changing it blind is the greater risk.
                 # Revisit during VM validation (docs/TEST_PLAN.md tier 4).
+                # timeout is NOT optional here. This runs from POST
+                # /api/edr/respond, which the API serves on a worker thread out
+                # of a pool of 40. A netsh call that never returns holds that
+                # worker for the life of the process; enough of them and the
+                # whole API stops answering again, which is the exact failure
+                # the async-def fix in web/server.py was about. Bounding the
+                # wait does not change the command or its effect - only how
+                # long we are willing to sit here - so it is safe to add
+                # without the VM validation the shell=True note below defers.
                 subprocess.run(c, shell=True, check=True,  # nosec B602
-                               capture_output=True)
+                               capture_output=True, timeout=_CMD_TIMEOUT_S)
             except subprocess.CalledProcessError as exc:
                 errors.append(f"{c!r}: {exc.stderr.decode(errors='replace').strip()}")
+            except subprocess.TimeoutExpired:
+                # Reported as a failure, never swallowed: a firewall command
+                # that timed out may have applied partially, and for an
+                # isolate/release action the caller must be told the host's
+                # state is now unverified rather than assuming success.
+                errors.append(f"{c!r}: timed out after {_CMD_TIMEOUT_S}s")
         if errors:
             return ("failed", f"{verb} partially failed: " + "; ".join(errors))
 
@@ -398,10 +420,10 @@ class RemovePersistenceResponder(ResponderPlugin):
     persistence detection places on its incident entity, so a playbook needs
     only ``target_from: entity`` to hand us exactly what to remove:
 
-        scheduled_task::<task path>        → schtasks /delete /tn <path> /f
-        service_install::<service name>    → sc stop + sc delete <name>
-        registry_run_key::<loc>::<value>   → winreg DeleteValue
-        startup_folder::<full file path>   → delete the dropped file
+        scheduled_task::<task path>        -> schtasks /delete /tn <path> /f
+        service_install::<service name>    -> sc stop + sc delete <name>
+        registry_run_key::<loc>::<value>   -> winreg DeleteValue
+        startup_folder::<full file path>   -> delete the dropped file
 
     Safety model (removing persistence is far less destructive than killing a
     process, but still guarded):
@@ -409,10 +431,10 @@ class RemovePersistenceResponder(ResponderPlugin):
       * System scheduled-task trees (``Microsoft\\Windows\\``) are never deleted.
       * Startup-folder deletes are confined to recognised Startup directories.
       * Registry deletes are confined to the known autorun keys.
-      * Missing privilege reports ``skipped`` with the reason — never a silent
-        no-op — exactly like the other responders.
+      * Missing privilege reports ``skipped`` with the reason - never a silent
+        no-op - exactly like the other responders.
 
-    Reversibility (IIBA §4.2.5 — this used to be delete-only, no way back):
+    Reversibility (IIBA §4.2.5 - this used to be delete-only, no way back):
     ``scheduled_task``, ``registry_run_key`` and ``startup_folder`` now
     snapshot the exact prior state BEFORE deleting (task XML export /
     registry value+type / file bytes) into ``PERSISTENCE_BACKUP_DIR``, so a
@@ -618,7 +640,7 @@ class RestorePersistenceResponder(ResponderPlugin):
 
     Target is the backup id returned in a ``remove_persistence`` result
     message (e.g. ``"remove_persistence"`` said ``"...(rollback:
-    restore_persistence 'a1b2c3d4e5f6a7b8')"`` — the target here is that id).
+    restore_persistence 'a1b2c3d4e5f6a7b8')"`` - the target here is that id).
     Explicit and operator-invoked only, never automatic: whether a removal
     was a false positive is a judgement call restore_persistence does not
     make for you (unlike the removal itself, which correlation/detection
@@ -728,7 +750,7 @@ class RestorePersistenceResponder(ResponderPlugin):
 
 
 # ---------------------------------------------------------------------------
-# ResponseManager — the front door the web API / CLI / fleet call
+# ResponseManager - the front door the web API / CLI / fleet call
 # ---------------------------------------------------------------------------
 
 BUILTIN_RESPONDERS = [
@@ -762,13 +784,13 @@ class ResponseManager:
         actions with no rollback path. Returns a (status, result) tuple to
         use INSTEAD of running the responder, or None to proceed.
 
-        Only IRREVERSIBLE actions are hard-gated here — a reversible action
+        Only IRREVERSIBLE actions are hard-gated here - a reversible action
         (block/isolate/remove-with-snapshot) can be undone if a human judges
         it wrong, so a manual operator call with no incident context is a
         legitimate, low-risk use that must keep working. An irreversible
         action (kill_process) gets exactly one chance to be right, so it must
         prove the incident actually clears the floor before it is allowed to
-        run for real — "severity unknown" does not clear it.
+        run for real - "severity unknown" does not clear it.
         """
         rev = reversibility.get(action)
         if rev is None or rev.reversible:
@@ -898,7 +920,7 @@ class ResponseManager:
                 self._store.record_response(act)
             except Exception:
                 # An audit-trail write failing must never crash the response
-                # path, but it must not vanish either — a response that
+                # path, but it must not vanish either - a response that
                 # "succeeded" yet was never recorded is exactly the kind of
                 # gap an EDR cannot afford to have silently.
                 log.exception("failed to record response audit row for action %s (incident %s)",
@@ -907,7 +929,7 @@ class ResponseManager:
 
 
 # ---------------------------------------------------------------------------
-# Reversibility registry entries — one per action, checked by
+# Reversibility registry entries - one per action, checked by
 # tests/test_responder_reversibility.py against every registered responder
 # action so a new one can't ship undocumented. See valkyrie/edr/reversibility.py.
 # ---------------------------------------------------------------------------
@@ -1009,11 +1031,11 @@ reversibility.register(reversibility.Reversibility(
     min_severity="low",
 ))
 # mac_randomize / mac_restore are not EDR responders (not wired through
-# ResponseManager/playbooks — MacRandomizer is a standing privacy feature,
+# ResponseManager/playbooks - MacRandomizer is a standing privacy feature,
 # not an incident response), but they are exactly the "MAC change" /
 # "registry write" enforcement actions item 1 requires auditing, so they are
 # documented in the same registry for completeness. min_severity is
-# informational only here — nothing enforces it, since these never flow
+# informational only here - nothing enforces it, since these never flow
 # through ResponseManager.respond().
 reversibility.register(reversibility.Reversibility(
     action="mac_randomize", reversible=True,

@@ -1,19 +1,19 @@
-"""Tier 1.6 — the full decision matrix for ``DNSInterceptor._decide``.
+"""Tier 1.6 - the full decision matrix for ``DNSInterceptor._decide``.
 
 Why this file is the highest-value test in the repo: `_decide` is where every
 signal in the product converges into the one irreversible act Valkyrie performs
-— returning `0.0.0.0` for a domain. Both of this project's real outages lived
+- returning `0.0.0.0` for a domain. Both of this project's real outages lived
 here (the world-banks ML false positive, and the query-burst class that
 sinkholed microsoft/paypal/bing/live/linkedin). The module was 33% covered.
 
 The stages are *ordered*, and the order is the security policy:
 
     1   user always_allow      2   user always_block
-    2a  threat-intel IOC       2b  intelligence memory (bad → block, good → allow)
+    2a  threat-intel IOC       2b  intelligence memory (bad -> block, good -> allow)
     3   scanner                3b  blocklist
     3c  intelligence classify  4   baseline anomaly
 
-Coverage alone would not catch a precedence regression — you can execute every
+Coverage alone would not catch a precedence regression - you can execute every
 line while silently reordering two of them. So each test below pins one
 *relationship*: given two stages that disagree, which one wins. Every fake
 disagrees deliberately, so a reordering flips a result rather than passing.
@@ -37,7 +37,7 @@ from valkyrie.dns_interceptor import DNSInterceptor
 from valkyrie.process_watcher import ProcessInfo
 
 
-# ── Minimal fakes: each one is a single stage that can be told what to say ───
+# --- Minimal fakes: each one is a single stage that can be told what to say ---
 
 @dataclass
 class _Rules:
@@ -172,7 +172,7 @@ def main() -> int:
 
     D = "example.test"
 
-    # ── 1. NO human-authored allow/block list is ever consulted ─────────────
+    # --- 1. NO human-authored allow/block list is ever consulted ---
     # Valkyrie analyses every domain and decides for itself. Even if a rules
     # object still carries allow/block entries, the decision IGNORES them and
     # comes from analysis. There is no "user:always_*" verdict any more.
@@ -187,7 +187,7 @@ def main() -> int:
     c.check("the verdict is analysis (threat_intel), never a user rule",
             cat == "threat_intel" and "user:" not in reason)
 
-    # ── 2. a domain a list would 'block' is decided by analysis, not the list ─
+    # --- 2. a domain a list would 'block' is decided by analysis, not the list -
     print("\n[2] a would-be blocked domain is decided by analysis, not a list")
     di, _ = _build(
         rules=_Rules(block={D}),                     # list says block; ignored
@@ -199,7 +199,7 @@ def main() -> int:
             dec == "allowed")
     c.check("no user:always_block verdict exists", "user:always_block" not in reason)
 
-    # ── 2a. threat intel beats the known-good fast path ─────────────────────
+    # --- 2a. threat intel beats the known-good fast path ---
     # The compromised-infrastructure case, and it is explicitly commented in
     # _decide: a domain we learned as good but which now appears in a C2 feed
     # must block. This is the single most important precedence in the chain.
@@ -213,7 +213,7 @@ def main() -> int:
     c.check("a threat-intel block is remembered for the next lookup",
             any(d == D for d, _ in ti_intel.blocked_calls))
 
-    # ── 2b. intelligence memory ─────────────────────────────────────────────
+    # --- 2b. intelligence memory ---
     print("\n[2b] intelligence memory short-circuits the pipeline")
     di, _ = _build(intelligence=_Intelligence(memory={D: "bad"}),
                    scanner=_Scanner({D: _ScanResult("allow", (), 0.0, "")}))
@@ -230,7 +230,7 @@ def main() -> int:
     c.check("a known-good domain skips the scanner entirely", dec == "allowed")
     c.check("known-good carries zero suspicion", score == 0.0)
 
-    # ── 3. scanner ──────────────────────────────────────────────────────────
+    # --- 3. scanner ---
     print("\n[3] scanner verdicts")
     di, parts = _build(scanner=_Scanner({D: _ScanResult("block", category="malware")}),
                        blocklist=_Blocklist())
@@ -239,7 +239,7 @@ def main() -> int:
     c.check("the scanner's own reasons are surfaced", "scanner-said-so" in reason)
     c.check("the scanner's category is preserved", cat == "malware")
     # A tracker/telemetry scanner-block is DECEIVED (decoy dead-end) in the
-    # Standard profile, not hard-blocked — full matrix in tests/test_deceive.py.
+    # Standard profile, not hard-blocked - full matrix in tests/test_deceive.py.
     di_t, parts_t = _build(scanner=_Scanner({D: _ScanResult("block", category="tracker")}))
     c.check("a tracker scanner-block is deceived, not blocked (Standard)",
             _decide(di_t, D)[0] == "deceived")
@@ -255,7 +255,7 @@ def main() -> int:
     c.check("a flag is NOT written to memory as a block",
             parts["intelligence"].blocked_calls == [])
 
-    # ── 3b. blocklist applies on top of a scanner 'allow' ───────────────────
+    # --- 3b. blocklist applies on top of a scanner 'allow' ---
     print("\n[3b] blocklist enforces beneath a scanner 'allow'")
     di, _ = _build(scanner=_Scanner(), blocklist=_Blocklist(blocked={D}))
     dec, reason, score, cat = _decide(di, D)
@@ -263,7 +263,7 @@ def main() -> int:
             dec == "blocked")
     c.check("blocklist block is categorised blocklist", cat == "blocklist")
 
-    # ── 3c. intelligence classifier ─────────────────────────────────────────
+    # --- 3c. intelligence classifier ---
     print("\n[3c] intelligence classifier runs after the list-based checks")
     di, parts = _build(intelligence=_Intelligence(
         classification={D: {"decision": "block", "reason": "beacon-cadence",
@@ -282,12 +282,12 @@ def main() -> int:
     c.check("a classifier flag is not remembered as a block",
             parts["intelligence"].blocked_calls == [])
 
-    # ── OPEN POLICY GAP: hard blocks vs the known-good fast path ────────────
+    # --- OPEN POLICY GAP: hard blocks vs the known-good fast path ---
     # docs/TEST_PLAN.md tier 1.6 states the intent that "hard blocks must beat
     # the known-good fast path". Today only threat-intel does (stage 2a, before
     # the fast path). The blocklist (3b) and a scanner 'block' (3) both sit
     # AFTER stage 2b, so a domain once promoted to known-good is allowed even
-    # once it lands on the blocklist — which matters because the blocklist grows
+    # once it lands on the blocklist - which matters because the blocklist grows
     # over time, so a domain promoted last week can be blocklisted today and
     # still resolve.
     #
@@ -310,7 +310,7 @@ def main() -> int:
     c.check("threat-intel remains the ONLY override of the fast path",
             dec_bl == "allowed" and dec_sc == "allowed")
 
-    # ── 4. baseline anomaly, and the default ────────────────────────────────
+    # --- 4. baseline anomaly, and the default ---
     print("\n[4] baseline anomaly flags; silence allows")
     di, _ = _build(store=_Store(anomalies={D}))
     dec, reason, _, cat = _decide(di, D)

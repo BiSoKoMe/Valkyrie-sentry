@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Browser credential-store watch (valkyrie/browser_cred_watch.py) — T1555.003.
+"""Browser credential-store watch (valkyrie/browser_cred_watch.py) - T1555.003.
 
   [1] credential_store_paths() finds Chromium + Firefox stores, skips system
       pseudo-accounts (Public/Default/...)
   [2] poll_once() emits a HIGH/T1555.003 event for a non-browser handle hit
-  [3] Cooldown — the SAME (pid, path) hit is not re-emitted every poll tick
+  [3] Cooldown - the SAME (pid, path) hit is not re-emitted every poll tick
   [4] A hit from a known BROWSER process itself is never reported (real scan)
   [5] A hit from an unrelated process IS reported (real scan)
   [6] A raising emitter never breaks the watch

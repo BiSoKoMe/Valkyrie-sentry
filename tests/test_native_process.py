@@ -1,12 +1,12 @@
 """The Sysmon-free process sensor: command-line detection with no download.
 
 Valkyrie's best detection needs to see a process's command line in real time.
-The only real-time source for that used to be Sysmon EID 1 — a separate
+The only real-time source for that used to be Sysmon EID 1 - a separate
 install that no ordinary user will ever perform, which meant the good path was
 dark for real customers and the engine fell back to a racy 2s poller.
 
 Windows emits the same information for free in **Security event 4688** once
-process-creation auditing (with command line) is enabled — a built-in config
+process-creation auditing (with command line) is enabled - a built-in config
 change, not a download. This sensor reads 4688 and feeds the SAME classifier
 stack the Sysmon sensor uses.
 
@@ -14,7 +14,7 @@ These tests drive real 4688-shaped event XML through the whole
 parse -> map -> classify path, with no changes to the host's audit policy
 (exactly like the Sysmon tests use synthetic Sysmon XML). The property that
 matters most is PARITY: a given process must classify identically whether the
-evidence arrived via Sysmon or via native 4688 — otherwise "Sysmon-free" would
+evidence arrived via Sysmon or via native 4688 - otherwise "Sysmon-free" would
 quietly mean "worse".
 """
 
@@ -56,7 +56,7 @@ def _event_4688(image, cmdline, parent, pid_hex="0x1f4", user="lawyer"):
 def main() -> int:
     c = Checks("native process sensor", expect_min=16)
 
-    # ── PID hex conversion (4688's format) ──────────────────────────────
+    # --- PID hex conversion (4688's format) ---
     print("\n[1] 4688 hex PID is converted to a usable decimal")
     from valkyrie.etw.native_process import _hex_to_dec
     c.check("0x1f4 -> 500", _hex_to_dec("0x1f4") == "500")
@@ -64,14 +64,14 @@ def main() -> int:
     c.check("garbage PID -> '0', not a crash", _hex_to_dec("nonsense") == "0")
     c.check("empty PID -> '0'", _hex_to_dec("") == "0")
 
-    # ── Mapping is total (old/truncated 4688 must not raise) ────────────
+    # --- Mapping is total (old/truncated 4688 must not raise) ---
     print("\n[2] mapping tolerates missing 4688 fields")
     m = map_4688({"NewProcessName": r"C:\x.exe"})   # no cmdline, no parent
     c.check("missing command line -> empty string", m["CommandLine"] == "")
     c.check("missing parent -> empty string", m["ParentImage"] == "")
     c.check("map_4688({}) does not raise", isinstance(map_4688({}), dict))
 
-    # ── End to end: a real 4688 XML detects encoded PowerShell ──────────
+    # --- End to end: a real 4688 XML detects encoded PowerShell ---
     print("\n[3] end-to-end: Security/4688 XML -> detection")
     xml = _event_4688(
         r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
@@ -88,7 +88,7 @@ def main() -> int:
     c.check("encoded-command label is present",
             verdict and any("encoded" in l for l in verdict["labels"]))
 
-    # ── PARITY: native path == sysmon path for the same process ─────────
+    # --- PARITY: native path == sysmon path for the same process ---
     print("\n[4] PARITY — native 4688 classifies identically to Sysmon EID 1")
     cases = [
         # (image, cmdline, parent)
@@ -110,7 +110,7 @@ def main() -> int:
             print(f"    MISMATCH: {cmd!r}  sysmon={a}  native={b}")
     c.check("every case classifies the same via both sources", parity)
 
-    # ── The emit path produces a real TelemetryEvent ────────────────────
+    # --- The emit path produces a real TelemetryEvent ---
     print("\n[5] the sensor emits a well-formed event")
     from valkyrie.etw.native_process import NativeProcessSensor
     captured = []
@@ -124,7 +124,7 @@ def main() -> int:
     c.check("the emitted event carries the actor name",
             "powershell" in (te.actor_name or "").lower())
 
-    # ── native_audit command construction (no execution) ────────────────
+    # --- native_audit command construction (no execution) ---
     print("\n[6] audit-enable uses the locale-independent subcategory GUID")
     cmd = native_audit._enable_audit_cmd()
     c.check("auditpol targets the Process Creation GUID, not a localised name",

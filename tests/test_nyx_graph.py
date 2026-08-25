@@ -1,8 +1,8 @@
-"""Tests for nyx_graph.py — the local tracker-correlation brain.
+"""Tests for nyx_graph.py - the local tracker-correlation brain.
 
 The one thing this layer must get right: recognise that a tracker seen under
 different hostnames, on different sites, across different channels is ONE
-adversary — and rank the one that follows you the widest to the top. And it
+adversary - and rank the one that follows you the widest to the top. And it
 must do it from the event store without a brittle dependency on any single
 row's shape.
 """
@@ -22,7 +22,7 @@ from valkyrie import nyx_graph
 def main() -> int:
     c = Checks("nyx_graph", expect_min=18)
 
-    # ── correlation by registrable domain ───────────────────────────────────
+    # --- correlation by registrable domain ---
     print("\n[1] one tracker, many masks and sites, is recognised as ONE")
     g = nyx_graph.TrackerGraph()
     # same tracker (adnet.example) under two hostnames, on three of the user's sites
@@ -37,14 +37,14 @@ def main() -> int:
     c.check("cross-channel is true (3 channels seen)", row and row["cross_channel"] is True)
     c.check("categories reached are recorded", row and "device ID" in row["categories"])
 
-    # ── a tracker on its OWN site is not 'reach' ────────────────────────────
+    # --- a tracker on its OWN site is not 'reach' ---
     print("\n[2] a tracker talking to its own domain is not cross-site reach")
     g2 = nyx_graph.TrackerGraph()
     g2.observe("cdn.adnet.example", first_party="adnet.example", channel="data-leak")
     c.check("first party == tracker domain does not inflate reach",
             g2.reach("adnet.example") == 0)
 
-    # ── ranking: the widest-reaching tracker sorts first ────────────────────
+    # --- ranking: the widest-reaching tracker sorts first ---
     print("\n[3] the tracker that follows you the widest ranks first")
     g3 = nyx_graph.TrackerGraph()
     for s in ("a.example", "b.example", "c.example", "d.example"):
@@ -54,14 +54,14 @@ def main() -> int:
     c.check("widest-reach tracker is ranked first",
             top3[0]["tracker"] == "tracker.example" or top3[0]["reach"] == 4)
 
-    # ── summary ─────────────────────────────────────────────────────────────
+    # --- summary ---
     print("\n[4] summary rolls up the whole picture")
     s = g.summary()
     c.check("summary counts distinct trackers", s["distinct_trackers"] >= 1)
     c.check("summary reports cross-channel trackers", s["cross_channel_trackers"] >= 1)
     c.check("summary reports the widest reach", s["widest_reach"] == 3)
 
-    # ── build_from_events: parse the real event rows ────────────────────────
+    # --- build_from_events: parse the real event rows ---
     print("\n[5] builds from event-store rows (parses Nyx's own sentences)")
     events = [
         {"domain": "collector.adnet.example", "raw_category": "nyx_leak", "decision": "flagged",
@@ -83,7 +83,7 @@ def main() -> int:
     c.check("benign/garbage rows are skipped, not crashed on",
             all(r["tracker"] != "self.example" for r in gb.top_trackers()))
 
-    # ── persistent memory: how long a tracker has been following you ────────
+    # --- persistent memory: how long a tracker has been following you ---
     print("\n[6] memory — span between first and last sighting")
     gt = nyx_graph.TrackerGraph()
     gt.observe("t.tracker.example", first_party="a.example", channel="data-leak",

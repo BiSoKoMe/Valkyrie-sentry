@@ -2,19 +2,19 @@
 """Deception status: store counters + the /api/deception/status endpoint.
 
 Two days of deception-engine work (persona.py, deception.py) had no product
-surface at all — no counter of how many beacons were answered, no way to see
+surface at all - no counter of how many beacons were answered, no way to see
 the current persona short of reading a JSON seed file on disk by hand. This
 pins the two pieces that make it visible:
 
-  1. Store.deception_stats() — reads dns_interceptor's own "deceived" decision
+  1. Store.deception_stats() - reads dns_interceptor's own "deceived" decision
      label (never redefines it, so it cannot drift from what happened on the
      wire) and turns it into counts a UI can render.
-  2. GET /api/deception/status — the endpoint the Electron renderer polls,
+  2. GET /api/deception/status - the endpoint the Electron renderer polls,
      wrapping those counts with the live persona (persona.py's single source
      of truth, read-only: this endpoint cannot rotate or influence it).
 
 Requires fastapi + httpx (the test client). Skips cleanly if either is absent
-— same convention as tests/test_web_auth.py.
+- same convention as tests/test_web_auth.py.
 """
 
 from __future__ import annotations
@@ -113,7 +113,7 @@ def main() -> int:
             and " " in persona_block["browser"])
 
     # A monitoring-only endpoint must never let a caller change the identity
-    # it reports — there is deliberately no POST here to pin that.
+    # it reports - there is deliberately no POST here to pin that.
     c.check("no POST route exists for /api/deception/* (read-only surface)",
             client.post("/api/deception/status").status_code == 405)
 

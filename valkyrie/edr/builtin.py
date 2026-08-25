@@ -1,8 +1,8 @@
 """Built-in detection & enrichment plugins.
 
-These translate Valkyrie's existing sensor output — the DNS decision event
+These translate Valkyrie's existing sensor output - the DNS decision event
 stream (blocklist, scanner, firewall answer-IP screening, behavioural
-heuristics, the intelligence classifier) — into EDR Detections. They add no new
+heuristics, the intelligence classifier) - into EDR Detections. They add no new
 sensing; they *interpret* what Valkyrie already sees so it shows up as triable
 security signal instead of a flat log line.
 
@@ -31,7 +31,7 @@ def _ev(event: dict) -> tuple:
 
 
 # ---------------------------------------------------------------------------
-# Category → MITRE ATT&CK technique (best-effort, informational)
+# Category -> MITRE ATT&CK technique (best-effort, informational)
 # ---------------------------------------------------------------------------
 
 _TECHNIQUE = {
@@ -91,7 +91,7 @@ class BeaconDetection(DetectionPlugin):
     def analyze(self, event, ctx):
         domain, decision, pname, pid, cat, susp, reason = _ev(event)
         rl = reason.lower()
-        # Repeated reverse-DNS / local lookups look periodic but are not C2 —
+        # Repeated reverse-DNS / local lookups look periodic but are not C2 -
         # they are routine OS resolution. Exempt them here so a real beacon to
         # an actual domain still fires (see is_infrastructure_domain).
         if is_infrastructure_domain(domain):
@@ -114,7 +114,7 @@ class IntelBlockDetection(DetectionPlugin):
     def analyze(self, event, ctx):
         domain, decision, pname, pid, cat, susp, reason = _ev(event)
         if cat == "intelligence" and decision in ("blocked", "behavioral"):
-            # Beacon detections already covered above — avoid double counting.
+            # Beacon detections already covered above - avoid double counting.
             if any(m in reason.lower() for m in BeaconDetection._MARKERS):
                 return []
             return [Detection(
@@ -150,7 +150,7 @@ class DgaDetection(DetectionPlugin):
     def analyze(self, event, ctx):
         domain, decision, pname, pid, cat, susp, reason = _ev(event)
         # Confirmed DGA from the corroborated classifier (valkyrie/dga.py, wired
-        # into the scanner) — length + entropy + bigram-implausibility all agree,
+        # into the scanner) - length + entropy + bigram-implausibility all agree,
         # so this is a high-confidence C2 signal.
         if cat == "dga":
             return [Detection(
@@ -181,7 +181,7 @@ class TunnelDetection(DetectionPlugin):
         domain, decision, pname, pid, cat, susp, reason = _ev(event)
         # The scanner's unique-subdomain flood verdict (site_scanner S9 /
         # dns_tunnel.py): many never-seen machine-generated labels under one
-        # registrable base in a short window — the shape of DNS exfil/C2,
+        # registrable base in a short window - the shape of DNS exfil/C2,
         # invisible to any single-query signal.
         if cat == "tunnel":
             return [Detection(
@@ -191,7 +191,7 @@ class TunnelDetection(DetectionPlugin):
                 technique="T1048.003 — Exfiltration Over Alternative Protocol (DNS tunnelling)",
                 details={"reason": reason, "suspicion": susp},
             )]
-        # A blocked generated-looking hostname on a wildcard IP-echo provider —
+        # A blocked generated-looking hostname on a wildcard IP-echo provider -
         # not yet a corroborated flood, but the same technique family (hiding
         # traffic under a legitimate wildcard base). Medium: real signal,
         # single-query evidence.
@@ -212,14 +212,14 @@ class AnomalyDetection(DetectionPlugin):
 
     def analyze(self, event, ctx):
         domain, decision, pname, pid, cat, susp, reason = _ev(event)
-        # A reverse-DNS / local name outside a process baseline is meaningless —
+        # A reverse-DNS / local name outside a process baseline is meaningless -
         # every process does different PTR lookups constantly. This is the single
         # highest-volume false positive on real hardware; drop it here.
         if is_infrastructure_domain(domain):
             return []
         # A SIGNED OS binary (Windows Update, the search stack, WMI, background
         # tasks, updaters, conhost) legitimately reaches a wide, changing set of
-        # domains — so "reached a domain outside its baseline" is noise on them,
+        # domains - so "reached a domain outside its baseline" is noise on them,
         # not signal. Suppress the lone low-value anomaly for OS processes; a real
         # threat from one still surfaces via the intelligence / threat-intel /
         # beacon paths, which key on BEHAVIOUR, not on baseline novelty. This is a

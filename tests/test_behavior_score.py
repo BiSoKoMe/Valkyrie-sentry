@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Behavioral anomaly scorer tests (valkyrie/behavior_score.py) — the *nose*.
+"""Behavioral anomaly scorer tests (valkyrie/behavior_score.py) - the *nose*.
 
 This is the generalizing detector: it must FIRE on intrinsic malicious scent it
-was never handed a rule for, and — the harder half — it must STAY QUIET on the
+was never handed a rule for, and - the harder half - it must STAY QUIET on the
 benign shapes that superficially resemble malware (installers from Downloads,
 updaters under AppData, LOLBins run legitimately). A false positive here breaks
 a real machine, so the benign controls are the point of this file.
@@ -10,7 +10,7 @@ a real machine, so the benign controls are the point of this file.
   [1] Each intrinsic malicious shape crosses the firing bar
   [2] Every fired case maps to a chain-ready ATT&CK tactic
   [3] Benign look-alikes stay UNDER the bar (the FP boundary)
-  [4] It generalizes — fires on shapes no behavioral_rules.py rule matches
+  [4] It generalizes - fires on shapes no behavioral_rules.py rule matches
   [5] Weak signals compound; a lone weak signal does not fire
   [6] obfuscation_strength / looks_machine_generated unit behavior
   [7] AncestryBaseline lift only tips a near-bar case, after warmup
@@ -33,7 +33,7 @@ def _check(label: str, ok: bool) -> None:
         _FAILURES.append(label)
 
 
-# (label, image, parent, cmdline, path) — intrinsic malicious scent that must FIRE.
+# (label, image, parent, cmdline, path) - intrinsic malicious scent that must FIRE.
 MALICIOUS = [
     ("svchost masquerading from temp", "svchost.exe", "explorer.exe", "svchost.exe",
      r"C:\Users\v\AppData\Local\Temp\svchost.exe"),
@@ -60,7 +60,7 @@ MALICIOUS = [
      r"C:\Users\v\AppData\Local\Temp\powershell.exe"),
     ("mshta remote over UNC", "mshta.exe", "explorer.exe",
      "mshta \\\\10.0.0.5\\share\\x.hta", ""),
-    # Impossible parent→child ancestry — masquerade / injection detected with a
+    # Impossible parent->child ancestry - masquerade / injection detected with a
     # totally benign-looking command line and even the CORRECT image path, so no
     # rule and no path/name signal can catch it; only the ancestry check does.
     ("fake svchost — wrong parent (masquerade/injection)", "svchost.exe", "cmd.exe",
@@ -71,7 +71,7 @@ MALICIOUS = [
      "cmd.exe", r"C:\Windows\System32\cmd.exe"),
 ]
 
-# Benign shapes that MUST NOT fire — the false-positive boundary. These are the
+# Benign shapes that MUST NOT fire - the false-positive boundary. These are the
 # cases a naive "temp = bad / lolbin = bad" detector wrongly flags.
 BENIGN = [
     ("chrome from Program Files", "chrome.exe", "explorer.exe",
@@ -150,11 +150,26 @@ def main() -> int:
         ("double-extension lure (Documents)", "invoice.pdf.exe", "outlook.exe",
          "invoice.pdf.exe", r"C:\Users\v\Documents\invoice.pdf.exe"),
     ]
+    # The property under test is that the NOSE FIRES ON ALL OF THESE, and that
+    # it still covers ground the rule engine does not. It is NOT that every one
+    # of these stays a rule miss forever.
+    #
+    # That distinction started mattering on 2026-08-25. 109 vendor rules were
+    # imported from SigmaHQ and Elastic, and one of them - "Suspicious Remote
+    # Child Process From Outlook" - now legitimately catches the
+    # double-extension lure. Rule coverage growing to absorb an example is a WIN,
+    # and a test that fails when detection improves is a test that punishes
+    # progress. Asserting "some of these are still rule misses" keeps proving
+    # generalisation without rotting every time the corpus grows.
+    misses = 0
     for label, image, parent, cmd, path in generalization:
         rule_hits = match_process(image, parent, cmd, path)
         nose = score_process(image, parent, cmd, path)
-        _check(f"{label}: rules miss ({len(rule_hits)}), nose fires",
-               len(rule_hits) == 0 and nose.fired())
+        if not rule_hits:
+            misses += 1
+        _check(f"{label}: nose fires (rules: {len(rule_hits)})", nose.fired())
+    _check(f"the nose still covers ground rules do not ({misses}/"
+           f"{len(generalization)} are rule misses)", misses >= 1)
 
     print("\n[5] Weak signals compound; a lone weak signal does not fire")
     lone = score_process("AppSetup.exe", "explorer.exe", "AppSetup.exe /S",

@@ -3,7 +3,7 @@
 `store.py` owns the audit trail: every DNS decision, every detection, every
 response action. Nothing else records them. If the background writer thread
 dies, the product keeps running and keeps *looking* healthy while nothing at
-all is being recorded — for a security tool, losing the audit trail without
+all is being recorded - for a security tool, losing the audit trail without
 saying so is close to the worst quiet failure available.
 
 The bug this file was written around (verified, not assumed): `_writer_loop`
@@ -44,7 +44,7 @@ def _event(domain: str) -> DnsEvent:
 
 
 def _poison() -> DnsEvent:
-    """An event SQLite cannot bind — stands in for any malformed row."""
+    """An event SQLite cannot bind - stands in for any malformed row."""
     e = _event("poison.test")
     try:
         e.suspicion = {"not": "bindable"}
@@ -60,7 +60,7 @@ def main() -> int:
     store.start()
 
     try:
-        # ── Baseline ────────────────────────────────────────────────────
+        # --- Baseline ---
         print("\n[1] the writer works normally to begin with")
         store.log(_event("before.test"))
         time.sleep(0.8)
@@ -68,7 +68,7 @@ def main() -> int:
         c.check("a normal event is persisted",
                 store.stats().get("total_24h", 0) >= 1)
 
-        # ── REGRESSION: a malformed row must not kill the writer ───────
+        # --- REGRESSION: a malformed row must not kill the writer ---
         print("\n[2] REGRESSION: a malformed event must not kill the writer")
         for _ in range(60):                # force a batch flush
             store.log(_poison())
@@ -76,7 +76,7 @@ def main() -> int:
         alive = store.is_writing()
         c.check("the writer SURVIVED a batch of unbindable events", alive)
 
-        # ── And logging must still work afterwards ─────────────────────
+        # --- And logging must still work afterwards ---
         print("\n[3] logging still works after the bad batch")
         before = store.stats().get("total_24h", 0)
         store.log(_event("after.test"))
@@ -88,7 +88,7 @@ def main() -> int:
                 f"({store.write_errors()} write errors)",
                 store.write_errors() > 0)
 
-        # ── Good rows in a mixed batch must survive ────────────────────
+        # --- Good rows in a mixed batch must survive ---
         print("\n[4] one bad row must not discard the good rows beside it")
         base = store.stats().get("total_24h", 0)
         store.log(_event("mixed-a.test"))
@@ -101,7 +101,7 @@ def main() -> int:
         c.check(f"good rows in a mixed batch were still written "
                 f"({base} -> {grew})", grew > base + 1)
 
-        # ── The watchdog can actually recover a dead writer ─────────────
+        # --- The watchdog can actually recover a dead writer ---
         print("\n[5] a dead writer can be recovered (the watchdog's action)")
         c.check("restart_writer() exists for the watchdog to call",
                 callable(getattr(store, "restart_writer", None)))

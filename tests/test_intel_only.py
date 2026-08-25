@@ -1,14 +1,14 @@
-"""Intelligence-only coverage test — no external lists, no network.
+"""Intelligence-only coverage test - no external lists, no network.
 
 Confirms that with USE_EXTERNAL_LISTS = False the seed list + behavioural
 scanner + intelligence memory alone still catch all three surveillance
 classes, driving the REAL DNS decision pipeline (DNSInterceptor._decide):
 
   1. a seed-list tracker                              -> sinkholed (DECEIVED in
-     Standard profile — a decoy dead-end, not a hard block)
+     Standard profile - a decoy dead-end, not a hard block)
   2. a tracker-name-pattern domain in NO list        -> deceived/flagged (scanner)
   3. a repeat of a real (non-tracker) THREAT          -> block via memory
-     (fast path — category "intelligence", set before any scanner re-run;
+     (fast path - category "intelligence", set before any scanner re-run;
      trackers are handled by DECEIVE and deliberately NOT learned as threats)
 
 Run:  python3 test_intel_only.py
@@ -80,7 +80,7 @@ def main() -> int:
 
     # Use the *actually running* process name so the anomaly detector's
     # liveness check reflects reality (the process that makes a DNS query is
-    # alive at that moment — on the real system this is always true). Using a
+    # alive at that moment - on the real system this is always true). Using a
     # fake dead name would wrongly trip the "app closed but connecting" signal.
     import psutil
     live_name = psutil.Process().name()
@@ -95,15 +95,15 @@ def main() -> int:
     A = dns.rdatatype.A
     proc = ProcessInfo(name=live_name, pid=psutil.Process().pid, path="")
 
-    # ── Case 1: seed-list tracker ─────────────────────────────────────────
+    # --- Case 1: seed-list tracker ---
     print("\n[1] Seed-list tracker (no external list, no network)")
     # A tracker is SINKHOLED, but in the Standard profile as a DECEIVE (decoy
-    # dead-end) rather than a hard block — the app keeps working, telemetry dies.
+    # dead-end) rather than a hard block - the app keeps working, telemetry dies.
     d1, r1, s1, c1 = interceptor._decide("scorecardresearch.com", A, proc, 80)
     check("seed tracker scorecardresearch.com is sinkholed (deceived in Standard)",
           d1 in ("deceived", "blocked"), f"got {d1} ({r1})")
 
-    # ── Case 2: tracker-name pattern in NO list ───────────────────────────
+    # --- Case 2: tracker-name pattern in NO list ---
     print("\n[2] Tracker-pattern domain absent from every list")
     novel = "telemetry.totally-unknown-vendor-4821.example"
     check("novel domain is NOT in the blocklist",
@@ -113,7 +113,7 @@ def main() -> int:
           d2 in ("deceived", "blocked", "flagged"), f"got {d2} ({r2})")
     print(f"       -> decision={d2}  score={s2}  reason={r2}")
 
-    # ── Case 3: repeat hit served from intelligence memory ────────────────
+    # --- Case 3: repeat hit served from intelligence memory ---
     print("\n[3] Repeat query served instantly from intelligence memory")
     # A REAL (non-tracker) threat is remembered and served from memory before the
     # scanner re-runs (category 'intelligence'). Trackers are NOT used here: they

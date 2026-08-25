@@ -60,7 +60,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     store = Store(db_path=dbp)
     store.start()
 
-    # ── Schema primitives ─────────────────────────────────────────────
+    # --- Schema primitives ---
     print("\n-- Schema ------------------------------------------")
     check("severity ordering", schema.severity_rank("critical") > schema.severity_rank("low"))
     check("max_severity picks worse", schema.max_severity("low", "high") == "high")
@@ -68,7 +68,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
                     title="x", entity="bad.example")
     check("detection round-trips via dict", Detection.from_row(det.to_dict()).entity == "bad.example")
 
-    # ── Plugin registry + fault isolation ─────────────────────────────
+    # --- Plugin registry + fault isolation ---
     print("\n-- Plugin architecture -----------------------------")
     reg = PluginRegistry()
     register_builtin(reg)
@@ -96,7 +96,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     check("responder actions advertised",
           set(["block_domain", "kill_process", "isolate_host"]) <= set(reg.available_actions()))
 
-    # ── Plugin discovery from a directory ─────────────────────────────
+    # --- Plugin discovery from a directory ---
     pdir = Path(tmp) / "plugins"
     pdir.mkdir()
     (pdir / "myplugin.py").write_text(
@@ -114,7 +114,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     check("external plugin discovered", "myplugin" in loaded)
     check("external plugin registered", any(p.name == "ext.demo" for p in reg2.all()))
 
-    # ── Built-in detection mapping ────────────────────────────────────
+    # --- Built-in detection mapping ---
     print("\n-- Built-in detections -----------------------------")
     reg3 = PluginRegistry()
     register_builtin(reg3)
@@ -133,7 +133,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     allowed = _detect(_event(domain="good.example", decision="allowed", category=""))
     check("clean allow yields no detection", allowed == [])
 
-    # ── Engine correlation + timelines ────────────────────────────────
+    # --- Engine correlation + timelines ---
     print("\n-- Correlation engine ------------------------------")
     engine = EdrEngine(store, correlation_window_seconds=600)
     engine.start()
@@ -190,7 +190,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     check("incident timeline recorded detections",
           any(t["kind"] == "detection" for t in detail["timeline"]))
 
-    # ── Response actions: dry-run, audit, protected PIDs ──────────────
+    # --- Response actions: dry-run, audit, protected PIDs ---
     print("\n-- Response actions --------------------------------")
     # block_domain / unblock_domain route through the ANALYSIS memory now (no
     # manual rules file). Give the responder a recording intelligence stub.
@@ -217,7 +217,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     check("response recorded in timeline",
           any(t["kind"] == "response" for t in detail["timeline"]))
 
-    # Real block_domain records the domain in analysis memory — NO file written,
+    # Real block_domain records the domain in analysis memory - NO file written,
     # no manual list. The DNS engine enforces it via that same memory next lookup.
     got = engine.respond("block_domain", "tracker.test", dry_run=False)
     check("real block_domain succeeds", got["status"] == "succeeded")
@@ -226,7 +226,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     engine.respond("unblock_domain", "tracker.test", dry_run=False)
     check("unblock marks the domain known-good", "tracker.test" in _intel.good)
 
-    # ── Incident lifecycle ────────────────────────────────────────────
+    # --- Incident lifecycle ---
     print("\n-- Incident lifecycle ------------------------------")
     upd = engine.update_incident(inc_id, status="investigating", notes="triaging",
                                  assignee="alice")
@@ -238,10 +238,10 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     check("stats count open incidents", stats["incidents_open"] >= 1)
     check("stats break down by severity", "high" in stats["open_by_severity"])
 
-    # ── Threat hunting ────────────────────────────────────────────────
+    # --- Threat hunting ---
     print("\n-- Threat hunting ----------------------------------")
     # Seed the raw event log the hunter reads. Spread the beacon across distinct
-    # minutes — a real C2 heartbeat phones home over time, which is exactly what
+    # minutes - a real C2 heartbeat phones home over time, which is exactly what
     # the beacon_candidates hunt keys on (distinct-minute count).
     from datetime import datetime as _dt, timedelta as _td
     _t0 = _dt.utcnow()
@@ -271,7 +271,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     check("facets return top processes", any(p["process_name"] == "mal.exe"
                                              for p in facets["top_processes"]))
 
-    # ── Investigation (offline default, AI opt-in/off) ────────────────
+    # --- Investigation (offline default, AI opt-in/off) ---
     print("\n-- Investigation -----------------------------------")
     report = engine.investigate(inc_id, use_ai=False)
     check("offline analyst always runs", report["analyst"] == "offline")
@@ -288,19 +288,19 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         check("AI opt-in without a key falls back to offline",
               report_ai["analyst"] == "offline" and "ai_error" in report_ai)
 
-    # ── Plugins introspection ─────────────────────────────────────────
+    # --- Plugins introspection ---
     print("\n-- Plugin introspection ----------------------------")
     pinfo = engine.plugins()
     check("engine lists its plugins", len(pinfo["plugins"]) >= 9)
     check("engine advertises response actions", "block_domain" in pinfo["actions"])
 
-    # ── Privacy: EDR data is local only ───────────────────────────────
+    # --- Privacy: EDR data is local only ---
     print("\n-- Privacy invariant -------------------------------")
     # The fleet-heartbeat version of this invariant moved with the fleet code
     # to experimental/tests/test_fleet.py (ADR 0044). What remains here is the
     # invariant that still applies to CORE: the EDR engine has no egress of its
     # own. Incident data reaches the network only through an explicitly wired,
-    # opt-in exporter (siem.py) — the engine itself must expose no transport.
+    # opt-in exporter (siem.py) - the engine itself must expose no transport.
     import inspect as _inspect
     import valkyrie.edr.engine as _eng
     _src = _inspect.getsource(_eng)

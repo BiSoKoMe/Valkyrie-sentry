@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Threat-intel feed engine — offline unit + integration + benchmark.
+"""Threat-intel feed engine - offline unit + integration + benchmark.
 
 Everything runs without network: feed bodies are fixture strings in the
 real formats (Feodo bare-IP, URLhaus hostfile, SSLBL CSV), caches are
@@ -70,7 +70,7 @@ THREATFOX_BODY = """\
 "2026-07-19 01:05:05", "1853608", "192.168.1.50:443", "ip:port", "botnet_cc"
 """
 
-# URLhaus full-URL (path-level) feed — one URL per line.
+# URLhaus full-URL (path-level) feed - one URL per line.
 URLHAUS_URL_BODY = """\
 # URLhaus recent URLs
 http://compromised-shop.example/wp-content/uploads/2026/payload.exe
@@ -266,7 +266,7 @@ def main() -> int:
         # constructs a mitmproxy http.Response, and mitmproxy is an optional
         # dependency. What this pins is the DECISION ROUTING (does a URL
         # indicator reach a block, and does a clean path on the same host
-        # avoid one) — the actual 403 construction is mitmproxy's own code.
+        # avoid one) - the actual 403 construction is mitmproxy's own code.
         blocks: list = []
         addon._block = lambda flow, domain, url, proc, reason, category: blocks.append(
             {"url": url, "reason": reason, "category": category})

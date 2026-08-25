@@ -205,6 +205,27 @@ def _build_coverage() -> dict:
     }
 
 
+def _subsystem_unavailable(name: str) -> JSONResponse:
+    """503 for a subsystem that is absent - saying WHICH KIND of absent.
+
+    "not yet" and "never" are different answers. The web server binds in about a
+    second and subsystems attach behind it, so `state.edr is None` is true both
+    while the engine is three seconds from existing AND when the user ran with
+    --no-edr. Twelve endpoints returned the identical payload for both, so a
+    caller - including this project's own desktop app - could not tell a warming
+    agent from a disabled feature, and the capability-delivery test read a
+    startup race as a hard failure.
+
+    Status stays 503 either way; the BODY now carries `starting`, so a client can
+    retry a warming subsystem and give up on a disabled one.
+    """
+    starting = not getattr(state, "ready", False)
+    return JSONResponse(
+        {"error": f"{name} still starting" if starting else f"{name} not enabled",
+         "starting": starting},
+        status_code=503)
+
+
 def _build_components() -> dict:
     if state.registry is None:
         return {"enabled": False, "components": []}
@@ -1202,7 +1223,7 @@ def create_app(ctx: Optional[AppContext] = None):
                             severity: Optional[str] = None,
                             brief: bool = False):
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         # Off the event loop: list_incidents is a synchronous SQLite read (opens a
         # connection, ORDER BY ... LIMIT 200). Run on the loop it blocks every
         # other request - including the self-heal /api/ping - for its whole
@@ -1221,7 +1242,7 @@ def create_app(ctx: Optional[AppContext] = None):
         the eval harness (see valkyrie/edr/metrics.py for the exact
         definitions and their honest limits)."""
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         # Off the event loop: mttd_mttr fans out to get_incident for up to 200
         # incidents (~3 queries + impact assessment each) - by far the heaviest
         # read in the API. On the loop it stalls everything for seconds.
@@ -1240,7 +1261,7 @@ def create_app(ctx: Optional[AppContext] = None):
     @app.get("/api/edr/incidents/{incident_id}")
     async def edr_incident(incident_id: str):
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         # Off the event loop: get_incident runs ~3 synchronous SQLite queries
         # (incident + detections + responses) plus an impact assessment.
         inc = await run_in_threadpool(state.edr.get_incident, incident_id)
@@ -1254,7 +1275,7 @@ def create_app(ctx: Optional[AppContext] = None):
         an incident, under the current risk profile, with a plain-language reason
         and user message. Deterministic - the explainable 'why' behind response."""
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         inc = state.edr.get_incident(incident_id)
         if inc is None:
             return JSONResponse({"error": "unknown incident"}, status_code=404)
@@ -1281,7 +1302,7 @@ def create_app(ctx: Optional[AppContext] = None):
         caller can tell "nothing to show" from "no process to show it for".
         """
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         inc = await run_in_threadpool(state.edr.get_incident, incident_id)
         if inc is None:
             return JSONResponse({"error": "unknown incident"}, status_code=404)
@@ -1305,13 +1326,13 @@ def create_app(ctx: Optional[AppContext] = None):
     def edr_causality_stats():
         """Process-ancestry graph size and health (nodes, inferred, evicted)."""
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         return state.edr.causality_stats()
 
     @app.post("/api/edr/incidents/{incident_id}/status")
     async def edr_incident_status(incident_id: str, request: Request):
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         guard = _edr_guard(request)
         if guard is not None:
             return guard
@@ -1326,7 +1347,7 @@ def create_app(ctx: Optional[AppContext] = None):
     @app.post("/api/edr/incidents/{incident_id}/investigate")
     async def edr_investigate(incident_id: str, request: Request):
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         guard = _edr_guard(request)
         if guard is not None:
             return guard
@@ -1340,7 +1361,7 @@ def create_app(ctx: Optional[AppContext] = None):
     @app.post("/api/edr/respond")
     async def edr_respond(request: Request):
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         guard = _edr_guard(request)
         if guard is not None:
             return guard
@@ -1357,14 +1378,14 @@ def create_app(ctx: Optional[AppContext] = None):
     @app.get("/api/edr/hunt/saved")
     def edr_saved_hunts():
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         return {"hunts": state.edr.saved_hunts(),
                 "facets": state.edr.hunt_facets(24)}
 
     @app.post("/api/edr/hunt")
     async def edr_hunt(request: Request):
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         body = await _safe_json(request)
         limit = int(body.get("limit", 200) or 200)
         if body.get("saved"):
@@ -1374,7 +1395,7 @@ def create_app(ctx: Optional[AppContext] = None):
     @app.get("/api/edr/plugins")
     def edr_plugins():
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         return state.edr.plugins()
 
     @app.websocket("/ws")

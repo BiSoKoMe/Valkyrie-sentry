@@ -1,4 +1,4 @@
-"""Which sensors each detector depends on — and what its confidence means
+"""Which sensors each detector depends on - and what its confidence means
 when they are dark.
 
 THE BUG THIS FIXES
@@ -6,7 +6,7 @@ THE BUG THIS FIXES
 ``decision.assess_confidence()`` scores a signal without any knowledge of
 whether the sensors that produced or could refute it are actually running.
 Right now, on this machine, Sysmon is *stopped* and 45 of 57 controls cannot
-be confirmed live — and the engine keeps returning HIGH confidence, because
+be confirmed live - and the engine keeps returning HIGH confidence, because
 nothing in the scoring path knows the difference between "I looked and found
 nothing contradicting this" and "I could not look".
 
@@ -17,7 +17,7 @@ machine goes blind. That is backwards, and it is live today.
 
 THREE RELATIONSHIPS, NOT ONE
 ----------------------------
-Global coverage (19.3%) is the wrong input — the state of the process sensor
+Global coverage (19.3%) is the wrong input - the state of the process sensor
 is irrelevant to a pure-DNS detection. What matters is per-detector, and the
 relationships behave differently:
 
@@ -36,7 +36,7 @@ relationships behave differently:
     hardcoded C2 and a domain Valkyrie merely failed to log are
     indistinguishable. An unfalsifiable claim must count for LESS, not more.
 
-Nothing here executes anything, and :func:`adjust` is pure — sensor state is
+Nothing here executes anything, and :func:`adjust` is pure - sensor state is
 passed in, never queried globally, so ``decision.decide()`` stays pure and
 every rule below is testable without a running engine.
 """

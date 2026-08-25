@@ -3,7 +3,7 @@
 Starlette only grew ``TestClient(client=...)`` in 0.41.x, and the pinned
 FastAPI holds starlette below that. The auth tests must simulate loopback
 vs. LAN peers, so instead of depending on the kwarg we rewrite
-``scope["client"]`` in a thin ASGI wrapper — identical behaviour on every
+``scope["client"]`` in a thin ASGI wrapper - identical behaviour on every
 starlette version, for HTTP and WebSocket scopes alike.
 """
 

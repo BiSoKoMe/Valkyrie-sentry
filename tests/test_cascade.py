@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cascade budget — shape, not volume (valkyrie/edr/cascade.py).
+"""Cascade budget - shape, not volume (valkyrie/edr/cascade.py).
 
 The property being pinned: a real intrusion and a runaway loop can produce the
 SAME number of actions, so counting cannot separate them. Blocking fifty

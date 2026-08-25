@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
 """AMSI content-scanning tests (valkyrie/amsi.py + the PowerShell sensor seam).
 
-AMSI is Valkyrie's only source of *content conviction* — an external engine's
+AMSI is Valkyrie's only source of *content conviction* - an external engine's
 verdict rather than a Valkyrie heuristic. These checks pin the two things that
 matter about that: the verdict vocabulary is interpreted exactly as the OS
-defines it, and the corroborator is strictly ADDITIVE — a scanner that is
+defines it, and the corroborator is strictly ADDITIVE - a scanner that is
 absent, silent, or broken must never change what the sensor would otherwise
 have reported.
 
-  [1]  AMSI_RESULT → disposition, including both documented boundaries
-  [2]  is_malware is a conviction only — an admin-policy block is not one
+  [1]  AMSI_RESULT -> disposition, including both documented boundaries
+  [2]  is_malware is a conviction only - an admin-policy block is not one
   [3]  An unstarted scanner degrades to verdicts, never exceptions
   [4]  Empty content is skipped; oversized content is skipped, never truncated
   [5]  Identical content is served from the verdict cache
   [6]  A conviction re-categorizes a script block to `malware` / critical
   [7]  A non-conviction leaves the heuristic result completely untouched
-  [8]  A scanner that raises is isolated — the event is still emitted
+  [8]  A scanner that raises is isolated - the event is still emitted
   [9]  Sub-threshold script blocks are never submitted to AMSI
   [10] Provider presence is read from the registry, not inferred from a scan
   [11] The self-test is tri-state: a non-conviction is inconclusive, not failure
   [12] Explainability: `malware` has meaning, recommendation, and a technique
   [13] Pipeline: a conviction becomes one `malware` incident via EdrEngine
-  [14] LIVE provider round trip — opt-in via VALKYRIE_TEST_LIVE_AMSI=1
+  [14] LIVE provider round trip - opt-in via VALKYRIE_TEST_LIVE_AMSI=1
 
 The live check is opt-in because a provider that convicts the test marker
 records a detection in its own history; the rest of the suite is pure and runs
@@ -249,7 +249,7 @@ def main() -> int:
             _check("the malware incident is critical", found["severity"] == "critical")
         engine.stop(); store.stop()
 
-    # [14] live provider — opt-in
+    # [14] live provider - opt-in
     if os.environ.get("VALKYRIE_TEST_LIVE_AMSI") == "1":
         s = AmsiScanner()
         if s.start():

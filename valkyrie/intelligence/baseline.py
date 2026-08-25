@@ -1,4 +1,4 @@
-"""BaselineLearner — learns what normal network behaviour looks like
+"""BaselineLearner - learns what normal network behaviour looks like
 for THIS machine.
 
 Every DNS query is recorded per (process, domain) pair: hit counts,
@@ -9,7 +9,7 @@ rhythm?".
 
 Persistence: SQLite via the existing Store (works in zero-log RAM mode
 too).  Writes are batched by a background flush thread so the DNS hot
-path never blocks on disk.  The baseline never resets on its own — it
+path never blocks on disk.  The baseline never resets on its own - it
 keeps learning across restarts.
 """
 
@@ -58,11 +58,11 @@ class BaselineLearner:
         self._store = store
         self._learning_days = learning_days      # legacy display hint only
         # Readiness is data-based now, but `learning_days=0` has always been the
-        # way a caller says "no learning period — be authoritative immediately"
+        # way a caller says "no learning period - be authoritative immediately"
         # (the intel-only harness and the classifier tests both rely on it).
         # Honour that contract explicitly: silently ignoring it left a fresh
         # store PERMANENTLY in learning mode, which damps every anomaly-only
-        # block down to a flag — i.e. the detector stops blocking and nothing
+        # block down to a flag - i.e. the detector stops blocking and nothing
         # says why.
         self._ready_pairs = 0 if float(learning_days) == 0 else max(1, int(ready_pairs))
         self._profiles: dict[tuple[str, str], _PairProfile] = {}
@@ -163,7 +163,7 @@ class BaselineLearner:
                 self._profiles[(process, domain)] = p
             if p.last_ts > 0:
                 gap = max(0.0, timestamp - p.last_ts)
-                # EWMA — recent behaviour weighted, but history not forgotten
+                # EWMA - recent behaviour weighted, but history not forgotten
                 p.avg_gap = gap if p.avg_gap == 0 else (0.7 * p.avg_gap + 0.3 * gap)
             p.hits     += 1
             p.last_seen = now_iso
@@ -174,26 +174,26 @@ class BaselineLearner:
             p.dirty = True
 
     def observed_pairs(self) -> int:
-        """Distinct process->domain behaviours learned so far — the breadth of
+        """Distinct process->domain behaviours learned so far - the breadth of
         this machine's normal. Grows only while the computer is on and observing;
         persists in SQLite across reboots; never restarts."""
         with self._lock:
             return len(self._profiles)
 
     def learning_progress(self) -> float:
-        """0.0 .. 1.0 — how much of the baseline is learned, measured by DATA."""
+        """0.0 .. 1.0 - how much of the baseline is learned, measured by DATA."""
         if self._ready_pairs <= 0:
             return 1.0          # learning explicitly disabled -> fully ready
         return min(1.0, self.observed_pairs() / self._ready_pairs)
 
     def is_learning(self) -> bool:
         """True until enough of THIS machine's normal has been observed to make
-        the novelty signals reliable — gated on DATA seen, not days elapsed.
+        the novelty signals reliable - gated on DATA seen, not days elapsed.
 
         The rule engine, the behavioural nose, and the kill-chain are live from
         second zero regardless; only the 'never seen on this host' novelty
         signals wait for this, because 'novel' is meaningless with no baseline.
-        A busy machine is ready in hours, an idle one takes longer — correct
+        A busy machine is ready in hours, an idle one takes longer - correct
         either way, and it accumulates whenever the machine is on."""
         return self.observed_pairs() < self._ready_pairs
 
@@ -319,7 +319,7 @@ class BaselineLearner:
         # (iterating _profiles under the lock) is outside that guard, so this
         # loop is not provably safe on its own. Guarded defensively: if this
         # thread dies, learned per-process baselines stop being persisted and
-        # every restart silently begins from an empty baseline — the anomaly
+        # every restart silently begins from an empty baseline - the anomaly
         # layer would appear to work while never accumulating any history.
         while self._running:
             time.sleep(INTEL_FLUSH_INTERVAL)

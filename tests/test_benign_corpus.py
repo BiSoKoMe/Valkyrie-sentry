@@ -1,4 +1,4 @@
-"""Tier 1.7 — the standing benign corpus gate.
+"""Tier 1.7 - the standing benign corpus gate.
 
 docs/TEST_PLAN.md calls this the single most valuable test in the repo, and the
 reason is history rather than theory: this project has shipped a false positive
@@ -10,9 +10,9 @@ The asymmetry that justifies a dedicated gate: a **missed threat** leaves one
 machine at ambient risk, which is bad. A **false positive** returns `0.0.0.0`
 for a domain, so the user's bank, tax portal, or hospital simply stops working
 and they have no idea Valkyrie did it. For this product the FP is the worse
-failure, so it gets the harder gate — **zero blocks tolerated**.
+failure, so it gets the harder gate - **zero blocks tolerated**.
 
-BLOCKED is a hard failure — not one benign domain may be sinkholed. FLAGGED is
+BLOCKED is a hard failure - not one benign domain may be sinkholed. FLAGGED is
 bounded rather than ignored: a flag does not break the site, but a rising flag
 rate is the leading indicator of the next outage.
 
@@ -23,11 +23,11 @@ domains blocked". State bleed between sweeps makes every number here
 unattributable, so each sweep builds its own store, engine and intelligence.
 
   A  each domain judged on its own merits (rate window cleared per lookup)
-  B  60 lookups in one burst — one ordinary page load
-  C  all 699 as one sustained burst — the shape of the real query-burst
+  B  60 lookups in one burst - one ordinary page load
+  C  all 699 as one sustained burst - the shape of the real query-burst
      incident that sinkholed microsoft/paypal/bing/live/linkedin
 
-This runs the REAL pipeline — real `SiteScanner`, real `BlocklistManager` seed,
+This runs the REAL pipeline - real `SiteScanner`, real `BlocklistManager` seed,
 real `BehavioralEngine`, real `Intelligence`, real `_decide` ordering. Fakes
 would defeat the entire point: the bug classes this exists to catch live in the
 interaction between those stages, not in any one of them.
@@ -87,7 +87,7 @@ def main() -> int:
 
     # A fresh pipeline per sweep. Sharing one would let an earlier sweep's
     # learned verdicts and rate windows leak into the next, which would make
-    # every number here unattributable — the exact confound this file exists to
+    # every number here unattributable - the exact confound this file exists to
     # rule out.
     # Must be a process that is genuinely running: the `app_closed` anomaly does
     # a live psutil liveness check, so an invented process name flags every
@@ -128,7 +128,7 @@ def main() -> int:
         so each domain is judged on its OWN merits rather than on how many
         lookups happened to precede it. With False the window accumulates, which
         is the shape of the query-burst incident that sinkholed microsoft/
-        paypal/bing/live/linkedin — worth asserting directly, not just avoiding.
+        paypal/bing/live/linkedin - worth asserting directly, not just avoiding.
         """
         di, store, behavioral = _pipeline()
         blocked_, flagged_ = [], []
@@ -161,15 +161,15 @@ def main() -> int:
     n = len(domains)
     tail = [d for d in domains if not is_popular(d)]
 
-    # A — each domain on its own merits.
+    # A - each domain on its own merits.
     solo_blocked, solo_flagged = _sweep(
         "A: each domain judged independently (rate window isolated)",
         domains, isolate_rate=True)
-    # B — a realistic page load: ~60 lookups from one process in one burst.
+    # B - a realistic page load: ~60 lookups from one process in one burst.
     page_blocked, _page_flagged = _sweep(
         "B: 60 lookups in one burst (one ordinary page load)",
         domains[:60], isolate_rate=False)
-    # C — the full corpus as one sustained burst: the outage shape.
+    # C - the full corpus as one sustained burst: the outage shape.
     burst_blocked, burst_flagged = _sweep(
         f"C: all {n} lookups as one sustained burst (the outage shape)",
         domains, isolate_rate=False)

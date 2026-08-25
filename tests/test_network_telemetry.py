@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Network connection telemetry — classification + diff/emit (ADR-0014).
+"""Network connection telemetry - classification + diff/emit (ADR-0014).
 
-The high-value signal is an outbound connection to a threat-intel IP — the
+The high-value signal is an outbound connection to a threat-intel IP - the
 hard-coded-IP-C2 case DNS never sees. This pins that behavior and the collector's
 baseline-then-emit / flagged-only semantics with injected snapshots.
 """

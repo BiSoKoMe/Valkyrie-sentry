@@ -1,17 +1,17 @@
-"""Valkyrie intelligence layer — self-learning threat detection.
+"""Valkyrie intelligence layer - self-learning threat detection.
 
 The ``Intelligence`` hub wires the five learning components together and
 is the single object the DNS pipeline and the web dashboard interact
 with:
 
-    baseline  — learns this machine's normal (BaselineLearner)
-    anomaly   — behaviour-signature scoring (AnomalyDetector)
-    graph     — threat infrastructure relations (ThreatGraph)
-    memory    — remembered verdicts, fast path (IntelligenceMemory)
-    classify  — combined decision (ThreatClassifier)
+    baseline  - learns this machine's normal (BaselineLearner)
+    anomaly   - behaviour-signature scoring (AnomalyDetector)
+    graph     - threat infrastructure relations (ThreatGraph)
+    memory    - remembered verdicts, fast path (IntelligenceMemory)
+    classify  - combined decision (ThreatClassifier)
 
 All state persists in the existing Store's SQLite database, so it
-survives reboots — and correctly stays in RAM under zero-log mode.
+survives reboots - and correctly stays in RAM under zero-log mode.
 Everything here is stdlib-only and works fully offline.
 """
 
@@ -83,7 +83,7 @@ class Intelligence:
             purged_pop = len(getattr(self.graph, "purged_popular", []) or [])
             # print(), not logging: this module has no logging.basicConfig
             # anywhere in the app, so a bare logging.getLogger().info() call is
-            # silently dropped by the default WARNING-level root logger —
+            # silently dropped by the default WARNING-level root logger -
             # verified missing from a real run. print() is what the rest of this
             # file already uses for startup diagnostics (see print_signal_health
             # below); nssm redirects stdout to service_stdout.log, so this is
@@ -99,7 +99,7 @@ class Intelligence:
         self.print_signal_health()
 
     # ------------------------------------------------------------------
-    # Signal health audit (no silent failures — see PHASE 0)
+    # Signal health audit (no silent failures - see PHASE 0)
     # ------------------------------------------------------------------
 
     def signal_health(self) -> list[dict]:
@@ -107,7 +107,7 @@ class Intelligence:
         stack, evaluated against the CURRENT baseline state.
 
         Grouped by engine. A DISABLED entry means the signal structurally
-        cannot fire right now (learning gate, missing dependency, etc.) — it is
+        cannot fire right now (learning gate, missing dependency, etc.) - it is
         surfaced rather than silently scoring 0.
         """
         rows: list[dict] = []
@@ -168,7 +168,7 @@ class Intelligence:
             pass
 
     def check_memory(self, domain: str, ip: str = "") -> Optional[str]:
-        """Step 2: fast path — 'bad' / 'good' / None.  Never raises."""
+        """Step 2: fast path - 'bad' / 'good' / None.  Never raises."""
         try:
             return self.memory.check(domain, ip)
         except Exception:
@@ -201,7 +201,7 @@ class Intelligence:
         return result
 
     def remember_block(self, domain: str, reason: str, ip: str = "") -> None:
-        """Steps 5–6: a block happened — remember it and grow the graph.
+        """Steps 5-6: a block happened - remember it and grow the graph.
 
         A tracker/telemetry domain is NEVER learned as a threat: it is a privacy
         nuisance handled by the scanner + DECEIVE policy, and treating it as a

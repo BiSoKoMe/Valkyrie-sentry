@@ -3,7 +3,7 @@
 Checks CA generation, that mitmproxy starts on TLS_PROXY_PORT, and sends
 a test HTTPS request through the proxy to confirm interception works.
 Without mitmproxy it exits EXIT_SKIP, so the runner records the TLS path as
-**untested here** instead of counting it as a pass — it previously exited 0,
+**untested here** instead of counting it as a pass - it previously exited 0,
 which is how tls_addon.py sat at 0% coverage behind a green badge.
 
 Usage:
@@ -75,7 +75,7 @@ def main() -> None:
 
 
 def _send_test_request(port: int) -> bool:
-    """Best-effort proxied request — failure here is expected unless the
+    """Best-effort proxied request - failure here is expected unless the
     Valkyrie CA has been installed as trusted, so this never fails the run."""
     try:
         import urllib.request

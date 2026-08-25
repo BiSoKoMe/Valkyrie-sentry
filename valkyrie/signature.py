@@ -1,4 +1,4 @@
-"""Authenticode signature state â€” the strongest generic signal available.
+"""Authenticode signature state — the strongest generic signal available.
 
 WHY
 ---
@@ -208,7 +208,7 @@ if sys.platform == "win32":                                  # pragma: no cover
                              (ctypes.c_ubyte * 8)(0x8C, 0xC2, 0x00, 0xC0,
                                                   0x4F, 0xC2, 0x95, 0xEE))
         _AVAILABLE = True
-    except Exception:   # noqa: BLE001 â€” no signature support is survivable
+    except Exception:   # noqa: BLE001 — no signature support is survivable
         _AVAILABLE = False
 
 _WTD_UI_NONE = 2

@@ -31,7 +31,7 @@ from valkyrie.config import RAM_DB_URI
 from valkyrie.zero_log import ZeroLogMode
 from valkyrie.store import Store, DnsEvent
 
-# ── Test 1: RAM DB creates with shared cache URI ──────────────────────────────
+# --- Test 1: RAM DB creates with shared cache URI ---
 print("\n-- RAM database ------------------------------------------")
 try:
     conn = sqlite3.connect(RAM_DB_URI, uri=True, check_same_thread=False)
@@ -44,7 +44,7 @@ try:
 except Exception as e:
     check("RAM DB creates and accepts writes", False, str(e))
 
-# ── Test 2: make_ram_store() returns a functioning Store ─────────────────────
+# --- Test 2: make_ram_store() returns a functioning Store ---
 print("\n-- RAM store -----------------------------------------")
 zl = ZeroLogMode()
 zl.enable()
@@ -72,7 +72,7 @@ try:
 except Exception as e:
     check("RAM store operations work", False, str(e))
 
-# ── Test 3: Disk DB unchanged when RAM mode active ────────────────────────────
+# --- Test 3: Disk DB unchanged when RAM mode active ---
 print("\n-- Disk isolation ------------------------------------")
 with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
     disk_path = Path(tf.name)
@@ -82,7 +82,7 @@ disk_store.start()
 disk_store.stop()
 size_before = disk_path.stat().st_size
 
-# Create a second RAM store and write to it — disk must not change
+# Create a second RAM store and write to it - disk must not change
 zl2 = ZeroLogMode()
 zl2.enable()
 ram2 = zl2.make_ram_store()
@@ -104,7 +104,7 @@ try:
 except PermissionError:
     pass   # Windows: SQLite WAL file may linger briefly
 
-# ── Test 4: Secure wipe runs on disable() ────────────────────────────────────
+# --- Test 4: Secure wipe runs on disable() ---
 print("\n-- Secure wipe ---------------------------------------")
 zl3 = ZeroLogMode()
 zl3.enable()
@@ -121,7 +121,7 @@ try:
 except Exception as e:
     check("disable() / secure wipe runs without error", False, str(e))
 
-# ── Test 5: Tamper detection detects file modification ────────────────────────
+# --- Test 5: Tamper detection detects file modification ---
 print("\n-- Tamper detection ----------------------------------")
 import hashlib
 from valkyrie.zero_log import _PKG_DIR
@@ -148,7 +148,7 @@ else:
 
 zl4._stop_event.set()
 
-# ── Test 6: status() returns correct mode ────────────────────────────────────
+# --- Test 6: status() returns correct mode ---
 print("\n-- Status dict ---------------------------------------")
 zl5 = ZeroLogMode()
 st_off = zl5.status()
@@ -163,7 +163,7 @@ check("status() mode contains 'ram' when enabled", "ram" in st_on["mode"])
 check("status() disk_writes='none' when enabled", st_on["disk_writes"] == "none")
 zl5._stop_event.set()
 
-# ── Summary ───────────────────────────────────────────────────────────────────
+# --- Summary ---
 print(f"\n{'=' * 50}")
 print(f"  {PASS} passed  /  {FAIL} failed")
 if FAIL:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resolution log + network scorer — actually wired, not just unit-tested.
+"""Resolution log + network scorer - actually wired, not just unit-tested.
 
 test_list_free_firewall.py proves network_score.py's scorer is list-free in
 isolation. This file proves the two integration seams the backlog asked for
@@ -8,10 +8,10 @@ their own green tests:
 
   [1] dns_interceptor.py records an ALLOWED answer's IPs into the resolution
       log, and does NOT record a BLOCKED/DECEIVED one (a sinkholed address is
-      not evidence a real destination was expected — recording it would teach
+      not evidence a real destination was expected - recording it would teach
       network_score.py's S2 signal the wrong thing).
   [2] network_telemetry.NetworkCollector actually builds a ConnFacts per new
-      connection and asks network_score.classify_connection_anomaly — proven
+      connection and asks network_score.classify_connection_anomaly - proven
       by a connection that fires on list-free signals ALONE (no threat-intel
       hit at all), which the pre-wiring collector could never have surfaced.
   [3] The per-process network baseline (S4) is live: a binary's first-ever
@@ -99,7 +99,7 @@ def main() -> int:
     set_active(log2)
     try:
         emitted: list = []
-        # ip_reputation always says "clean" — if anything fires, it can only
+        # ip_reputation always says "clean" - if anything fires, it can only
         # be the list-free scorer, proving the wiring reaches production code
         # rather than the old list-only path.
         col = NetworkCollector(emit=emitted.append, ip_reputation=lambda ip: False)

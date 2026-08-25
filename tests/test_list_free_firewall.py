@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""List-free network decision — the gate that keeps feeds from becoming load-bearing.
+"""List-free network decision - the gate that keeps feeds from becoming load-bearing.
 
 The owner's requirement: Valkyrie must make its OWN network decisions, not
 depend on someone else's list. That is easy to claim and easy to quietly lose,
 so it is enforced here as a mechanical property:
 
-    Score every case TWICE — once with threat intel, once with it forced off.
+    Score every case TWICE - once with threat intel, once with it forced off.
     The VERDICT must be identical. Only confidence may differ.
 
 If any verdict flips when the feeds are removed, a list has become the thing
 creating the decision, and this test fails.
 
-  [1] Resolution log — the signal only Valkyrie can compute
+  [1] Resolution log - the signal only Valkyrie can compute
   [2] No single weak signal ever fires (the precision rule, structurally)
   [3] Compounding signals do fire
   [4] Unknown context (feature off) is never scored as bad

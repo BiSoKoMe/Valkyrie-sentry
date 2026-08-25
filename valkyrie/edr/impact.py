@@ -1,7 +1,7 @@
-"""Incident impact — plain language, not a fabricated score.
+"""Incident impact - plain language, not a fabricated score.
 
 Clinton's *Cybersecurity for Business* (ch. 4) makes a specific, empirical
-claim: colors, letter grades, and 0-100 scores are not decision-useful —
+claim: colors, letter grades, and 0-100 scores are not decision-useful -
 they FEEL precise while hiding the one thing a person actually needs to
 decide what to do, which is "what did this cost me and can I undo it."
 IIBA/IEEE's *Cybersecurity Analysis* handbook (§4.9.4) points at NIST SP
@@ -9,11 +9,11 @@ IIBA/IEEE's *Cybersecurity Analysis* handbook (§4.9.4) points at NIST SP
 than inventing a new one.
 
 NIST SP 800-30 (Guide for Conducting Risk Assessments) defines impact
-across several rows — harm to operations, harm to assets, harm to
+across several rows - harm to operations, harm to assets, harm to
 individuals, harm to other organizations, harm to the nation. Valkyrie
 protects one person's endpoint: there is no organization, no mission
-operations, no nation-level stake here, so exactly one row applies —
-**Harm to Individuals** — described in terms of identity theft, loss of
+operations, no nation-level stake here, so exactly one row applies -
+**Harm to Individuals** - described in terms of identity theft, loss of
 PII, and damage to reputation/standing. This module does not reproduce
 NIST's tables verbatim (a US government publication with its own precise
 wording); it reuses the CATEGORY of harm it names, applied honestly to
@@ -22,14 +22,14 @@ what Valkyrie's detectors can actually see.
 **What this module refuses to do, on purpose:**
   * No dollar figures. Clinton's own point is that a number that LOOKS
     precise but isn't (a $47,000 "estimated cost" with no real basis) is
-    worse than an honest qualitative statement — it borrows credibility
+    worse than an honest qualitative statement - it borrows credibility
     the estimate hasn't earned.
   * No claim of CONFIRMED exposure when Valkyrie only observed an ATTEMPT.
     Blocking an exfiltration attempt and confirming data actually left the
     machine are different facts; conflating them either overstates harm
     (alarm fatigue) or, worse, understates a genuine breach.
 
-``severity`` (schema.py's SEVERITIES) is left completely alone — playbook
+``severity`` (schema.py's SEVERITIES) is left completely alone - playbook
 matching and correlation still key off it. This module adds ``impact`` as
 what a HUMAN reads; severity stays what the MACHINE reads.
 """

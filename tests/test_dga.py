@@ -5,13 +5,13 @@ Exit 0 on success, non-zero on failure (matches the standalone-script contract
 tests/run_tests.py expects).
 
 Three things are asserted:
-  1. Unit behavior — registrable-label extraction, the bigram/entropy signals,
+  1. Unit behavior - registrable-label extraction, the bigram/entropy signals,
      and the corroboration gates fire (and don't) on named cases.
-  2. Accuracy — recall/precision on a labeled corpus of long-label DGA vs. a
+  2. Accuracy - recall/precision on a labeled corpus of long-label DGA vs. a
      HARD benign control set (CDN hash hostnames, odd-spelled brands, long
      dictionary/foreign domains). Precision MUST be 100% (the project rule: a
      false positive breaks a real site); recall must clear a documented floor.
-  3. Performance — classification is a cheap pure function (throughput floor).
+  3. Performance - classification is a cheap pure function (throughput floor).
 """
 
 from __future__ import annotations
@@ -28,9 +28,9 @@ from valkyrie.dga import (
 from valkyrie.site_scanner import SiteScanner
 
 
-# ── Labeled corpus ──────────────────────────────────────────────────────────
+# --- Labeled corpus ---
 # Malicious: shape-faithful long-label DGA (necurs/ramnit/gozi/murofet/qakbot
-# style — 12-24 char gibberish registrable label, some with interleaved digits).
+# style - 12-24 char gibberish registrable label, some with interleaved digits).
 DGA_DOMAINS = [
     "xjkqvw92hd8skwlqz3ty.com", "k2v9q3xw8pjh4m1tzr7f.top",
     "uqwxkcjznqvbhlpm.net", "myfpbcadkbfcdcj.com", "ffvknrgtcfdyjwq.ru",
@@ -43,7 +43,7 @@ DGA_DOMAINS = [
 
 # Benign: chosen to break a naive entropy/gibberish detector.
 BENIGN_DOMAINS = [
-    # CDN / cloud hash hostnames — gibberish SUBDOMAIN, legitimate 2LD.
+    # CDN / cloud hash hostnames - gibberish SUBDOMAIN, legitimate 2LD.
     "d1anzknqnc1kmb.cloudfront.net", "dxbwzq9k3n7p2m.cloudfront.net",
     "prod-07-abcdxyz123.s3.amazonaws.com", "lh3.googleusercontent.com",
     "avatars0.githubusercontent.com", "scontent-iad3-1.xx.fbcdn.net",
@@ -117,7 +117,7 @@ def test_accuracy(fails: list) -> None:
           f"(TP={tp} FN={fn} FP={fp} TN={tn})")
     if fp:
         print("   FALSE POSITIVES:", [d for d in BENIGN_DOMAINS if classify_dga(d).is_dga])
-    # Precision is the hard gate — a benign false positive is unacceptable.
+    # Precision is the hard gate - a benign false positive is unacceptable.
     _check(fp == 0, f"precision must be 100% — {fp} benign false positive(s)", fails)
     _check(recall >= RECALL_FLOOR,
            f"recall {recall*100:.1f}% below floor {RECALL_FLOOR*100:.0f}%", fails)

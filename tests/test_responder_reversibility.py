@@ -22,7 +22,7 @@ SAFETY: every test below is either a pure data/logic check or runs against
 mocked subprocess/winreg/filesystem. Nothing here ever calls a real netsh,
 schtasks, sc.exe, or touches this host's real registry, firewall, network
 adapter, or scheduled tasks. Nothing here calls responder.execute() for
-kill_process with dry_run=False for any reason, at any severity — the
+kill_process with dry_run=False for any reason, at any severity - the
 floor-check logic is verified in isolation instead, specifically so this
 file can never be the thing that terminates a real process.
 """
@@ -80,7 +80,7 @@ def test_every_action_documented() -> None:
 
     # Non-responder enforcement actions the task explicitly requires auditing
     # (MAC change / registry write) even though they aren't ResponseManager
-    # responders — see reversibility.py's mac_randomize/mac_restore entries.
+    # responders - see reversibility.py's mac_randomize/mac_restore entries.
     for extra in ("mac_randomize", "mac_restore"):
         c.check(f"'{extra}' (non-responder enforcement action) is documented",
                 reversibility.is_documented(extra))
@@ -273,7 +273,7 @@ class _FakeWinReg:
 
     Seeded/read via ``.values``: {(hive, subkey, name): (data, type)}. Every
     responder call in this file goes through ``patch.dict(sys.modules, ...)``
-    so the module's own ``import winreg`` resolves to this fake — the real
+    so the module's own ``import winreg`` resolves to this fake - the real
     Windows registry is never opened.
     """
     HKEY_LOCAL_MACHINE = _real_winreg.HKEY_LOCAL_MACHINE

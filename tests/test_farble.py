@@ -1,16 +1,16 @@
-"""Tests for farble.py — the per-origin/per-session fingerprint randomiser.
+"""Tests for farble.py - the per-origin/per-session fingerprint randomiser.
 
 These are invariant tests, not coverage tests. Farbling has exactly three
 properties that make it work, and getting any ONE of them backwards turns the
 feature into the bug it replaced:
 
-  STABLE within (origin, session)  — a site reading the same surface twice
+  STABLE within (origin, session)  - a site reading the same surface twice
       must get the same answer. Two different answers is itself a tamper
       signal, and it breaks legitimate canvas/audio use.
-  DIFFERENT across origins         — this is the entire point. If two sites
+  DIFFERENT across origins         - this is the entire point. If two sites
       see the same values, they can correlate the user, which is exactly
       what the old constant-valued implementation allowed.
-  DIFFERENT across sessions        — otherwise the farbled value becomes a
+  DIFFERENT across sessions        - otherwise the farbled value becomes a
       durable long-term ID, i.e. a fingerprint with extra steps.
 
 The fourth property is negative and equally important: the script must never
@@ -40,7 +40,7 @@ def _seed_in(script: bytes) -> int:
 def main() -> int:
     c = Checks("farble", expect_min=22)
 
-    # ── Origin normalisation ────────────────────────────────────────────
+    # --- Origin normalisation ---
     print("\n[1] origin is the correlation boundary")
     c.check("path does not change the origin",
             farble.origin_of("https://a.com/x/y?z=1") == farble.origin_of("https://a.com/other"))
@@ -54,7 +54,7 @@ def main() -> int:
             farble.origin_of("not a url") == "about:blank")
     c.check("empty input does not raise", farble.origin_of("") == "about:blank")
 
-    # ── INVARIANT 1: stable within (origin, session) ────────────────────
+    # --- INVARIANT 1: stable within (origin, session) ---
     print("\n[2] STABLE within one origin + session (page must not break)")
     s1 = farble.script_for("https://facebook.com/feed")
     s2 = farble.script_for("https://facebook.com/other/page")
@@ -65,7 +65,7 @@ def main() -> int:
             _seed_in(farble.script_for("https://facebook.com"))
             == _seed_in(farble.script_for("https://facebook.com/deep/path")))
 
-    # ── INVARIANT 2: different across origins (the whole point) ─────────
+    # --- INVARIANT 2: different across origins (the whole point) ---
     print("\n[3] DIFFERENT across origins (kills cross-site correlation)")
     fb = _seed_in(farble.script_for("https://facebook.com"))
     goog = _seed_in(farble.script_for("https://google.com"))
@@ -77,7 +77,7 @@ def main() -> int:
     c.check(f"200 origins -> 200 distinct seeds (got {len(many)}), no collisions",
             len(many) == 200)
 
-    # ── INVARIANT 3: different across sessions (kills durable IDs) ──────
+    # --- INVARIANT 3: different across sessions (kills durable IDs) ---
     print("\n[4] DIFFERENT across sessions (kills long-term tracking)")
     before = _seed_in(farble.script_for("https://facebook.com"))
     farble.new_session()
@@ -87,7 +87,7 @@ def main() -> int:
     c.check("still stable within the NEW session",
             _seed_in(farble.script_for("https://facebook.com")) == after)
 
-    # ── The seed must not leak the session secret ───────────────────────
+    # --- The seed must not leak the session secret ---
     print("\n[5] the injected seed must not expose the session secret")
     c.check("seed is a bounded 32-bit value (not raw key material)",
             0 <= after <= 0xFFFFFFFF)
@@ -96,7 +96,7 @@ def main() -> int:
     c.check("one origin's seed does not trivially derive another's",
             a != b and (a ^ b) != 0)
 
-    # ── REGRESSION: the old constant-valued implementation is gone ──────
+    # --- REGRESSION: the old constant-valued implementation is gone ---
     print("\n[6] REGRESSION: no constant lies (a constant lie IS a fingerprint)")
     script = farble.script_for("https://example.com")
     c.check("the 'data:image/png,v' canvas constant is gone",
@@ -108,7 +108,7 @@ def main() -> int:
     c.check("hardwareConcurrency is randomised, not fixed",
             b"hardwareConcurrency" in script and b"pick(" in script)
 
-    # ── Script sanity ───────────────────────────────────────────────────
+    # --- Script sanity ---
     print("\n[7] the injected script is well-formed and defensive")
     c.check("is a complete <script> tag",
             script.startswith(b"<script>") and script.rstrip().endswith(b"</script>"))
@@ -134,11 +134,11 @@ def main() -> int:
     c.check("keeps the analytics no-ops", b"window.fbq" in script)
     c.check("no unsubstituted template placeholder", b"%SEED%" not in script)
 
-    # ── END-TO-END through the real injector ────────────────────────────
+    # --- END-TO-END through the real injector ---
     # The unit checks above prove the SCRIPT is right. These prove it
     # actually reaches a page, through both cleaning paths. The lxml path is
     # the one that runs in production, and its injection is wrapped in a
-    # bare `except: pass` — so if lxml ever rejected the script fragment,
+    # bare `except: pass` - so if lxml ever rejected the script fragment,
     # the feature would silently inject NOTHING and every check above would
     # still pass. That is exactly the "green but doing nothing" failure this
     # project keeps finding, so it gets an explicit test.
@@ -167,10 +167,10 @@ def main() -> int:
                 s_fb is not None)
         c.check("lxml path differs per origin", s_fb is not None and s_fb != s_gg)
 
-    # ── EXECUTION-BASED: attack the farbled surfaces for real ───────────────
+    # --- EXECUTION-BASED: attack the farbled surfaces for real ---
     # The checks above prove the hooks EXIST (string presence). This proves they
     # WORK: run the injected script in a mock browser (Node) and attack it like a
-    # real fingerprinting/anti-tamper probe would — every hook must be
+    # real fingerprinting/anti-tamper probe would - every hook must be
     # undetectable via Function.prototype.toString / '' + fn / String(fn), canvas
     # /WebGL/OffscreenCanvas/audio readbacks must be perturbed, and normal code
     # must NOT be made to look fake (overreach guard). Skips cleanly if Node is
