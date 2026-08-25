@@ -399,10 +399,24 @@ class PersistenceCollector:
         grace = min(self._startup_grace, self._interval * 3)
         waited = 0.0
         while self._running and waited < grace:
-            time.sleep(0.5)
-            waited += 0.5
+            try:
+                time.sleep(0.5)
+                waited += 0.5
+            except Exception:   # noqa: BLE001 — a worker loop never dies
+                waited += 0.5
+
+        # GUARDED. The baseline snapshot was moved onto this thread so it would
+        # stop blocking start(), and it was left OUTSIDE the try/except below.
+        # A single raise here killed the whole collector before it ever reached
+        # the guarded poll loop - the sensor would be dead for the life of the
+        # process while the engine went on reporting itself healthy. Silent
+        # sensor death is the failure mode this project keeps getting burned by,
+        # so the baseline gets the same guard every other poll has.
         if self._running and self._last is None:
-            self._last = self.snapshot()     # silent baseline, on THIS thread
+            try:
+                self._last = self.snapshot()     # silent baseline, on THIS thread
+            except Exception:   # noqa: BLE001
+                self._last = None                # retry on the next poll instead
         while self._running:
             time.sleep(self._interval)
             if not self._running:

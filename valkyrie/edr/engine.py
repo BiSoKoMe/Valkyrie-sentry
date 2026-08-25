@@ -36,6 +36,7 @@ from .killchain import KillChainCorrelator
 from ..behavioral_sequences import SequenceEngine
 from .plugins import PluginContext, PluginRegistry
 from .response import ResponseManager, register_responders
+from .remediation import plan as _remediation_plan
 from .schema import (
     Detection, Incident, TimelineEntry, iso_from_epoch, max_severity,
     severity_rank,
@@ -680,6 +681,34 @@ class EdrEngine:
                                   "limited_by": list(_au.limited_by),
                                   "reasons": list(_au.reasons),
                                   "vetoed": _au.vetoed}).to_dict())
+
+                    # WHAT WOULD ACTUALLY BE DONE, and why each step is
+                    # justified. The decision says how bad this is and the
+                    # authority verdict says how far we may go; neither says
+                    # which concrete actions the evidence supports. remediation
+                    # .plan() derives that from the causality subgraph, citing
+                    # the artifact behind every action and refusing to plan
+                    # irreversible steps where the graph has holes.
+                    #
+                    # Attached to the timeline, NOT executed - enforcement stays
+                    # with the audited playbooks. This module was built and
+                    # tested and then left with no caller at all, which meant an
+                    # analyst could see "kill_process was permitted" and never
+                    # see what would have been killed or on what grounds.
+                    _pl = _remediation_plan(
+                        self._causality.subgraph(
+                            det.pid, getattr(det, "create_time", 0.0),
+                            max_nodes=128),
+                        _sig, _dec)
+                    if _pl is not None and _pl.actions:
+                        inc.timeline.append(TimelineEntry(
+                            kind="remediation_plan",
+                            summary=(f"{len(_pl.actions)} action(s) justified by "
+                                     f"evidence"
+                                     + (f"; {len(_pl.blind_spots)} blind spot(s) "
+                                        f"cap irreversible steps"
+                                        if _pl.blind_spots else "")),
+                            data=_pl.to_dict()).to_dict())
                 except Exception:
                     pass
                 det.incident_id = inc.id

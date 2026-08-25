@@ -46,9 +46,9 @@ for mod, install_cmd in _REQUIRED.items():
         _missing.append((mod, install_cmd))
 
 if _missing:
-    print("Missing dependencies — install them and retry:\n")
+    print("Missing dependencies â€” install them and retry:\n")
     for mod, cmd in _missing:
-        print(f"  {mod:12s}  →  {cmd}")
+        print(f"  {mod:12s}  â†’  {cmd}")
     sys.exit(1)
 
 
@@ -128,14 +128,14 @@ def _add_windows_firewall_rule(port: int, console=None) -> None:
             # engine finishes coming up, so a netsh call that never returns
             # means the service never starts and never says why.
             subprocess.run(args, check=True, capture_output=True, timeout=60)
-            _say(f"[green]✓[/green] Firewall rule: {rule['name']}")
+            _say(f"[green]âœ“[/green] Firewall rule: {rule['name']}")
         except subprocess.TimeoutExpired:
             _say(f"[dim]Firewall rule skipped ({rule['name']}): timed out[/dim]")
         except subprocess.CalledProcessError as exc:
             _say(f"[dim]Firewall rule skipped ({rule['name']}): "
                  f"{exc.stderr.decode(errors='replace').strip()}[/dim]")
         except FileNotFoundError:
-            _say("[dim]netsh not found — skipping firewall rules[/dim]")
+            _say("[dim]netsh not found â€” skipping firewall rules[/dim]")
             break
 
 
@@ -182,7 +182,7 @@ def _print_status_box(console, rows) -> None:
 
     Args:
         console: Rich console to print to.
-        rows:    list of (label, ok, detail) tuples - ok=False renders a red ✗.
+        rows:    list of (label, ok, detail) tuples - ok=False renders a red âœ—.
     """
     from rich import box as _box
     from rich.panel import Panel
@@ -193,7 +193,7 @@ def _print_status_box(console, rows) -> None:
     grid.add_column(justify="center", no_wrap=True)
     grid.add_column(justify="left")
     for label, ok, detail in rows:
-        mark = "[green]✓[/green]" if ok else "[red]✗[/red]"
+        mark = "[green]âœ“[/green]" if ok else "[red]âœ—[/red]"
         grid.add_row(f"[bold]{label}[/bold]", mark, f"[dim]{detail}[/dim]")
 
     console.print()
@@ -264,7 +264,7 @@ def build_status_rows(
                          f"{_ist['learning_percent']}%)"))
         else:
             rows.append(("Intelligence", True,
-                         f"active — {_ist['threats_learned']:,} threats learned"))
+                         f"active â€” {_ist['threats_learned']:,} threats learned"))
     if unbound_ok:
         rows.append(("Recursive DNS", True,
                      f"Unbound {dns_upstream_host}:{dns_upstream_port}"))
@@ -314,7 +314,7 @@ def protection_state(rows) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="valkyrie",
-        description="Local privacy gateway — DNS sinkhole + behavioral heuristics",
+        description="Local privacy gateway â€” DNS sinkhole + behavioral heuristics",
     )
     parser.add_argument("--update",    action="store_true",  help="Force blocklist update then exit")
     parser.add_argument("--no-dns",    action="store_true",  help="Skip DNS interceptor")
@@ -350,7 +350,7 @@ def main() -> None:
                              "service runs with this).")
     # --setup-multihop / --hop1 / --hop2 / --multihop-status removed with the
     # multi-hop VPN (experimental/).
-    parser.add_argument("--zero-log",        action="store_true",  help="RAM-only mode — no disk writes")
+    parser.add_argument("--zero-log",        action="store_true",  help="RAM-only mode â€” no disk writes")
     parser.add_argument("--zero-log-import", type=int, default=0, metavar="HOURS",
                         help="Import last N hours from disk DB into RAM at startup")
     parser.add_argument("--meeting-on",  action="store_true", help="Meeting Mode: block ALL outbound traffic (kill switch), then exit")
@@ -362,19 +362,19 @@ def main() -> None:
     parser.add_argument("--siem", type=str, default="", metavar="URL",
                         help="Export EDR incidents to a SIEM: udp://host:514, "
                              "tcp://host:514, tls://host:6514 or file:///path "
-                             "(off by default — sends event data off this machine)")
+                             "(off by default â€” sends event data off this machine)")
     parser.add_argument("--siem-format", type=str, default="cef",
                         choices=("cef", "json"), help="SIEM export format (default: cef)")
     parser.add_argument("--siem-dns", action="store_true",
                         help="Also export blocked/flagged DNS events to the SIEM "
-                             "(includes domains — explicit opt-in)")
+                             "(includes domains â€” explicit opt-in)")
     parser.add_argument("--skip-selftest", action="store_true", help="Skip the startup self-test (not recommended)")
     parser.add_argument("--enable-native-audit", action="store_true",
                         help="Turn on Windows process-creation auditing (Security 4688 + "
                              "command line) so command-line detection works WITHOUT Sysmon, "
                              "then exit. Needs admin.")
     parser.add_argument("--debug", action="store_true",
-                        help="Verbose DNS forwarding logs — prints every query, upstream tried, and result")
+                        help="Verbose DNS forwarding logs â€” prints every query, upstream tried, and result")
     parser.add_argument("--intelligence-status", action="store_true",
                         help="Print learning status and learned-intelligence stats, then exit")
     parser.add_argument("--reset-learning", action="store_true",
@@ -386,7 +386,7 @@ def main() -> None:
     parser.add_argument("--no-edr", action="store_true",
                         help="Disable the EDR layer (incidents, hunting, response)")
     parser.add_argument("--no-sysmon-setup", action="store_true",
-                        help="Skip Sysmon install/verify at startup — Valkyrie still "
+                        help="Skip Sysmon install/verify at startup â€” Valkyrie still "
                              "runs, but command-line, process-injection and "
                              "credential-dump detection may run in degraded mode "
                              "without it. For hosts where Sysmon is managed "
@@ -406,7 +406,7 @@ def main() -> None:
     parser.add_argument("--no-endpoint", action="store_true",
                         help="DNS-only mode: disable endpoint telemetry and real-time "
                              "sensors. Endpoint detection is ON BY DEFAULT so a shipped "
-                             "install is fully armed however it is launched — this flag "
+                             "install is fully armed however it is launched â€” this flag "
                              "opts out")
     parser.add_argument("--incidents", action="store_true",
                         help="Print current EDR incidents and exit")
@@ -416,15 +416,15 @@ def main() -> None:
     parser.add_argument("--analyze", type=str, default="", metavar="URL",
                         help="Genuinely analyze a site's CONTENT and exit: fetch the page and "
                              "score fingerprinting, cryptomining, obfuscated JS, phishing and "
-                             "tracker density. List-free — it judges what the site actually does.")
+                             "tracker density. List-free â€” it judges what the site actually does.")
     # --mcp / --allow-response removed with the MCP server (experimental/).
     parser.add_argument("--download-lists", action="store_true",
                         help="Force-enable downloading external blocklist/threat-intel feeds "
                              "for this run, even if USE_EXTERNAL_LISTS is False in config.py "
-                             "(default: on — see --no-download-lists to opt out)")
+                             "(default: on â€” see --no-download-lists to opt out)")
     parser.add_argument("--no-download-lists", action="store_true",
                         help="Opt OUT of downloading external blocklist/IP/threat-intel feeds "
-                             "for this run — stay on the built-in seed list + learned "
+                             "for this run â€” stay on the built-in seed list + learned "
                              "intelligence only, with zero outbound fetches at startup")
     parser.add_argument("--no-dns-leak", action="store_true",
                         help="Fail-closed DNS: only ever use the local resolver upstream; "
@@ -468,7 +468,7 @@ def main() -> None:
                 ).strip().lower()
                 if confirm == "y":
                     intel.reset_learning()
-                    console.print("[green]✓[/green] Learning reset — baseline wiped, learning restarts now.")
+                    console.print("[green]âœ“[/green] Learning reset â€” baseline wiped, learning restarts now.")
                 else:
                     console.print("Cancelled.")
             elif args.export_intelligence:
@@ -476,7 +476,7 @@ def main() -> None:
                 data = intel.export()
                 out = DATA_DIR / "intelligence_export.json"
                 out.write_text(_json.dumps(data, indent=2), encoding="utf-8")
-                console.print(f"[green]✓[/green] Intelligence exported → [cyan]{out}[/cyan]")
+                console.print(f"[green]âœ“[/green] Intelligence exported â†’ [cyan]{out}[/cyan]")
                 console.print(f"  Threats learned : {len(data['threats']):,}")
                 console.print(f"  Safe patterns   : {len(data['safe']):,}")
             else:
@@ -532,7 +532,7 @@ def main() -> None:
             for r in v.reasons:
                 console.print(f"    - {r}")
         else:
-            console.print("  Evidence : none — the page content looks clean")
+            console.print("  Evidence : none â€” the page content looks clean")
         console.print(f"  Signals  : {v.signals}")
         return
 
@@ -596,7 +596,7 @@ def main() -> None:
         tk = TelemetryKiller()
         findings = tk.scan()
         if not findings:
-            console.print("[yellow]Could not scan — admin rights required.[/yellow]")
+            console.print("[yellow]Could not scan â€” admin rights required.[/yellow]")
             return
         console.print("[bold]Telemetry scan:[/bold]")
         for name, info in findings.items():
@@ -629,7 +629,7 @@ def main() -> None:
             from ._build import BUILD_STAMP
         except Exception:
             BUILD_STAMP = "dev (unstamped source run)"
-        print(f"Valkyrie {__version__}  ·  build {BUILD_STAMP}")
+        print(f"Valkyrie {__version__}  Â·  build {BUILD_STAMP}")
         return
 
     # ------------------------------------------------------------------
@@ -656,20 +656,20 @@ def main() -> None:
         from .meeting_mode import MeetingMode
         mm = MeetingMode()
         if args.meeting_on:
-            console.print("[bold red]Activating Meeting Mode — blocking ALL outbound traffic…[/bold red]")
+            console.print("[bold red]Activating Meeting Mode â€” blocking ALL outbound trafficâ€¦[/bold red]")
             res = mm.activate()
         elif args.meeting_off:
-            console.print("[bold]Deactivating Meeting Mode — restoring normal traffic…[/bold]")
+            console.print("[bold]Deactivating Meeting Mode â€” restoring normal trafficâ€¦[/bold]")
             res = mm.deactivate()
         else:
             res = mm.status()
         if res.get("error"):
-            console.print(f"[red]✗ {res['error']}[/red]")
+            console.print(f"[red]âœ— {res['error']}[/red]")
         elif res.get("active"):
-            console.print(f"[bold red]MEETING MODE ACTIVE[/bold red] — outbound blocked "
+            console.print(f"[bold red]MEETING MODE ACTIVE[/bold red] â€” outbound blocked "
                           f"(since {res.get('activated_at', '?')}, {res.get('duration_minutes', 0)} min)")
         else:
-            console.print("[green]Meeting Mode is OFF[/green] — traffic normal.")
+            console.print("[green]Meeting Mode is OFF[/green] â€” traffic normal.")
         return
 
     # ------------------------------------------------------------------
@@ -680,12 +680,12 @@ def main() -> None:
         fp = NetworkFingerprint()
         if args.fingerprint:
             ok = fp.normalize()
-            console.print("[green]✓ Fingerprint normalised[/green] (TTL 64, TCP timestamps off)"
-                          if ok else f"[red]✗ {fp.last_error}[/red]")
+            console.print("[green]âœ“ Fingerprint normalised[/green] (TTL 64, TCP timestamps off)"
+                          if ok else f"[red]âœ— {fp.last_error}[/red]")
         elif args.fingerprint_restore:
             ok = fp.restore()
-            console.print("[green]✓ Fingerprint restored[/green]"
-                          if ok else f"[red]✗ {fp.last_error}[/red]")
+            console.print("[green]âœ“ Fingerprint restored[/green]"
+                          if ok else f"[red]âœ— {fp.last_error}[/red]")
         else:
             st = fp.status()
             console.print(f"  Supported     : {st['supported']}")
@@ -706,7 +706,7 @@ def main() -> None:
         if not args.debug:
             return
         elapsed = time.monotonic() - t0
-        console.print(f"[green]✓[/green] {label} [dim]({elapsed:.2f}s)[/dim]")
+        console.print(f"[green]âœ“[/green] {label} [dim]({elapsed:.2f}s)[/dim]")
 
     # Sub-components accept a Rich console for progress output; give them one
     # only in debug mode so normal startup stays quiet (Improvement 6).
@@ -727,13 +727,13 @@ def main() -> None:
         fatal = critical_failures(checks)
         if fatal or args.debug:
             for c in checks:
-                mark = "[green]✓[/green]" if c.ok else ("[red]✗[/red]" if c.critical else "[yellow]![/yellow]")
+                mark = "[green]âœ“[/green]" if c.ok else ("[red]âœ—[/red]" if c.critical else "[yellow]![/yellow]")
                 console.print(f"  {mark} {c.name}: [dim]{c.detail}[/dim]")
         if fatal:
             console.print()
-            console.print("[bold red]Startup aborted — critical checks failed:[/bold red]")
+            console.print("[bold red]Startup aborted â€” critical checks failed:[/bold red]")
             for c in fatal:
-                console.print(f"  [red]✗ {c.name}: {c.detail}[/red]")
+                console.print(f"  [red]âœ— {c.name}: {c.detail}[/red]")
             console.print("[dim]Fix the above and retry, or pass --skip-selftest to override.[/dim]")
             sys.exit(1)
 
@@ -823,13 +823,29 @@ def main() -> None:
     # fully warmed up?" fills in behind it. web_state is a plain mutable
     # AppContext shared by reference with the running server, so later attribute
     # assignments are seen live.
+    registry = None            # created in 1b when --web is on; see there\r
     web_state = None
     web_thread = None
     if args.web:
         from .web.server import run_server as _run_server
         from .context import AppContext as _AppContext
+        # The component registry is created HERE, before the server binds, and
+        # populated later as each subsystem comes up.
+        #
+        # It used to be created at the very end of startup, which meant
+        # /api/components returned {"enabled": false, "components": []} for the
+        # whole warm-up - byte-identical to the response for "this feature is
+        # switched off". The desktop app polls that endpoint and had no way to
+        # tell "still starting" from "disabled", and the startup smoke test read
+        # it as a wiring failure. Liveness before readiness is the right
+        # architecture, but it obliges every endpoint to say WHICH of the two it
+        # is; an empty answer that looks like a disabled answer is a lie.
+        from .components import ComponentRegistry as _ComponentRegistry
+        from .eventbus import EventBus as _EventBus
+        registry = _ComponentRegistry(bus=_EventBus("components"))
         web_state = _AppContext(store=store, start_time=time.time(),
-                                dns_port=args.port, web_port=args.web_port)
+                                dns_port=args.port, web_port=args.web_port,
+                                registry=registry)
         web_thread = threading.Thread(
             target=_run_server,
             kwargs={"host": args.web_host, "port": args.web_port, "ctx": web_state},
@@ -941,13 +957,13 @@ def main() -> None:
     allow_external_fallback = not (unbound_ok or force_local_only)
     if not allow_external_fallback:
         if unbound_ok:
-            console.print("[green]✓[/green] No-leak DNS: local resolver only, "
+            console.print("[green]âœ“[/green] No-leak DNS: local resolver only, "
                           "no public-DNS fallback [dim](Unbound active)[/dim]")
         else:
             # Forced fail-closed with no local resolver present: queries will
             # SERVFAIL rather than leak - the safe choice when the user asked.
             console.print("[yellow]No-leak DNS forced (--no-dns-leak) but no local "
-                          "resolver is active — queries will SERVFAIL until Unbound "
+                          "resolver is active â€” queries will SERVFAIL until Unbound "
                           "is available (no external fallback).[/yellow]")
 
     # ------------------------------------------------------------------
@@ -1013,9 +1029,9 @@ def main() -> None:
         # identity; the original is backed up so the UI can show original -> new.
         new_mac = mac_randomizer.randomize()
         if new_mac:
-            console.print(f"[green]✓[/green] MAC randomised: [cyan]{new_mac}[/cyan]")
+            console.print(f"[green]âœ“[/green] MAC randomised: [cyan]{new_mac}[/cyan]")
         elif mac_randomizer.last_error:
-            console.print(f"[red]✗ MAC randomisation failed:[/red] {mac_randomizer.last_error}")
+            console.print(f"[red]âœ— MAC randomisation failed:[/red] {mac_randomizer.last_error}")
         mac_randomizer.auto_randomize_on_connect()
         _tick("MAC randomizer: active (auto-randomise on reconnect)", _t)
     elif args.debug:
@@ -1120,7 +1136,7 @@ def main() -> None:
                 f"Sysmon setup raised unexpectedly ({type(exc).__name__}: {exc}); "
                 "continuing without it.", SysmonEnvironment())
         if sysmon_result.degraded:
-            console.print(f"[yellow]Sysmon: {sysmon_result.mode} — "
+            console.print(f"[yellow]Sysmon: {sysmon_result.mode} â€” "
                           f"{sysmon_result.reason}[/yellow]")
         else:
             _tick(f"Sysmon verified ({sysmon_result.mode})", _t)
@@ -1144,7 +1160,7 @@ def main() -> None:
             _tick(f"Deception endpoint listening on 127.0.0.1:{DECEPTION_PORT}", _t)
         else:
             console.print(f"[dim]Deception endpoint unavailable (port "
-                          f"{DECEPTION_PORT} in use) — DECEIVE falls back to "
+                          f"{DECEPTION_PORT} in use) â€” DECEIVE falls back to "
                           f"the sinkhole[/dim]")
             deception = None
 
@@ -1157,7 +1173,7 @@ def main() -> None:
         _add_windows_firewall_rule(args.port, _verbose)
         if _test_upstream():
             if args.debug:
-                console.print("[green]✓ Upstream DNS reachable[/green]")
+                console.print("[green]âœ“ Upstream DNS reachable[/green]")
         else:
             console.print("[red]WARNING: Cannot reach upstream DNS servers. "
                           "Check firewall / network.[/red]")
@@ -1194,7 +1210,7 @@ def main() -> None:
                     f"-j REDIRECT --to-port {args.port}[/cyan]"
                 )
         except PermissionError:
-            console.print(f"[red]✗ Cannot bind port {args.port} — try sudo or use --port 5353[/red]")
+            console.print(f"[red]âœ— Cannot bind port {args.port} â€” try sudo or use --port 5353[/red]")
             dns_server = None
     elif args.debug:
         console.print("[yellow]DNS interceptor disabled (--no-dns)[/yellow]")
@@ -1204,12 +1220,12 @@ def main() -> None:
     # ------------------------------------------------------------------
     if args.test_dns:
         if dns_server is None:
-            console.print("[red]DNS interceptor failed to start — cannot run self-test.[/red]")
+            console.print("[red]DNS interceptor failed to start â€” cannot run self-test.[/red]")
             store.stop()
             return
         time.sleep(0.2)   # let the serve loop come up
         domain = args.test_dns
-        console.print(f"\n[bold]DNS self-test →[/bold] querying [cyan]{domain}[/cyan] …")
+        console.print(f"\n[bold]DNS self-test â†’[/bold] querying [cyan]{domain}[/cyan] â€¦")
         result = dns_server.self_test(domain)
         if result["decision"] == "PASS":
             ip     = result.get("ip", "?")
@@ -1221,7 +1237,7 @@ def main() -> None:
             console.print(f"  Rcode  : {rcode}")
             console.print(f"  Answers: {result.get('answers', 0)}")
         else:
-            console.print(f"  [bold red]FAIL[/bold red] — {result.get('error', 'unknown error')}")
+            console.print(f"  [bold red]FAIL[/bold red] â€” {result.get('error', 'unknown error')}")
         dns_server.stop()
         store.stop()
         return
@@ -1247,9 +1263,9 @@ def main() -> None:
     if args.build_baseline:
         if store.should_build_baseline():
             store.build_baselines()
-            console.print("[green]✓[/green] Baselines rebuilt.")
+            console.print("[green]âœ“[/green] Baselines rebuilt.")
         else:
-            console.print("[yellow]Not enough data yet — need 24h of events.[/yellow]")
+            console.print("[yellow]Not enough data yet â€” need 24h of events.[/yellow]")
     else:
         threading.Thread(target=_baseline_loop, daemon=True, name="baseline").start()
 
@@ -1262,9 +1278,9 @@ def main() -> None:
 
         def _on_health_change(healthy: bool) -> None:
             if healthy:
-                console.print("[green]✓ Protection heartbeat recovered — DNS sinkhole answering again.[/green]")
+                console.print("[green]âœ“ Protection heartbeat recovered â€” DNS sinkhole answering again.[/green]")
             else:
-                console.print("[bold red]⚠ PROTECTION HEARTBEAT FAILED — DNS sinkhole is not answering![/bold red]")
+                console.print("[bold red]âš  PROTECTION HEARTBEAT FAILED â€” DNS sinkhole is not answering![/bold red]")
 
         heartbeat = HeartbeatMonitor(
             dns_host  = args.host,
@@ -1333,7 +1349,7 @@ def main() -> None:
                 edr_engine.subscribe(siem_exporter.export_incident)
                 if args.siem_dns:
                     store.subscribe(siem_exporter.export_dns)
-                _tick(f"SIEM export active ({args.siem_format} → {args.siem})", _ts)
+                _tick(f"SIEM export active ({args.siem_format} â†’ {args.siem})", _ts)
             except ValueError as exc:
                 console.print(f"[red]SIEM export disabled: {exc}[/red]")
                 siem_exporter = None
@@ -1441,7 +1457,7 @@ def main() -> None:
             # silently degrading with no signal at all.
             _tst = time.monotonic()
             from .sensor_tamper import SensorTamperMonitor
-            # Compensating control (valkyrie/control_taxonomy.py, IIBA §4.2.3):
+            # Compensating control (valkyrie/control_taxonomy.py, IIBA Â§4.2.3):
             # when Sysmon dies, actively tighten the independent psutil-based
             # process poller instead of silently continuing at its normal
             # cadence. Partial coverage only - see control_taxonomy.py for
@@ -1480,7 +1496,7 @@ def main() -> None:
                         _tick(f"AMSI content scanning active (provider: {_state})", _ta)
                         if _state != "resident":
                             console.print(
-                                "[yellow]AMSI: no antimalware provider is resident — "
+                                "[yellow]AMSI: no antimalware provider is resident â€” "
                                 "scans will return 'not detected' regardless of "
                                 "content until one is installed.[/yellow]")
                 except Exception as _e:      # never block startup
@@ -1588,9 +1604,13 @@ def main() -> None:
     #     ADAPTS the services built above; nothing is rewritten. See
     #     docs/adr/0021-component-registry.md.
     # ------------------------------------------------------------------
-    from .components import ComponentRegistry
-    from .eventbus import EventBus
-    registry = ComponentRegistry(bus=EventBus("components"))
+    # The registry object was created in section 1b (before the server bound) so
+    # /api/components could tell "starting" from "disabled". Reuse it if it is
+    # there; only construct one here when the web server is off entirely.
+    if registry is None:
+        from .components import ComponentRegistry
+        from .eventbus import EventBus
+        registry = ComponentRegistry(bus=EventBus("components"))
     _reg_specs = [
         ("store", store, "storage"),
         ("firewall", firewall, "network"),
@@ -1660,15 +1680,15 @@ def main() -> None:
                 pass
         if args.web_host not in ("127.0.0.1", "::1", "localhost"):
             console.print(
-                f"[yellow]⚠ Web dashboard bound to {args.web_host} (off-loopback).[/yellow]\n"
+                f"[yellow]âš  Web dashboard bound to {args.web_host} (off-loopback).[/yellow]\n"
                 f"  Live DNS/browsing history is reachable from the network. "
                 f"Off-loopback API and WebSocket calls now require the control "
                 f"token in [cyan]data/control_token.txt[/cyan] "
-                f"(header X-Valkyrie-Token or ?token=…)."
+                f"(header X-Valkyrie-Token or ?token=â€¦)."
             )
         if args.debug:
             console.print(
-                f"[green]✓[/green] Web dashboard  "
+                f"[green]âœ“[/green] Web dashboard  "
                 f"[cyan]http://localhost:{args.web_port}[/cyan]"
             )
 
@@ -1847,12 +1867,12 @@ def main() -> None:
                                      rules=rules, threat_intel=threat_intel)
         if tls_inspector.start():
             ca_path = tls_inspector.setup_ca()
-            console.print(f"[green]✓[/green] TLS inspector on port {tls_inspector.port}")
+            console.print(f"[green]âœ“[/green] TLS inspector on port {tls_inspector.port}")
             console.print(f"[dim]  Configure your browser proxy: 127.0.0.1:{tls_inspector.port}[/dim]")
             console.print(f"[dim]  CA certificate: {ca_path}[/dim]")
         else:
             console.print(
-                "[yellow]TLS inspection unavailable — install mitmproxy: "
+                "[yellow]TLS inspection unavailable â€” install mitmproxy: "
                 "pip install mitmproxy[/yellow]"
             )
             tls_inspector = None
@@ -1885,7 +1905,7 @@ def main() -> None:
     if protection_state(status_rows) == "ACTIVE":
         console.print("  [bold]Protection:[/bold] [bold green]ACTIVE[/bold green]")
     else:
-        console.print("  [bold]Protection:[/bold] [bold yellow]DEGRADED[/bold yellow] — see ✗ above")
+        console.print("  [bold]Protection:[/bold] [bold yellow]DEGRADED[/bold yellow] â€” see âœ— above")
     if args.web:
         console.print(f"  Open dashboard: [cyan]{web_url}[/cyan]")
     console.print("  [dim]Press Ctrl-C to stop.[/dim]\n")
@@ -1913,7 +1933,7 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        console.print("\n[dim]Shutting down…[/dim]")
+        console.print("\n[dim]Shutting downâ€¦[/dim]")
         if heartbeat:
             heartbeat.stop()
         if dns_server:
@@ -1956,7 +1976,7 @@ def main() -> None:
             # keeps maturing across restarts instead of starting from nothing.
             try:
                 edr_engine.save_causal_baseline()
-            except Exception:   # noqa: BLE001 — never block shutdown on this
+            except Exception:   # noqa: BLE001 â€” never block shutdown on this
                 pass
             edr_engine.stop()
         if intelligence:
@@ -1979,3 +1999,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

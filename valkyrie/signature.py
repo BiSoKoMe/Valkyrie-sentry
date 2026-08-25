@@ -1,4 +1,4 @@
-﻿"""Authenticode signature state â€” the strongest generic signal available.
+"""Authenticode signature state â€” the strongest generic signal available.
 
 WHY
 ---

@@ -80,8 +80,14 @@ def _resolve_relative(importing_module: str, is_package: bool,
     return ".".join(base)
 
 
+# Files the scan could not read. Populated by build_importer_graph and asserted
+# EMPTY, because an unreadable file makes every orphan verdict unreliable.
+_UNREADABLE: list = []
+
+
 def build_importer_graph() -> dict[str, set[tuple[str, bool]]]:
     """Return {valkyrie_module: {(importing_file, is_test), ...}}."""
+    _UNREADABLE.clear()
     valkyrie_modules = {
         _module_name(p): p for p in _VALKYRIE.rglob("*.py")
         if "__pycache__" not in p.parts
@@ -90,11 +96,21 @@ def build_importer_graph() -> dict[str, set[tuple[str, bool]]]:
     importers: dict[str, set[tuple[str, bool]]] = {m: set() for m in valkyrie_modules}
 
     for f in _iter_py_files():
+        # utf-8-sig, and UNPARSEABLE FILES ARE RECORDED, NOT SKIPPED.
+        #
+        # This silently `continue`d on SyntaxError, which sounds harmless and is
+        # not: a single unreadable file drops out of the import graph, and every
+        # module it imports then looks like an orphan. That exact thing happened
+        # on 2026-08-25 - a UTF-8 BOM got written into __main__.py, the plain
+        # utf-8 read raised, the composition root vanished from the scan, and
+        # this test reported 15 healthy modules as dead code. A scan that cannot
+        # read a file must SAY SO, not quietly produce a confident wrong answer.
         try:
-            tree = ast.parse(f.read_text(encoding="utf-8", errors="replace"),
+            tree = ast.parse(f.read_text(encoding="utf-8-sig", errors="strict"),
                              filename=str(f))
-        except SyntaxError:
-            continue                                  # not this test's concern
+        except (SyntaxError, UnicodeDecodeError) as exc:
+            _UNREADABLE.append((str(f), f"{type(exc).__name__}: {exc}"))
+            continue
         this_module = _module_name(f)
         is_pkg = this_module in package_dirs
         is_test = "tests" in f.relative_to(_ROOT).parts
@@ -140,6 +156,31 @@ _ALLOWLIST = {
     "valkyrie.updater": "zero non-test importers, confirmed; deliberately "
                         "unwired per docs/PLATFORM_ROADMAP.md -- the "
                         "apply path is intentionally not yet built",
+
+    # BUILD-TIME TOOL, not runtime code. sigma_import converts a SigmaHQ
+    # checkout into valkyrie/defaults/imported_rules.json, which the engine then
+    # loads at startup via behavioral_rules.load_imported_rules(). Importing a
+    # 3000-rule corpus at runtime would be strictly worse: slower start, and a
+    # rule set that varies with whatever happens to be on disk instead of the
+    # reviewed, committed artifact. Having no runtime caller is the correct
+    # design here, not a forgotten wire. Remove this entry if rule import ever
+    # becomes a live feature rather than a build step.
+    "valkyrie.edr.sigma_import": "build-time converter; its OUTPUT "
+                                 "(defaults/imported_rules.json) is what ships "
+                                 "and is loaded at startup",
+
+    # DELIBERATELY NOT WIRED, for safety. host_safety decides what to do with a
+    # DNS configuration that points at a resolver which may be dead -- the exact
+    # situation that once stranded the developer's WiFi mid-session. The
+    # DECISION logic is pure, tested and correct; the OS shim that would act on
+    # it touches live networking on a machine somebody is using. Per ADR 0055 it
+    # stays unwired until it can be exercised on a disposable host first.
+    # Wiring it because a test complained would be precisely the reflex that
+    # caused the original incident.
+    "valkyrie.host_safety": "fail-safe DNS decision logic, deliberately not "
+                            "yet given an OS shim (ADR 0055) -- must be proven "
+                            "on a disposable host before it touches live "
+                            "networking",
 }
 
 
@@ -151,6 +192,17 @@ def main() -> int:
 
     c.check("the scan actually found valkyrie modules to check",
             len(importers) > 50)
+
+    # Before any orphan verdict is trusted, the scan must have READ EVERYTHING.
+    # One unreadable file silently removes its imports from the graph and turns
+    # live modules into phantom orphans.
+    if _UNREADABLE:
+        print("\n  FILES THE SCAN COULD NOT READ (every verdict below is "
+              "unreliable until these parse):")
+        for path, why in _UNREADABLE:
+            print(f"    {path}\n      {why}")
+    c.check(f"every python file parsed ({len(_UNREADABLE)} unreadable)",
+            not _UNREADABLE)
 
     orphans: list[str] = []
     test_only: list[str] = []
