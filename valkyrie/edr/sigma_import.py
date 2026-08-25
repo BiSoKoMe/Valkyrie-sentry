@@ -55,6 +55,7 @@ from typing import Optional
 
 from ..behavioral_rules import Rule
 from .adaptive import BENIGN_CORPUS
+from .elastic_import import full_benign_corpus
 
 
 class SigmaVerdict(str, Enum):
@@ -221,7 +222,11 @@ def import_rules(sigma_rules: list, *,
     false-positive gate is applied to EVERY converted rule; nothing reaches the
     approved set without surviving the benign corpus.
     """
-    corpus = BENIGN_CORPUS if benign_corpus is None else benign_corpus
+    # Defaults to the hand-written corpus PLUS the benign knowledge harvested
+    # from a real EDR fleet's exclusion lists - imported content is measured
+    # against what actually breaks on real machines, not only against what this
+    # developer thought to write down.
+    corpus = full_benign_corpus() if benign_corpus is None else benign_corpus
     existing_ids = existing_rule_ids or set()
     shapes = existing_shapes or set()
     out: list = []
