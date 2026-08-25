@@ -1343,6 +1343,44 @@ def main() -> None:
         heartbeat.start()
 
     # ------------------------------------------------------------------
+    # 9b2. DNS host-safety watchdog (ADR 0055) - the OS shim finally wired in.
+    #
+    # arm-protection.ps1 (the real product's DNS-interception toggle, run as
+    # the no-UAC ValkyrieArm scheduled task) checks the interceptor is
+    # answering ONCE, at arm time, then never looks again. If the interceptor
+    # dies afterward - proven tonight it genuinely can, under real load - the
+    # adapter stays pointed at a dead resolver and the host is stranded. That
+    # is the exact 2026-08-23 incident. host_safety.py's DnsWatchdog was
+    # written to close this and deliberately left unwired pending proof the
+    # OS shim was safe; dns_os.py is that shim, now real.
+    #
+    # Runs on every Windows launch, not only when --port 53 is used here: the
+    # adapter can be armed by a COMPLETELY SEPARATE process (the desktop app's
+    # scheduled task) at any time, so the watchdog cannot assume it caused
+    # any redirect it finds - it only ever reacts to what the adapter
+    # actually shows, exactly as host_safety.py's own design requires.
+    dns_watchdog = None
+    if platform.system() == "Windows":
+        from .host_safety import DnsWatchdog
+        from . import dns_os as _dns_os
+
+        dns_watchdog = DnsWatchdog(_dns_os.make_executor())
+
+        def _dns_watchdog_loop() -> None:
+            while True:
+                try:
+                    action = dns_watchdog.tick()
+                    if action.kind.value in ("restore_original", "reset_to_auto"):
+                        console.print(f"[bold red]⚠ DNS watchdog healed a "
+                                      f"stranded adapter: {action.reason}[/bold red]")
+                except Exception:   # noqa: BLE001 — a watchdog must never die
+                    pass
+                time.sleep(20.0)
+
+        threading.Thread(target=_dns_watchdog_loop, daemon=True,
+                         name="dns-watchdog").start()
+
+    # ------------------------------------------------------------------
     # 9c. EDR layer - detection -> incident -> response on top of the sensors.
     #     Subscribes to the live event stream and correlates detections into
     #     incidents. Stays entirely local (state lives in the same DB).
@@ -2034,6 +2072,18 @@ def main() -> None:
             except Exception:   # noqa: BLE001 — never block shutdown on this
                 pass
             edr_engine.stop()
+        if dns_watchdog is not None:
+            # The engine stopping while DNS is armed IS the strand condition:
+            # protection and the process are separate (arm-protection.ps1
+            # toggles the adapter independently of this engine's lifecycle),
+            # so if this process dies with the adapter still pointed at us,
+            # nothing is left to answer. Force it safe on the way out, exactly
+            # as a crash-recovery watchdog tick would, rather than leave that
+            # to the next launch's first tick 20s later.
+            try:
+                dns_watchdog.restore_on_stop()
+            except Exception:   # noqa: BLE001 — never block shutdown on this
+                pass
         if intelligence:
             intelligence.stop()
         if threat_intel is not None:
