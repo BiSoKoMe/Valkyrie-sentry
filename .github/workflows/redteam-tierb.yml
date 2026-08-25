@@ -168,7 +168,48 @@ jobs:
             # job: a failed redirect just means this run does not get to test
             # its hypothesis, which is what already happened before this fix
             # existed at all.
+            # VERIFY BEFORE COMMIT. Run 32858476983 redirected the runner's DNS
+            # blind, Valkyrie's upstream (8.8.8.8:53, the hardcoded default -
+            # see __main__.py's dns_upstream_host) turned out to be unreachable
+            # from this network, and the runner went COMPLETELY DARK: every
+            # step showed no conclusion at all, no logs, no artifacts - not a
+            # failed job, a lost one. That is not a bigger version of the same
+            # problem; it is the exact failure class host_safety.py (ADR 0055)
+            # exists to prevent, reproduced for real: a redirect to a resolver
+            # whose own upstream cannot be reached takes the whole host offline,
+            # including - this time - the GitHub Actions runner agent's own
+            # ability to report back.
+            #
+            # This is that module's core principle (verify the resolver is
+            # actually alive BEFORE trusting a redirect), sized for a one-shot
+            # CI experiment rather than the full continuously-ticking
+            # DnsWatchdog: a raw UDP query to the SAME upstream Valkyrie itself
+            # will use, sent BEFORE the adapter is touched at all. If it does
+            # not answer, the redirect is skipped entirely and DNS is never
+            # touched - the failure mode above becomes structurally impossible,
+            # not just less likely.
+            $upstreamOk = $false
             try {
+              $probe = New-Object System.Net.Sockets.UdpClient
+              $probe.Client.ReceiveTimeout = 3000
+              $probe.Connect("8.8.8.8", 53)
+              # Minimal well-formed DNS query for "google.com" A record - the
+              # exact shape self_test.py's _probe_dns sends, so this tests the
+              # real protocol path, not just a TCP handshake.
+              $q = [byte[]](0x12,0x34,0x01,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00,
+                            0x06,0x67,0x6f,0x6f,0x67,0x6c,0x65,0x03,0x63,0x6f,0x6d,0x00,
+                            0x00,0x01,0x00,0x01)
+              $probe.Send($q, $q.Length) | Out-Null
+              $remote = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
+              $resp = $probe.Receive([ref]$remote)
+              $upstreamOk = $resp.Length -ge 12
+              $probe.Close()
+              Write-Host "[cfg] upstream 8.8.8.8:53 preflight: $(if ($upstreamOk) {'REACHABLE'} else {'answered but malformed'}) ($($resp.Length) bytes)"
+            } catch {
+              Write-Host "[cfg] upstream 8.8.8.8:53 preflight: UNREACHABLE ($($_.Exception.Message)) - this is very likely why the last redirect attempt stranded the runner. Skipping the redirect entirely; DNS stays untouched."
+            }
+            try {
+              if (-not $upstreamOk) { throw "upstream preflight failed" }
               $iface = Get-DnsClientServerAddress -AddressFamily IPv4 |
                 Where-Object { $_.ServerAddresses } | Select-Object -First 1
               if ($iface) {
