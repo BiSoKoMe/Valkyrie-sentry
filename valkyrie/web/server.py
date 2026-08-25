@@ -1256,6 +1256,18 @@ def create_app(ctx: Optional[AppContext] = None):
         if sm is None:
             return {"enabled": False}
         s = sm.stats(); s["enabled"] = True
+        # POLL-BASED collectors report separately, because "running" is not the
+        # same as "able to detect". The persistence collector works by DIFFING
+        # snapshots, so before its first baseline exists it can detect nothing -
+        # and silence from a sensor that has not started looking must not read
+        # as an all-clear. A harness (or an operator) can wait on
+        # baseline_ready instead of racing it.
+        pc = getattr(state, "persistence_collector", None)
+        if pc is not None and hasattr(pc, "status"):
+            try:
+                s["persistence_collector"] = pc.status()
+            except Exception as exc:   # noqa: BLE001
+                s["persistence_collector"] = {"error": exc.__class__.__name__}
         return s
 
     @app.get("/api/edr/incidents/{incident_id}")

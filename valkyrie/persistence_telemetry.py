@@ -220,7 +220,7 @@ class PersistenceCollector:
     """Polls ASEP locations and emits a TelemetryEvent per newly-created entry."""
 
     def __init__(self, emit: Callable[[TelemetryEvent], None], interval: float = 15.0,
-                 snapshot_budget: float = 4.0) -> None:
+                 snapshot_budget: float = 4.0, startup_grace: float = 5.0) -> None:
         self._emit = emit
         self._interval = max(2.0, float(interval))
         self._last: Optional[dict] = None      # {activity: {identity: value}}
@@ -233,7 +233,27 @@ class PersistenceCollector:
         self._truncated: list[str] = []
         # Seconds to wait before the first baseline snapshot, keeping the engine's
         # startup + readiness window clear of the heavy enumeration.
-        self._startup_grace = 45.0
+        # 5s, not 45s. MEASURED, not guessed.
+        #
+        # The 45-second grace was introduced when a full snapshot took 253
+        # seconds and blocked the event loop. Since then this collector gained a
+        # cooperative yield every 128 entries and a hard snapshot_budget, and
+        # the same snapshot now costs FOUR MILLISECONDS over 901 entries -
+        # roughly 60,000x faster. The grace was protecting against a problem
+        # that no longer exists.
+        #
+        # It was not free. 45s of grace plus a 15s poll, against Tier B's 30s
+        # detection window, meant a persistence technique executed early in a
+        # run was measured against a collector that had not begun looking -
+        # persist-startup-folder flipped DETECTED/MISSED across two runs of the
+        # same build for exactly this reason. Worse in production than in test:
+        # the first minute after boot is when autostart malware runs.
+        #
+        # 5s leaves the baseline at ~5s and the first poll at ~20s, both inside
+        # a 30s window, while still letting startup settle. snapshot_budget
+        # remains the real protection against a slow host, which is where that
+        # protection belongs.
+        self._startup_grace = float(startup_grace)
 
     def available(self) -> bool:
         return os.name == "nt" and _WINREG
@@ -356,6 +376,36 @@ class PersistenceCollector:
             pass
 
     # -- poll ---------------------------------------------------------------
+    def status(self) -> dict:
+        """Is this collector actually able to detect anything YET?
+
+        It works by DIFFING snapshots, so until the first baseline exists it can
+        detect nothing at all - a persistence change made before then has
+        nothing to be compared against and is invisible forever.
+
+        That is not hypothetical. Tier B runs a 30-second detection window per
+        technique, while this collector waits `_startup_grace` (45s) before its
+        first snapshot and then polls every `_interval` (15s). A persistence
+        technique executed early in a run is therefore measured against a
+        collector that has not started looking, and `persist-startup-folder`
+        duly flipped between DETECTED and MISSED across two runs of the same
+        build - which reads as flaky detection and is really a race between a
+        45s grace and a 30s window.
+
+        Exposing this lets a harness WAIT for `baseline_ready` instead of
+        racing it, and lets an operator see "this sensor is not armed yet"
+        rather than assuming silence means safety.
+        """
+        return {
+            "running": self.is_running(),
+            "baseline_ready": self._last is not None,
+            "startup_grace_s": self._startup_grace,
+            "poll_interval_s": self._interval,
+            # The honest headline: a caller that acts on this collector's
+            # silence before the baseline exists is acting on nothing.
+            "detects_before_baseline": False,
+        }
+
     def poll_once(self) -> int:
         new = self.snapshot()
         if self._last is None:

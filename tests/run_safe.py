@@ -72,9 +72,18 @@ def main() -> int:
         skipped_dangerous = [f for f in files if f in HOST_AFFECTING]
         files = [f for f in files if f not in HOST_AFFECTING]
 
-    print(f"running {len(files)} test files"
-          + (f"  (excluding {len(skipped_dangerous)} host-affecting)"
-             if skipped_dangerous else "  INCLUDING HOST-AFFECTING TESTS"))
+    # Report what the FLAG decided, not what the filter happened to match.
+    # `-k persist` matches none of the host-affecting files, and keying the
+    # message off "did we skip any" made that print "INCLUDING HOST-AFFECTING
+    # TESTS" for a run that included nothing of the sort - a status line that
+    # lies in the alarming direction is still a status line that lies.
+    if include_dangerous:
+        note = "  INCLUDING HOST-AFFECTING TESTS (VALKYRIE_DISPOSABLE_HOST=1)"
+    elif skipped_dangerous:
+        note = f"  (excluding {len(skipped_dangerous)} host-affecting)"
+    else:
+        note = "  (no host-affecting tests matched this selection)"
+    print(f"running {len(files)} test files{note}")
     print("=" * 74)
 
     passed, failed, skipped = [], [], []
