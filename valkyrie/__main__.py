@@ -1305,10 +1305,20 @@ def main() -> None:
             plugin_dir   = plugin_dir,
             correlation_window_seconds = EDR_CORRELATION_WINDOW,
         )
+        # The causal baseline MUST survive restarts. It only earns the right to
+        # raise a detection after maturing (300 observed structures across 3
+        # sessions), so an in-memory-only baseline resets every launch and the
+        # causal detector can never fire at all - shipped, wired, and silently
+        # inert. Loading it here is what makes that subsystem real.
+        edr_engine.load_causal_baseline(DATA_DIR / "causal_baseline.json")
         edr_engine.start()
         _pi = edr_engine.plugins()
+        _cs = edr_engine.causal_status()
         _tick(f"EDR active ({len(_pi['plugins'])} plugins, "
-              f"{len(_pi['actions'])} response actions)", _t)
+              f"{len(_pi['actions'])} response actions, causal baseline "
+              f"{'mature' if _cs.get('mature') else 'learning'}: "
+              f"{_cs.get('observations', 0)} structures / "
+              f"{_cs.get('sessions', 0)} sessions)", _t)
 
         # SIEM export (opt-in): stream incidents (and, with --siem-dns, DNS
         # blocks) to the operator's log pipeline in CEF or JSON Lines. The
@@ -1935,6 +1945,12 @@ def main() -> None:
         if siem_exporter is not None:
             siem_exporter.stop()
         if edr_engine is not None:
+            # Persist what this session learned BEFORE stopping, so the baseline
+            # keeps maturing across restarts instead of starting from nothing.
+            try:
+                edr_engine.save_causal_baseline()
+            except Exception:   # noqa: BLE001 — never block shutdown on this
+                pass
             edr_engine.stop()
         if intelligence:
             intelligence.stop()

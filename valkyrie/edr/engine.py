@@ -136,6 +136,10 @@ class EdrEngine:
         # therefore never emit anything.
         self._causal_baseline = CausalBaseline()
         self._causal_baseline_path: Optional[Path] = None
+        self._causal_unsaved = 0
+        # Checkpoint cadence. Small enough that a hard kill costs little, large
+        # enough that learning does not turn into a write amplifier.
+        self._CAUSAL_SAVE_EVERY = 50
         self._causal_seen: set = set()   # subgraph keys already scored this run
         self._running = False
 
@@ -445,6 +449,15 @@ class EdrEngine:
         # 1. LEARN (always, silently)
         try:
             self._causal_baseline.observe_subgraph(sub)
+            self._causal_unsaved += 1
+            # CHECKPOINT. Saving only at shutdown loses the whole session
+            # whenever the process is killed rather than asked to stop - which
+            # is the normal way a Windows service ends. A baseline that needs
+            # 3 sessions to mature cannot afford to lose them, so it is
+            # checkpointed as it learns.
+            if self._causal_unsaved >= self._CAUSAL_SAVE_EVERY:
+                self._causal_unsaved = 0
+                self.save_causal_baseline()
         except Exception:
             pass
 
@@ -508,16 +521,35 @@ class EdrEngine:
         self._causal_baseline.start_session()
 
     def save_causal_baseline(self) -> bool:
-        """Persist the baseline so it can mature across sessions."""
+        """Persist the baseline so it can mature across sessions. ATOMIC.
+
+        Written to a temporary file and then replaced into place, because this
+        is now checkpointed *while learning* rather than only at shutdown. A
+        plain truncating write that is interrupted - a service kill, a power
+        loss - leaves a half-written JSON file, and load_causal_baseline treats
+        an unreadable baseline as "start fresh". That would silently discard
+        every session's learning at the exact moment persistence was supposed to
+        protect it. os.replace is atomic on Windows and POSIX alike, so a reader
+        sees either the previous baseline or the new one, never a torn one.
+        """
         import json
+        import os
         if self._causal_baseline_path is None:
             return False
+        tmp = self._causal_baseline_path.with_suffix(".json.tmp")
         try:
             self._causal_baseline_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self._causal_baseline_path, "w", encoding="utf-8") as fh:
+            with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(self._causal_baseline.to_dict(), fh)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, self._causal_baseline_path)
             return True
         except Exception:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:   # noqa: BLE001
+                pass
             return False
 
     def causal_status(self) -> dict:
