@@ -288,17 +288,59 @@ def main() -> int:
                  "/adventure-tours"]:   # must NOT match "/adsct"
         benign(f"benign path not a tracker beacon: {path}", not _is_tracker_path(path))
 
-    # --- Scoreboard ---
+    # --- The "accepted non-coverage" claim, PROVEN not asserted -------------
+    # These three path patterns are deliberately NOT matched by
+    # _is_tracker_path (a path rule generic enough to catch them - "/tr",
+    # "/v1/batch", "/b/ss" - would also match ordinary site routes and break
+    # pages, which is the one unforgivable failure for this module). The claim
+    # is that each is still defended by a DIFFERENT signal. That claim used to
+    # live only in a comment string and was live-verified once by hand, off
+    # the record, rather than checked here - which is exactly the shape of
+    # claim this project has been burned by trusting without evidence
+    # elsewhere tonight. So it is checked directly against the real functions
+    # below, and the checks below are what determine `_ACCEPTED`, not a
+    # hand-written dict.
+    #
+    # The mechanism is NOT uniform, and saying "domain rules" for all three
+    # would be wrong: TRACKER_SLDS-based blocking (_check_script/_check_pixel
+    # in tls_addon.py) derives its SLD as `domain.split('.')[-2]` - a naive
+    # split, not proper registrable-domain extraction - so
+    # 'connect.facebook.net' -> sld 'facebook' and 'api.segment.com' -> sld
+    # 'segment', and NEITHER is in TRACKER_SLDS. Only 'scorecardresearch' is.
+    # What actually catches all three, uniformly, is the HTML content cleaner
+    # (TRACKING_SCRIPT_DOMAINS, ValkyrieAddon._clean_html_regex) stripping the
+    # <script src="..."> tag outright - a response-body rewrite, not a
+    # connection-level domain block.
+    _cleaned, _ = ValkyrieAddon._clean_html_regex(
+        None,
+        b'<script src="https://connect.facebook.net/en_US/fbevents.js"></script>'
+        b'<script src="https://cdn.segment.com/analytics.js/v1/K/a.min.js"></script>'
+        b'<script src="https://sb.scorecardresearch.com/beacon.js"></script>'
+        b'<script src="https://cdn.jsdelivr.net/npm/vue.js"></script>',
+        "shop.example.com")
+    _cleaned_s = _cleaned.decode("utf-8", "replace")
+    benign("legit CDN script is NOT stripped by the tracker cleaner "
+          "(precision check on the mechanism being proven, not just its recall)",
+          "cdn.jsdelivr.net" in _cleaned_s)
+
+    def _sld(host: str) -> str:
+        return host.split(".")[-2] if "." in host else host
+
+    from valkyrie.config import TRACKER_SLDS
+
+    _ACCEPTED = {}
+    for label, host in (("path: /tr", "connect.facebook.net"),
+                        ("path: /v1/batch", "cdn.segment.com"),
+                        ("path: /b/ss", "sb.scorecardresearch.com")):
+        cleaner_catches = host not in _cleaned_s
+        sld_catches = _sld(host) in TRACKER_SLDS
+        defend(f"{label} (host {host}): caught by content-cleaner "
+              f"and/or SLD block", cleaner_catches or sld_catches)
+        via = ("content-cleaner" if cleaner_catches else "") + \
+              (" + SLD-block" if sld_catches else "")
+        _ACCEPTED[label] = f"not path-matched by design; caught via {via}"
     pct = (100.0 * _defended / _attacks) if _attacks else 0.0
     print("\n" + "=" * 68)
-    # Known, deliberate non-coverage - real trackers we do NOT match by PATH
-    # because a path rule would break sites, but which are still caught by the
-    # DOMAIN rules (so the tracker is handled, just not via this signal).
-    _ACCEPTED = {
-        "path: /tr": "Facebook pixel — '/tr/' is the Turkish locale; caught by facebook.net domain",
-        "path: /v1/batch": "Segment — too generic to path-match; caught by segment.com domain",
-        "path: /b/ss": "Comscore — too generic to path-match; caught by scorecardresearch.com domain",
-    }
     if _misses:
         real = [m for m in _misses if m not in _ACCEPTED]
         if real:
