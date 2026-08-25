@@ -234,11 +234,30 @@ jobs:
             # simultaneous destructive atomics. The drop counters already exist and
             # are already exposed at /api/sensors/status — just read them, once,
             # before stopping, for direct evidence instead of inferring from variance.
+            # THIS BLOCK MUST NEVER FAIL THE JOB. Run 32826492527 proved that the
+            # try/catch alone was not enough: the Invoke-RestMethod timeout was
+            # caught and logged exactly as designed, and the job still exited 1
+            # right after it. Scoring already does not depend on this endpoint -
+            # coverage is read from the SQLite incident store below, and this
+            # comment block said so BEFORE that run ever happened. A diagnostic
+            # the code's own authors documented as expected-to-timeout under
+            # battery load must not be able to fail a gate whose entire purpose
+            # is "did detection work", especially now that pushes to valkyrie/**
+            # trigger this automatically - an unattended run failing on a
+            # non-essential probe is worse than one that only ever ran on a
+            # manual click, because there is nobody watching to say "oh, that
+            # part doesn't matter."
+            #
+            # $Error.Clear() + explicit $LASTEXITCODE reset make this
+            # unambiguous rather than relying on try/catch semantics that were
+            # just demonstrated not to be sufficient on their own.
             "==== /api/sensors/status (backpressure/dedup drop evidence) ====" | Tee-Object tierb_transcript.log -Append
             try {
               $ss = Invoke-RestMethod "http://127.0.0.1:8090/api/sensors/status" -TimeoutSec 30
               ($ss | ConvertTo-Json -Depth 6) | Tee-Object tierb_transcript.log -Append
             } catch { "ERR sensors/status: $($_.Exception.Message)" | Tee-Object tierb_transcript.log -Append }
+            $Error.Clear()
+            $global:LASTEXITCODE = 0
             # Coverage is read AFTER Valkyrie stops, straight from the SQLite
             # incident store (the 'Authoritative coverage' step below). The live
             # API is unreliable under battery load — even the brief read times

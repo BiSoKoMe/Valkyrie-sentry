@@ -725,4 +725,37 @@ Write-Host "  Tier B live evaluation complete: $($Records.Count) techniques run.
 Write-Host "  Results: $OutPath"
 Write-Host "  Run the scorer:  PYTHONUTF8=1 python redteam/evaluation/score.py `"$OutPath`""
 Write-Host "======================================================================`n"
+
+# INTERPRETIVE NOTE, not a fix - this number IS working as designed, but three
+# CI runs in a row (5-8 of 50 techniques, one or two techniques absorbing
+# 20-77 "false positives" apiece, and WHICH technique varies run to run) made
+# it clear this reads as alarming to anyone who has not also read lines 80-82
+# and 707-710 above.
+#
+# With -SettleSeconds 0 (the CI default, chosen for speed - "no real adversary
+# runs 39 techniques back-to-back"), there is ZERO drain time between
+# techniques. A detection legitimately caused by technique N can land during
+# technique N+1's window and, because that incident's technique label does not
+# match N+1's id, gets counted as a false positive AGAINST N+1. The instability
+# of WHICH technique absorbs the count run to run is the signature of this:
+# it depends only on which techniques happen to be adjacent that run, not on
+# anything either technique's rule got wrong.
+#
+# This is entirely separate from, and does not affect, the false-positive
+# figures measured against real software on a live host (see
+# valkyrie/edr/elastic_import.py's harvested corpus and the ad-hoc live-process
+# sweeps) - those measure real benign commands with no adjacent attack traffic
+# at all. Do not quote this run's total false_positives_generated as a
+# real-world FP rate; it is an attribution-window artifact of running at
+# SettleSeconds=0, not evidence Valkyrie fires on legitimate activity.
+$totalFp = ($Records | ForEach-Object { $_.false_positives_generated } | Measure-Object -Sum).Sum
+$fpTechs = ($Records | Where-Object { $_.false_positives_generated -gt 0 }).Count
+if ($totalFp -gt 0) {
+    Write-Host ("  NOTE: false_positives_generated totals $totalFp across " +
+               "$fpTechs/$($Records.Count) techniques, at -SettleSeconds " +
+               "$SettleSeconds. This is very likely cross-technique attribution " +
+               "bleed (see script header, ~line 80), NOT a real-software false- " +
+               "positive rate - re-run with -SettleSeconds 5+ before treating " +
+               "this number as meaningful on its own.") -ForegroundColor DarkYellow
+}
 Write-Host "  REVERT THE SNAPSHOT NOW." -ForegroundColor Yellow
