@@ -1,6 +1,6 @@
 'use strict';
 /* =========================================================================
-   Valkyrie renderer — splash cinematic + live multi-page dashboard.
+   Valkyrie renderer - splash cinematic + live multi-page dashboard.
    Talks to the shell only through window.valkyrie (preload). No Node, no
    direct HTTP, no localhost surface. All data arrives pre-parsed over IPC.
    ========================================================================= */
@@ -16,7 +16,7 @@ const el = (tag, cls, html) => {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function safe(fn, fallback) { try { return await fn(); } catch { return fallback; } }
 
-// Shared modal focus trap — used by every full-screen overlay (Replay,
+// Shared modal focus trap - used by every full-screen overlay (Replay,
 // Command Palette) so Tab/Shift+Tab cycle within the dialog instead of
 // leaking focus back to the page behind it. Returns a disposer.
 const FOCUSABLE_SEL = 'a[href], button:not([disabled]), input:not([disabled]), ' +
@@ -35,8 +35,8 @@ function trapFocus(container) {
   return () => container.removeEventListener('keydown', handler);
 }
 
-// Winged-V mark — matched to the real Valkyrie logo (see electron/build/icon.*
-// and icons.js ICON.mark, which share this exact geometry — one shape, one
+// Winged-V mark - matched to the real Valkyrie logo (see electron/build/icon.*
+// and icons.js ICON.mark, which share this exact geometry - one shape, one
 // source of truth). Monochrome, matches the tactical HUD design system.
 const LOGO = `
 <svg viewBox="0 0 100 88" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -51,9 +51,9 @@ const state = { engineUp: false, protected: false, busy: false, route: 'dashboar
 
 /* ============================ Utilities ============================== */
 function fmt(n) { return (n == null || isNaN(n)) ? '0' : Number(n).toLocaleString('en-US'); }
-// Formats a duration in SECONDS (fractional — MTTD/MTTR are often
+// Formats a duration in SECONDS (fractional - MTTD/MTTR are often
 // sub-second) into the shortest reasonable human string. Used only for
-// valkyrie/edr/metrics.py's median_seconds/p95_seconds — null means "not
+// valkyrie/edr/metrics.py's median_seconds/p95_seconds - null means "not
 // enough data", handled by the caller before this is reached.
 function fmtDuration(s) {
   if (s == null || isNaN(s)) return '—';
@@ -97,7 +97,7 @@ function animateNumber(node, to) {
     return;
   }
   // null/undefined means "the subsystem that produces this number is not
-  // running" — distinct from a real zero. Rendering it as 0 reads as
+  // running" - distinct from a real zero. Rendering it as 0 reads as
   // "running, nothing found", which is false reassurance about a layer that
   // is switched off entirely. The API sends null deliberately for this.
   if (to == null) {
@@ -146,7 +146,7 @@ function rowsPanel(pairs) {
 function badge(text, kind) {
   return `<span class="badge ${kind || ''}"><span class="bdot"></span>${text}</span>`;
 }
-/* Reusable empty / offline / error state — the one component every page uses so
+/* Reusable empty / offline / error state - the one component every page uses so
    an absence of data is always communicated honestly and consistently.
    kind: 'offline' (engine not monitoring) | 'empty' (monitoring, nothing found)
        | 'error' (couldn't load). */
@@ -157,8 +157,8 @@ function stateBlock(kind, title, sub) {
 }
 // Plain-language incident impact (valkyrie/edr/impact.py, NIST SP 800-30
 // harm-to-individuals vocabulary): what was exposed, to whom, is it
-// reversible, what to do. Supplements severity — never replaces the .sev
-// chip already shown alongside it — and is deliberately never a color or a
+// reversible, what to do. Supplements severity - never replaces the .sev
+// chip already shown alongside it - and is deliberately never a color or a
 // score: harm_level is named in the caption, not painted. Missing/older-
 // build incidents (no `impact` key) render nothing, not a placeholder.
 function renderImpactLine(impact) {
@@ -174,18 +174,18 @@ function startParticles() {
   let raf, w = 1, h = 1;
   // Keep the canvas BUFFER matched to its on-screen size at all times. Measuring
   // the element (with a viewport fallback) means we never seed into a partial
-  // layout — the bug that bunched every particle into the top-left corner.
+  // layout - the bug that bunched every particle into the top-left corner.
   //
   // That bug reproduced live even with the fallback chain below: the FIRST
   // resize() ran synchronously from runSplashNormal(), before the BrowserWindow
-  // had actually settled its size — at that instant offsetWidth/clientWidth
+  // had actually settled its size - at that instant offsetWidth/clientWidth
   // AND window.innerWidth can all still read as their transient near-zero
   // pre-layout value, so every faller's fractional (0..1) position multiplied
   // out to ~1px and the whole field collapsed into the top-left corner. Two
   // fixes, both belt-and-suspenders: (1) defer the first measurement past the
   // next paint with rAF, when layout is guaranteed settled, and (2) a
   // one-shot re-measure shortly after as a backstop for a window that is
-  // still resizing at that point — self-correcting either way since draw()
+  // still resizing at that point - self-correcting either way since draw()
   // always reads the live w/h, never a snapshot.
   const resize = () => {
     const dpr = window.devicePixelRatio || 1;
@@ -202,7 +202,7 @@ function startParticles() {
   const count = Math.max(150, Math.min(340, Math.round(area / 9000)));
   // Positions are stored as FRACTIONS of the canvas (0..1). Multiplying by the
   // live width/height at draw time guarantees the field ALWAYS fills the whole
-  // screen — independent of size, DPR, or when a resize lands.
+  // screen - independent of size, DPR, or when a resize lands.
   const pts = Array.from({ length: count }, () => ({
     fx: Math.random(), fy: Math.random(),
     r: Math.random() * 1.7 + 0.4,            // css px; scaled by dpr at draw
@@ -215,7 +215,7 @@ function startParticles() {
     ctx.clearRect(0, 0, w, h);
     for (const p of pts) {
       p.fx += p.vx; p.fy += p.vy;
-      if (p.fy < -0.02) { p.fy = 1.02; p.fx = Math.random(); }   // wrap top→bottom
+      if (p.fy < -0.02) { p.fy = 1.02; p.fx = Math.random(); }   // wrap top->bottom
       if (p.fx < -0.02) p.fx = 1.02; else if (p.fx > 1.02) p.fx = -0.02;
       ctx.beginPath();
       ctx.arc(p.fx * w, p.fy * h, p.r * dpr, 0, Math.PI * 2);
@@ -282,7 +282,7 @@ function finishSplash(stopParticles) {
   setTimeout(() => { splash.remove(); if (stopParticles) stopParticles(); }, 950);
 }
 
-// Normal launch — the quick cinematic ("Hi. I'm Valkyrie…").
+// Normal launch - the quick cinematic ("Hi. I'm Valkyrie...").
 async function runSplashNormal() {
   $('splashLogo').innerHTML = LOGO;
   const stopParticles = startParticles();
@@ -294,7 +294,7 @@ async function runSplashNormal() {
   finishSplash(stopParticles);
 }
 
-// First install / upgrade / repair — a deliberate "Preparing Valkyrie" sequence
+// First install / upgrade / repair - a deliberate "Preparing Valkyrie" sequence
 // whose checklist is driven by REAL boot:step events from the main process.
 async function runSetupSplash(scenario) {
   const titles = {
@@ -329,8 +329,8 @@ async function runSetupSplash(scenario) {
 
 /* ============================ Chrome / nav ==========================
    Enterprise SOC information architecture: the sidebar is grouped by what an
-   analyst is DOING — Monitor (what is happening) → Detect (what we found) →
-   Protect (what is enforcing) → System (how the product itself is doing) —
+   analyst is DOING - Monitor (what is happening) -> Detect (what we found) ->
+   Protect (what is enforcing) -> System (how the product itself is doing) -
    rather than as one flat product-feature list. Every entry below maps to a
    real implemented PAGES.* route; nothing here is a dead link.
    `count` is an optional key on the live telemetry `stats` object; when the
@@ -363,7 +363,7 @@ const NAV_GROUPS = [
     ['about',        'About',               'info'],
   ]],
 ];
-// Flat view of the same data — every existing call site (route(), the command
+// Flat view of the same data - every existing call site (route(), the command
 // palette, loadLastRoute) still expects [id, label, icon] tuples.
 const NAV = NAV_GROUPS.flatMap(([, items]) => items.map(([id, label, icon]) => [id, label, icon]));
 // id -> {count, crit} for the rows that carry a live badge.
@@ -392,7 +392,7 @@ function buildChrome() {
       sb.appendChild(item);
     });
   });
-  // Footer status — the one place the product's mythology is allowed to
+  // Footer status - the one place the product's mythology is allowed to
   // surface, and only as words. Reflects real engine state (see updateTopbar).
   const foot = el('div', 'rail-foot',
     `<div class="rail-status off" id="railStatus"><span class="rs-dot"></span><span id="railStatusText">Connecting…</span></div>`);
@@ -404,7 +404,7 @@ function buildChrome() {
     $('notifBtn').onclick = () => V.openLogs();
   }
 }
-// Reopen where the analyst left off — persisted locally only, never synced.
+// Reopen where the analyst left off - persisted locally only, never synced.
 const LAST_ROUTE_KEY = 'valkyrie:lastRoute';
 function saveLastRoute(id) { try { localStorage.setItem(LAST_ROUTE_KEY, id); } catch {} }
 function loadLastRoute() {
@@ -434,16 +434,16 @@ function route(id) {
 /* ============================ PAGES ================================= */
 const PAGES = {};
 
-/* ---- Trend chart — a real, live "detections per tick" activity chart ----
+/* ---- Trend chart - a real, live "detections per tick" activity chart ----
    The engine's counters are cumulative since start, so the chart plots the
-   PER-TICK DELTA (this poll's total minus the last one) — genuine session
+   PER-TICK DELTA (this poll's total minus the last one) - genuine session
    activity, not a fabricated series. Single series -> no legend needed
    (dataviz: "a single series needs no legend box, the title names it"),
    thin 2px accent line, faint area fill, rounded end-cap, minimal
    crosshair+tooltip on hover. Reset each time the page is (re)opened. */
 const dashTrend = { buf: [], lastBlocked: null, canvas: null, hoverX: null };
 function pushTrendSample(up, stats) {
-  if (!up) return;                       // no real data this tick — don't fabricate a point
+  if (!up) return;                       // no real data this tick - don't fabricate a point
   const now = (stats.dns_blocked || 0) + (stats.fw_blocked || 0);
   if (dashTrend.lastBlocked != null) {
     const delta = Math.max(0, now - dashTrend.lastBlocked);
@@ -464,7 +464,7 @@ function drawTrend() {
   ctx.clearRect(0, 0, cw, ch);
   const buf = dashTrend.buf;
   const padB = 4, padT = 6;
-  // Faint recessive gridlines — 3 horizontal guides, never the data ink.
+  // Faint recessive gridlines - 3 horizontal guides, never the data ink.
   ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 1;
   for (let i = 1; i <= 2; i++) {
     const y = Math.round(padT + (ch - padT - padB) * (i / 3)) + 0.5;
@@ -480,7 +480,7 @@ function drawTrend() {
   const xAt = (i) => cw - (buf.length - 1 - i) * stepX;
   const yAt = (v) => padT + (ch - padT - padB) * (1 - v / max);
 
-  // Area fill — accent, fading to transparent toward the baseline.
+  // Area fill - accent, fading to transparent toward the baseline.
   const grad = ctx.createLinearGradient(0, padT, 0, ch);
   grad.addColorStop(0, 'rgba(255,255,255,0.22)');
   grad.addColorStop(1, 'rgba(255,255,255,0.0)');
@@ -491,7 +491,7 @@ function drawTrend() {
   ctx.closePath();
   ctx.fillStyle = grad; ctx.fill();
 
-  // The line itself — thin, one accent hue, rounded joins.
+  // The line itself - thin, one accent hue, rounded joins.
   ctx.beginPath();
   buf.forEach((p, i) => { const x = xAt(i), y = yAt(p.v); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
   ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.8; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
@@ -613,7 +613,7 @@ PAGES.dashboard = {
   },
 };
 
-/* Security posture — the one-line answer to "where do I stand?". Deliberately
+/* Security posture - the one-line answer to "where do I stand?". Deliberately
    derived from real signals only (engine reachable, protection armed, whether
    anything is currently flagged), and it says so in plain words. It is NOT a
    vanity score: when the engine is unreachable it refuses to show a number at
@@ -649,7 +649,7 @@ function renderPosture(stats, up, prot, privacy) {
 }
 // Keys of the rows currently on screen, so a poll that returns the same events
 // does not rebuild the DOM. Rebuilding every 1.5s replayed each row's entry
-// animation on all 40 rows at once, which read as a constant flicker — the
+// animation on all 40 rows at once, which read as a constant flicker - the
 // opposite of the "subtle and functional" motion the console is meant to have.
 let _feedKeys = [];
 function feedRowKey(e) {
@@ -686,13 +686,27 @@ function renderFeed(events, up) {
 /* ---- Nyx (the data guard) ---- */
 // Nyx is Valkyrie's data brain: it reads each outbound request in the raw and,
 // by the SHAPE of what's inside, spots a piece of the user crossing to a third
-// party. This slice is SEE & REPORT — observe-only — so the page says so plainly
+// party. This slice is SEE & REPORT - observe-only - so the page says so plainly
 // and never implies Nyx is blocking those leaks (it isn't, yet). The "defended"
 // tiles below are the OTHER, already-acting defenses (blocks, fake beacons),
 // kept visually distinct from the observe-only leak feed so the honesty holds.
 PAGES.nyx = {
   render() {
+    // WHO'S TRACKING YOU leads the page. This is the same correlation data
+    // the second section below always had (nyx_graph.py's TrackerGraph via
+    // /api/nyx) - nothing new is computed here, it is reordered and
+    // rewritten so the one conclusion a person actually came here for isn't
+    // the third thing they scroll past. See docs: the front door, not the
+    // graph.
     $('page').innerHTML = `
+      <div class="headline-block" id="nyxHeadline">
+        <div class="hl-top">Who's tracking you</div>
+        <div class="hl-main" id="nyxHeadlineMain">Watching…</div>
+        <div class="hl-sub" id="nyxHeadlineSub"></div>
+        <div class="hl-pair" id="nyxHeadlinePair"></div>
+      </div>
+      ${sectionHead('Who is following you', 'Each tracker unmasked — how many of your sites it rides, and how many disguises it wears')}
+      <div class="feed" id="nyxTrackers"><div class="empty">Correlating…</div></div>
       <div class="page-intro">Nyx is Valkyrie's data guard. It watches every request leaving your machine and,
       reading the raw data itself, catches when a piece of <em>you</em> — a device ID, your location,
       your contact details, a browser fingerprint — is being handed to a third party you didn't mean to talk to.
@@ -707,9 +721,7 @@ PAGES.nyx = {
         ${statCard('nyx_blocked', 'Trackers Stopped', 'shield', 'accent-green')}
       </div>
       ${sectionHead('What crossed to third parties', 'Each line is one thing Nyx caught leaving')}
-      <div class="feed" id="nyxFeed"><div class="empty">Waiting for Nyx…</div></div>
-      ${sectionHead('Who is following you', 'Each tracker unmasked — how many of your sites it rides, and how many disguises it wears')}
-      <div class="feed" id="nyxTrackers"><div class="empty">Correlating…</div></div>`;
+      <div class="feed" id="nyxFeed"><div class="empty">Waiting for Nyx…</div></div>`;
     const stBtn = $('nyxSelfTest');
     if (stBtn) stBtn.onclick = async () => {
       const out = $('nyxSelfTestOut');
@@ -745,6 +757,38 @@ PAGES.nyx = {
     if (modeEl) modeEl.textContent = !up ? '' : (acting
       ? 'Nyx is ACTIVE — feeding trackers fake data, not just watching.'
       : 'Nyx is watching and reporting — it never changes your traffic, so it can’t break a page.');
+
+    // ---- Headline: the one conclusion, before any of the raw feed. -----
+    // Every number here is arithmetic on fields /api/nyx already returns
+    // (leak_count, defended.*, tracker_summary.*, trackers[0]) - nothing
+    // new is measured or correlated to produce this.
+    const hlMain = $('nyxHeadlineMain'), hlSub = $('nyxHeadlineSub'), hlPair = $('nyxHeadlinePair');
+    if (hlMain) {
+      if (!up) {
+        hlMain.textContent = 'Protection is off';
+        if (hlSub) hlSub.textContent = 'Turn protection on and Nyx will start watching your data.';
+        if (hlPair) hlPair.innerHTML = '';
+      } else {
+        const sm = d.tracker_summary || {};
+        const top = (d.trackers && d.trackers[0]) || null;
+        const attempts = (d.leak_count || 0) + (def.trackers_blocked || 0) + (def.fake_data_served || 0);
+        if (!attempts && !sm.distinct_trackers) {
+          hlMain.textContent = 'Nothing has tried to track you yet';
+          if (hlSub) hlSub.textContent = 'Nyx is watching — this fills in as you browse.';
+          if (hlPair) hlPair.innerHTML = '';
+        } else {
+          hlMain.textContent = `NYX caught ${attempts} tracking attempt${attempts === 1 ? '' : 's'} today`
+            + (sm.distinct_trackers ? ` from ${sm.distinct_trackers} distinct tracker${sm.distinct_trackers === 1 ? '' : 's'}` : '');
+          hlSub.textContent = top
+            ? `Most connected: ${top.tracker} — seen on ${top.reach} of your site${top.reach === 1 ? '' : 's'}`
+              + (top.masks > 1 ? `, wearing ${top.masks} different names` : '')
+            : '';
+          hlPair.innerHTML =
+            `<span class="hl-num">${def.trackers_blocked || 0}<small>Blocked</small></span>`
+            + `<span class="hl-num hl-num-dim">${d.leak_count || 0}<small>Seen, not blocked</small></span>`;
+        }
+      }
+    }
 
     // The correlation brain: who is following you, unmasked.
     const tb = $('nyxTrackers');
@@ -852,8 +896,8 @@ PAGES.protection = {
     const arr = Array.isArray(incidents) ? incidents : (incidents.incidents || []);
     // Sensor tamper (T1562.001): a security tool's OWN sensor going dark is
     // itself an attack technique (Impair Defenses). This is DIFFERENT
-    // information from the coverage gap list below — an active-tampering
-    // signal, not just "something isn't running" — so it keeps its own
+    // information from the coverage gap list below - an active-tampering
+    // signal, not just "something isn't running" - so it keeps its own
     // banner rather than being folded into coverage. The old binary
     // "DEGRADED" banner (sysmon.degraded alone) is retired: the coverage
     // section below already reports that, with the effective/degraded/
@@ -882,12 +926,12 @@ PAGES.protection = {
 };
 
 // Defense coverage (valkyrie/coverage.py): the headline fraction plus the
-// NAMED gaps — "which parts of my defense are not running" is the actual
+// NAMED gaps - "which parts of my defense are not running" is the actual
 // deliverable, not the percentage alone. Three states, encoded by
 // fill/opacity only (no color): effective = solid, degraded = mid-opacity,
 // absent = hairline outline on empty track. A present-but-STOPPED sensor
 // (e.g. Sysmon installed but not delivering events) lands in absent, never
-// effective — see coverage.py's own module docstring for why that
+// effective - see coverage.py's own module docstring for why that
 // distinction is the entire point of this metric.
 function renderCoverage(headBox, gapsBox, cov) {
   if (!headBox || !gapsBox) return;
@@ -916,7 +960,7 @@ function renderCoverage(headBox, gapsBox, cov) {
     </div>`;
 
   const gaps = (cov.gaps || []).slice()
-    // Absent first — the most actionable state — then degraded.
+    // Absent first - the most actionable state - then degraded.
     .sort((a, b) => (a.state === b.state ? 0 : a.state === 'absent' ? -1 : 1));
   if (!gaps.length) {
     gapsBox.innerHTML = stateBlock('empty', 'Every control is effective', 'No named gaps right now.');
@@ -982,7 +1026,7 @@ PAGES.privacy = {
     const telStatus = tel.status === 'KILLED' ? badge('Killed', 'ok')
       : tel.status === 'ACTIVE' ? badge('Telemetry active', 'warn')
       : tel.status === 'PARTIAL' ? badge('Partial', 'warn') : badge('Unknown', 'off');
-    // MAC identity — show original → current (spoofed) for the adapter that changed.
+    // MAC identity - show original -> current (spoofed) for the adapter that changed.
     const ifaces = (mac && mac.interfaces) || {};
     let m = null, mName = '';
     for (const [name, v] of Object.entries(ifaces)) {
@@ -1008,10 +1052,10 @@ PAGES.privacy = {
   },
 };
 
-// Deception engine rows — how many trackers got a fabricated persona instead
+// Deception engine rows - how many trackers got a fabricated persona instead
 // of a dead end, and what that persona currently looks like. A NULL `dec`
 // means the endpoint call failed (engine off, or an older build without it);
-// rendered as '—' rather than 0, since 0 would falsely read as "deception is
+// rendered as '-' rather than 0, since 0 would falsely read as "deception is
 // active and simply has nothing to report yet".
 function renderDeceptionRows(box, dec) {
   if (!box) return;
@@ -1026,10 +1070,10 @@ function renderDeceptionRows(box, dec) {
   ]);
 }
 
-// DoH-bypass rows — a process resolving DNS-over-HTTPS straight to a public
+// DoH-bypass rows - a process resolving DNS-over-HTTPS straight to a public
 // resolver's IP is routing DNS around Valkyrie entirely, so it never reaches
 // the deception/block decision at all. A NULL `doh` (endpoint call failed)
-// renders as '—'; a wired-but-unavailable detector (no psutil) renders as
+// renders as '-'; a wired-but-unavailable detector (no psutil) renders as
 // its own distinct badge rather than looking identical to "nothing found".
 function renderDohRows(box, doh) {
   if (!box) return;
@@ -1081,9 +1125,9 @@ function renderTopBlocked(box, top, up) {
   }).join('');
 }
 
-// MTTD/MTTR (valkyrie/edr/metrics.py) — labeled in plain words, not
+// MTTD/MTTR (valkyrie/edr/metrics.py) - labeled in plain words, not
 // acronyms alone, per the task: "time to detect" / "time to respond".
-// median/p95 side by side (never a single average — see metrics.py's own
+// median/p95 side by side (never a single average - see metrics.py's own
 // docstring on why). n==0 renders as "not enough data yet", never a
 // fabricated 0s, since a metric with no samples is not the same claim as
 // an instant one.
@@ -1160,12 +1204,12 @@ PAGES.threats = {
       const sevClass = /crit/.test(sev) ? 'critical' : /high/.test(sev) ? 'high'
         : /med/.test(sev) ? 'medium' : /low/.test(sev) ? 'low' : '';
       const sevText = sevClass || (i.status || 'incident');
-      // MITRE id from a "technique" field, tolerating "T1003.001 — LSASS" strings.
+      // MITRE id from a "technique" field, tolerating "T1003.001 - LSASS" strings.
       const tech = (i.technique || '').toString().match(/T\d{4}(?:\.\d{3})?/);
       const entity = i.entity || i.host || '';
       const sub = [i.status, i.host].filter(Boolean).join(' · ');
       const title = i.title || i.name || i.rule || 'Incident';
-      // Plain-language "why" — the decision engine's own reasoning where
+      // Plain-language "why" - the decision engine's own reasoning where
       // available (see edr/engine.py's _incident_explanation), so a user can
       // see why an incident exists without opening the replay view. Omitted
       // when it would just repeat the title verbatim.
@@ -1195,7 +1239,7 @@ function fmtCell(v) {
 
 /* ---- Threat Hunting ---- */
 // A real, safe, read-only query surface (edr/hunt.py): a small validated
-// filter spec compiled to a parameterised query — never arbitrary SQL — plus
+// filter spec compiled to a parameterised query - never arbitrary SQL - plus
 // six canned "saved hunts" for the questions defenders ask most. No query
 // language, autocomplete-from-history, or saved/pinned queries beyond that
 // exist server-side, so none of that is invented client-side either.
@@ -1297,7 +1341,7 @@ PAGES.hunting = {
     this.paintResults();
   },
   // Sort state lives on the page object, not the DOM, so re-sorting never
-  // re-fetches — the same "local re-render from cached state" pattern the
+  // re-fetches - the same "local re-render from cached state" pattern the
   // Components page uses for its restart-arm state.
   paintResults() {
     const box = $('huntResults'); if (!box) return;
@@ -1446,8 +1490,8 @@ PAGES.dns = {
 /* ---- Devices ---- */
 // Asset inventory (CIS Controls #1/#2, valkyrie/asset_inventory.py): what's
 // installed, listening and loaded on THIS device. The snapshot counts are
-// bookkeeping; "Recent Changes" — the delta since the engine started
-// watching — is the actual product surface, so it renders second and gets
+// bookkeeping; "Recent Changes" - the delta since the engine started
+// watching - is the actual product surface, so it renders second and gets
 // the fuller treatment (per-row detail), not the reverse.
 PAGES.devices = {
   render() { $('page').innerHTML = `
@@ -1468,7 +1512,7 @@ PAGES.devices = {
   },
   // Backed by an hourly server-side poll (AssetInventoryCollector) and now a
   // fast in-memory cache (see valkyrie/asset_inventory.py's last_snapshot())
-  // — no need to hit it as often as the 2s telemetry stream.
+  // - no need to hit it as often as the 2s telemetry stream.
   interval: 15000,
   async poll() {
     const counts = $('assetCounts'), changes = $('assetChanges');
@@ -1486,7 +1530,7 @@ PAGES.devices = {
 };
 
 // A NULL inv means the endpoint call itself failed (engine off, or an older
-// build without it) — rendered as '—', never 0, for the same reason
+// build without it) - rendered as '-', never 0, for the same reason
 // renderDeceptionRows does: 0 would read as "collected, found nothing",
 // which is a different (and false, here) claim than "no data arrived".
 function renderAssetCounts(box, inv) {
@@ -1512,9 +1556,9 @@ const ASSET_CHANGE_ICON = {
   new_listening_port: 'network',
   new_kernel_driver: 'cpu',
 };
-// Recent changes — the actual product surface (see the PAGES.devices
-// comment above). Each row states what changed, and — encoded by fill vs.
-// outline per the monochrome design language, never color — whether it
+// Recent changes - the actual product surface (see the PAGES.devices
+// comment above). Each row states what changed, and - encoded by fill vs.
+// outline per the monochrome design language, never color - whether it
 // came from a trusted, Microsoft-owned path ('ok', filled) or not
 // ('warn', outline), the same badge vocabulary the rest of the app uses
 // for effective-vs-degraded state.
@@ -1557,7 +1601,7 @@ PAGES.updates = {
 
 /* ---- Components ---- */
 // The uniform plugin contract every subsystem already runs through
-// (valkyrie/components.py, ADR 0021) — register/health/metrics/config/
+// (valkyrie/components.py, ADR 0021) - register/health/metrics/config/
 // restart, fault-isolated so a broken health probe reports "error" instead
 // of crashing anything. GET /api/components + POST /{name}/restart already
 // existed with zero UI; this is that UI, not a new backend.
@@ -1613,7 +1657,7 @@ PAGES.components = {
     this.lastComps = comps;   // cached so arm/disarm can re-render without a re-fetch
     this.renderList();
   },
-  // Rebuilds the list from the last fetch only — no network call. Used both
+  // Rebuilds the list from the last fetch only - no network call. Used both
   // after a poll and whenever local UI state (armed restart, expanded
   // metrics) changes, so a poll landing mid-confirm can never silently
   // reset a restart the user already armed.
@@ -1664,7 +1708,7 @@ PAGES.components = {
   },
   async handleRestart(name) {
     // Restarting a live security subsystem has real effect (a brief gap in
-    // that subsystem's coverage) — arm-then-confirm instead of firing on the
+    // that subsystem's coverage) - arm-then-confirm instead of firing on the
     // first click. State lives on the page object (not the DOM node), and
     // every render (poll or local) reads it, so a poll landing mid-confirm
     // can never silently reset a restart the user already armed.
@@ -1695,7 +1739,7 @@ function mttrText(minutes) {
 }
 
 /* ---- Compliance ---- */
-// Evidence, not certification — the backend (compliance.py) is explicit that
+// Evidence, not certification - the backend (compliance.py) is explicit that
 // it never claims compliance, only reports what actually happened, computed
 // live with no hardcoded "OK" fields. The UI's job is to not lose that
 // framing: the disclaimer ships from the API and is shown verbatim, first.
@@ -1874,7 +1918,7 @@ function toast(message, kind) {
 
 /* ============================ Shared quick actions ====================
    Named, reusable functions (not per-page closures) so the exact same logic
-   runs whether triggered from a page's button or from the command palette —
+   runs whether triggered from a page's button or from the command palette -
    no duplicated action logic, one source of truth per action.
    ========================================================================= */
 async function toggleMeetingMode() {
@@ -1899,16 +1943,16 @@ async function randomizeMac() {
 
 /* ============================ Live topbar =========================== */
 // `on` (armed/disarmed) and `up` (did the engine actually answer this poll)
-// are independent facts — armed is a filesystem marker, up is live telemetry.
+// are independent facts - armed is a filesystem marker, up is live telemetry.
 // The toggle affordance (orb glow, START/STOP label) tracks the real armed
 // state either way, since that's true regardless of whether stats loaded.
 // The status TEXT must not claim "Protected" on a poll that has no data to
-// back it — that reads as reassurance the app cannot support.
+// back it - that reads as reassurance the app cannot support.
 function setProtectionUI(on, up) {
   const wrap = $('orbWrap'), label = $('orbLabel'), pill = $('statusPill'), txt = $('statusText');
   const btn = $('orb');
   if (wrap) wrap.classList.toggle('on', on);
-  // The control is inverted (white fill) when armed — the strongest emphasis
+  // The control is inverted (white fill) when armed - the strongest emphasis
   // available without introducing color.
   if (btn) btn.classList.toggle('on', on);
   // Sentence case, not shouted caps: this is a professional tool, and the
@@ -1948,7 +1992,7 @@ function updateNavBadges(stats, up) {
   }
 }
 
-// Sidebar footer. "Standing watch" is the product's one nod to its own name —
+// Sidebar footer. "Standing watch" is the product's one nod to its own name -
 // stated in words, never drawn.
 function updateRailStatus(up, prot) {
   const wrap = $('railStatus'), txt = $('railStatusText');
@@ -1959,7 +2003,7 @@ function updateRailStatus(up, prot) {
 }
 
 /* ============================ Replay Mode ===========================
-   Opens an incident and replays its correlated telemetry step-by-step —
+   Opens an incident and replays its correlated telemetry step-by-step -
    the attack chain, MITRE techniques, and evidence unfolding in sequence.
    Driven by the REAL /api/edr/incidents/{id} timeline; no synthetic data.
    =================================================================== */
@@ -2012,7 +2056,7 @@ function normalizeSteps(inc) {
 }
 
 // The incident lifecycle the engine actually models (valkyrie/edr/schema.py
-// INCIDENT_STATES) — a fixed, documented enum, not invented UI vocabulary.
+// INCIDENT_STATES) - a fixed, documented enum, not invented UI vocabulary.
 const INCIDENT_STATES = ['open', 'investigating', 'contained', 'resolved', 'dismissed'];
 
 const Replay = {
@@ -2112,7 +2156,7 @@ const Replay = {
     };
     this.keyHandler = (e) => {
       if (e.key === 'Escape') { this.close(); return; }
-      // The Investigation tab has real text fields (assignee, notes) — space
+      // The Investigation tab has real text fields (assignee, notes) - space
       // and the arrow keys must behave like normal text editing there, not
       // hijack playback. Transport shortcuts only apply when nothing is
       // being typed into.
@@ -2223,7 +2267,7 @@ const Replay = {
     }
     // Found during a wiring audit (2026-07-30): this panel already computes
     // and DISPLAYS the recommended response (edr/investigate.py), but nothing
-    // here ever called POST /api/edr/respond — the one endpoint that actually
+    // here ever called POST /api/edr/respond - the one endpoint that actually
     // isolates a host, kills a process, or blocks a domain. An analyst could
     // read "isolate_host recommended" and had no button to do it; the only
     // action reachable from the UI was relabeling the incident's status.
@@ -2289,7 +2333,7 @@ const Replay = {
     });
   },
 
-  // Step 1: dry_run — shows exactly what would happen, commits nothing. This
+  // Step 1: dry_run - shows exactly what would happen, commits nothing. This
   // mirrors edr/response.py's own stated contract ("dry-run by default, a
   // real action must be explicitly requested") one level up into the UI,
   // rather than only trusting the backend default silently.
@@ -2356,8 +2400,8 @@ function openReplay(id) { Replay.open(id); }
 /* ============================ Command Palette (Ctrl+K) ===============
    Global search + quick actions. Ranking/grouping is pure CommandIndex
    logic (unit tested in command-index.test.js); this object is only the
-   DOM binding — open/close, keyboard nav, painting results. Reuses the
-   same shared action functions (toggleProtection, toggleMeetingMode, …)
+   DOM binding - open/close, keyboard nav, painting results. Reuses the
+   same shared action functions (toggleProtection, toggleMeetingMode, ...)
    the pages themselves call, so running a command here is never a
    second implementation of what a button already does.
    ========================================================================= */
@@ -2379,7 +2423,7 @@ function buildBaseCommands() {
   );
   return cmds;
 }
-// Recent incidents, fetched fresh each time the palette opens — read-only,
+// Recent incidents, fetched fresh each time the palette opens - read-only,
 // same endpoint the Threats page already uses. Empty (not faked) if the
 // engine isn't reporting or there's nothing to show.
 async function fetchIncidentCommands() {
