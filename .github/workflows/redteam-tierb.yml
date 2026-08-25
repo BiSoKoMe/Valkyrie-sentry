@@ -168,6 +168,27 @@ jobs:
             # job: a failed redirect just means this run does not get to test
             # its hypothesis, which is what already happened before this fix
             # existed at all.
+            # STATUS as of 2026-08-25, run 32866512713: the strand danger below
+            # is FIXED and PROVEN (preflight REACHABLE, redirect proceeded, run
+            # completed in 24min - back near the ~17-20min baseline, nothing
+            # like the 62min run that went dark). The four C2 techniques STILL
+            # missed anyway. Ruled out, in order: interceptor not binding
+            # (bind succeeds, self-test PASSES right after start every time);
+            # OS resolver not reaching it (proven reachable via the redirect,
+            # confirmed by the very self-test passing); intelligence-layer GIL
+            # contention (removed, made no difference); upstream unreachable
+            # (this preflight proves it IS reachable). The heartbeat still
+            # failed once mid-run despite all of that checking out at boot.
+            # The remaining question is narrower and harder: something about
+            # the interceptor's OWN serve loop under REAL concurrent battery
+            # load (not at idle, where self-test always passes) makes it
+            # intermittently stop answering. That needs its own instrumented
+            # investigation - profiling the serve loop under load, not another
+            # CI flag - and is not being guessed at further tonight after five
+            # dispatched runs on this one question. Left as an honest,
+            # specifically-scoped gap rather than either claimed-fixed or
+            # vaguely-broken.
+            #
             # VERIFY BEFORE COMMIT. Run 32858476983 redirected the runner's DNS
             # blind, Valkyrie's upstream (8.8.8.8:53, the hardcoded default -
             # see __main__.py's dns_upstream_host) turned out to be unreachable
