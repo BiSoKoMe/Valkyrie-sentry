@@ -270,6 +270,19 @@ MALICIOUS = [
      "Add-Content $PROFILE 'Start-Process c:\\evil.exe'", ""),
     ("persistence-silent-process-exit", "reg.exe", "cmd.exe",
      "reg add \"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SilentProcessExit\\notepad.exe\" /v MonitorProcess /d evil.exe /f", ""),
+
+    # Signature-state rules. These carry a 6th element: the Authenticode state
+    # of the image, which the engine supplies from valkyrie/signature.py. They
+    # describe what the BINARY IS rather than what it did, which is why they
+    # generalise to payloads no rule was written for.
+    ("masquerade-unsigned-system-binary", "svchost.exe", "explorer.exe",
+     "svchost.exe", "c:\\users\\bob\\appdata\\local\\temp\\svchost.exe",
+     "unsigned"),
+    ("tampered-or-revoked-signature", "installer.exe", "explorer.exe",
+     "installer.exe /silent", "c:\\program files\\vendor\\installer.exe",
+     "untrusted"),
+    ("unsigned-binary-from-drop-zone", "payload.exe", "winword.exe",
+     "payload.exe", "c:\\users\\public\\payload.exe", "unsigned"),
 ]
 
 # Benign command shapes that must NEVER fire any rule.
@@ -415,8 +428,10 @@ def main() -> int:
     print(f"[1] Every rule ({len(RULES)}) fires on its malicious example")
     _check("a malicious example exists for every shipped rule",
            set(by_id) == mal_ids)
-    for rid, image, parent, cmd, path in MALICIOUS:
-        hits = {h.rule_id for h in match_process(image, parent, cmd, path)}
+    for entry in MALICIOUS:
+        rid, image, parent, cmd, path = entry[:5]
+        sig = entry[5] if len(entry) > 5 else ""
+        hits = {h.rule_id for h in match_process(image, parent, cmd, path, sig)}
         _check(f"{rid} fires", rid in hits)
 
     print("\n[2] Every rule's technique maps to a chain-ready tactic")

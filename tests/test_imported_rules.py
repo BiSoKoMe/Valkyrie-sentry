@@ -39,7 +39,10 @@ def main() -> int:
     # ================================================================ [1]
     print("\n[1] the ruleset ships and loads")
     c.check("imported rules loaded", len(IMPORTED_RULES) > 50)
-    c.check("native corpus is unchanged by the import", len(RULES) == 168)
+    c.check("native corpus is not diluted by the import "
+            "(imports go to their own list, never into RULES)",
+            len(RULES) == 171 and all(not r.id.startswith(("elastic-", "sigma-"))
+                                      for r in RULES))
     c.check("ALL_RULES is native + imported",
             len(ALL_RULES) == len(RULES) + len(IMPORTED_RULES))
 

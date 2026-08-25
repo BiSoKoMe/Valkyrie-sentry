@@ -77,8 +77,24 @@ class Rule:
                                    # at all - accept the false positive or fix the
                                    # rule some other way.
     path_any: tuple = ()           # ANY of these substrings in the image path
+    signed: str = ""               # required Authenticode state, "" = don't care
+                                   #
+                                   # "unsigned"     - verified as carrying none
+                                   # "untrusted"    - signed but not acceptable
+                                   #                  (revoked/expired/tampered)
+                                   # "not_trusted"  - either of the above
+                                   #
+                                   # FAIL CLOSED: when the signature state is
+                                   # UNKNOWN - a locked file, access denied, a
+                                   # verification error - a rule keying on it
+                                   # must NOT fire. Treating "we could not
+                                   # check" as "unsigned" would let a transient
+                                   # read failure manufacture a detection
+                                   # against real software, which is the one
+                                   # outcome this project never ships.
 
-    def matches(self, image: str, parent: str, cmd: str, path: str) -> bool:
+    def matches(self, image: str, parent: str, cmd: str, path: str,
+                signature: str = "") -> bool:
         if self.images and image not in self.images:
             return False
         if self.images_not and image in self.images_not:
@@ -109,12 +125,23 @@ class Rule:
             return False
         if self.path_any and not any(t in path for t in self.path_any):
             return False
+        if self.signed:
+            sig = (signature or "").lower()
+            # Fail closed: unknown/absent signature state never satisfies a
+            # signature requirement.
+            if sig in ("", "unknown"):
+                return False
+            if self.signed == "not_trusted":
+                if sig not in ("unsigned", "untrusted"):
+                    return False
+            elif sig != self.signed:
+                return False
         # A rule with no POSITIVE condition never fires (guards against typos;
         # images_not/cmd_not alone are not enough - they must pair with a
         # positive match).
         return bool(self.images or self.parents or self.cmd_all
                     or self.cmd_any or self.cmd_any2 or self.cmd_any3
-                    or self.path_any)
+                    or self.path_any or self.signed)
 
 
 @dataclass(frozen=True)
@@ -1505,6 +1532,61 @@ RULES: tuple = (
          cmd_all=("silentprocessexit",),
          cmd_any=("reg add", "set-itemproperty", "new-itemproperty",
                   "monitorprocess", "/d ")),
+
+    # --- Code-signature state (T1036 / T1553) ---------------------------
+    # These are the rules that GENERALISE rather than enumerate. Every other
+    # rule in this file describes WHAT a process did and can be evaded by doing
+    # something slightly different; these describe WHAT THE BINARY IS, which an
+    # attacker cannot change cheaply. They cost nothing to evaluate (cached) and
+    # they cover payloads nobody has written a rule for yet.
+    #
+    # All of them fail closed on UNKNOWN signature state - see Rule.signed.
+
+    # The single highest-confidence signature rule available. A genuine
+    # svchost.exe/lsass.exe/services.exe is ALWAYS catalog-signed by Microsoft;
+    # Windows will not boot otherwise. So an executable carrying one of these
+    # names that does not verify is not a false positive waiting to happen - it
+    # is a payload wearing a system binary's name, which is among the oldest and
+    # most reliable malware behaviours there is.
+    Rule("masquerade-unsigned-system-binary",
+         "T1036.005 — Masquerading: Match Legitimate Name or Location",
+         SEV_CRITICAL, "masquerade_system_binary",
+         "A process is using a core Windows binary's name but the file is not "
+         "signed by Microsoft — a payload impersonating a system process",
+         images=("svchost.exe", "lsass.exe", "services.exe", "csrss.exe",
+                 "wininit.exe", "winlogon.exe", "smss.exe", "spoolsv.exe",
+                 "dwm.exe", "taskhostw.exe", "explorer.exe", "conhost.exe",
+                 "rundll32.exe", "regsvr32.exe", "ctfmon.exe", "sihost.exe",
+                 "searchindexer.exe", "wuauclt.exe", "lsm.exe", "audiodg.exe"),
+         signed="not_trusted"),
+
+    # A signature that is PRESENT but unacceptable - revoked, expired, or a
+    # digest that no longer matches the file. Distinct from unsigned and much
+    # louder: unsigned software is everywhere and mostly benign, whereas a
+    # broken signature means the binary was tampered with after signing, or was
+    # signed with a certificate somebody revoked. Both are deliberate acts.
+    Rule("tampered-or-revoked-signature",
+         "T1553 — Subvert Trust Controls", SEV_HIGH,
+         "signature_untrusted",
+         "The executable carries a signature that does not verify — tampered "
+         "after signing, or signed with a revoked/distrusted certificate",
+         signed="untrusted"),
+
+    # LOW on purpose. Unsigned binaries running from temp/download directories
+    # are the normal shape of a dropped payload - AND the normal shape of a
+    # developer's own build output, an installer's staged uninstaller, and every
+    # portable tool anyone has ever downloaded. On this machine specifically the
+    # owner compiles unsigned binaries constantly. So it is carried as CONTEXT
+    # that sharpens a real detection sitting next to it, and never raises an
+    # incident by itself.
+    Rule("unsigned-binary-from-drop-zone",
+         "T1204 — User Execution", SEV_LOW, "unsigned_drop_zone",
+         "An unsigned executable ran from a staging directory",
+         signed="unsigned",
+         path_any=("\\users\\public\\", "\\appdata\\local\\temp\\",
+                   "\\downloads\\", "\\windows\\temp\\", "\\perflogs\\",
+                   "\\$recycle.bin\\", "\\programdata\\microsoft\\windows\\"
+                   "start menu\\programs\\startup\\")),
 )
 
 
@@ -1566,7 +1648,7 @@ ALL_RULES: tuple = RULES + IMPORTED_RULES
 
 
 def match_process(image: str, parent: str, cmdline: str,
-                  path: str = "") -> list[RuleHit]:
+                  path: str = "", signature: str = "") -> list[RuleHit]:
     """Return all rule hits for a process start, highest severity first. Pure.
 
     Rules are matched against the raw command line AND its de-obfuscated form
@@ -1581,17 +1663,25 @@ def match_process(image: str, parent: str, cmdline: str,
     cmd = (cmdline or "").lower()
     pth = (path or "").lower().replace("/", "\\")
 
+    sig = (signature or "").lower()
+
     seen: dict[str, RuleHit] = {}
     for r in ALL_RULES:
-        if r.matches(im, par, cmd, pth):
+        if r.matches(im, par, cmd, pth, sig):
             seen[r.id] = RuleHit(r.id, r.label, r.technique, r.severity, r.reason)
 
     norm = normalize_cmdline(cmdline)
     if norm.changed:
         ncmd = norm.text.lower()
         if ncmd != cmd:
-            for r in RULES:
-                if r.id not in seen and r.matches(im, par, ncmd, pth):
+            # ALL_RULES, not RULES. Iterating only the native corpus here meant
+            # the 109 imported rules got the raw pass and never the
+            # de-obfuscated one - so `c^ertoc -LoadDLL` evaded every imported
+            # rule while the native rules recovered it. Borrowed content has to
+            # inherit the anti-evasion property, or importing it quietly ships a
+            # second, weaker rule engine alongside the real one.
+            for r in ALL_RULES:
+                if r.id not in seen and r.matches(im, par, ncmd, pth, sig):
                     seen[r.id] = RuleHit(r.id, r.label, r.technique, r.severity,
                                          r.reason + " (recovered from an "
                                          "obfuscated command line)")
@@ -1602,7 +1692,7 @@ def match_process(image: str, parent: str, cmdline: str,
 
 
 def classify_behavior(image: str, parent: str, cmdline: str,
-                      path: str = "") -> Optional[dict]:
+                      path: str = "", signature: str = "") -> Optional[dict]:
     """Top-level convenience: the highest-severity hit as a dict the collector
     merges into a telemetry event, plus every label. None if nothing fired.
 
@@ -1617,7 +1707,7 @@ def classify_behavior(image: str, parent: str, cmdline: str,
     instead of silent. Cosmetic normalization (whitespace, env vars) never
     triggers this; only the EVASIVE transform class does.
     """
-    hits = match_process(image, parent, cmdline, path)
+    hits = match_process(image, parent, cmdline, path, signature)
     norm = normalize_cmdline(cmdline)
 
     if not hits:
