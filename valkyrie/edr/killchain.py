@@ -1,16 +1,16 @@
-"""Multi-stage kill-chain correlation — turn isolated detections into one
+"""Multi-stage kill-chain correlation - turn isolated detections into one
 scored attack chain.
 
 The problem this solves (measured, not hypothetical): the base correlator in
 store.find_open_incident groups detections by SAME category, so a single
 intrusion shows up as several disconnected, individually-unremarkable
-incidents —
+incidents -
 
-    powershell.exe  encoded command      (execution)      → incident A
-    powershell.exe  DNS C2 beacon         (C2)             → incident B
-    powershell.exe  registry Run key      (persistence)    → incident C
+    powershell.exe  encoded command      (execution)      -> incident A
+    powershell.exe  DNS C2 beacon         (C2)             -> incident B
+    powershell.exe  registry Run key      (persistence)    -> incident C
 
-— none of which, alone, is confident enough to act on. A real attack IS the
+- none of which, alone, is confident enough to act on. A real attack IS the
 sequence: the same actor moving across ATT&CK *tactics* in a short window.
 This module scores that sequence.
 
@@ -19,18 +19,18 @@ INDEPENDENT signals agree. One tactic is business as usual; three distinct
 tactics on one actor in four minutes is an attack. The score is a pure
 function of the distinct tactics observed (+ a bump when the chain reaches a
 high-impact tactic like encryption or exfiltration), so every number is
-explainable and testable — there are no learned weights or opaque thresholds.
+explainable and testable - there are no learned weights or opaque thresholds.
 
 Honest boundaries:
   * Lineage is PID-based when the collector provides it (process_telemetry
     and Sysmon carry ppid/parent): a child process folds into its parent's
-    chain via the parent→child PID edge. Where a detection has NO attributed
+    chain via the parent->child PID edge. Where a detection has NO attributed
     PID (e.g. a DNS query the resolver couldn't map to a process), the actor
-    NAME is the identity — precise where PIDs exist, best-effort where they
+    NAME is the identity - precise where PIDs exist, best-effort where they
     don't. Two detections in different namespaces (one with a PID, one with
     only a name) will not merge; that residual gap is the honest limit of
     user-mode attribution.
-  * This correlates detections that were ALREADY produced — it raises no new
+  * This correlates detections that were ALREADY produced - it raises no new
     primary signal, only escalates confidence when independent detectors
     already agree. It cannot conjure a chain the sensors never saw.
 
@@ -46,7 +46,7 @@ import threading
 from typing import Optional
 
 # ---------------------------------------------------------------------------
-# Technique → ATT&CK tactic. HONEST SCOPE: only the techniques Valkyrie
+# Technique -> ATT&CK tactic. HONEST SCOPE: only the techniques Valkyrie
 # actually emits (grepped from the codebase), so the map never implies
 # coverage that doesn't exist. Sub-technique first, base as fallback.
 # ---------------------------------------------------------------------------
@@ -135,6 +135,7 @@ TECHNIQUE_TACTIC: dict[str, str] = {
     "T1555.003": "credential-access",    # Credentials from Web Browsers
     "T1552":     "credential-access",    # Unsecured Credentials
     "T1552.001": "credential-access",    # Unsecured Credentials in Files
+    "T1005":     "collection",           # Data from Local System
     "T1560":     "collection",           # Archive Collected Data
     "T1560.001": "collection",           # Archive via Utility (encrypted)
     "T1040":     "credential-access",    # Network Sniffing
@@ -177,7 +178,7 @@ TECHNIQUE_TACTIC: dict[str, str] = {
     "T1569.002": "execution",            # Service Execution (PsExec)
 }
 
-# Tactics whose presence makes a chain materially worse — the "objective"
+# Tactics whose presence makes a chain materially worse - the "objective"
 # end of an intrusion. A chain that reaches one of these is escalated.
 HIGH_IMPACT_TACTICS = frozenset({"credential-access", "exfiltration", "impact"})
 
@@ -195,7 +196,7 @@ _TID_RE = re.compile(r"T1[0-9]{3}(?:\.[0-9]{3})?")
 
 
 def extract_technique_id(text: str) -> str:
-    """Pull a bare technique id out of a label like 'T1059.001 — PowerShell'."""
+    """Pull a bare technique id out of a label like 'T1059.001 - PowerShell'."""
     m = _TID_RE.search(str(text or ""))
     return m.group(0) if m else ""
 
@@ -214,7 +215,7 @@ def tactic_for(technique: str) -> Optional[str]:
 def score_chain(tactics: set[str]) -> tuple[float, str]:
     """Pure scoring: (confidence 0-1, severity). Explainable by construction.
 
-    0.25 per distinct tactic (2→0.50, 3→0.75, 4→1.00), +0.15 if the chain
+    0.25 per distinct tactic (2->0.50, 3->0.75, 4->1.00), +0.15 if the chain
     reaches a high-impact tactic (cred-access / exfil / impact). Severity:
     >=0.9 critical, >=0.7 high, else medium.
     """
@@ -232,10 +233,10 @@ class KillChainCorrelator:
 
     A "chain" is a connected component of process identities. Detections are
     linked into the same chain when they share a PID (same process, different
-    tactic) or a parent→child PID edge (``ppid``), so an intrusion that walks
-    ``powershell.exe → rundll32.exe → …`` is scored as ONE attack instead of
+    tactic) or a parent->child PID edge (``ppid``), so an intrusion that walks
+    ``powershell.exe -> rundll32.exe -> ...`` is scored as ONE attack instead of
     one-per-process. When PIDs are unavailable (e.g. a DNS detection with no
-    attributed process), the actor NAME is the identity — precise where PIDs
+    attributed process), the actor NAME is the identity - precise where PIDs
     exist, best-effort where they don't.
 
     ``observe`` returns a chain summary only when a chain crosses into (or
@@ -246,7 +247,7 @@ class KillChainCorrelator:
     _MAX_CHAINS = 2048
 
     # Default matches the module's own stated principle above ("three distinct
-    # tactics... is an attack") — a live VM run found the default had drifted to
+    # tactics... is an attack") - a live VM run found the default had drifted to
     # 2, which raised "multi-stage attack" incidents against ordinary PowerShell
     # admin scripting and TiWorker.exe (Windows Modules Installer, a legitimate
     # OS component) purely from two loosely-related tactic labels inside the
@@ -256,11 +257,11 @@ class KillChainCorrelator:
     def __init__(self, window_seconds: float = 600.0, min_tactics: int = 3) -> None:
         self._window = window_seconds
         self._min = min_tactics
-        # chain id → deque[(ts, tactic, technique, title, actor_name)]
+        # chain id -> deque[(ts, tactic, technique, title, actor_name)]
         self._chains: dict[int, collections.deque] = {}
-        # identity token ("pid:N" | "name:X") → chain id (union-find, flattened)
+        # identity token ("pid:N" | "name:X") -> chain id (union-find, flattened)
         self._token_chain: dict[str, int] = {}
-        # chain id → frozenset of tactics last reported (emit only on growth)
+        # chain id -> frozenset of tactics last reported (emit only on growth)
         self._reported: dict[int, frozenset] = {}
         self._next_cid = 1
         self._lock = threading.RLock()
@@ -276,7 +277,7 @@ class KillChainCorrelator:
         """
         tactic = tactic_for(technique)
         if not actor or tactic is None:
-            return None                      # unattributable / unmapped → no chain
+            return None                      # unattributable / unmapped -> no chain
         primary = f"pid:{pid}" if pid > 0 else f"name:{actor}"
         parent = f"pid:{ppid}" if ppid > 0 else None
         tokens = [primary] + ([parent] if parent else [])
@@ -294,7 +295,7 @@ class KillChainCorrelator:
                 return None
             frozen = frozenset(tactics)
             if self._reported.get(cid) == frozen:
-                return None                  # no NEW tactic since last report → quiet
+                return None                  # no NEW tactic since last report -> quiet
             self._reported[cid] = frozen
             steps = [{"tactic": t, "technique": tech, "title": ttl, "ts": t0,
                       "actor": act} for (t0, t, tech, ttl, act) in dq]
@@ -317,7 +318,7 @@ class KillChainCorrelator:
 
     def _chain_for(self, tokens: list[str], now: float) -> int:
         """Resolve the chain id for these identity tokens, merging existing
-        chains when a parent→child edge joins two of them. Called under lock."""
+        chains when a parent->child edge joins two of them. Called under lock."""
         found = sorted({self._token_chain[t] for t in tokens
                         if t in self._token_chain})
         if not found:
@@ -361,7 +362,7 @@ class KillChainCorrelator:
                  if not dq or now - dq[-1][0] > self._window]
         for cid in stale:
             self._drop(cid)
-        if len(self._chains) >= self._MAX_CHAINS:      # still full → oldest-touched
+        if len(self._chains) >= self._MAX_CHAINS:      # still full -> oldest-touched
             oldest = sorted(self._chains.items(), key=lambda kv: kv[1][-1][0])
             for cid, _ in oldest[: len(self._chains) - self._MAX_CHAINS + 1]:
                 self._drop(cid)
