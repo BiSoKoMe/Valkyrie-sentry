@@ -35,14 +35,23 @@ _ACTIONABLE = {"medium", "high", "critical"}
 
 
 def _fires(rule_id: str, image: str, parent: str, cmd: str, path: str = "") -> bool:
-    """Does this rule fire, through the same normalisation the engine uses?"""
-    try:
-        norm = normalize_cmdline(cmd)
-        text = (norm.text if hasattr(norm, "text") else str(norm)).lower()
-    except Exception:   # noqa: BLE001
-        text = cmd.lower()
+    """Does this rule fire the way the ENGINE actually evaluates it?
+
+    The RAW command line is passed, because that is what process_telemetry and
+    the Sysmon path hand to classify_behavior. match_process then matches the
+    raw string AND its normalised form and unions the hits, so normalisation can
+    only ever add a detection.
+
+    Getting this wrong is not hypothetical: an earlier version of this helper
+    normalised first and passed the result in, so match_process normalised an
+    already-normalised string. That made rundll32-lowtrust-dll look dead, and it
+    was reported as a live production gap. It was not - the rule fires correctly
+    on the raw command line. Test harnesses must call the code the way
+    production calls it, or they measure the harness.
+    """
     return any(h.rule_id == rule_id
-               for h in match_process(image.lower(), parent.lower(), text, path.lower()))
+               for h in match_process(image.lower(), parent.lower(),
+                                      cmd, path.lower()))
 
 
 def _pair(c: Checks, rule_id: str, *, benign: tuple, attack: tuple) -> None:

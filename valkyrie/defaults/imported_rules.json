@@ -1,0 +1,2054 @@
+{
+ "_provenance": {
+  "description": "Detection rules imported from public vendor and community corpora, each having survived Valkyrie's import funnel: per-rule licence, exact-expressibility, never-drop-a-conjunct, dead-rule, false-positive and duplicate gates.",
+  "sources": {
+   "elastic/protections-artifacts": {
+    "license": "Elastic-2.0",
+    "url": "https://github.com/elastic/protections-artifacts",
+    "attribution": "Elastic (elastic/protections-artifacts, Elastic-2.0)",
+    "examined": 772,
+    "imported": 11
+   },
+   "SigmaHQ": {
+    "license": "DRL-1.1",
+    "url": "https://github.com/SigmaHQ/sigma",
+    "attribution": "SigmaHQ contributors (DRL-1.1)",
+    "examined": 1185,
+    "imported": 98
+   }
+  },
+  "notice": "Both licences require that attribution is preserved and shown where matches are displayed. Each rule's `reason` carries its attribution; do not strip it.",
+  "generated": "2026-08-24"
+ },
+ "rules": [
+  {
+   "id": "elastic-binary-proxy-execution-via-runexehelper",
+   "technique": "T1218",
+   "severity": "high",
+   "label": "elastic_import",
+   "reason": "Binary Proxy Execution via Runexehelper — Elastic (elastic/protections-artifacts, id=8b1ae402-a41b-485f-8eb6-00ae6144cf8a, Elastic-2.0)",
+   "images": [],
+   "images_not": [
+    "conhost.exe",
+    "powercfg.exe",
+    "wevtutil.exe",
+    "wscollect.exe",
+    "tpmtool.exe",
+    "mdmdiagnosticstool.exe",
+    "dsregcmd.exe",
+    "stordiag.exe",
+    "dxdiag.exe",
+    "logman.exe",
+    "licensingdiag.exe",
+    "dispdiag.exe",
+    "pnputil.exe",
+    "hcsdiag.exe",
+    "ddodiag.exe"
+   ],
+   "parents": [
+    "runexehelper.exe"
+   ],
+   "parents_not": [],
+   "cmd_all": [],
+   "cmd_not": [],
+   "source": "elastic/protections-artifacts",
+   "license": "Elastic-2.0",
+   "upstream_id": "8b1ae402-a41b-485f-8eb6-00ae6144cf8a"
+  },
+  {
+   "id": "elastic-dll-execution-via-visual-studio-live-share",
+   "technique": "T1218",
+   "severity": "high",
+   "label": "elastic_import",
+   "reason": "DLL Execution via Visual Studio Live Share — Elastic (elastic/protections-artifacts, id=a5416b1f-fc3f-4162-936d-34086689c3b0, Elastic-2.0)",
+   "images": [
+    "vsls-agent.exe",
+    "vsls-agent.dll"
+   ],
+   "images_not": [],
+   "parents": [],
+   "parents_not": [
+    "devenv.exe"
+   ],
+   "cmd_all": [
+    "--agentextensionpath"
+   ],
+   "cmd_not": [
+    "--pipe",
+    "https://*.visualstudio.com/"
+   ],
+   "source": "elastic/protections-artifacts",
+   "license": "Elastic-2.0",
+   "upstream_id": "a5416b1f-fc3f-4162-936d-34086689c3b0"
+  },
+  {
+   "id": "elastic-potential-evasion-via-asp-net-compiler",
+   "technique": "T1218",
+   "severity": "high",
+   "label": "elastic_import",
+   "reason": "Potential Evasion via ASP.NET Compiler — Elastic (elastic/protections-artifacts, id=2aa05bad-c402-4504-9fbe-cc2fb273193a, Elastic-2.0)",
+   "images": [
+    "aspnet_compiler.exe"
+   ],
+   "images_not": [],
+   "parents": [],
+   "parents_not": [
+    "microsoft visual studio"
+   ],
+   "cmd_all": [
+    "-v",
+    "-f",
+    "-u"
+   ],
+   "cmd_not": [
+    "-d"
+   ],
+   "source": "elastic/protections-artifacts",
+   "license": "Elastic-2.0",
+   "upstream_id": "2aa05bad-c402-4504-9fbe-cc2fb273193a"
+  },
+  {
+   "id": "elastic-suspicious-imageload-via-windows-certoc",
+   "technique": "T1218",
+   "severity": "high",
+   "label": "elastic_import",
+   "reason": "Suspicious ImageLoad via Windows CertOC — Elastic (elastic/protections-artifacts, id=6fcbf73f-4413-4689-be33-61b0d6bd0ffc, Elastic-2.0)",
+   "images": [
+    "certoc.exe"
+   ],
+   "images_not": [],
+   "parents": [],
+   "parents_not": [],
+   "cmd_all": [
+    "-loaddll"
+   ],
+   "cmd_not": [],
+   "source": "elastic/protections-artifacts",
+   "license": "Elastic-2.0",
+   "upstream_id": "6fcbf73f-4413-4689-be33-61b0d6bd0ffc"
+  },
+  {
+   "id": "elastic-potential-virtual-machine-fingerprinting-via-vmd",
+   "technique": "T1082",
+   "severity": "high",
+   "label": "elastic_import",
+   "reason": "Potential Virtual Machine Fingerprinting via VMDetect — Elastic (elastic/protections-artifacts, id=75226c55-55b5-47b6-b27a-757b895c3bce, Elastic-2.0)",
+   "images": [
+    "vmdetect.exe"
+   ],
+   "images_not": [],
+   "parents": [],
+   "parents_not": [],
+   "cmd_all": [],
+   "cmd_not": [],
+   "source": "elastic/protections-artifacts",
+   "license": "Elastic-2.0",
+   "upstream_id": "75226c55-55b5-47b6-b27a-757b895c3bce"
+  },
+  {
+   "id": "elastic-potential-payload-download-via-finger-lolbin",
+   "technique": "T1566",
+   "severity": "high",
+   "label": "elastic_import",
+   "reason": "Potential Payload Download via Finger LOLBin — Elastic (elastic/protections-artifacts, id=3260bb0d-7b35-4c7a-b59a-35ca8dbd3856, Elastic-2.0)",
+   "images": [
+    "finger.exe"
+   ],
+   "images_not": [],
+   "parents": [
+    "cmd.exe",
+    "powershell.exe",
+    "windowsterminal.exe",
+    "wt.exe",
+    "explorer.exe"
+   ],
+   "parents_not": [],
+   "cmd_all": [
+    "@"
+   ],
+   "cmd_not": [
+    "@localhost"
+   ],
+   "source": "elastic/protections-artifacts",
+   "license": "Elastic-2.0",
+   "upstream_id": "3260bb0d-7b35-4c7a-b59a-35ca8dbd3856"
+  },
+  {
+   "id": "elastic-suspicious-child-process-from-winget-configurati",
+   "technique": "T1059",
+   "severity": "high",
+   "label": "elastic_import",
+   "reason": "Suspicious Child Process from WinGet Configuration Remoting Server — Elastic (elastic/protections-artifacts, id=a3c7e9b1-2d4f-5a6c-8e0b-1f3d5a7c9e0b, Elastic-2.0)",
+   "images": [
+    "powershell.exe",
+    "pwsh.exe",
+    "cmd.exe",
+    "wscript.exe",
+    "cscript.exe",
+    "bash.exe",
+    "wsl.exe",
+    "mshta.exe",
+    "rundll32.exe",
+    "regsvr32.exe",
+    "msiexec.exe",
+    "msbuild.exe",
+    "installutil.exe",
+    "regasm.exe",
+    "regsvcs.exe",
+    "curl.exe",
+    "openssh.exe"
+   ],
+   "images_not": [],
+   "parents": [
+    "configurationremotingserver.exe"
+   ],
+   "parents_not": [],
+   "cmd_all": [],
+   "cmd_not": [],
+   "source": "elastic/protections-artifacts",
+   "license": "Elastic-2.0",
+   "upstream_id": "a3c7e9b1-2d4f-5a6c-8e0b-1f3d5a7c9e0b"
+  },
+  {
+   "id": "elastic-microsoft-equation-editor-child-process",
+   "technique": "T1566",
+   "severity": "high",
+   "label": "elastic_import",
+   "reason": "Microsoft Equation Editor Child Process — Elastic (elastic/protections-artifacts, id=60eb5960-b26e-494a-8cf2-35ab5939f6c1, Elastic-2.0)",
+   "images": [],
+   "images_not": [
+    "werfault.exe"
+   ],
+   "parents": [
+    "eqnedt32.exe"
+   ],
+   "parents_not": [],
+   "cmd_all": [],
+   "cmd_not": [],
+   "source": "elastic/protections-artifacts",
+   "license": "Elastic-2.0",
+   "upstream_id": "60eb5960-b26e-494a-8cf2-35ab5939f6c1"
+  },
+  {
+   "id": "elastic-potential-webshell-via-screenconnect-server",
+   "technique": "T1190",
+   "severity": "high",
+   "label": "elastic_import",
+   "reason": "Potential WebShell via ScreenConnect Server — Elastic (elastic/protections-artifacts, id=10265eab-b3b0-4ecb-bed2-5b4f4a5a4e28, Elastic-2.0)",
+   "images": [
+    "cmd.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "powershell_ise.exe",
+    "csc.exe"
+   ],
+   "images_not": [
+    "csc.exe"
+   ],
+   "parents": [
+    "screenconnect.service.exe"
+   ],
+   "parents_not": [],
+   "cmd_all": [],
+   "cmd_not": [],
+   "source": "elastic/protections-artifacts",
+   "license": "Elastic-2.0",
+   "upstream_id": "10265eab-b3b0-4ecb-bed2-5b4f4a5a4e28"
+  },
+  {
+   "id": "elastic-suspicious-execution-via-microsoft-exchange-tran",
+   "technique": "T1505",
+   "severity": "high",
+   "label": "elastic_import",
+   "reason": "Suspicious Execution via Microsoft Exchange Transport Agent — Elastic (elastic/protections-artifacts, id=243315b3-8664-4869-a3f4-197eb54c1446, Elastic-2.0)",
+   "images": [
+    "cmd.exe",
+    "powershell.exe",
+    "certutil.exe",
+    "bitsadmin.exe",
+    "rundll32.exe",
+    "curl.exe",
+    "reg.exe",
+    "net.exe",
+    "mshta.exe"
+   ],
+   "images_not": [],
+   "parents": [
+    "msexchangetransport.exe",
+    "edgetransport.exe"
+   ],
+   "parents_not": [],
+   "cmd_all": [],
+   "cmd_not": [],
+   "source": "elastic/protections-artifacts",
+   "license": "Elastic-2.0",
+   "upstream_id": "243315b3-8664-4869-a3f4-197eb54c1446"
+  },
+  {
+   "id": "elastic-privilege-escalation-via-named-pipe-impersonatio",
+   "technique": "T1134",
+   "severity": "high",
+   "label": "elastic_import",
+   "reason": "Privilege Escalation via Named Pipe Impersonation — Elastic (elastic/protections-artifacts, id=a0265178-779d-4bc5-b3f1-abb3bcddedab, Elastic-2.0)",
+   "images": [
+    "cmd.exe",
+    "powershell.exe",
+    "sc.exe",
+    "schtasks.exe"
+   ],
+   "images_not": [],
+   "parents": [],
+   "parents_not": [
+    "chrome.exe",
+    "msedge.exe"
+   ],
+   "cmd_all": [
+    "echo*>*\\\\.\\pipe\\"
+   ],
+   "cmd_not": [],
+   "source": "elastic/protections-artifacts",
+   "license": "Elastic-2.0",
+   "upstream_id": "a0265178-779d-4bc5-b3f1-abb3bcddedab"
+  },
+  {
+   "id": "sigma-aspnetcompiler-execution",
+   "technique": "T1127",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "AspNetCompiler Execution (SigmaHQ, DRL-1.1, id=a01b8329-5953-4f73-ae2d-aa01e1f35f00)",
+   "images": [
+    "aspnet_compiler.exe"
+   ],
+   "parents": [],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "a01b8329-5953-4f73-ae2d-aa01e1f35f00"
+  },
+  {
+   "id": "sigma-interactive-at-job",
+   "technique": "T1053.002",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Interactive AT Job (SigmaHQ, DRL-1.1, id=60fc936d-2eb0-4543-8a13-911c750a1dfc)",
+   "images": [
+    "at.exe"
+   ],
+   "parents": [],
+   "cmd_all": [
+    "interactive"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "60fc936d-2eb0-4543-8a13-911c750a1dfc"
+  },
+  {
+   "id": "sigma-suspicious-bitlocker-access-agent-update-utility",
+   "technique": "T1218",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Suspicious BitLocker Access Agent Update Utility Execution (SigmaHQ, DRL-1.1, id=9f38c1db-e2ae-40bf-81d0-5b68f73fb512)",
+   "images": [
+    "bitsadmin.exe",
+    "cmd.exe",
+    "cscript.exe",
+    "mshta.exe",
+    "powershell_ise.exe",
+    "powershell.exe",
+    "regsvr32.exe",
+    "rundll32.exe",
+    "schtasks.exe",
+    "wmic.exe",
+    "wscript.exe"
+   ],
+   "parents": [
+    "baaupdate.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "9f38c1db-e2ae-40bf-81d0-5b68f73fb512"
+  },
+  {
+   "id": "sigma-uncommon-child-process-of-bginfo-exe",
+   "technique": "T1059.005",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Uncommon Child Process Of BgInfo.EXE (SigmaHQ, DRL-1.1, id=aaf46cdc-934e-4284-b329-34aa701e3771)",
+   "images": [],
+   "parents": [
+    "bginfo.exe",
+    "bginfo64.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "aaf46cdc-934e-4284-b329-34aa701e3771"
+  },
+  {
+   "id": "sigma-chromium-browser-instance-executed-with-custom-e",
+   "technique": "T1176.001",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Chromium Browser Instance Executed With Custom Extension (SigmaHQ, DRL-1.1, id=88d6e60c-759d-4ac1-a447-c0f1466c2d21)",
+   "images": [
+    "brave.exe",
+    "chrome.exe",
+    "msedge.exe",
+    "opera.exe",
+    "vivaldi.exe"
+   ],
+   "parents": [],
+   "cmd_all": [
+    "--load-extension="
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "88d6e60c-759d-4ac1-a447-c0f1466c2d21"
+  },
+  {
+   "id": "sigma-suspicious-chromium-browser-instance-executed-wi",
+   "technique": "T1176.001",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Suspicious Chromium Browser Instance Executed With Custom Extension (SigmaHQ, DRL-1.1, id=27ba3207-dd30-4812-abbf-5d20c57d474e)",
+   "images": [
+    "brave.exe",
+    "chrome.exe",
+    "msedge.exe",
+    "opera.exe",
+    "vivaldi.exe"
+   ],
+   "parents": [
+    "cmd.exe",
+    "cscript.exe",
+    "mshta.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "regsvr32.exe",
+    "rundll32.exe",
+    "wscript.exe"
+   ],
+   "cmd_all": [
+    "--load-extension="
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "27ba3207-dd30-4812-abbf-5d20c57d474e"
+  },
+  {
+   "id": "sigma-cmstp-execution-process-creation",
+   "technique": "T1218.003",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "CMSTP Execution Process Creation (SigmaHQ, DRL-1.1, id=7d4cdc5a-0076-40ca-aac8-f7e714570e47)",
+   "images": [],
+   "parents": [
+    "cmstp.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "7d4cdc5a-0076-40ca-aac8-f7e714570e47"
+  },
+  {
+   "id": "sigma-conhost-exe-commandline-path-traversal",
+   "technique": "T1059.003",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Conhost.exe CommandLine Path Traversal (SigmaHQ, DRL-1.1, id=ee5e119b-1f75-4b34-add8-3be976961e39)",
+   "images": [],
+   "parents": [],
+   "cmd_all": [
+    "/../../"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "ee5e119b-1f75-4b34-add8-3be976961e39"
+  },
+  {
+   "id": "sigma-suspicious-use-of-csharp-interactive-console",
+   "technique": "T1127",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Suspicious Use of CSharp Interactive Console (SigmaHQ, DRL-1.1, id=a9e416a8-e613-4f8b-88b8-a7d1d1af2f61)",
+   "images": [
+    "csi.exe"
+   ],
+   "parents": [
+    "powershell.exe",
+    "pwsh.exe",
+    "powershell_ise.exe"
+   ],
+   "cmd_all": [
+    "csi.exe"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "a9e416a8-e613-4f8b-88b8-a7d1d1af2f61"
+  },
+  {
+   "id": "sigma-uncommon-child-process-of-defaultpack-exe",
+   "technique": "T1218",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Uncommon Child Process Of Defaultpack.EXE (SigmaHQ, DRL-1.1, id=b2309017-4235-44fe-b5af-b15363011957)",
+   "images": [],
+   "parents": [
+    "defaultpack.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "b2309017-4235-44fe-b5af-b15363011957"
+  },
+  {
+   "id": "sigma-remote-file-download-via-desktopimgdownldr-utili",
+   "technique": "T1105",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Remote File Download Via Desktopimgdownldr Utility (SigmaHQ, DRL-1.1, id=214641c2-c579-4ecb-8427-0cf19df6842e)",
+   "images": [
+    "desktopimgdownldr.exe"
+   ],
+   "parents": [
+    "desktopimgdownldr.exe"
+   ],
+   "cmd_all": [
+    "/lockscreenurl:http"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "214641c2-c579-4ecb-8427-0cf19df6842e"
+  },
+  {
+   "id": "sigma-devicecredentialdeployment-execution",
+   "technique": "T1218",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "DeviceCredentialDeployment Execution (SigmaHQ, DRL-1.1, id=b8b1b304-a60f-4999-9a6e-c547bde03ffd)",
+   "images": [
+    "devicecredentialdeployment.exe"
+   ],
+   "parents": [],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "b8b1b304-a60f-4999-9a6e-c547bde03ffd"
+  },
+  {
+   "id": "sigma-potentially-suspicious-child-process-of-diskshad",
+   "technique": "T1218",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Potentially Suspicious Child Process Of DiskShadow.EXE (SigmaHQ, DRL-1.1, id=9f546b25-5f12-4c8d-8532-5893dcb1e4b8)",
+   "images": [
+    "certutil.exe",
+    "cscript.exe",
+    "mshta.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "regsvr32.exe",
+    "rundll32.exe",
+    "wscript.exe"
+   ],
+   "parents": [
+    "diskshadow.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "9f546b25-5f12-4c8d-8532-5893dcb1e4b8"
+  },
+  {
+   "id": "sigma-potential-application-whitelisting-bypass-via-dn",
+   "technique": "T1218",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Potential Application Whitelisting Bypass via Dnx.EXE (SigmaHQ, DRL-1.1, id=81ebd28b-9607-4478-bf06-974ed9d53ed7)",
+   "images": [
+    "dnx.exe"
+   ],
+   "parents": [],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "81ebd28b-9607-4478-bf06-974ed9d53ed7"
+  },
+  {
+   "id": "sigma-file-explorer-folder-opened-using-explorer-folde",
+   "technique": "T1135",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "File Explorer Folder Opened Using Explorer Folder Shortcut Via Shell (SigmaHQ, DRL-1.1, id=c3d76afc-93df-461e-8e67-9b2bad3f2ac4)",
+   "images": [
+    "explorer.exe"
+   ],
+   "parents": [
+    "cmd.exe",
+    "powershell.exe",
+    "pwsh.exe"
+   ],
+   "cmd_all": [
+    "shell:mycomputerfolder"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "c3d76afc-93df-461e-8e67-9b2bad3f2ac4"
+  },
+  {
+   "id": "sigma-html-help-hh-exe-suspicious-child-process",
+   "technique": "T1047",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "HTML Help HH.EXE Suspicious Child Process (SigmaHQ, DRL-1.1, id=52cad028-0ff0-4854-8f67-d25dfcbc78b4)",
+   "images": [
+    "certreq.exe",
+    "certutil.exe",
+    "cmd.exe",
+    "cscript.exe",
+    "installutil.exe",
+    "msbuild.exe",
+    "mshta.exe",
+    "msiexec.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "regsvr32.exe",
+    "rundll32.exe",
+    "schtasks.exe",
+    "wmic.exe",
+    "wscript.exe"
+   ],
+   "parents": [
+    "hh.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "52cad028-0ff0-4854-8f67-d25dfcbc78b4"
+  },
+  {
+   "id": "sigma-hacktool-hollowreaper-execution",
+   "technique": "T1055.012",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "HackTool - HollowReaper Execution (SigmaHQ, DRL-1.1, id=85d23b42-9a9d-4f8f-b3d7-d2733c1d58f5)",
+   "images": [
+    "hollowreaper.exe"
+   ],
+   "parents": [],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "85d23b42-9a9d-4f8f-b3d7-d2733c1d58f5"
+  },
+  {
+   "id": "sigma-invoke-obfuscation-stdin-launcher",
+   "technique": "T1027",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Invoke-Obfuscation STDIN+ Launcher (SigmaHQ, DRL-1.1, id=6c96fc76-0eb1-11eb-adc1-0242ac120002)",
+   "images": [],
+   "parents": [],
+   "cmd_all": [
+    "cmd.{0,5}(?:/c|/r).+powershell.+(?:\\$\\{?input\\}?|noexit).+\\"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "6c96fc76-0eb1-11eb-adc1-0242ac120002"
+  },
+  {
+   "id": "sigma-invoke-obfuscation-var-launcher",
+   "technique": "T1027",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Invoke-Obfuscation VAR+ Launcher (SigmaHQ, DRL-1.1, id=27aec9c9-dbb0-4939-8422-1742242471d0)",
+   "images": [],
+   "parents": [],
+   "cmd_all": [
+    "cmd.{0,5}(?:/c|/r)(?:\\s|)\\\"set\\s[a-za-z]{3,6}.*(?:\\{\\d\\}){1,}\\\\\\\"\\s+?\\-f(?:.*\\)){1,}.*\\"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "27aec9c9-dbb0-4939-8422-1742242471d0"
+  },
+  {
+   "id": "sigma-invoke-obfuscation-via-stdin",
+   "technique": "T1027",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Invoke-Obfuscation Via Stdin (SigmaHQ, DRL-1.1, id=9c14c9fa-1a63-4a64-8e57-d19280559490)",
+   "images": [],
+   "parents": [],
+   "cmd_all": [
+    "(?i)(?:set).*&&\\s?set.*(?:environment|invoke|\\$\\{?input).*&&.*"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "9c14c9fa-1a63-4a64-8e57-d19280559490"
+  },
+  {
+   "id": "sigma-invoke-obfuscation-via-use-clip",
+   "technique": "T1027",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Invoke-Obfuscation Via Use Clip (SigmaHQ, DRL-1.1, id=e1561947-b4e3-4a74-9bdd-83baed21bdb5)",
+   "images": [],
+   "parents": [],
+   "cmd_all": [
+    "(?i)echo.*clip.*&&.*(?:clipboard|i`?n`?v`?o`?k`?e`?)"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "e1561947-b4e3-4a74-9bdd-83baed21bdb5"
+  },
+  {
+   "id": "sigma-hacktool-sliver-c2-implant-activity-pattern",
+   "technique": "T1059",
+   "severity": "critical",
+   "label": "sigma_import",
+   "reason": "HackTool - Sliver C2 Implant Activity Pattern (SigmaHQ, DRL-1.1, id=42333b2c-b425-441c-b70e-99404a17170f)",
+   "images": [],
+   "parents": [],
+   "cmd_all": [
+    "-noexit -command [console]::outputencoding=[text.utf8encoding]::utf8"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "42333b2c-b425-441c-b70e-99404a17170f"
+  },
+  {
+   "id": "sigma-hacktool-wmiexec-default-powershell-command",
+   "technique": "unmapped",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "HackTool - Wmiexec Default Powershell Command (SigmaHQ, DRL-1.1, id=022eaba8-f0bf-4dd9-9217-4604b0bb3bb0)",
+   "images": [],
+   "parents": [],
+   "cmd_all": [
+    "-nop -nol -sta -noni -w hidden -exec bypass -enc"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "022eaba8-f0bf-4dd9-9217-4604b0bb3bb0"
+  },
+  {
+   "id": "sigma-suspicious-hwp-sub-processes",
+   "technique": "T1566.001",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Suspicious HWP Sub Processes (SigmaHQ, DRL-1.1, id=023394c4-29d5-46ab-92b8-6a534c6f447b)",
+   "images": [
+    "gbb.exe"
+   ],
+   "parents": [
+    "hwp.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "023394c4-29d5-46ab-92b8-6a534c6f447b"
+  },
+  {
+   "id": "sigma-suspicious-shells-spawn-by-java-utility-keytool",
+   "technique": "unmapped",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Suspicious Shells Spawn by Java Utility Keytool (SigmaHQ, DRL-1.1, id=90fb5e62-ca1f-4e22-b42e-cc521874c938)",
+   "images": [
+    "cmd.exe",
+    "sh.exe",
+    "bash.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "schtasks.exe",
+    "certutil.exe",
+    "whoami.exe",
+    "bitsadmin.exe",
+    "wscript.exe",
+    "cscript.exe",
+    "scrcons.exe",
+    "regsvr32.exe",
+    "hh.exe",
+    "wmic.exe",
+    "mshta.exe",
+    "rundll32.exe",
+    "forfiles.exe",
+    "scriptrunner.exe",
+    "mftrace.exe",
+    "appvlp.exe",
+    "systeminfo.exe",
+    "reg.exe",
+    "query.exe"
+   ],
+   "parents": [
+    "keytool.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "90fb5e62-ca1f-4e22-b42e-cc521874c938"
+  },
+  {
+   "id": "sigma-suspicious-processes-spawned-by-java-exe",
+   "technique": "unmapped",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Suspicious Processes Spawned by Java.EXE (SigmaHQ, DRL-1.1, id=0d34ed8b-1c12-4ff2-828c-16fc860b766d)",
+   "images": [
+    "appvlp.exe",
+    "bitsadmin.exe",
+    "certutil.exe",
+    "cscript.exe",
+    "curl.exe",
+    "forfiles.exe",
+    "hh.exe",
+    "mftrace.exe",
+    "mshta.exe",
+    "net.exe",
+    "net1.exe",
+    "query.exe",
+    "reg.exe",
+    "regsvr32.exe",
+    "rundll32.exe",
+    "schtasks.exe",
+    "scrcons.exe",
+    "scriptrunner.exe",
+    "sh.exe",
+    "systeminfo.exe",
+    "whoami.exe",
+    "wmic.exe",
+    "wscript.exe"
+   ],
+   "parents": [
+    "java.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "0d34ed8b-1c12-4ff2-828c-16fc860b766d"
+  },
+  {
+   "id": "sigma-devtoolslauncher-exe-executes-specified-binary",
+   "technique": "T1218",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Devtoolslauncher.exe Executes Specified Binary (SigmaHQ, DRL-1.1, id=cc268ac1-42d9-40fd-9ed3-8c4e1a5b87e6)",
+   "images": [
+    "devtoolslauncher.exe"
+   ],
+   "parents": [],
+   "cmd_all": [
+    "launchfordeploy"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "cc268ac1-42d9-40fd-9ed3-8c4e1a5b87e6"
+  },
+  {
+   "id": "sigma-openwith-exe-executes-specified-binary",
+   "technique": "T1218",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "OpenWith.exe Executes Specified Binary (SigmaHQ, DRL-1.1, id=cec8e918-30f7-4e2d-9bfa-a59cc97ae60f)",
+   "images": [
+    "openwith.exe"
+   ],
+   "parents": [],
+   "cmd_all": [
+    "/c"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "cec8e918-30f7-4e2d-9bfa-a59cc97ae60f"
+  },
+  {
+   "id": "sigma-use-of-pcalua-for-execution",
+   "technique": "T1059",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Use of Pcalua For Execution (SigmaHQ, DRL-1.1, id=0955e4e1-c281-4fb9-9ee1-5ee7b4b754d2)",
+   "images": [
+    "pcalua.exe"
+   ],
+   "parents": [],
+   "cmd_all": [
+    "-a"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "0955e4e1-c281-4fb9-9ee1-5ee7b4b754d2"
+  },
+  {
+   "id": "sigma-execute-pcwrun-exe-to-leverage-follina",
+   "technique": "T1218",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Execute Pcwrun.EXE To Leverage Follina (SigmaHQ, DRL-1.1, id=6004abd0-afa4-4557-ba90-49d172e0a299)",
+   "images": [
+    "pcwrun.exe"
+   ],
+   "parents": [],
+   "cmd_all": [
+    "../"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "6004abd0-afa4-4557-ba90-49d172e0a299"
+  },
+  {
+   "id": "sigma-lolbin-runexehelper-use-as-proxy",
+   "technique": "T1218",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Lolbin Runexehelper Use As Proxy (SigmaHQ, DRL-1.1, id=cd71385d-fd9b-4691-9b98-2b1f7e508714)",
+   "images": [],
+   "parents": [
+    "runexehelper.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "cd71385d-fd9b-4691-9b98-2b1f7e508714"
+  },
+  {
+   "id": "sigma-suspicious-runscripthelper-exe",
+   "technique": "T1059",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Suspicious Runscripthelper.exe (SigmaHQ, DRL-1.1, id=eca49c87-8a75-4f13-9c73-a5a29e845f03)",
+   "images": [
+    "runscripthelper.exe"
+   ],
+   "parents": [],
+   "cmd_all": [
+    "surfacecheck"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "eca49c87-8a75-4f13-9c73-a5a29e845f03"
+  },
+  {
+   "id": "sigma-time-travel-debugging-utility-usage",
+   "technique": "T1218",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Time Travel Debugging Utility Usage (SigmaHQ, DRL-1.1, id=0b4ae027-2a2d-4b93-8c7e-962caaba5b2a)",
+   "images": [],
+   "parents": [
+    "tttracer.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "0b4ae027-2a2d-4b93-8c7e-962caaba5b2a"
+  },
+  {
+   "id": "sigma-visual-basic-command-line-compiler-usage",
+   "technique": "T1027.004",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Visual Basic Command Line Compiler Usage (SigmaHQ, DRL-1.1, id=7b10f171-7f04-47c7-9fa2-5be43c76e535)",
+   "images": [
+    "cvtres.exe"
+   ],
+   "parents": [
+    "vbc.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "7b10f171-7f04-47c7-9fa2-5be43c76e535"
+  },
+  {
+   "id": "sigma-potential-credential-dumping-via-lsass-process-c",
+   "technique": "T1003",
+   "severity": "critical",
+   "label": "sigma_import",
+   "reason": "Potential Credential Dumping Via LSASS Process Clone (SigmaHQ, DRL-1.1, id=c8da0dfd-4ed0-4b68-962d-13c9c884384e)",
+   "images": [
+    "lsass.exe"
+   ],
+   "parents": [
+    "lsass.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "c8da0dfd-4ed0-4b68-962d-13c9c884384e"
+  },
+  {
+   "id": "sigma-potential-mftrace-exe-abuse",
+   "technique": "T1127",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Potential Mftrace.EXE Abuse (SigmaHQ, DRL-1.1, id=3d48c9d3-1aa6-418d-98d3-8fd3c01a564e)",
+   "images": [],
+   "parents": [
+    "mftrace.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "3d48c9d3-1aa6-418d-98d3-8fd3c01a564e"
+  },
+  {
+   "id": "sigma-mmc20-lateral-movement",
+   "technique": "T1021.003",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "MMC20 Lateral Movement (SigmaHQ, DRL-1.1, id=f1f3bf22-deb2-418d-8cce-e1a45e46a5bd)",
+   "images": [
+    "mmc.exe"
+   ],
+   "parents": [
+    "svchost.exe"
+   ],
+   "cmd_all": [
+    "-embedding"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "f1f3bf22-deb2-418d-8cce-e1a45e46a5bd"
+  },
+  {
+   "id": "sigma-potential-lethalhta-technique-execution",
+   "technique": "T1218.005",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Potential LethalHTA Technique Execution (SigmaHQ, DRL-1.1, id=ed5d72a6-f8f4-479d-ba79-02f6a80d7471)",
+   "images": [
+    "mshta.exe"
+   ],
+   "parents": [
+    "svchost.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "ed5d72a6-f8f4-479d-ba79-02f6a80d7471"
+  },
+  {
+   "id": "sigma-potential-process-injection-via-msra-exe",
+   "technique": "T1055",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Potential Process Injection Via Msra.EXE (SigmaHQ, DRL-1.1, id=744a188b-0415-4792-896f-11ddb0588dbc)",
+   "images": [
+    "arp.exe",
+    "cmd.exe",
+    "net.exe",
+    "netstat.exe",
+    "nslookup.exe",
+    "route.exe",
+    "schtasks.exe",
+    "whoami.exe"
+   ],
+   "parents": [
+    "msra.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "744a188b-0415-4792-896f-11ddb0588dbc"
+  },
+  {
+   "id": "sigma-msxsl-exe-execution",
+   "technique": "T1220",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Msxsl.EXE Execution (SigmaHQ, DRL-1.1, id=9e50a8b3-dd05-4eb8-9153-bdb6b79d50b0)",
+   "images": [
+    "msxsl.exe"
+   ],
+   "parents": [],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "9e50a8b3-dd05-4eb8-9153-bdb6b79d50b0"
+  },
+  {
+   "id": "sigma-remote-xsl-execution-via-msxsl-exe",
+   "technique": "T1220",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Remote XSL Execution Via Msxsl.EXE (SigmaHQ, DRL-1.1, id=75d0a94e-6252-448d-a7be-d953dff527bb)",
+   "images": [
+    "msxsl.exe"
+   ],
+   "parents": [],
+   "cmd_all": [
+    "http"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "75d0a94e-6252-448d-a7be-d953dff527bb"
+  },
+  {
+   "id": "sigma-invocation-of-active-directory-diagnostic-tool-n",
+   "technique": "T1003.003",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Invocation of Active Directory Diagnostic Tool (ntdsutil.exe) (SigmaHQ, DRL-1.1, id=2afafd61-6aae-4df4-baed-139fa1f4c345)",
+   "images": [
+    "ntdsutil.exe"
+   ],
+   "parents": [],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "2afafd61-6aae-4df4-baed-139fa1f4c345"
+  },
+  {
+   "id": "sigma-uncommon-child-process-spawned-by-odbcconf-exe",
+   "technique": "T1218.008",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Uncommon Child Process Spawned By Odbcconf.EXE (SigmaHQ, DRL-1.1, id=8e3c7994-131e-4ba5-b6ea-804d49113a26)",
+   "images": [],
+   "parents": [
+    "odbcconf.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "8e3c7994-131e-4ba5-b6ea-804d49113a26"
+  },
+  {
+   "id": "sigma-outlook-enableunsafeclientmailrules-setting-enab",
+   "technique": "T1059",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Outlook EnableUnsafeClientMailRules Setting Enabled (SigmaHQ, DRL-1.1, id=55f0a3a1-846e-40eb-8273-677371b8d912)",
+   "images": [],
+   "parents": [],
+   "cmd_all": [
+    "\\outlook\\security\\enableunsafeclientmailrules"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "55f0a3a1-846e-40eb-8273-677371b8d912"
+  },
+  {
+   "id": "sigma-suspicious-outlook-child-process",
+   "technique": "T1204.002",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Suspicious Outlook Child Process (SigmaHQ, DRL-1.1, id=208748f7-881d-47ac-a29c-07ea84bf691d)",
+   "images": [
+    "appvlp.exe",
+    "bash.exe",
+    "cmd.exe",
+    "cscript.exe",
+    "forfiles.exe",
+    "hh.exe",
+    "mftrace.exe",
+    "msbuild.exe",
+    "msdt.exe",
+    "mshta.exe",
+    "msiexec.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "regsvr32.exe",
+    "schtasks.exe",
+    "scrcons.exe",
+    "scriptrunner.exe",
+    "sh.exe",
+    "svchost.exe",
+    "wmic.exe",
+    "wscript.exe"
+   ],
+   "parents": [
+    "outlook.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "208748f7-881d-47ac-a29c-07ea84bf691d"
+  },
+  {
+   "id": "sigma-suspicious-remote-child-process-from-outlook",
+   "technique": "T1059",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Suspicious Remote Child Process From Outlook (SigmaHQ, DRL-1.1, id=e212d415-0e93-435f-9e1a-f29005bb4723)",
+   "images": [],
+   "parents": [
+    "outlook.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "e212d415-0e93-435f-9e1a-f29005bb4723"
+  },
+  {
+   "id": "sigma-ping-hex-ip",
+   "technique": "T1140",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Ping Hex IP (SigmaHQ, DRL-1.1, id=1a0d4aba-7668-4365-9ce4-6d79ab088dfd)",
+   "images": [
+    "ping.exe"
+   ],
+   "parents": [],
+   "cmd_all": [
+    "0x[a-fa-f0-9]{8}"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "1a0d4aba-7668-4365-9ce4-6d79ab088dfd"
+  },
+  {
+   "id": "sigma-potential-process-execution-proxy-via-cl-invocat",
+   "technique": "T1216",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Potential Process Execution Proxy Via CL_Invocation.ps1 (SigmaHQ, DRL-1.1, id=a0459f02-ac51-4c09-b511-b8c9203fc429)",
+   "images": [],
+   "parents": [],
+   "cmd_all": [
+    "syncinvoke"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "a0459f02-ac51-4c09-b511-b8c9203fc429"
+  },
+  {
+   "id": "sigma-base64-encoded-powershell-command-detected",
+   "technique": "T1027",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Base64 Encoded PowerShell Command Detected (SigmaHQ, DRL-1.1, id=e32d4572-9826-4738-b651-95fa63747e8a)",
+   "images": [],
+   "parents": [],
+   "cmd_all": [
+    "::frombase64string("
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "e32d4572-9826-4738-b651-95fa63747e8a"
+  },
+  {
+   "id": "sigma-powershell-get-clipboard-cmdlet-via-cli",
+   "technique": "T1115",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "PowerShell Get-Clipboard Cmdlet Via CLI (SigmaHQ, DRL-1.1, id=b9aeac14-2ffd-4ad3-b967-1354a4e628c3)",
+   "images": [],
+   "parents": [],
+   "cmd_all": [
+    "get-clipboard"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "b9aeac14-2ffd-4ad3-b967-1354a4e628c3"
+  },
+  {
+   "id": "sigma-msexchange-transport-agent-installation",
+   "technique": "T1505.002",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "MSExchange Transport Agent Installation (SigmaHQ, DRL-1.1, id=83809e84-4475-4b69-bc3e-4aad8568612f)",
+   "images": [],
+   "parents": [],
+   "cmd_all": [
+    "install-transportagent"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "83809e84-4475-4b69-bc3e-4aad8568612f"
+  },
+  {
+   "id": "sigma-run-powershell-script-from-redirected-input-stre",
+   "technique": "T1059",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Run PowerShell Script from Redirected Input Stream (SigmaHQ, DRL-1.1, id=c83bf4b5-cdf0-437c-90fa-43d734f7c476)",
+   "images": [
+    "powershell.exe",
+    "pwsh.exe"
+   ],
+   "parents": [],
+   "cmd_all": [
+    "\\s-\\s*<"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "c83bf4b5-cdf0-437c-90fa-43d734f7c476"
+  },
+  {
+   "id": "sigma-visual-studio-nodejstools-pressanykey-arbitrary-",
+   "technique": "T1218",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Visual Studio NodejsTools PressAnyKey Arbitrary Binary Execution (SigmaHQ, DRL-1.1, id=a20391f8-76fb-437b-abc0-dba2df1952c6)",
+   "images": [],
+   "parents": [
+    "microsoft.nodejstools.pressanykey.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "a20391f8-76fb-437b-abc0-dba2df1952c6"
+  },
+  {
+   "id": "sigma-pua-nircmd-execution-as-local-system",
+   "technique": "T1569.002",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "PUA - NirCmd Execution As LOCAL SYSTEM (SigmaHQ, DRL-1.1, id=d9047477-0359-48c9-b8c7-792cedcdc9c4)",
+   "images": [],
+   "parents": [],
+   "cmd_all": [
+    "runassystem"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "d9047477-0359-48c9-b8c7-792cedcdc9c4"
+  },
+  {
+   "id": "sigma-suspicious-rasdial-activity",
+   "technique": "T1059",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Suspicious RASdial Activity (SigmaHQ, DRL-1.1, id=6bba49bf-7f8c-47d6-a1bb-6b4dece4640e)",
+   "images": [
+    "rasdial.exe"
+   ],
+   "parents": [],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "6bba49bf-7f8c-47d6-a1bb-6b4dece4640e"
+  },
+  {
+   "id": "sigma-regedit-as-trusted-installer",
+   "technique": "T1548",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Regedit as Trusted Installer (SigmaHQ, DRL-1.1, id=883835a7-df45-43e4-bf1d-4268768afda4)",
+   "images": [
+    "regedit.exe"
+   ],
+   "parents": [
+    "trustedinstaller.exe",
+    "processhacker.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "883835a7-df45-43e4-bf1d-4268768afda4"
+  },
+  {
+   "id": "sigma-potential-persistence-via-logon-scripts-commandl",
+   "technique": "T1037.001",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Potential Persistence Via Logon Scripts - CommandLine (SigmaHQ, DRL-1.1, id=21d856f9-9281-4ded-9377-51a1a6e2a432)",
+   "images": [],
+   "parents": [],
+   "cmd_all": [
+    "userinitmprlogonscript"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "21d856f9-9281-4ded-9377-51a1a6e2a432"
+  },
+  {
+   "id": "sigma-potential-provisioning-registry-key-abuse-for-bi",
+   "technique": "T1218",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Potential Provisioning Registry Key Abuse For Binary Proxy Execution (SigmaHQ, DRL-1.1, id=2a4b3e61-9d22-4e4a-b60f-6e8f0cde6f25)",
+   "images": [],
+   "parents": [],
+   "cmd_all": [
+    "software\\microsoft\\provisioning\\commands\\"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "2a4b3e61-9d22-4e4a-b60f-6e8f0cde6f25"
+  },
+  {
+   "id": "sigma-persistence-via-typedpaths-commandline",
+   "technique": "unmapped",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Persistence Via TypedPaths - CommandLine (SigmaHQ, DRL-1.1, id=ec88289a-7e1a-4cc3-8d18-bd1f60e4b9ba)",
+   "images": [],
+   "parents": [],
+   "cmd_all": [
+    "\\software\\microsoft\\windows\\currentversion\\explorer\\typedpaths"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "ec88289a-7e1a-4cc3-8d18-bd1f60e4b9ba"
+  },
+  {
+   "id": "sigma-remote-access-tool-potential-meshagent-execution",
+   "technique": "T1219.002",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Remote Access Tool - Potential MeshAgent Execution - Windows (SigmaHQ, DRL-1.1, id=2fbbe9ff-0afc-470b-bdc0-592198339968)",
+   "images": [],
+   "parents": [],
+   "cmd_all": [
+    "--meshservicename"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "2fbbe9ff-0afc-470b-bdc0-592198339968"
+  },
+  {
+   "id": "sigma-remote-access-tool-meshagent-command-execution-v",
+   "technique": "T1219.002",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Remote Access Tool - MeshAgent Command Execution via MeshCentral (SigmaHQ, DRL-1.1, id=74a2b202-73e0-4693-9a3a-9d36146d0775)",
+   "images": [
+    "cmd.exe",
+    "powershell.exe",
+    "pwsh.exe"
+   ],
+   "parents": [
+    "meshagent.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "74a2b202-73e0-4693-9a3a-9d36146d0775"
+  },
+  {
+   "id": "sigma-remote-access-tool-screenconnect-server-web-shel",
+   "technique": "T1190",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Remote Access Tool - ScreenConnect Server Web Shell Execution (SigmaHQ, DRL-1.1, id=b19146a3-25d4-41b4-928b-1e2a92641b1b)",
+   "images": [
+    "cmd.exe",
+    "csc.exe"
+   ],
+   "parents": [
+    "screenconnect.service.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "b19146a3-25d4-41b4-928b-1e2a92641b1b"
+  },
+  {
+   "id": "sigma-remote-access-tool-simple-help-execution",
+   "technique": "T1219.002",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Remote Access Tool - Simple Help Execution (SigmaHQ, DRL-1.1, id=95e60a2b-4705-444b-b7da-ba0ea81a3ee2)",
+   "images": [
+    "simpleservice.exe"
+   ],
+   "parents": [],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "95e60a2b-4705-444b-b7da-ba0ea81a3ee2"
+  },
+  {
+   "id": "sigma-suspicious-rundll32-setupapi-dll-activity",
+   "technique": "T1218.011",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Suspicious Rundll32 Setupapi.dll Activity (SigmaHQ, DRL-1.1, id=285b85b1-a555-4095-8652-a8a4106af63f)",
+   "images": [
+    "runonce.exe"
+   ],
+   "parents": [
+    "rundll32.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "285b85b1-a555-4095-8652-a8a4106af63f"
+  },
+  {
+   "id": "sigma-script-event-consumer-spawning-process",
+   "technique": "T1047",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Script Event Consumer Spawning Process (SigmaHQ, DRL-1.1, id=f6d1dd2f-b8ce-40ca-bc23-062efb686b34)",
+   "images": [
+    "svchost.exe",
+    "dllhost.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "wscript.exe",
+    "cscript.exe",
+    "schtasks.exe",
+    "regsvr32.exe",
+    "mshta.exe",
+    "rundll32.exe",
+    "msiexec.exe",
+    "msbuild.exe"
+   ],
+   "parents": [
+    "scrcons.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "f6d1dd2f-b8ce-40ca-bc23-062efb686b34"
+  },
+  {
+   "id": "sigma-sdclt-child-processes",
+   "technique": "T1548.002",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Sdclt Child Processes (SigmaHQ, DRL-1.1, id=da2738f2-fadb-4394-afa7-0a0674885afa)",
+   "images": [],
+   "parents": [
+    "sdclt.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "da2738f2-fadb-4394-afa7-0a0674885afa"
+  },
+  {
+   "id": "sigma-suspicious-serv-u-process-pattern",
+   "technique": "T1555",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Suspicious Serv-U Process Pattern (SigmaHQ, DRL-1.1, id=58f4ea09-0fc2-4520-ba18-b85c540b0eaf)",
+   "images": [
+    "cmd.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "wscript.exe",
+    "cscript.exe",
+    "sh.exe",
+    "bash.exe",
+    "schtasks.exe",
+    "regsvr32.exe",
+    "wmic.exe",
+    "mshta.exe",
+    "rundll32.exe",
+    "msiexec.exe",
+    "forfiles.exe",
+    "scriptrunner.exe"
+   ],
+   "parents": [
+    "serv-u.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "58f4ea09-0fc2-4520-ba18-b85c540b0eaf"
+  },
+  {
+   "id": "sigma-indirect-command-execution-via-sftp-proxycommand",
+   "technique": "T1202",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Indirect Command Execution via SFTP ProxyCommand (SigmaHQ, DRL-1.1, id=762bb580-79b4-40f4-8b9e-9349ce1710f4)",
+   "images": [
+    "sftp.exe"
+   ],
+   "parents": [],
+   "cmd_all": [
+    "proxycommand="
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "762bb580-79b4-40f4-8b9e-9349ce1710f4"
+  },
+  {
+   "id": "sigma-suspicious-execution-of-shutdown-to-log-out",
+   "technique": "T1529",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Suspicious Execution of Shutdown to Log Out (SigmaHQ, DRL-1.1, id=ec290c06-9b6b-4338-8b6b-095c0f284f10)",
+   "images": [
+    "shutdown.exe"
+   ],
+   "parents": [],
+   "cmd_all": [
+    "/l"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "ec290c06-9b6b-4338-8b6b-095c0f284f10"
+  },
+  {
+   "id": "sigma-audio-capture-via-soundrecorder",
+   "technique": "T1123",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Audio Capture via SoundRecorder (SigmaHQ, DRL-1.1, id=83865853-59aa-449e-9600-74b9d89a6d6e)",
+   "images": [
+    "soundrecorder.exe"
+   ],
+   "parents": [],
+   "cmd_all": [
+    "/file"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "83865853-59aa-449e-9600-74b9d89a6d6e"
+  },
+  {
+   "id": "sigma-suspicious-speech-runtime-binary-child-process",
+   "technique": "T1021.003",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Suspicious Speech Runtime Binary Child Process (SigmaHQ, DRL-1.1, id=78f10490-f2f4-4d19-a75b-4e0683bf3b8d)",
+   "images": [],
+   "parents": [
+    "speechruntime.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "78f10490-f2f4-4d19-a75b-4e0683bf3b8d"
+  },
+  {
+   "id": "sigma-suspicious-splwow64-without-params",
+   "technique": "T1202",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Suspicious Splwow64 Without Params (SigmaHQ, DRL-1.1, id=1f1a8509-2cbb-44f5-8751-8e1571518ce2)",
+   "images": [
+    "splwow64.exe"
+   ],
+   "parents": [],
+   "cmd_all": [
+    "splwow64.exe"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "1f1a8509-2cbb-44f5-8751-8e1571518ce2"
+  },
+  {
+   "id": "sigma-port-forwarding-activity-via-ssh-exe",
+   "technique": "T1572",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Port Forwarding Activity Via SSH.EXE (SigmaHQ, DRL-1.1, id=327f48c1-a6db-4eb8-875a-f6981f1b0183)",
+   "images": [
+    "ssh.exe"
+   ],
+   "parents": [],
+   "cmd_all": [
+    "-r"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "327f48c1-a6db-4eb8-875a-f6981f1b0183"
+  },
+  {
+   "id": "sigma-potential-rdp-tunneling-via-ssh",
+   "technique": "T1572",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Potential RDP Tunneling Via SSH (SigmaHQ, DRL-1.1, id=f7d7ebd5-a016-46e2-9c54-f9932f2d386d)",
+   "images": [
+    "ssh.exe"
+   ],
+   "parents": [],
+   "cmd_all": [
+    ":3389"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "f7d7ebd5-a016-46e2-9c54-f9932f2d386d"
+  },
+  {
+   "id": "sigma-start-of-nt-virtual-dos-machine",
+   "technique": "unmapped",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Start of NT Virtual DOS Machine (SigmaHQ, DRL-1.1, id=16905e21-66ee-42fe-b256-1318ada2d770)",
+   "images": [
+    "ntvdm.exe",
+    "csrstub.exe"
+   ],
+   "parents": [],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "16905e21-66ee-42fe-b256-1318ada2d770"
+  },
+  {
+   "id": "sigma-phishing-pattern-iso-in-archive",
+   "technique": "T1566",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Phishing Pattern ISO in Archive (SigmaHQ, DRL-1.1, id=fcdf69e5-a3d3-452a-9724-26f2308bf2b1)",
+   "images": [
+    "isoburn.exe",
+    "poweriso.exe",
+    "imgburn.exe"
+   ],
+   "parents": [
+    "winrar.exe",
+    "7zfm.exe",
+    "peazip.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "fcdf69e5-a3d3-452a-9724-26f2308bf2b1"
+  },
+  {
+   "id": "sigma-potential-hidden-directory-creation-via-ntfs-ind",
+   "technique": "T1564.004",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Potential Hidden Directory Creation Via NTFS INDEX_ALLOCATION Stream - CLI (SigmaHQ, DRL-1.1, id=0900463c-b33b-49a8-be1d-552a3b553dae)",
+   "images": [],
+   "parents": [],
+   "cmd_all": [
+    "::$index_allocation"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "0900463c-b33b-49a8-be1d-552a3b553dae"
+  },
+  {
+   "id": "sigma-whoami-as-parameter",
+   "technique": "T1033",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "WhoAmI as Parameter (SigmaHQ, DRL-1.1, id=e9142d84-fbe0-401d-ac50-3e519fb00c89)",
+   "images": [],
+   "parents": [],
+   "cmd_all": [
+    ".exe whoami"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "e9142d84-fbe0-401d-ac50-3e519fb00c89"
+  },
+  {
+   "id": "sigma-psexec-service-child-process-execution-as-local-",
+   "technique": "unmapped",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "PsExec Service Child Process Execution as LOCAL SYSTEM (SigmaHQ, DRL-1.1, id=7c0dcd3d-acf8-4f71-9570-f448b0034f94)",
+   "images": [],
+   "parents": [
+    "psexesvc.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "7c0dcd3d-acf8-4f71-9570-f448b0034f94"
+  },
+  {
+   "id": "sigma-sysprep-on-appdata-folder",
+   "technique": "T1059",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Sysprep on AppData Folder (SigmaHQ, DRL-1.1, id=d5b9ae7a-e6fc-405e-80ff-2ff9dcc64e7e)",
+   "images": [
+    "sysprep.exe"
+   ],
+   "parents": [],
+   "cmd_all": [
+    "\\appdata\\"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "d5b9ae7a-e6fc-405e-80ff-2ff9dcc64e7e"
+  },
+  {
+   "id": "sigma-taskmgr-as-local-system",
+   "technique": "T1036",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Taskmgr as LOCAL_SYSTEM (SigmaHQ, DRL-1.1, id=9fff585c-c33e-4a86-b3cd-39312079a65f)",
+   "images": [
+    "taskmgr.exe"
+   ],
+   "parents": [],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "9fff585c-c33e-4a86-b3cd-39312079a65f"
+  },
+  {
+   "id": "sigma-suspicious-tscon-start-as-system",
+   "technique": "T1219.002",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Suspicious TSCON Start as SYSTEM (SigmaHQ, DRL-1.1, id=9847f263-4a81-424f-970c-875dab15b79b)",
+   "images": [
+    "tscon.exe"
+   ],
+   "parents": [],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "9847f263-4a81-424f-970c-875dab15b79b"
+  },
+  {
+   "id": "sigma-suspicious-rdp-redirect-using-tscon",
+   "technique": "T1563.002",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Suspicious RDP Redirect Using TSCON (SigmaHQ, DRL-1.1, id=f72aa3e8-49f9-4c7d-bd74-f8ab84ff9bbb)",
+   "images": [],
+   "parents": [],
+   "cmd_all": [
+    "/dest:rdp-tcp#"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "f72aa3e8-49f9-4c7d-bd74-f8ab84ff9bbb"
+  },
+  {
+   "id": "sigma-uac-bypass-using-changepk-and-slui",
+   "technique": "T1548.002",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "UAC Bypass Using ChangePK and SLUI (SigmaHQ, DRL-1.1, id=503d581c-7df0-4bbe-b9be-5840c0ecc1fc)",
+   "images": [
+    "changepk.exe"
+   ],
+   "parents": [
+    "slui.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "503d581c-7df0-4bbe-b9be-5840c0ecc1fc"
+  },
+  {
+   "id": "sigma-uac-bypass-using-disk-cleanup",
+   "technique": "T1548.002",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "UAC Bypass Using Disk Cleanup (SigmaHQ, DRL-1.1, id=b697e69c-746f-4a86-9f59-7bfff8eab881)",
+   "images": [],
+   "parents": [],
+   "cmd_all": [
+    "\\system32\\cleanmgr.exe /autoclean /d c:"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "b697e69c-746f-4a86-9f59-7bfff8eab881"
+  },
+  {
+   "id": "sigma-uac-bypass-using-consent-and-comctl32-process",
+   "technique": "T1548.002",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "UAC Bypass Using Consent and Comctl32 - Process (SigmaHQ, DRL-1.1, id=1ca6bd18-0ba0-44ca-851c-92ed89a61085)",
+   "images": [
+    "werfault.exe"
+   ],
+   "parents": [
+    "consent.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "1ca6bd18-0ba0-44ca-851c-92ed89a61085"
+  },
+  {
+   "id": "sigma-uac-bypass-using-dismhost",
+   "technique": "T1548.002",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "UAC Bypass Using DismHost (SigmaHQ, DRL-1.1, id=853e74f9-9392-4935-ad3b-2e8c040dae86)",
+   "images": [],
+   "parents": [
+    "dismhost.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "853e74f9-9392-4935-ad3b-2e8c040dae86"
+  },
+  {
+   "id": "sigma-bypass-uac-via-fodhelper-exe",
+   "technique": "T1548.002",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "Bypass UAC via Fodhelper.exe (SigmaHQ, DRL-1.1, id=7f741dcf-fc22-4759-87b4-9ae8376676a2)",
+   "images": [],
+   "parents": [
+    "fodhelper.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "7f741dcf-fc22-4759-87b4-9ae8376676a2"
+  },
+  {
+   "id": "sigma-uac-bypass-using-ieinstal-process",
+   "technique": "T1548.002",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "UAC Bypass Using IEInstal - Process (SigmaHQ, DRL-1.1, id=80fc36aa-945e-4181-89f2-2f907ab6775d)",
+   "images": [
+    "consent.exe"
+   ],
+   "parents": [
+    "ieinstal.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "80fc36aa-945e-4181-89f2-2f907ab6775d"
+  },
+  {
+   "id": "sigma-uac-bypass-using-msconfig-token-modification-pro",
+   "technique": "T1548.002",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "UAC Bypass Using MSConfig Token Modification - Process (SigmaHQ, DRL-1.1, id=ad92e3f9-7eb6-460e-96b1-582b0ccbb980)",
+   "images": [],
+   "parents": [
+    "pkgmgr.exe"
+   ],
+   "cmd_all": [
+    "c:\\windows\\system32\\msconfig.exe\" -5"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "ad92e3f9-7eb6-460e-96b1-582b0ccbb980"
+  },
+  {
+   "id": "sigma-uac-bypass-using-pkgmgr-and-dism",
+   "technique": "T1548.002",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "UAC Bypass Using PkgMgr and DISM (SigmaHQ, DRL-1.1, id=a743ceba-c771-4d75-97eb-8a90f7f4844c)",
+   "images": [
+    "dism.exe"
+   ],
+   "parents": [
+    "pkgmgr.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "a743ceba-c771-4d75-97eb-8a90f7f4844c"
+  },
+  {
+   "id": "sigma-potential-uac-bypass-via-sdclt-exe",
+   "technique": "T1548.002",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Potential UAC Bypass Via Sdclt.EXE (SigmaHQ, DRL-1.1, id=40f9af16-589d-4984-b78d-8c2aec023197)",
+   "images": [
+    "sdclt.exe"
+   ],
+   "parents": [],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "40f9af16-589d-4984-b78d-8c2aec023197"
+  },
+  {
+   "id": "sigma-uac-bypass-abusing-winsat-path-parsing-process",
+   "technique": "T1548.002",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "UAC Bypass Abusing Winsat Path Parsing - Process (SigmaHQ, DRL-1.1, id=7a01183d-71a2-46ad-ad5c-acd989ac1793)",
+   "images": [],
+   "parents": [
+    "winsat.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "7a01183d-71a2-46ad-ad5c-acd989ac1793"
+  },
+  {
+   "id": "sigma-uac-bypass-wsreset",
+   "technique": "T1548.002",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "UAC Bypass WSReset (SigmaHQ, DRL-1.1, id=89a9a0e0-f61a-42e5-8957-b1479565a658)",
+   "images": [
+    "wsreset.exe"
+   ],
+   "parents": [],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "89a9a0e0-f61a-42e5-8957-b1479565a658"
+  },
+  {
+   "id": "sigma-potentially-suspicious-webdav-lnk-execution",
+   "technique": "T1059.001",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "Potentially Suspicious WebDAV LNK Execution (SigmaHQ, DRL-1.1, id=1412aa78-a24c-4abd-83df-767dfb2c5bbe)",
+   "images": [
+    "cmd.exe",
+    "cscript.exe",
+    "mshta.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "wscript.exe"
+   ],
+   "parents": [
+    "explorer.exe"
+   ],
+   "cmd_all": [
+    "\\davwwwroot\\"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "1412aa78-a24c-4abd-83df-767dfb2c5bbe"
+  },
+  {
+   "id": "sigma-wmi-persistence-script-event-consumer",
+   "technique": "T1546.003",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "WMI Persistence - Script Event Consumer (SigmaHQ, DRL-1.1, id=ec1d5e28-8f3b-4188-a6f8-6e8df81dc28e)",
+   "images": [
+    "scrcons.exe"
+   ],
+   "parents": [
+    "svchost.exe"
+   ],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "ec1d5e28-8f3b-4188-a6f8-6e8df81dc28e"
+  },
+  {
+   "id": "sigma-uefi-persistence-via-wpbbin-processcreation",
+   "technique": "T1542.001",
+   "severity": "high",
+   "label": "sigma_import",
+   "reason": "UEFI Persistence Via Wpbbin - ProcessCreation (SigmaHQ, DRL-1.1, id=4abc0ec4-db5a-412f-9632-26659cddf145)",
+   "images": [
+    "wpbbin.exe"
+   ],
+   "parents": [],
+   "cmd_all": [],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "4abc0ec4-db5a-412f-9632-26659cddf145"
+  },
+  {
+   "id": "sigma-com-object-execution-via-xwizard-exe",
+   "technique": "T1218",
+   "severity": "medium",
+   "label": "sigma_import",
+   "reason": "COM Object Execution via Xwizard.EXE (SigmaHQ, DRL-1.1, id=53d4bb30-3f36-4e8a-b078-69d36c4a79ff)",
+   "images": [],
+   "parents": [],
+   "cmd_all": [
+    "runwizard",
+    "\\{[a-fa-f0-9]{8}-[a-fa-f0-9]{4}-[a-fa-f0-9]{4}-[a-fa-f0-9]{4}-[a-fa-f0-9]{12}\\}"
+   ],
+   "source": "SigmaHQ",
+   "license": "DRL-1.1",
+   "upstream_id": "53d4bb30-3f36-4e8a-b078-69d36c4a79ff"
+  }
+ ]
+}

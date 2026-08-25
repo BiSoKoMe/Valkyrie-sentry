@@ -81,8 +81,32 @@ class ElasticVerdict(str, Enum):
     SKIP_TELEMETRY = "skipped_needs_telemetry_we_lack"
     SKIP_UNPARSEABLE = "skipped_clause_not_parseable"
     SKIP_NO_ANCHOR = "skipped_no_positive_anchor"
+    SKIP_DEAD = "skipped_would_never_match"
     REJECT_FP = "rejected_false_positive"
     SKIP_DUPLICATE = "skipped_duplicate"
+
+
+# A process basename Valkyrie can actually compare. Rule.matches uses exact
+# membership, so anything else silently NEVER fires.
+_VALID_BASENAME = re.compile(r"^[a-z0-9][a-z0-9._+~-]*\.[a-z0-9]{1,8}$")
+
+
+def _dead_names(names: list) -> list:
+    """Names that would make an imported rule silently unmatchable.
+
+    Two real cases from the corpus, both of which imported "successfully" and
+    detected nothing:
+
+      * ``autoit*.exe`` - Elastic match a wildcard; Valkyrie compares basenames
+        exactly, so the rule can never fire.
+      * ``-appvscript`` - an argument that leaked into the parent list through a
+        mis-bounded clause, i.e. a parser bug wearing the shape of a rule.
+
+    A dead rule is WORSE than a refused one. A refusal is visible and counted; a
+    dead rule inflates the coverage number while contributing no detection,
+    which is precisely the fake-parity failure this project refuses to ship.
+    """
+    return [n for n in names if not _VALID_BASENAME.match(n or "")]
 
 
 # --- EQL surface Valkyrie can actually express ----------------------------
@@ -492,6 +516,10 @@ def convert(rule: dict, *, mode: ShipMode = ShipMode.COMMERCIAL_PRODUCT) -> tupl
     parents: list = []
     cmd_all: list = []
     ancestors: list = []
+    cmd_not: list = []
+    parents_not: list = []
+    images_not: list = []
+    narrowed = 0        # exclusions applied more broadly than upstream wrote them
 
     # --- EVERY top-level conjunct must be handled. Dropping one broadens --
     for clause in _split_top_level_and(body_expr):
@@ -501,6 +529,38 @@ def convert(rule: dict, *, mode: ShipMode = ShipMode.COMMERCIAL_PRODUCT) -> tupl
 
         if any(p.match(c) for p in _IMPLIED):
             continue                      # guaranteed by evaluation context
+
+        # A COMPOUND exclusion: not (A and B). "Not both" cannot be written as a
+        # flat exclusion list, but excluding on A alone is strictly NARROWER than
+        # upstream - it suppresses a superset of what Elastic suppresses. That
+        # can cost a detection and can never add a false positive, so it is
+        # allowed and counted rather than refused.
+        if re.match(r"^not\s*\(", c, re.I):
+            inner = _strip_outer_parens(re.sub(r"^not\s+", "", c, flags=re.I))
+            subs = _split_top_level_and(inner)
+            applied = False
+            for sub in subs:
+                p2 = _parse_clause(sub)
+                if not p2:
+                    continue
+                f2, v2 = p2
+                if f2 in _F_CMD or f2 in _F_PARENT_CMD:
+                    cmd_not.extend(x for x in (_depattern(v) for v in v2) if x)
+                    applied = True
+                elif f2 in _F_PARENT:
+                    parents_not.extend(_basename(v) for v in v2)
+                    applied = True
+                elif f2 in _F_IMAGE:
+                    images_not.extend(_basename(v) for v in v2)
+                    applied = True
+            if not applied:
+                return (None, ElasticVerdict.SKIP_TELEMETRY,
+                        (f"compound exclusion {c[:60]!r} keys only on telemetry "
+                         f"Valkyrie does not collect; ignoring it would make the "
+                         f"rule BROADER than the one Elastic tested",), prov)
+            if len(subs) > 1:
+                narrowed += 1
+            continue
 
         # ancestry — expressible here, unlike in Sigma
         mo = _DESCENDANT.search(c)
@@ -524,15 +584,29 @@ def convert(rule: dict, *, mode: ShipMode = ShipMode.COMMERCIAL_PRODUCT) -> tupl
         field, values = parsed
 
         if negated:
-            # We harvest exclusions as benign facts, but we cannot *enforce*
-            # them inside a flat Rule. A rule imported without its exclusions
-            # false-positives more than upstream - which is the one outcome
-            # that is never acceptable here.
-            return (None, ElasticVerdict.SKIP_UNPARSEABLE,
-                    (f"rule carries exclusions ({field}) that a flat Rule cannot "
-                     f"enforce; importing only its positive half would ship MORE "
-                     f"false positives than Elastic accepts. Its exclusions are "
-                     f"still harvested as benign facts",), prov)
+            # Rule.cmd_not / parents_not / images_not can now ENFORCE an
+            # exclusion, so a rule that carries one is no longer refused
+            # outright. The direction of error is what matters: applying an
+            # exclusion makes the rule NARROWER than upstream, which can cost a
+            # detection but can never add a false positive. Failing to apply one
+            # makes it BROADER, which ships false positives onto a real machine.
+            # Narrower is acceptable and counted; broader is not.
+            if field in _F_CMD or field in _F_PARENT_CMD:
+                cmd_not.extend(_depattern(v) for v in values if _depattern(v))
+            elif field in _F_PARENT:
+                parents_not.extend(_basename(v) for v in values)
+            elif field in _F_IMAGE:
+                images_not.extend(_basename(v) for v in values)
+            else:
+                # An exclusion on telemetry we do not carry (user.id,
+                # code signature, args_count) cannot be enforced at all, and
+                # dropping it would let the rule fire where Elastic's would not.
+                return (None, ElasticVerdict.SKIP_TELEMETRY,
+                        (f"exclusion keys on {field!r}, which Valkyrie does not "
+                         f"collect; ignoring it would make the rule BROADER than "
+                         f"the one Elastic tested. Its benign facts are still "
+                         f"harvested",), prov)
+            continue
 
         if field in _F_IMAGE:
             images.extend(_basename(v) for v in values)
@@ -556,6 +630,15 @@ def convert(rule: dict, *, mode: ShipMode = ShipMode.COMMERCIAL_PRODUCT) -> tupl
                 ("no process/parent/ancestor anchor; a command-line-only rule is "
                  "too broad to import safely",), prov)
 
+    # --- gate: would this rule be silently DEAD once imported? -----------
+    dead = _dead_names(images + parents + ancestors)
+    if dead:
+        return (None, ElasticVerdict.SKIP_DEAD,
+                (f"process name(s) {dead[:3]} cannot match Valkyrie's exact "
+                 f"basename comparison (wildcard, or a mis-parsed argument); "
+                 f"importing it would add coverage on paper and no detection in "
+                 f"fact",), prov)
+
     tid = _technique(rule)
     rid = "elastic-" + re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:48]
     out = Rule(
@@ -565,10 +648,18 @@ def convert(rule: dict, *, mode: ShipMode = ShipMode.COMMERCIAL_PRODUCT) -> tupl
         label="elastic_import",
         reason=f"{name} — {prov.attribution()}",
         images=tuple(dict.fromkeys(images)),
+        images_not=tuple(dict.fromkeys(images_not)),
         parents=tuple(dict.fromkeys(parents + ancestors)),
+        parents_not=tuple(dict.fromkeys(parents_not)),
         cmd_all=tuple(dict.fromkeys(cmd_all)),
+        cmd_not=tuple(dict.fromkeys(cmd_not)),
     )
-    return (out, ElasticVerdict.IMPORTED, (decision.reason,), prov)
+    note = (decision.reason,)
+    if narrowed:
+        note += (f"{narrowed} compound exclusion(s) applied more broadly than "
+                 f"written: strictly narrower than upstream, so it may cost a "
+                 f"detection but cannot add a false positive",)
+    return (out, ElasticVerdict.IMPORTED, note, prov)
 
 
 def import_rules(rules: list, *,
@@ -733,4 +824,6 @@ def fires_on_benign(rule, entries: list) -> list:
 def _rule_dict(r: Rule) -> dict:
     return {"id": r.id, "technique": r.technique, "severity": r.severity,
             "label": r.label, "reason": r.reason, "images": list(r.images),
-            "parents": list(r.parents), "cmd_all": list(r.cmd_all)}
+            "images_not": list(r.images_not), "parents": list(r.parents),
+            "parents_not": list(r.parents_not), "cmd_all": list(r.cmd_all),
+            "cmd_not": list(r.cmd_not)}

@@ -205,16 +205,21 @@ _MODULE_EXTS = (".dll", ".cpl", ".ocx", ".sys", ".drv")
 def _is_module_export_comma(out: list, ch: str) -> bool:
     """Is this comma the separator in `module.dll,ExportName`?
 
-    Folding it destroys the `.dll,` token, and that is not a theoretical
-    concern: it silently killed rundll32-lowtrust-dll in the live engine. The
-    rule fired on the raw command line and missed on the normalised one, so the
-    detection looked present in the source and was absent in production.
+    Folding it destroys the `.dll,` token that rundll32-lowtrust-dll keys on.
 
-    This module's docstring promises normalisation can only ADD detections and
-    never remove one. That promise holds for classify_behavior, which also sees
-    the original string, but NOT for the behavioural rule engine, which is given
-    the normalised text alone. Until that asymmetry is closed, every fold has to
-    be checked against the syntax it might be destroying.
+    CORRECTION, recorded because the first version of this comment was wrong:
+    this was NOT a live production gap. match_process matches the raw command
+    line AND the normalised one and unions the hits, and process_telemetry hands
+    it the raw string, so the rule always fired in the engine. The apparent
+    breakage came from a test helper that normalised before calling, making
+    match_process normalise an already-normalised string.
+
+    The exemption is still correct and kept, because any consumer that sees ONLY
+    the normalised text - the import false-positive gate, fires_on_benign, and
+    anything calling Rule.matches directly - would otherwise evaluate a command
+    line whose export syntax had been dissolved. The module's "can only ADD
+    detections" promise holds for match_process; it does not hold for a caller
+    that normalises first, and this keeps that caller honest too.
     """
     if ch != ",":
         return False

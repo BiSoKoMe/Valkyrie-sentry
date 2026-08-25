@@ -24,7 +24,9 @@ boundary.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 from .cmdline_normalize import normalize_cmdline
@@ -42,6 +44,7 @@ class Rule:
     images: tuple = ()             # process basenames this applies to (empty = any)
     images_not: tuple = ()         # process basenames to EXCLUDE (empty = none)
     parents: tuple = ()            # parent basenames (empty = any)
+    parents_not: tuple = ()        # parent basenames to EXCLUDE (empty = none)
     cmd_all: tuple = ()            # ALL of these substrings must be present
     cmd_any: tuple = ()            # ANY of these substrings present
     cmd_any2: tuple = ()           # a SECOND independent ANY-group, ANDed with
@@ -81,6 +84,8 @@ class Rule:
         if self.images_not and image in self.images_not:
             return False
         if self.parents and parent not in self.parents:
+            return False
+        if self.parents_not and parent in self.parents_not:
             return False
         if self.cmd_all and not all(t in cmd for t in self.cmd_all):
             return False
@@ -1503,6 +1508,63 @@ RULES: tuple = (
 )
 
 
+# ---------------------------------------------------------------------------
+# IMPORTED RULES — public vendor and community detection content
+# ---------------------------------------------------------------------------
+# Detection content from elastic/protections-artifacts (Elastic 2.0) and SigmaHQ
+# (DRL 1.1), each rule having survived the import funnel in valkyrie/edr/
+# elastic_import.py and sigma_import.py: per-rule licence, exact
+# expressibility, never-drop-a-conjunct, dead-rule, false-positive and duplicate
+# gates.
+#
+# Kept in a SEPARATE list from RULES on purpose. Valkyrie's own coverage and
+# borrowed coverage must stay countable apart, or "how many techniques do we
+# detect" quietly becomes a number nobody can attribute - which is the
+# fake-parity failure this project refuses to ship. RULES stays the native
+# corpus; ALL_RULES is what actually gets evaluated.
+#
+# Both licences require attribution wherever matches are displayed, so each
+# imported rule carries its source and upstream id in `reason`. Do not strip it.
+IMPORTED_RULES_PATH = Path(__file__).resolve().parent / "defaults" / "imported_rules.json"
+
+_IMPORTED_FIELDS = ("images", "images_not", "parents", "parents_not",
+                    "cmd_all", "cmd_any", "cmd_any2", "cmd_any3", "cmd_not",
+                    "path_any")
+
+
+def load_imported_rules(path: Optional[Path] = None) -> tuple:
+    """Load the shipped imported ruleset. Fail-soft, and never raises.
+
+    A missing or damaged file means Valkyrie runs on its native rules alone -
+    degraded, but working. An import corpus must never be able to take the
+    engine down; borrowed content is a supplement, not a dependency.
+    """
+    target = Path(path) if path else IMPORTED_RULES_PATH
+    out: list = []
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+        for d in data.get("rules", []):
+            try:
+                out.append(Rule(
+                    id=str(d["id"]), technique=str(d.get("technique") or "unmapped"),
+                    severity=str(d.get("severity") or SEV_MEDIUM),
+                    label=str(d.get("label") or "imported"),
+                    reason=str(d.get("reason") or ""),
+                    **{f: tuple(d.get(f) or ()) for f in _IMPORTED_FIELDS}))
+            except Exception:   # noqa: BLE001 — one bad rule must not lose the rest
+                continue
+    except Exception:   # noqa: BLE001
+        return ()
+    return tuple(out)
+
+
+IMPORTED_RULES: tuple = load_imported_rules()
+
+# What the engine actually evaluates. Native first, so a native rule's hit is
+# the one recorded when both cover the same behaviour.
+ALL_RULES: tuple = RULES + IMPORTED_RULES
+
+
 def match_process(image: str, parent: str, cmdline: str,
                   path: str = "") -> list[RuleHit]:
     """Return all rule hits for a process start, highest severity first. Pure.
@@ -1520,7 +1582,7 @@ def match_process(image: str, parent: str, cmdline: str,
     pth = (path or "").lower().replace("/", "\\")
 
     seen: dict[str, RuleHit] = {}
-    for r in RULES:
+    for r in ALL_RULES:
         if r.matches(im, par, cmd, pth):
             seen[r.id] = RuleHit(r.id, r.label, r.technique, r.severity, r.reason)
 

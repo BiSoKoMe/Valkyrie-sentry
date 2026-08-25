@@ -55,7 +55,7 @@ from typing import Optional
 
 from ..behavioral_rules import Rule
 from .adaptive import BENIGN_CORPUS
-from .elastic_import import full_benign_corpus
+from .elastic_import import full_benign_corpus, _dead_names
 
 
 class SigmaVerdict(str, Enum):
@@ -64,6 +64,7 @@ class SigmaVerdict(str, Enum):
     SKIP_CONDITION = "skipped_complex_condition"
     SKIP_LEVEL = "skipped_low_confidence"
     SKIP_NO_FIELDS = "skipped_no_mappable_fields"
+    SKIP_DEAD = "skipped_would_never_match"
     REJECT_FP = "rejected_false_positive"
     SKIP_DUPLICATE = "skipped_duplicate"
 
@@ -192,6 +193,21 @@ def convert(sigma: dict) -> tuple:
         # every other Sigma field (hashes, User, IntegrityLevel, ...) has no
         # Valkyrie equivalent and is ignored - noted below if nothing mapped.
 
+    # Sigma paths do not always basename into a process: a value ending in a
+    # separator yields "", and a directory pattern yields something like
+    # "$recycle.bin". Neither can ever equal a real process name, so a rule
+    # carrying one is partly or wholly DEAD - coverage on paper, nothing in
+    # fact. This is the same gate the Elastic path applies; running it on only
+    # one importer is how the junk got in.
+    images = [i for i in images if i]
+    parents = [p for p in parents if p]
+    dead = _dead_names(images + parents)
+    if dead:
+        return (None, SigmaVerdict.SKIP_DEAD,
+                (f"process name(s) {dead[:3]} cannot match Valkyrie's exact "
+                 f"basename comparison; importing would add coverage on paper "
+                 f"and no detection in fact",))
+
     if not (images or parents or cmd_all):
         return (None, SigmaVerdict.SKIP_NO_FIELDS,
                 ("no Image/ParentImage/CommandLine field mapped; the rule keys "
@@ -204,7 +220,10 @@ def convert(sigma: dict) -> tuple:
         technique=technique or "unmapped",
         severity=_LEVEL_SEVERITY[level],
         label="sigma_import",
-        reason=f"{title} (SigmaHQ, DRL 1.1, id={sid})",
+        # The licence token is written in its canonical SPDX-style form
+        # (DRL-1.1) so attribution is machine-checkable, not just human-readable
+        # - a test can then assert every shipped rule still carries it.
+        reason=f"{title} (SigmaHQ, DRL-1.1, id={sid})",
         images=tuple(dict.fromkeys(images)),
         parents=tuple(dict.fromkeys(parents)),
         cmd_all=tuple(dict.fromkeys(cmd_all)),
