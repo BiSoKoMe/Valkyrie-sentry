@@ -165,6 +165,32 @@ def main() -> int:
             _fires("mshta-remote", "mshta.exe", "explorer.exe",
                    'mshta.exe vbscript:CreateObject("Wscript.Shell").Run("calc")'))
 
+    # ================================================================ [10]
+    print("\n[10] script-host rules: the drop-zone scoping is what keeps them safe")
+    # Installers legitimately run scripts out of %TEMP% and AppData - Elastic's
+    # own fleet exclusions contain such cases - so a naive "script host from a
+    # writable path" rule manufactures false positives. Public/Downloads are
+    # different: software does not install itself from them.
+    for label, img, par, cmd in [
+        ("MSI custom action from Windows\\Installer", "wscript.exe", "msiexec.exe",
+         r"wscript.exe C:\Windows\Installer\MSI1234.tmp\setup.vbs"),
+        ("vendor uninstaller under AppData\\Roaming", "wscript.exe", "services.exe",
+         r"wscript.exe C:\Users\v\AppData\Roaming\Nextech\uninstall.vbs"),
+        ("slmgr from System32", "cscript.exe", "svchost.exe",
+         r"cscript.exe C:\Windows\System32\slmgr.vbs /dlv"),
+        ("admin double-clicks their own script", "wscript.exe", "explorer.exe",
+         r"wscript.exe C:\Scripts\backup.vbs"),
+    ]:
+        c.check(f"benign CLEAR: {label}",
+                not _fires("scripthost-dropzone-script", img, par, cmd)
+                and not _fires("scripthost-from-document", img, par, cmd))
+    c.check("attack CAUGHT: script dropped in Public",
+            _fires("scripthost-dropzone-script", "wscript.exe", "explorer.exe",
+                   r"wscript.exe C:\Users\Public\evil.vbs"))
+    c.check("attack CAUGHT: Word launches a script host, any path",
+            _fires("scripthost-from-document", "wscript.exe", "winword.exe",
+                   r"wscript.exe C:\Users\v\AppData\Local\Temp\macro.vbs"))
+
     # ================================================================ [9]
     print("\n[9] the exclusion primitive itself behaves")
     c.check("cmd_not is available on Rule", hasattr(_BY_ID["msiexec-remote"], "cmd_not"))

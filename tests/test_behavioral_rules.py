@@ -271,6 +271,13 @@ MALICIOUS = [
     ("persistence-silent-process-exit", "reg.exe", "cmd.exe",
      "reg add \"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SilentProcessExit\\notepad.exe\" /v MonitorProcess /d evil.exe /f", ""),
 
+    # Script hosts (T1059.005). Both found by Tier B 2026-08-25, where a bare
+    # `wscript.exe C:\Users\Public\evil.vbs` raised nothing at all.
+    ("scripthost-dropzone-script", "wscript.exe", "explorer.exe",
+     r"wscript.exe C:\Users\Public\evil.vbs", ""),
+    ("scripthost-from-document", "wscript.exe", "winword.exe",
+     r"wscript.exe C:\Users\v\AppData\Local\Temp\macro.vbs", ""),
+
     # Signature-state rules. These carry a 6th element: the Authenticode state
     # of the image, which the engine supplies from valkyrie/signature.py. They
     # describe what the BINARY IS rather than what it did, which is why they

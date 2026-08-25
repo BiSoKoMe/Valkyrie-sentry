@@ -1533,6 +1533,48 @@ RULES: tuple = (
          cmd_any=("reg add", "set-itemproperty", "new-itemproperty",
                   "monitorprocess", "/d ")),
 
+    # --- Script hosts (T1059.005 / T1059.007) ---------------------------
+    # Found by Tier B on 2026-08-25: `wscript.exe C:\Users\Public\evil.vbs`
+    # raised nothing at all. A bare script-host invocation was genuinely
+    # uncovered unless the script's own contents happened to trip another rule.
+    #
+    # SCOPED TO DROP ZONES, AND DELIBERATELY NOT TO %TEMP%. The obvious version
+    # of this rule ("script host running a script from a writable path") would
+    # fire on installers constantly: MSI custom actions execute from
+    # C:\Windows\Installer, and Elastic's fleet exclusions contain real benign
+    # examples such as an uninstaller .vbs under AppData\Roaming. Public\ and
+    # Downloads\ are different - software does not install itself from them, so
+    # a script host reaching into one is the drop-and-run shape rather than a
+    # setup routine.
+    Rule("scripthost-dropzone-script", "T1059.005 — Visual Basic / Script Host",
+         SEV_HIGH, "scripthost_dropzone",
+         "A Windows script host executed a script from a drop-zone directory",
+         images=("wscript.exe", "cscript.exe", "mshta.exe"),
+         cmd_any=(".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".hta"),
+         cmd_any2=("\\users\\public\\", "\\downloads\\", "\\$recycle.bin\\",
+                   "\\perflogs\\")),
+
+    # The other half, and the stronger signal: a script host started BY a
+    # document or a browser. Word does not legitimately launch wscript, whatever
+    # path the script sits in - that is the macro/attachment delivery chain, so
+    # no path constraint is needed and none is applied.
+    Rule("scripthost-from-document", "T1059.005 — Visual Basic / Script Host",
+         SEV_HIGH, "scripthost_document_child",
+         "A document or browser process launched a Windows script host",
+         images=("wscript.exe", "cscript.exe"),
+         parents=("winword.exe", "excel.exe", "powerpnt.exe", "outlook.exe",
+                  "msaccess.exe", "onenote.exe", "visio.exe",
+                  "acrord32.exe", "acrobat.exe",
+                  "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe",
+                  "opera.exe", "iexplore.exe",
+                  "7zfm.exe", "winrar.exe")),
+    # explorer.exe is deliberately ABSENT from that list. It is the shell, so
+    # every double-clicked script has it as a parent - including an
+    # administrator's own. Including it would have made this rule fire on
+    # ordinary script use, which is the same over-reach the drop-zone scoping
+    # above exists to avoid. A script launched from Explorer is covered by the
+    # drop-zone rule when it lives somewhere it should not.
+
     # --- Code-signature state (T1036 / T1553) ---------------------------
     # These are the rules that GENERALISE rather than enumerate. Every other
     # rule in this file describes WHAT a process did and can be evaded by doing
