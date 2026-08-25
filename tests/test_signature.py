@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from harness import Checks, skip_file  # noqa: E402
 import valkyrie.signature as S  # noqa: E402
-from valkyrie.behavioral_rules import Rule, match_process  # noqa: E402
+from valkyrie.behavioral_rules import Rule, RULES, match_process  # noqa: E402
 
 
 def main() -> int:
@@ -159,6 +159,37 @@ def main() -> int:
     S._budget_spent = 0.0
     c.check("with budget restored the same file verifies normally",
             S.verify(r"C:\Windows\System32\cmd.exe").trust is S.Trust.TRUSTED)
+
+    # ================================================== [SELF-DECEPTION]
+    print("\n[SELF-DECEPTION] a false-positive measurement taken while the "
+          "budget is starving verification proves NOTHING about these rules")
+    #
+    # This is here because it actually happened. A live false-positive sweep was
+    # run across 122 real processes and reported "0 false positives, signature
+    # rules included". The same run's own output said {'trusted': 18,
+    # 'unknown': 104} - the budget had throttled 104 of 122 binaries to UNKNOWN,
+    # and signature rules fail closed on UNKNOWN. They were structurally
+    # INCAPABLE of firing. Their silence was reported as evidence of safety when
+    # it was evidence of nothing at all.
+    #
+    # Re-run with the budget lifted: 115 trusted, 6 genuinely unsigned, still 0
+    # false positives. THAT is the measurement that means something.
+    #
+    # The property below makes the trap explicit, so a future sweep that sees
+    # mostly-UNKNOWN state is understood as an untested run rather than a clean
+    # one.
+    sig_rules = [r for r in RULES if getattr(r, "signed", "")]
+    c.check("there are signature-dependent rules to reason about", len(sig_rules) >= 1)
+    c.check("EVERY signature rule is silent on UNKNOWN — so an FP sweep with "
+            "unresolved signatures cannot exonerate them",
+            all(not r.matches("svchost.exe", "explorer.exe", "svchost.exe",
+                              r"c:\users\public\svchost.exe", "unknown")
+                for r in sig_rules))
+    c.check("and the same rules DO fire once the state is actually resolved "
+            "(proving the silence above was the budget, not the rule)",
+            any(r.matches("svchost.exe", "explorer.exe", "svchost.exe",
+                          r"c:\users\public\svchost.exe", "unsigned")
+                for r in sig_rules))
 
     return c.finish()
 

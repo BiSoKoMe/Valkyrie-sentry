@@ -42,6 +42,27 @@ THE THREE RULES THIS MODULE OBEYS
 
 Non-Windows and missing-API paths degrade to UNKNOWN rather than raising, so
 this module is importable and testable anywhere.
+
+AN UNCOMFORTABLE RESULT, RECORDED HERE BECAUSE IT SHOULD NOT BE FORGOTTEN
+------------------------------------------------------------------------
+The first sweep of this module across the developer's own live processes found
+that **Valkyrie.exe is itself unsigned**. The product whose strongest new
+detection signal is "an unsigned binary is suspicious" cannot currently pass its
+own test.
+
+That is not a bug in this file, and no code change fixes it. It needs an
+Authenticode code-signing certificate, which is money and paperwork rather than
+engineering - the same certificate the kernel driver (docs/adr/0026) is waiting
+on. Until then:
+
+  * every user sees a SmartScreen warning at install, which is precisely the
+    "just click through the scary dialog" habit a security product should not be
+    teaching;
+  * Valkyrie cannot make about itself the argument it makes about other
+    software, and a reviewer will notice that before anything else in the demo.
+
+Written down here rather than in a backlog because this module is where somebody
+will next think about signing, and the irony is worth meeting head-on.
 """
 
 from __future__ import annotations
