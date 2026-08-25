@@ -135,9 +135,50 @@ jobs:
           # job: pointing its resolver at loopback cannot strand anyone's network
           # the way it once stranded the developer's own.
           $netArgs = @("--no-dns", "--no-unbound", "--no-intelligence")
+          $dnsRedirected = $false
+          $origDnsServers = $null
+          $dnsIfaceIdx = $null
           if ("${{ inputs.enable_network_layer }}" -eq "true") {
-            $netArgs = @("--no-unbound")
-            Write-Host "[cfg] NETWORK LAYER ENABLED - DNS + threat intel live; C2 techniques are testable this run"
+            # STARTING the interceptor is not enough - it binds 127.0.0.1:5300
+            # by default (valkyrie/config.py DNS_LISTEN_PORT), and Windows'
+            # DNS client always queries port 53 with no way to tell it
+            # otherwise. An earlier variant run (32818642609) proved this the
+            # hard way: DNS on, 0/4 C2 techniques gained, 14 OTHER techniques
+            # lost to the extra background load, net -14. The interceptor was
+            # never seeing a single query.
+            #
+            # This is the real fix, not a bigger guess: bind Valkyrie on the
+            # actual system port (--port 53, needs the admin rights a
+            # GitHub-hosted windows-latest runner already has) AND point this
+            # runner's adapter at 127.0.0.1 so the OS resolver's queries
+            # actually reach it. This is exactly the OS shim
+            # valkyrie/host_safety.py (ADR 0055) was built for and
+            # deliberately left unwired until it could be "proven on a
+            # disposable host first" - a destroyed-after-the-job CI runner is
+            # precisely that host, unlike the developer's own machine, which
+            # is what this redirect would risk stranding if done there.
+            #
+            # Every step degrades to "leave DNS alone" rather than crash the
+            # job: a failed redirect just means this run does not get to test
+            # its hypothesis, which is what already happened before this fix
+            # existed at all.
+            try {
+              $iface = Get-DnsClientServerAddress -AddressFamily IPv4 |
+                Where-Object { $_.ServerAddresses } | Select-Object -First 1
+              if ($iface) {
+                $origDnsServers = @($iface.ServerAddresses)
+                $dnsIfaceIdx = $iface.InterfaceIndex
+                Set-DnsClientServerAddress -InterfaceIndex $dnsIfaceIdx -ServerAddresses "127.0.0.1"
+                $dnsRedirected = $true
+                Write-Host "[cfg] runner DNS -> 127.0.0.1 (was: $($origDnsServers -join ', '); interface $dnsIfaceIdx)"
+              } else {
+                Write-Host "[cfg] no IPv4 DNS interface found - cannot redirect, leaving DNS untouched"
+              }
+            } catch {
+              Write-Host "[cfg] DNS redirect failed ($($_.Exception.Message)) - leaving DNS untouched, C2/DNS techniques will miss as before"
+            }
+            $netArgs = @("--no-unbound") + $(if ($dnsRedirected) { @("--port", "53") } else { @() })
+            Write-Host "[cfg] NETWORK LAYER ENABLED - DNS$(if ($dnsRedirected) {' (resolver REDIRECTED)'} else {' (interceptor only, NOT reachable)'}) + threat intel live"
           } else {
             Write-Host "[cfg] network layer OFF (baseline config) - the 4 C2 techniques are NOT_TESTED, not missed"
           }
@@ -265,6 +306,25 @@ jobs:
             # ask the API at all; we read ground truth from the DB at rest.
           } finally {
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            # UNCONDITIONAL, and runs even if everything above threw. A
+            # disposable runner cannot stay stranded past this job either way,
+            # but restoring cleanly means the NEXT step (Authoritative
+            # coverage, log upload) still has working network access, and it
+            # costs nothing to do properly rather than rely on the runner's
+            # destruction to paper over it.
+            if ($dnsRedirected) {
+              try {
+                if ($origDnsServers -and $origDnsServers.Count -gt 0) {
+                  Set-DnsClientServerAddress -InterfaceIndex $dnsIfaceIdx -ServerAddresses $origDnsServers
+                  Write-Host "[cfg] runner DNS restored to: $($origDnsServers -join ', ')"
+                } else {
+                  Set-DnsClientServerAddress -InterfaceIndex $dnsIfaceIdx -ResetServerAddresses
+                  Write-Host "[cfg] runner DNS reset to automatic (no original recorded)"
+                }
+              } catch {
+                Write-Host "[cfg] DNS restore failed ($($_.Exception.Message)) - non-fatal on a disposable runner"
+              }
+            }
           }
 
       - name: Stop Valkyrie
