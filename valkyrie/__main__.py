@@ -1566,7 +1566,14 @@ def main() -> None:
         _t = time.monotonic()
         try:
             from .decoys import DecoyManager, set_active
-            from .config import DATA_DIR
+            # NOTE: do NOT re-import DATA_DIR here. It is already imported at
+            # module scope, and a function-local `from .config import DATA_DIR`
+            # makes the name local for the WHOLE function - so every earlier
+            # use of DATA_DIR in this function raises UnboundLocalError, even
+            # though the module-level import is right there. That is exactly
+            # what killed a Tier B run: the engine bound liveness, answered one
+            # health probe, then died on the causal-baseline load 250 lines
+            # above this point.
             _decoys = DecoyManager(manifest_path=DATA_DIR / "decoys.json")
             _decoys.load()
             _n = _decoys.deploy()
