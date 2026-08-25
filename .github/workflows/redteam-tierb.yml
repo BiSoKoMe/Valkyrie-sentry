@@ -122,11 +122,17 @@ jobs:
           #
           # Four catalog techniques (c2-dga-domain, c2-dns-tracker-domain,
           # c2-dns-tunneling, c2-hardcoded-ip) are scored MISSED on every run,
-          # and none of them is a detection gap. Their detectors are
-          # dga.py, dns_tunnel.py and the DNS interceptor pipeline - all dead
-          # under --no-dns - plus network_telemetry's threat-intel IP feed,
-          # dead under --no-intelligence. The harness has been marking Valkyrie
-          # down for failing to catch things it was never allowed to look at.
+          # and none of them is a detection gap. Three of the four (the DNS
+          # ones) route through dga.py, dns_tunnel.py and the DNS interceptor
+          # pipeline - all dead under --no-dns. The fourth, c2-hardcoded-ip,
+          # routes through network_telemetry's IP reputation check
+          # (threat_intel.match_ip) - CORRECTED 2026-08-25: this is NOT gated by
+          # --no-intelligence, that flag only controls the separate adaptive
+          # self-learning layer. threat_intel loads unconditionally in
+          # __main__.py, so this one was never actually blocked by either flag -
+          # it needs a real network path to the target IP, which --no-firewall
+          # already provides. The harness has been marking Valkyrie down for
+          # failing to catch things it was never allowed to look at.
           #
           # Kept OFF by default so the known-good baseline stays reproducible and
           # comparable to every previous run. Turned on deliberately, as a
@@ -177,8 +183,23 @@ jobs:
             } catch {
               Write-Host "[cfg] DNS redirect failed ($($_.Exception.Message)) - leaving DNS untouched, C2/DNS techniques will miss as before"
             }
-            $netArgs = @("--no-unbound") + $(if ($dnsRedirected) { @("--port", "53") } else { @() })
-            Write-Host "[cfg] NETWORK LAYER ENABLED - DNS$(if ($dnsRedirected) {' (resolver REDIRECTED)'} else {' (interceptor only, NOT reachable)'}) + threat intel live"
+            # --no-intelligence STAYS ON, deliberately. Run 32856176466 proved
+            # the DNS interceptor works (self-test PASS right after start()) and
+            # then FLAPPED - heartbeat FAILED/recovered/FAILED/recovered
+            # repeatedly under load. Checked before guessing again: the c2-
+            # hardcoded-ip detector's IP reputation check
+            # (__main__.py's _ip_bad -> threat_intel.match_ip) reads
+            # ThreatIntelManager, which is constructed and loaded UNCONDITIONALLY
+            # in __main__.py - it has never been gated by --no-intelligence at
+            # all. That flag only controls the SEPARATE adaptive self-learning
+            # layer, which this exact workflow's own comments already document
+            # as a known GIL-starvation cause on a 2-vCPU runner ("intelligence
+            # ... runs CPU-heavy background threads ... starve the web thread of
+            # GIL time"). This variant turned that on for zero benefit - none of
+            # the four C2 techniques need it - and very plausibly caused the
+            # flapping. Removed; threat-intel IP matching is unaffected.
+            $netArgs = @("--no-unbound", "--no-intelligence") + $(if ($dnsRedirected) { @("--port", "53") } else { @() })
+            Write-Host "[cfg] NETWORK LAYER ENABLED - DNS$(if ($dnsRedirected) {' (resolver REDIRECTED)'} else {' (interceptor only, NOT reachable)'}); intelligence stays OFF (not needed, and a known GIL-contention source)"
           } else {
             Write-Host "[cfg] network layer OFF (baseline config) - the 4 C2 techniques are NOT_TESTED, not missed"
           }
