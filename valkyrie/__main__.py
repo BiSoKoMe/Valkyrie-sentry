@@ -1228,6 +1228,32 @@ def main() -> None:
         try:
             dns_server.start()
             _tick(f"DNS sinkhole on 0.0.0.0:{args.port} -> {dns_upstream_host}:{dns_upstream_port}", _t)
+            # VERIFY, don't just trust that start() not raising means "working".
+            # The startup banner's "DNS Sinkhole" row was reading dns_server is
+            # not None as its whole health signal - identical to the
+            # /api/components bug fixed earlier this session, where "the object
+            # exists" stood in for "it actually answers". A live CI run
+            # (32853827627, --port 53 with the resolver redirected for the
+            # first time ever - every prior run used --no-dns) showed the
+            # banner print DNS Sinkhole OK and the heartbeat immediately
+            # report it not answering, seconds later, with nothing in between
+            # to say which one was telling the truth.
+            #
+            # HEALTH_PROBE_DOMAIN is answered locally with no upstream needed
+            # (see self_test.py's own reasoning), so this costs one UDP
+            # round-trip and works offline. Logged unconditionally, not gated
+            # on --debug, because this is exactly the fact this investigation
+            # needed and didn't have.
+            try:
+                from .config import HEALTH_PROBE_DOMAIN as _HPD
+                _self_check = dns_server.self_test(_HPD, timeout=2.0)
+                if _self_check.get("decision") == "PASS":
+                    console.print(f"[dim]  DNS self-test: PASS ({_self_check})[/dim]")
+                else:
+                    console.print(f"[bold red]  DNS self-test: FAIL immediately after "
+                                  f"start() — {_self_check}[/bold red]")
+            except Exception as _exc:   # noqa: BLE001 — diagnostics must not crash startup
+                console.print(f"[yellow]  DNS self-test raised: {_exc!r}[/yellow]")
             if platform.system() == "Linux":
                 console.print(
                     f"[dim]  Redirect OS DNS:[/dim]\n"
