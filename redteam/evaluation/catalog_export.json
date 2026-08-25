@@ -1207,7 +1207,7 @@
         "path": ""
       },
       "requires": [],
-      "notes": "MSBuild running an inline-task project compiles+runs C# at build time; verified -> T1127.001. Project absent, so it fails; the invocation is the signal.",
+      "notes": "MSBuild running an inline-task project compiles+runs C# at build time; verified -> T1127.001 offline. TOOL ABSENT ON A CLEAN HOST: msbuild.exe ships with Visual Studio / the .NET SDK, NOT with Windows (verified 2026-08-25: `Get-Command msbuild.exe` fails on a stock Windows box and on the CI runner). So a live MISS here is a tool-failure, not a detection gap - the process never starts, so there is nothing for any EDR to see. Scored as NOT_TESTED, not missed, and excluded from the honest denominator.",
       "known_mismatch": ""
     },
     {
@@ -1231,7 +1231,7 @@
         "path": ""
       },
       "requires": [],
-      "notes": "ntdsutil IFM dumps the AD database; verified -> T1003.003. On a non-DC it fails, but the invocation is the detection.",
+      "notes": "ntdsutil IFM dumps the AD database; verified -> T1003.003 offline. TOOL ABSENT ON A NON-DC: ntdsutil.exe ships with the AD DS role, not with stock Windows (verified 2026-08-25: `Get-Command ntdsutil.exe` fails on a stock box and on the CI runner). A live MISS is therefore a tool-failure, not a detection gap - no process starts, so nothing is observable. Scored NOT_TESTED, excluded from the honest denominator. Testing this properly needs a DC.",
       "known_mismatch": ""
     },
     {
@@ -1351,7 +1351,31 @@
         "path": ""
       },
       "requires": [],
-      "notes": "Staging data into an archive before exfil is uncovered (verified -> None). FIRST Collection entry; honest gap - Valkyrie has no Collection-tactic rules yet.",
+      "notes": "TWO separate findings, kept apart honestly. (1) TOOL ABSENT: rar.exe ships with WinRAR, not with Windows (verified 2026-08-25 on a stock box and the CI runner), so a live MISS here is a tool-failure - NOT_TESTED, not a detection gap. (2) Even if it ran, this exact command archives ~\\Documents, which is an ORDINARY BACKUP shape and is deliberately NOT flagged - the archive-credential-store rule (added 2026-08-24) fires on the SOURCE being a credential store (.ssh/.aws/browser profile), because flagging a Documents backup is precisely the interference the prime directive forbids. So this entry stays a MISS by design and a separate credential-store entry measures the real capability.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "collect-copy-cred-store",
+      "technique_id": "T1005",
+      "technique_name": "Data from Local System (credential store copy)",
+      "tactic": "Collection",
+      "art_test_ref": "T1005 (credential-store staging)",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/behavioral_rules.py: copy-credential-store rule",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "ioa_rule",
+      "probe_input": {
+        "image": "xcopy.exe",
+        "parent": "cmd.exe",
+        "cmdline": "xcopy.exe C:\\Users\\Public\\.ssh\\id_rsa C:\\Users\\Public\\stage\\ /Y",
+        "path": ""
+      },
+      "requires": [],
+      "notes": "Verified against the real classifier -> copy-credential-store (T1005). xcopy ships with Windows so this is testable on a clean host, unlike the rar entry above. Uses a Public-dir source so the atomic touches no real user secret.",
       "known_mismatch": ""
     },
     {
