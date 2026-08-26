@@ -57,8 +57,25 @@ def main() -> int:
     _check("net view -> T1018", "T1018" in tech)
     _, dlabels, _, tech = classify_discovery("net.exe", "net user")
     _check("bare net user (list) -> T1087.001", "T1087.001" in tech)
+    # UPDATED CONTRACT (Detection Coverage milestone, 2026-08-26): this used
+    # to assert T1087.001, which was itself the live-fire gap - the real
+    # Atomic Red Team T1069.001 test runs exactly this command, but the old
+    # code mislabeled it as T1087.001 (Account Discovery), so a live scorer
+    # that never credits a technique under the wrong label never credited
+    # it. 'net localgroup' is MITRE's own canonical example for T1069.001
+    # (Permission Groups Discovery: Local Groups), distinct from 'net user'
+    # (T1087.001, still asserted above and unchanged).
     _, dlabels, _, tech = classify_discovery("net.exe", "net localgroup administrators")
-    _check("bare net localgroup administrators (list) -> T1087.001", "T1087.001" in tech)
+    _check("net localgroup administrators (list) -> T1069.001, not T1087.001",
+           "T1069.001" in tech and "T1087.001" not in tech)
+    _, dlabels, _, tech = classify_discovery("net.exe", "net localgroup")
+    _check("bare net localgroup (no group name) -> T1069.001 too",
+           "T1069.001" in tech)
+    _, dlabels, _, tech = classify_discovery(
+        "net.exe", "net localgroup administrators evilcorp /add")
+    _check("net localgroup ... /add is NOT labeled discovery "
+           "(real group-membership change, not enumeration)",
+           tech == "" and dlabels == [])
     _, dlabels, _, tech = classify_discovery(
         "net.exe", "net user backdoor P@ss /add")
     _check("net user ... /add is NOT labeled discovery "
@@ -79,6 +96,10 @@ def main() -> int:
     _check("caret-escaped 'net view' still -> T1018", "T1018" in tech)
     _, _, _, tech = classify_discovery("net.exe", "net u^ser")
     _check("caret-escaped bare 'net user' still -> T1087.001", "T1087.001" in tech)
+    _, _, _, tech = classify_discovery("net.exe", "net l^ocalgroup administrators")
+    _check("caret-escaped 'net localgroup administrators' still -> T1069.001 "
+           "(inherited for free: same de-obfuscated candidates tuple as its siblings)",
+           "T1069.001" in tech)
     _, _, _, tech = classify_discovery("net.exe", 'net u"s"er')
     _check("token-split-quote 'net user' still -> T1087.001", "T1087.001" in tech)
     _, _, _, tech = classify_discovery("nltest.exe", "nltest /dcl^ist:corp")

@@ -258,9 +258,21 @@ def _discovery_cmdline_technique(n: str, candidates: tuple) -> str:
             # admins") - a domain-account discovery distinct from local 'net
             # user'/'net localgroup'. /add is group creation, handled elsewhere.
             return "T1087.002 — Account Discovery: Domain Account"
-        listing = any("net user" in c or "net localgroup administrators" in c
-                     for c in candidates)
-        if listing and not add_present:
+        if any("net localgroup" in c for c in candidates) and not add_present:
+            # 'net localgroup' (bare, or with a group name such as
+            # 'administrators') enumerates LOCAL GROUP membership - MITRE's
+            # own canonical example command for T1069.001. This used to be
+            # folded into the same bucket as 'net user' below and returned
+            # T1087.001 (Account Discovery) instead - a real live-fire
+            # evaluation gap: the T1069.001 atomic test's exact command,
+            # 'net localgroup administrators', already matched the old check
+            # but under the wrong technique ID, so a live scorer that (per
+            # this project's own rule) never credits a technique under the
+            # wrong label never credited it. Checked before the bare 'net
+            # user' case below since 'net localgroup' is the more specific
+            # command shape.
+            return "T1069.001 — Permission Groups Discovery: Local Groups"
+        if any("net user" in c for c in candidates) and not add_present:
             # Bare listing only - /add is real account creation, already
             # covered (and alerted on) by behavioral_rules.py's own rules.
             return "T1087.001 — Account Discovery: Local Account"
