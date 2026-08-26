@@ -1822,6 +1822,405 @@ EXPANSION_ROUND2 = [
 ]
 
 # ---------------------------------------------------------------------------
+# ROUND 2B (2026-08-26) - a background research agent independently sourced 61
+# more candidates across Discovery/Privilege Escalation/Defense Evasion,
+# cross-checking the live Atomic Red Team repo directly (it found the entire
+# T1562.* folder tree has since been removed from ART upstream, confirmed via
+# three separate methods, and flagged verclsid.exe/mavinject.exe as at real
+# risk of being absent on windows-latest since LOLBAS scopes both to
+# Windows 10/11 client only, no Server edition). Many of its 61 overlapped
+# with what round 2 (above) already added under different id slugs testing
+# the identical command - those are skipped here, not duplicated. This subset
+# is the well-verified, low-risk remainder: no external downloads, no
+# uncertain-binary-presence LOLBins, no reboot-dependent techniques. Each
+# predicted_tier_b was set the same way as every other entry in this file -
+# by reading Valkyrie's real classifier source, not by trusting the agent's
+# own "likely_valkyrie_relevance" guess (which was explicitly a sanity check,
+# not a detection prediction, and is not used here).
+#
+# A SECOND named-rule generalization finding, distinct from round 2's five:
+# `uac-bypass-hijack` (behavioral_rules.py) is not one UAC-bypass rule but a
+# keyword set covering FOUR real bypass mechanisms at once (ms-settings,
+# mscfile, exefile/Folder ProgIds, and any DelegateExecute write) - which
+# means three of the agent's proposed UAC variants already fire the SAME
+# existing rule as each other and as the original catalog's fodhelper entry.
+# Only the genuinely uncovered ProgID/CurVer variant is a new finding.
+EXCLUDED_FROM_ROUND2B = (
+    "T1552.006 GPP, T1567.002 rclone/Mega, T1134.001 Empire-script-download "
+    "(both NamedPipe and SeDebug variants), T1134.002 (needs ART's own "
+    "GetToken.ps1 helper plus a live lsass token duplication - too far from "
+    "a literal command line for this pass), T1574.001 phantom-DLL/Spooler "
+    "variant (writes into System32 AND requires a service restart to prove "
+    "anything - the amsi.dll rename variant below is kept, it needs neither), "
+    "T1553.003 SIP hijack (downloads a third-party researcher's compiled DLL "
+    "from GitHub at runtime), T1553.004 root cert install (needs a "
+    "generated test cert as a prerequisite this pass didn't build), "
+    "T1553.005 both variants (need a pre-staged MOTW-tagged decoy file/ISO "
+    "this pass didn't build), T1218.002/.004/.008/.009 (each needs a "
+    "compiled or downloaded payload artifact staged first), T1216.001 "
+    "(fetches a remote .sct payload - same class of dependency), T1218.014 "
+    "MMC (GUI console host, uncertain behavior on a headless CI session), "
+    "T1218.012 verclsid / T1218.013 mavinject (both flagged by the "
+    "research agent as at real risk of being ABSENT on windows-latest "
+    "Server 2022 - deferred rather than catalogued on that uncertainty), "
+    "T1562.002/.006 (their own ART atomics folder is confirmed gone "
+    "upstream; the underlying wevtutil/auditpol commands are real and could "
+    "still be catalogued as 'documented cmdline', but disabling the "
+    "Security event log or audit policy for a live evaluation run has "
+    "genuine blast-radius risk to the SAME run's own evidence collection - "
+    "deferred for a dedicated, carefully-sequenced pass rather than mixed "
+    "into this batch), T1134.004 parent-PID spoofing (installs a "
+    "third-party PowerShell Gallery module at runtime), disc-app-window "
+    "T1010 (needs a compiled helper binary staged from ART's own repo), "
+    "disc-geo-location T1614 (makes a real outbound call to a public "
+    "third-party service - out of scope the same way a real C2 callout "
+    "would be), disc-sandbox-check-thermal/disc-browser-bookmarks/disc-"
+    "peripheral-pnp (thin value, deferred for a later pass, not because "
+    "anything about them is unsafe). Every one of these is a real, "
+    "verified candidate, just not converted to a live Technique() entry in "
+    "this pass - a future pass can add them once the deferred prerequisite "
+    "(a staged artifact, a sequencing decision, a live binary-presence "
+    "check) is actually built, not guessed past."
+)
+
+EXPANSION_ROUND2B = [
+    Technique(
+        id="privesc-uac-eventvwr", technique_id="T1548.002",
+        technique_name="Abuse Elevation Control Mechanism: Bypass UAC "
+                        "(Event Viewer / mscfile hijack)",
+        tactic="Privilege Escalation",
+        art_test_ref="T1548.002 Test #1 (hijack HKCU mscfile\\shell\\open, "
+                      "launch eventvwr.msc)",
+        destructive=True, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
+        detector_path="valkyrie/behavioral_rules.py: uac-bypass-hijack "
+                       "(cmd_any includes 'mscfile\\shell')",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="ioa_rule", probe_input={
+            "image": "reg.exe", "parent": "cmd.exe",
+            "cmdline": r'reg.exe add hkcu\software\classes\mscfile\shell\open'
+                       r'\command /ve /d "C:\Windows\System32\cmd.exe" /f',
+            "path": ""},
+        notes="Clean DETECT, correctly labeled - a DIFFERENT auto-elevate "
+              "ProgId than the original catalog's fodhelper (ms-settings) "
+              "entry, same generalized rule.",
+    ),
+    Technique(
+        id="privesc-uac-sdclt", technique_id="T1548.002",
+        technique_name="Abuse Elevation Control Mechanism: Bypass UAC "
+                        "(sdclt DelegateExecute)",
+        tactic="Privilege Escalation",
+        art_test_ref="T1548.002 Test #7 (hijack HKCU Folder\\shell\\open, "
+                      "launch sdclt.exe)",
+        destructive=True, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
+        detector_path="valkyrie/behavioral_rules.py: uac-bypass-hijack "
+                       "(cmd_any includes '\\folder\\shell\\open\\command' "
+                       "and 'delegateexecute')",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="ioa_rule", probe_input={
+            "image": "powershell.exe", "parent": "cmd.exe",
+            "cmdline": "powershell.exe New-Item -Force -Path "
+                       "\"HKCU:\\Software\\Classes\\Folder\\shell\\open\\"
+                       "command\" -Value 'cmd.exe /c notepad.exe'; "
+                       "New-ItemProperty -Force -Path "
+                       "\"HKCU:\\Software\\Classes\\Folder\\shell\\open\\"
+                       "command\" -Name \"DelegateExecute\"",
+            "path": ""},
+        notes="Clean DETECT via the SAME generalized rule as eventvwr above "
+              "- a third distinct auto-elevate ProgId (Folder, not "
+              "mscfile/ms-settings) it already covers.",
+    ),
+    Technique(
+        id="privesc-uac-wsreset", technique_id="T1548.002",
+        technique_name="Abuse Elevation Control Mechanism: Bypass UAC "
+                        "(WSReset AppX hijack)",
+        tactic="Privilege Escalation",
+        art_test_ref="T1548.002 Test #23 (hijack an AppX ProgId's "
+                      "DelegateExecute, launch WSReset.exe)",
+        destructive=True, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
+        detector_path="valkyrie/behavioral_rules.py: uac-bypass-hijack "
+                       "(cmd_any includes 'delegateexecute' - the only one "
+                       "of its 5 keywords this specific ProgId string "
+                       "matches, since the AppX class name itself is not in "
+                       "the list)",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="ioa_rule", probe_input={
+            "image": "powershell.exe", "parent": "cmd.exe",
+            "cmdline": "powershell.exe New-ItemProperty -Path "
+                       "HKCU:\\Software\\Classes\\AppX82a6gwre4fdg3bt635tn5"
+                       "ctqjf8msdd2\\Shell\\open\\command -Name "
+                       "\"DelegateExecute\" -Value \"\" -Force",
+            "path": ""},
+        notes="ART's own text warns this specific bypass may not "
+              "functionally escalate on Server 2022 - irrelevant to this "
+              "test, which only measures whether the registry-write PATTERN "
+              "is observed, not whether the exploit succeeds. Caught by the "
+              "generic 'delegateexecute' keyword alone, since the AppX class "
+              "GUID itself is not enumerable in advance.",
+    ),
+    Technique(
+        id="privesc-uac-progids", technique_id="T1548.002",
+        technique_name="Abuse Elevation Control Mechanism: Bypass UAC "
+                        "(ProgID/CurVer hijack)",
+        tactic="Privilege Escalation",
+        art_test_ref="T1548.002 Test #27 (register a .pwn ProgId, redirect "
+                      "ms-settings' CurVer to it, launch fodhelper.exe)",
+        destructive=True, live_vm_safe=True, delivery=DELIVERY_NONE,
+        detector_path="valkyrie/behavioral_rules.py: uac-bypass-hijack's "
+                       "cmd_any list (ms-settings\\shell, mscfile\\shell, "
+                       "exefile\\shell, \\folder\\shell\\open\\command, "
+                       "delegateexecute) - NONE of these appear in a "
+                       "CurVer redirect, which writes ms-settings\\CurVer "
+                       "(no '\\shell' substring) and a separate .pwn "
+                       "ProgId's own open command (no recognized ProgId "
+                       "name at all)",
+        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
+        probe="ioa_rule", probe_input={
+            "image": "reg.exe", "parent": "cmd.exe",
+            "cmdline": r'reg add "HKEY_CURRENT_USER\Software\Classes\.pwn'
+                       r'\Shell\Open\command" /ve /d '
+                       r'"C:\Windows\System32\calc.exe" /f',
+            "path": ""},
+        notes="GENUINE GAP, same UAC-bypass family as three DETECTs above "
+              "but a real generalization miss: this ProgID/CurVer redirect "
+              "class (used by real malware, e.g. ValleyRAT) writes neither "
+              "of the 5 substrings the existing rule keys on. Same launcher "
+              "binary (fodhelper.exe) as the original catalog's covered "
+              "entry, but the REGISTRY MECHANISM differs enough to evade "
+              "entirely - a concrete, narrow rule-generalization candidate "
+              "for the adversarial phase (e.g. also flag any HKCU write "
+              "under Software\\Classes\\*\\Shell\\Open\\command combined "
+              "with a CurVer redirect, not just the 5 hardcoded ProgIds).",
+    ),
+    Technique(
+        id="privesc-dll-searchorder-amsi", technique_id="T1574.001",
+        technique_name="Hijack Execution Flow: DLL Search Order Hijacking "
+                        "(amsi.dll)",
+        tactic="Privilege Escalation",
+        art_test_ref="T1574.001 Test #1 (copy powershell.exe + amsi.dll to "
+                      "%APPDATA%, run the renamed copy)",
+        destructive=True, live_vm_safe=True, delivery=DELIVERY_NONE,
+        detector_path="no rule found for DLL search-order hijacking; the "
+                       "only T1574 entry is cor-profiler-hijack, a "
+                       "different sub-technique (.012, COR_PROFILER env "
+                       "var), keyed on unrelated strings",
+        predicted_tier_b="MISS", source_confidence=SOURCE_PARTIAL,
+        probe="ioa_rule", probe_input={
+            "image": "updater.exe", "parent": "cmd.exe",
+            "cmdline": r"copy %windir%\System32\windowspowershell\v1.0"
+                       r"\powershell.exe %APPDATA%\updater.exe & "
+                       r"copy %windir%\System32\amsi.dll %APPDATA%\amsi.dll "
+                       r"& %APPDATA%\updater.exe -Command exit",
+            "path": r"C:\Users\Public\AppData\Roaming\updater.exe"},
+        notes="Real PowerShell engine renamed + a co-located amsi.dll "
+              "planted next to it is a textbook AMSI-bypass-via-hijack "
+              "setup. Nothing in behavioral_rules.py targets this pattern "
+              "today. SOURCE_PARTIAL: only grepped, not exhaustively "
+              "traced across every classifier file.",
+    ),
+    Technique(
+        id="disc-net-connections-ps", technique_id="T1049",
+        technique_name="System Network Connections Discovery (PowerShell)",
+        tactic="Discovery",
+        art_test_ref="T1049 Test #2 (Get-NetTCPConnection)",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_NONE,
+        detector_path="process_telemetry.py's powershell.exe cmdline branch "
+                       "only recognizes AD-module cmdlets (get-adcomputer/"
+                       "get-aduser/get-adgroup/...); Get-NetTCPConnection "
+                       "is not among them",
+        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
+        probe="ioa_rule", probe_input={
+            "image": "powershell.exe", "parent": "cmd.exe",
+            "cmdline": "powershell.exe Get-NetTCPConnection", "path": ""},
+        notes="Same underlying discovery intent as the covered netstat.exe "
+              "entry (T1049), but the PowerShell-cmdlet path is invisible "
+              "to the classifier - a real generalization gap: the binary "
+              "form is covered, the cmdlet form is not.",
+    ),
+    Technique(
+        id="disc-service-net-start", technique_id="T1007",
+        technique_name="System Service Discovery (net start)",
+        tactic="Discovery",
+        art_test_ref="T1007 Test #2 (net.exe start)",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_NONE,
+        detector_path="process_telemetry.py's net.exe branch only "
+                       "recognizes view/group/localgroup/user; 'start' is "
+                       "not a checked verb",
+        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
+        probe="ioa_rule", probe_input={
+            "image": "net.exe", "parent": "cmd.exe",
+            "cmdline": "net.exe start", "path": ""},
+        notes="net.exe is already a recognized discovery-relevant binary "
+              "for 4 other verbs; 'start' (enumerate running services) "
+              "falls through unclassified entirely.",
+    ),
+    Technique(
+        id="disc-service-discovery-ps", technique_id="T1007",
+        technique_name="System Service Discovery (PowerShell)",
+        tactic="Discovery",
+        art_test_ref="T1007 Test #4 (Get-Service)",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_NONE,
+        detector_path="no cmdlet-path branch recognizes Get-Service",
+        predicted_tier_b="MISS", source_confidence=SOURCE_PARTIAL,
+        probe="ioa_rule", probe_input={
+            "image": "powershell.exe", "parent": "cmd.exe",
+            "cmdline": "powershell.exe Get-Service", "path": ""},
+        notes="Same generalization gap class as disc-net-connections-ps.",
+    ),
+    Technique(
+        id="disc-scheduled-tasks-query", technique_id="T1007",
+        technique_name="System Service Discovery (scheduled task "
+                        "enumeration)",
+        tactic="Discovery",
+        art_test_ref="T1007 Test #6 (schtasks /query /fo LIST /v)",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_NONE,
+        detector_path="schtasks.exe is not a recognized binary in any "
+                       "discovery branch (distinct from the covered "
+                       "T1053.005 entry, which tests task CREATION via a "
+                       "different mechanism/probe entirely)",
+        predicted_tier_b="MISS", source_confidence=SOURCE_PARTIAL,
+        probe="ioa_rule", probe_input={
+            "image": "schtasks.exe", "parent": "cmd.exe",
+            "cmdline": "schtasks.exe /query /fo LIST /v", "path": ""},
+        notes="Read-only task enumeration, not creation - a different "
+              "intent than the already-covered persistence test.",
+    ),
+    Technique(
+        id="disc-network-shares-smb", technique_id="T1135",
+        technique_name="Network Share Discovery (Get-SmbShare)",
+        tactic="Discovery",
+        art_test_ref="T1135 Test #5 (Get-SmbShare)",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_NONE,
+        detector_path="no cmdlet-path branch recognizes Get-SmbShare "
+                       "(distinct from the covered net.exe 'view' entry, "
+                       "which known_mismatches to T1018 anyway)",
+        predicted_tier_b="MISS", source_confidence=SOURCE_PARTIAL,
+        probe="ioa_rule", probe_input={
+            "image": "powershell.exe", "parent": "cmd.exe",
+            "cmdline": "powershell.exe Get-SmbShare", "path": ""},
+        notes="Same generalization gap class - the cmdlet form of an "
+              "already-tested binary technique is invisible.",
+    ),
+    Technique(
+        id="disc-security-software-cim", technique_id="T1518.001",
+        technique_name="Security Software Discovery (CIM/WMI antivirus "
+                        "query)",
+        tactic="Discovery",
+        art_test_ref="T1518.001 Test #8 (Get-CimInstance "
+                      "root/securityCenter2 antivirusproduct)",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_NONE,
+        detector_path="no branch recognizes Get-CimInstance queries against "
+                       "securityCenter2 at all",
+        predicted_tier_b="MISS", source_confidence=SOURCE_PARTIAL,
+        probe="ioa_rule", probe_input={
+            "image": "powershell.exe", "parent": "cmd.exe",
+            "cmdline": "powershell.exe Get-CimInstance -Namespace "
+                       "root/securityCenter2 -ClassName antivirusproduct",
+            "path": ""},
+        notes="Directly probes for Valkyrie's own presence via a "
+              "WMI-namespace query neither this nor the already-covered "
+              "netsh/tasklist T1518.001 entry can see.",
+    ),
+    Technique(
+        id="disc-software-installed", technique_id="T1518",
+        technique_name="Software Discovery",
+        tactic="Discovery",
+        art_test_ref="T1518 Test #2 (enumerate installed software via the "
+                      "Uninstall registry key)",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_NONE,
+        detector_path="no branch recognizes Get-ItemProperty reads of the "
+                       "Uninstall registry key; the reg.exe cmdline branch "
+                       "only recognizes literal 'reg query' invocations, "
+                       "not the PowerShell cmdlet equivalent",
+        predicted_tier_b="MISS", source_confidence=SOURCE_PARTIAL,
+        probe="ioa_rule", probe_input={
+            "image": "powershell.exe", "parent": "cmd.exe",
+            "cmdline": "powershell.exe Get-ItemProperty "
+                       "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion"
+                       "\\Uninstall\\*", "path": ""},
+        notes="FIRST T1518 entry in the catalog (parent technique of the "
+              "already-covered T1518.001 sub-technique). Same class of "
+              "cmdlet-vs-binary generalization gap.",
+    ),
+    Technique(
+        id="disc-password-policy", technique_id="T1201",
+        technique_name="Password Policy Discovery",
+        tactic="Discovery",
+        art_test_ref="T1201 Test #6 (net accounts)",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_NONE,
+        detector_path="process_telemetry.py's net.exe branch does not "
+                       "recognize the 'accounts' verb",
+        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
+        probe="ioa_rule", probe_input={
+            "image": "net.exe", "parent": "cmd.exe",
+            "cmdline": "net.exe accounts", "path": ""},
+        notes="FIRST T1201 entry in the catalog. Same net.exe binary "
+              "already recognized for 4 other verbs; 'accounts' is a 5th "
+              "gap in the same branch.",
+    ),
+    Technique(
+        id="disc-domain-groups", technique_id="T1069.002",
+        technique_name="Permission Groups Discovery: Domain Groups",
+        tactic="Discovery",
+        art_test_ref="T1069.002 Test #1 (net group \"domain admins\" "
+                      "/domain)",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
+        detector_path="process_telemetry.py's net.exe branch: 'net group' "
+                       "(without /add) returns T1087.002, not a T1069.002 "
+                       "label - there is no dedicated domain-GROUPS "
+                       "discovery label anywhere, only domain-ACCOUNTS",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="recon_burst", probe_input={
+            "image": "net.exe",
+            "cmdline": 'net group "domain admins" /domain',
+            "co_occurring": [("systeminfo.exe", "systeminfo.exe"),
+                             ("tasklist.exe", "tasklist.exe /v")]},
+        known_mismatch="T1087.002 — Account Discovery: Domain Account",
+        notes="'net group' is MITRE's own documented example for T1069.002 "
+              "(domain GROUP membership, e.g. 'Domain Admins'), but the "
+              "code's net.exe branch returns T1087.002 (domain ACCOUNT "
+              "discovery) for any non-/add 'net group' invocation, with no "
+              "way to distinguish a group-name argument (groups) from no "
+              "argument (would enumerate all groups) from this branch's "
+              "logic. A precise fix would need to also recognize a group "
+              "argument shape to route to a real T1069.002 label - deferred "
+              "to the adversarial phase. CORRECTED cmdline: the check is a "
+              "literal two-word substring match on 'net group' (unlike the "
+              "single-word 'view' check that covers the T1018 branch), so "
+              "'net.exe group ...' (the form this entry originally used) "
+              "does not match at all - only the bare 'net group ...' form "
+              "does, which is also the exact form ART's own atomic uses. "
+              "Confirmed live via replay_harness.py after the first draft "
+              "surfaced a real MISMATCH between predicted and actual. "
+              "Whether Valkyrie's classifier should be robust to a "
+              "'net.exe' vs 'net' prefix difference at all is a separate, "
+              "real robustness question worth raising in the adversarial "
+              "phase - a trivial .exe suffix should not be an evasion knob.",
+    ),
+    Technique(
+        id="disc-file-dir-ps", technique_id="T1083",
+        technique_name="File and Directory Discovery (PowerShell)",
+        tactic="Discovery",
+        art_test_ref="T1083 Test #2 (Get-ChildItem -Recurse, scoped to "
+                      "$env:USERPROFILE rather than ART's default full-drive "
+                      "form)",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_NONE,
+        detector_path="no cmdlet-path branch recognizes Get-ChildItem "
+                       "(distinct from the covered cmd.exe 'dir' entry, "
+                       "which is also an honest MISS for the same reason: "
+                       "no cmd.exe-builtin branch exists either)",
+        predicted_tier_b="MISS", source_confidence=SOURCE_PARTIAL,
+        probe="ioa_rule", probe_input={
+            "image": "powershell.exe", "parent": "cmd.exe",
+            "cmdline": "powershell.exe Get-ChildItem -Path $env:USERPROFILE "
+                       "-Recurse -ErrorAction SilentlyContinue",
+            "path": ""},
+        notes="Bounded to the user profile rather than ART's full C:\\ "
+              "recursive scan, which would be needlessly slow/IO-heavy on "
+              "a CI runner for no additional detection signal.",
+    ),
+]
+
+# ---------------------------------------------------------------------------
 # Round 2 techniques researched but explicitly excluded, named and reasoned
 # rather than silently dropped, matching this file's OUT_OF_SCOPE philosophy.
 # These are NOT added to OUT_OF_SCOPE (which the exporter always includes,
@@ -1869,6 +2268,7 @@ ALL_TACTICS = {
     "Extended (behavioral rules)": EXTENDED,
     "Breadth expansion 2026-08": BREADTH_EXPANSION,
     "Breadth expansion round 2 (2026-08-26)": EXPANSION_ROUND2,
+    "Breadth expansion round 2B (2026-08-26)": EXPANSION_ROUND2B,
 }
 
 
