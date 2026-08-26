@@ -225,6 +225,7 @@ For anyone evaluating Valkyrie technically, not just running it:
 |---|---|
 | **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** | The real system diagram (sensors → correlation → incidents), and an honest capability map: shipped, buildable, and infrastructure boundaries that no amount of code can close (e.g. no signed kernel driver) |
 | **[`docs/LIVE_FIRE_EVALUATION.md`](docs/LIVE_FIRE_EVALUATION.md)** | **Start here for detection claims.** Real Atomic Red Team execution against a running instance, methodology, the full benchmark result (73.1% proven floor), every miss explained, and a real found-and-fixed bug with before/after proof |
+| [`docs/RESEARCH_PAPER.md`](docs/RESEARCH_PAPER.md) | The same evaluation, written up formally (abstract, methodology, threats to validity) for anyone who wants the academic-paper version |
 | [`docs/DETECTION_EFFICACY_REPORT.md`](docs/DETECTION_EFFICACY_REPORT.md) | A weaker, complementary measurement: synthetic technique-representative inputs fed straight to the classifier code (no execution, no sensors) - useful for fast regression checking, not a substitute for the live-fire result above |
 | [`docs/EDR.md`](docs/EDR.md) | Full detection & response console reference |
 | [`docs/GAP_ANALYSIS.md`](docs/GAP_ANALYSIS.md) | What's shipped vs. planned, updated as an ongoing process |
