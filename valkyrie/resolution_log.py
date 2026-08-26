@@ -102,7 +102,29 @@ class ResolutionLog:
             self._by_ip.move_to_end(key)
             return domain
 
-    def was_resolved(self, ip: str, now: Optional[float] = None) -> bool:
+    def was_resolved(self, ip: str, now: Optional[float] = None) -> Optional[bool]:
+        """Tri-state, not boolean. True/False only once this log has actually
+        processed at least one real resolution - proof DNS interception is
+        genuinely seeing traffic. Before that (self._recorded == 0), return
+        None: this could mean interception was never wired to see anything
+        at all (e.g. --no-dns, used by every CI/Tier-B run) or it simply
+        hasn't processed its first resolution yet. Both are honestly
+        'unknown, not yet active', never 'suspicious'.
+
+        Found via the incident-storm investigation (2026-08-26): this method
+        used to return a bare False for both cases, so `--no-dns` made
+        `never_resolved` fire on every single connection on the host,
+        attacker or not - Valkyrie's own loopback API traffic and an
+        unrelated CI-runner telemetry process both got flagged as network
+        anomalies with zero attacker action. `_recorded` is exactly the
+        signal this needs: it is incremented only by `record()`, which the
+        DNS interceptor calls on a real allowed resolution - never touched
+        by a `--no-dns` startup, so it stays 0 for the life of the process
+        in that configuration.
+        """
+        with self._lock:
+            if self._recorded == 0:
+                return None
         return self.domain_for(ip, now) is not None
 
     def stats(self) -> dict:

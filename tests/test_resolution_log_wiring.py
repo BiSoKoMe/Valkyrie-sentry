@@ -98,6 +98,16 @@ def main() -> int:
     log2 = ResolutionLog()
     set_active(log2)
     try:
+        # Establish that DNS interception is genuinely active before checking
+        # the target IP below. A fresh, never-touched ResolutionLog now
+        # correctly reads as "unknown whether interception is active" (see
+        # was_resolved()'s docstring / the incident-storm fix), not "actively
+        # resolving and this IP just never came up" - conflating those two
+        # was exactly the bug (`--no-dns` made every connection look
+        # hardcoded). Recording one unrelated, real resolution first is both
+        # the fix for this test and more realistic: some domain will always
+        # have resolved before a genuinely suspicious connection appears.
+        log2.record("unrelated-benign.test", ["203.0.113.5"])
         emitted: list = []
         # ip_reputation always says "clean" - if anything fires, it can only
         # be the list-free scorer, proving the wiring reaches production code

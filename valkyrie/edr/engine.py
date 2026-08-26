@@ -198,7 +198,8 @@ class EdrEngine:
         # at ingest also stops these from feeding the kill-chain correlator, so
         # no "multi-stage attack on valkyrie.exe" can form either.
         from ..trust import is_self
-        if is_self(str(d.get("actor_name", "")), str(d.get("actor_path", ""))):
+        if is_self(str(d.get("actor_name", "")), str(d.get("actor_path", "")),
+                  int(d.get("actor_pid", 0) or 0)):
             return None
 
         # Causality graph is fed HERE - above the severity gate below - and that

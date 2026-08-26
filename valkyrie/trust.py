@@ -119,8 +119,25 @@ _SELF_PATH_MARKERS = (
 )
 
 
-def is_self(name: str = "", path: str = "") -> bool:
-    """True for Valkyrie's own processes / binaries / data directories."""
+def is_self(name: str = "", path: str = "", pid: int = 0) -> bool:
+    """True for Valkyrie's own processes / binaries / data directories.
+
+    ``pid``, when the caller has it, is checked against THIS process's own
+    PID (``os.getpid()``) - exact identity, not a name or path guess. The
+    name/path checks below only ever recognize a *packaged, installed*
+    Valkyrie (``valkyrie.exe``, or a path under Program Files/ProgramData) -
+    they cannot recognize Valkyrie running as ``python -m valkyrie`` from a
+    source checkout, which is how every CI/Tier-B job (and this dev
+    environment) actually runs it. Found via the incident-storm
+    investigation (2026-08-26): Valkyrie's own loopback API traffic was
+    attributed to "python.exe", which matched neither check, so its own
+    network activity was never suppressed and got scored as an external
+    actor's traffic. A PID match can never whitelist an unrelated Python
+    process - `os.getpid()` is THIS running process's own identity, so it
+    only ever equals the actor PID when the actor IS this process.
+    """
+    if pid and pid == os.getpid():
+        return True
     if (name or "").strip().lower() in _SELF_NAMES:
         return True
     p = _norm(path)
