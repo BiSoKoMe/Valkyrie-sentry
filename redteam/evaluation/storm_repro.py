@@ -180,14 +180,29 @@ def main() -> int:
         print(boot_output[-3000:])
 
         # PRESERVE THE DB BEFORE THE TEMP DIR IS EVER TOUCHED.
+        # Store uses WAL journaling (store.py: PRAGMA journal_mode=WAL), so
+        # recent writes - including, on a fresh DB, the CREATE TABLE
+        # statements themselves - can still be sitting in the *.db-wal
+        # sidecar file rather than the main .db file. Copying only the main
+        # file (this script's first version) silently produced a file with
+        # NO tables at all. Force a checkpoint into the main file first, with
+        # the engine process already fully stopped so nothing else holds the
+        # lock, THEN copy.
         db_candidates = list(Path(data_dir).rglob("*.db"))
         RESULTS_DIR.mkdir(exist_ok=True)
         ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
         preserved_db = None
         if db_candidates:
+            import sqlite3 as _sq
+            try:
+                _ck = _sq.connect(str(db_candidates[0]))
+                _ck.execute("PRAGMA wal_checkpoint(FULL)")
+                _ck.close()
+            except Exception as exc:
+                print(f"[PRESERVE] checkpoint warning (continuing anyway): {exc}")
             preserved_db = RESULTS_DIR / f"{ts}__storm_repro.db"
             shutil.copy2(db_candidates[0], preserved_db)
-            print(f"[PRESERVE] copied {db_candidates[0]} -> {preserved_db}")
+            print(f"[PRESERVE] checkpointed + copied {db_candidates[0]} -> {preserved_db}")
         else:
             print("[PRESERVE] WARNING: no .db file found under data_dir")
 
