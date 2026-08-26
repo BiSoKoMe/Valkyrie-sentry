@@ -13,6 +13,9 @@ name: Incident Storm Investigation (isolated repro)
 
 on:
   workflow_dispatch:
+  # Re-run after the incident-storm fix (resolution_log.py tri-state +
+  # trust.is_self() PID match) to verify the mechanism is actually gone -
+  # validation step H of the approved fix.
   # workflow_dispatch requires the file to exist on the default branch before
   # the API/CLI can see it at all - not the case yet for a brand-new workflow
   # on a feature branch. This push trigger fires directly from THIS branch's
