@@ -16,10 +16,19 @@ classifies every change:
   * GAIN       - resistance rose, or a technique that used to evade now
                  resists. The ledger ratchets UP to the new high-water mark.
   * REGRESSION - a technique that was ONCE resisted now evades, or a
-                 transform's rate fell below its recorded best. This is a HARD
-                 FAILURE (non-zero exit): the whole point of a ratchet is that
-                 you cannot silently slide back down. A real regression must be
-                 fixed or the ledger deliberately reset with a recorded reason.
+                 transform's rate fell below its recorded best AGAINST THE SAME
+                 applicable population. This is a HARD FAILURE (non-zero exit):
+                 the whole point of a ratchet is that you cannot silently slide
+                 back down. A real regression must be fixed or the ledger
+                 deliberately reset with a recorded reason.
+
+                 Growing the catalog with new, not-yet-resisted techniques
+                 lowers the aggregate rate on its own (a bigger denominator)
+                 without any previously-resisted technique regressing. That is
+                 not penalized: a rate drop only counts as a regression when
+                 the applicable population did not grow. The per-technique
+                 check (a once-resisted id now evading) still fires regardless
+                 of population size, since that is never an artifact of scale.
   * HEADROOM   - techniques that evade right now and never resisted. Not a
                  failure - it is the NEXT plate to lift, surfaced so the loop
                  always has a target.
@@ -70,6 +79,7 @@ class TransformDelta:
     regressed:        tuple = ()     # techniques once resisted, now evading
     headroom:         tuple = ()     # evading now, never resisted
     rate_regressed:   bool = False   # run_rate fell below recorded best
+    population_grew:  bool = False   # new techniques entered the applicable set
 
     @property
     def is_regression(self) -> bool:
@@ -166,19 +176,29 @@ def update_ledger(ledger: Optional[dict], run_summary: dict) -> tuple:
         prev = old_transforms.get(name)
         prev_best_rate = None
         ever_resisted: set = set()
+        prev_applicable: set = set()
         if prev is not None:
             prev_best_rate = prev.get("best_rate")
             ever_resisted = set(prev.get("ever_resisted") or [])
+            prev_applicable = set(prev.get("applicable_ids") or [])
 
-        # Regression: a technique that was EVER resisted now evades.
+        # Regression: a technique that was EVER resisted now evades. This is
+        # never an artifact of the catalog growing, so it fires regardless.
         regressed = tuple(sorted(ever_resisted & evaded_now))
         # Gain: resisted now, never in the ledger before.
         newly = tuple(sorted(resisted_now - ever_resisted))
         # Headroom: evading now and never resisted - the next plate to lift.
         headroom = tuple(sorted(evaded_now - ever_resisted))
 
+        applicable_now = resisted_now | evaded_now
+        merged_applicable = prev_applicable | applicable_now
+        # New techniques entering the population drag the aggregate rate down
+        # on their own - that is not a regression, it is more plates on the
+        # bar. Only compare rates when the population did not grow.
+        population_grew = bool(applicable_now - prev_applicable)
         rate_regressed = (prev_best_rate is not None
-                          and run_rate < prev_best_rate - _EPS)
+                          and run_rate < prev_best_rate - _EPS
+                          and not population_grew)
 
         # The ledger only ever ratchets UP.
         best_rate = run_rate if prev_best_rate is None else max(prev_best_rate, run_rate)
@@ -187,12 +207,14 @@ def update_ledger(ledger: Optional[dict], run_summary: dict) -> tuple:
         new_transforms[name] = {
             "best_rate": best_rate,
             "ever_resisted": merged_resisted,
+            "applicable_ids": sorted(merged_applicable),
             "last_run_rate": run_rate,
         }
         deltas.append(TransformDelta(
             transform=name, best_rate=best_rate, prev_best_rate=prev_best_rate,
             run_rate=run_rate, newly_resisted=newly, regressed=regressed,
             headroom=headroom, rate_regressed=rate_regressed,
+            population_grew=population_grew,
         ))
 
     # Transforms that were in the ledger but absent from this run are carried
@@ -234,7 +256,16 @@ def render(report: RatchetReport) -> str:
         for d in report.headroom:
             lines.append(f"  {d.transform}: {len(d.headroom)} evading "
                          f"({', '.join(d.headroom)})")
-    if report.ok and not report.gains and not report.headroom:
+    grown = [d for d in report.deltas
+             if d.population_grew and not d.is_regression
+             and d.prev_best_rate is not None and d.run_rate < d.prev_best_rate - _EPS]
+    if grown:
+        lines.append("\nRate dip from a growing catalog (not a regression - "
+                      "no previously-resisted technique evaded):")
+        for d in grown:
+            lines.append(f"  {d.transform}: rate {100*d.prev_best_rate:.1f}% -> "
+                         f"{100*d.run_rate:.1f}% (new techniques added to scope)")
+    if report.ok and not report.gains and not report.headroom and not grown:
         lines.append("\nNo change - every transform at its recorded best.")
     return "\n".join(lines)
 
