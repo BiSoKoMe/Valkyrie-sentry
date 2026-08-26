@@ -29,6 +29,10 @@ on:
         description: "Start the DNS + threat-intelligence layers so the C2 techniques are actually testable (they are scored as MISSED today because their detectors are switched off)"
         type: boolean
         default: false
+      only_ids:
+        description: "Comma-separated catalog ids to run in isolation (e.g. evasion-process-injection) - for verifying one Detection Coverage fix without running the full battery. Empty runs everything, unchanged."
+        type: string
+        default: ""
   # Auto-run when this evaluation setup itself changes on the working branch, so
   # a live Tier B pass fires without needing the manual button (which GitHub only
   # exposes once the workflow reaches the default branch). The push-triggered run
@@ -318,6 +322,12 @@ jobs:
             # honest ~34/39). Reliable-by-default beats aggressive-but-crashing.
             $skip = $true
           }
+          $onlyIdsArgs = @{}
+          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.only_ids }}" -ne "") {
+            $ids = @("${{ inputs.only_ids }}".Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
+            $onlyIdsArgs = @{ OnlyIds = $ids }
+            Write-Host "[cfg] OnlyIds filter: $($ids -join ', ')"
+          }
           try {
             # Root cause fixed: the scorer polled the FULL incidents endpoint
             # (per-incident impact assessment, O(incidents)) with a 10s timeout,
@@ -340,7 +350,7 @@ jobs:
               # rules yet scored MISS live. 30s clears 15s + poll jitter + ingest,
               # exactly as this script's own -DetectWindowSeconds doc states. 12
               # was set to speed up flaky runs and silently under-counted.
-              redteam\evaluation\run_live_evaluation.ps1 -SkipDestructive:$skip -ApiBase "http://127.0.0.1:8090" -DetectWindowSeconds 30 *>&1 |
+              redteam\evaluation\run_live_evaluation.ps1 -SkipDestructive:$skip -ApiBase "http://127.0.0.1:8090" -DetectWindowSeconds 30 @onlyIdsArgs *>&1 |
                 Tee-Object -FilePath tierb_transcript.log -Append
               if ($?) { $evalOk = $true; break }
               if ($attempt -eq 2) { break }

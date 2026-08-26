@@ -48,7 +48,7 @@ if (-not $SkipSysmon) {
         Invoke-WebRequest "https://raw.githubusercontent.com/SwiftOnSecurity/sysmon-config/master/sysmonconfig-export.xml" `
             -OutFile $cfg -UseBasicParsing
         # The SwiftOnSecurity config keeps ProcessAccess (EID 10) minimal because
-        # it is noisy — but EID10->lsass.exe is EXACTLY the signal Valkyrie's
+        # it is noisy - but EID10->lsass.exe is EXACTLY the signal Valkyrie's
         # credential-theft (T1003.001) detection consumes. Without it the LSASS
         # atomics run and Sysmon logs NOTHING, so the technique scores MISS for a
         # blind-sensor reason, not a rule reason (confirmed by a live run: EID10
@@ -56,7 +56,7 @@ if (-not $SkipSysmon) {
         # ProcessAccess include RuleGroup for lsass.exe so the sensor emits what
         # the detector needs. Additive (Sysmon ORs RuleGroups), and fully
         # best-effort: any failure falls back to the stock config so provisioning
-        # — and the whole run — can never be broken by this patch.
+        # - and the whole run - can never be broken by this patch.
         try {
             [xml]$sx = Get-Content $cfg -Raw
             $filtering = $sx.Sysmon.EventFiltering
@@ -75,10 +75,34 @@ if (-not $SkipSysmon) {
                 $sx.Save($cfg)
                 Info "Patched Sysmon config: ProcessAccess->lsass.exe (EID 10) explicitly ON."
             } else {
-                Warn "Sysmon config had no EventFiltering node — using stock config."
+                Warn "Sysmon config had no EventFiltering node - using stock config."
             }
         } catch {
             Warn "Could not patch Sysmon config for lsass EID10 (using stock): $($_.Exception.Message)"
+        }
+        # Same problem, same fix, for CreateRemoteThread (EID 8): SwiftOnSecurity's
+        # config disables it entirely by default (their own stated reason: too
+        # noisy without per-environment tuning). Valkyrie's EID8 handler
+        # (etw/sysmon.py) is confirmed correct as written - process injection
+        # (T1055) missed live in real Tier B runs purely because Sysmon never
+        # emitted the event at all, a sensor/provisioning gap, not a rule gap.
+        # An empty (no TargetImage/SourceImage children) onmatch="include"
+        # CreateRemoteThread block turns EID8 ON unconditionally, matching how
+        # EID1/EID3/EID7 already log broadly with no narrowing filter here -
+        # unlike EID10, injection can legitimately target any process, so
+        # narrowing by target would defeat the point of testing the detector.
+        try {
+            $rg8 = $sx.CreateElement("RuleGroup")
+            $rg8.SetAttribute("name", "valkyrie-process-injection")
+            $rg8.SetAttribute("groupRelation", "or")
+            $crt = $sx.CreateElement("CreateRemoteThread")
+            $crt.SetAttribute("onmatch", "include")
+            $rg8.AppendChild($crt) | Out-Null
+            $filtering.AppendChild($rg8) | Out-Null
+            $sx.Save($cfg)
+            Info "Patched Sysmon config: CreateRemoteThread (EID 8) explicitly ON."
+        } catch {
+            Warn "Could not patch Sysmon config for EID8 (using stock): $($_.Exception.Message)"
         }
         Info "Installing Sysmon..."
         & (Join-Path $sysDir "Sysmon64.exe") -accepteula -i $cfg
@@ -100,7 +124,7 @@ Info "Script Block Logging enabled."
 # ---------------------------------------------------------------------------
 # The runner has no Chrome profile, so browser_cred_watch.credential_store_paths()
 # would be EMPTY and the watcher (which snapshots its watch-paths at start())
-# would watch nothing — T1555 could never fire, however good the detector is.
+# would watch nothing - T1555 could never fire, however good the detector is.
 # Create a dummy Login Data file under the CURRENT user's real profile BEFORE
 # Valkyrie starts so the watcher picks it up; the eval then opens it from a
 # non-browser process to trigger the detection honestly.

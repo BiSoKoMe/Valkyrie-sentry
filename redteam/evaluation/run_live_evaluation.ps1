@@ -89,7 +89,15 @@ param(
     # while tolerating the transient GIL stalls the single-loop API suffers.
     [int]$ReadyMinWarmupSeconds = 30,
     [switch]$SkipDestructive,
-    [string]$RepoRoot = (Resolve-Path "$PSScriptRoot\..\..").Path
+    [string]$RepoRoot = (Resolve-Path "$PSScriptRoot\..\..").Path,
+    # Run only these catalog ids (e.g. -OnlyIds evasion-process-injection).
+    # For isolating ONE technique during the Detection Coverage milestone's
+    # per-technique attack loop, without needing a bespoke one-off script per
+    # fix - reuses this file's own already-vetted execution, scoring, and
+    # evidence-capture logic instead of duplicating it. Empty (default) runs
+    # the full battery exactly as before; this parameter changes nothing when
+    # omitted.
+    [string[]]$OnlyIds = @()
 )
 
 $ErrorActionPreference = "Continue"
@@ -105,6 +113,11 @@ if (-not (Test-Path $CatalogJson)) { throw "catalog export failed -- is python o
 $Catalog = (Get-Content $CatalogJson -Raw | ConvertFrom-Json)
 $CatalogVersion = $Catalog.catalog_version
 $Techniques = $Catalog.techniques
+if ($OnlyIds.Count -gt 0) {
+    $Techniques = @($Techniques | Where-Object { $OnlyIds -contains $_.id })
+    Info "OnlyIds filter active: running $($Techniques.Count) of $($Catalog.techniques.Count) catalog techniques ($($OnlyIds -join ', '))"
+    if ($Techniques.Count -eq 0) { throw "No catalog technique matched -OnlyIds $($OnlyIds -join ', ')" }
+}
 
 # Techniques with a verified Atomic Red Team mapping, carried over from the
 # original redteam/run-redteam.ps1 plan (already vetted by that kit's author).
