@@ -1,8 +1,8 @@
-"""Normalized telemetry events — one envelope for every signal source.
+"""Normalized telemetry events - one envelope for every signal source.
 
 Today Valkyrie's detection layer consumes a DNS-decision dict shaped by the
 Store. Phase 3 adds more signal sources (process starts, network connections,
-and — later — kernel/ETW/eBPF telemetry). Rather than teach the correlator a new
+and - later - kernel/ETW/eBPF telemetry). Rather than teach the correlator a new
 dict shape per source, every source normalizes into one small, explicit
 ``TelemetryEvent`` (an OCSF-inspired lingua franca kept deliberately minimal).
 
@@ -14,7 +14,7 @@ Design goals:
   * **Stable + serializable.** ``to_dict``/``from_dict`` round-trip cleanly for
     the event bus, the WebSocket, and on-disk storage.
 
-Stdlib-only. No behavior change to existing code — this is the schema new
+Stdlib-only. No behavior change to existing code - this is the schema new
 collectors emit and that adapters map the current DNS stream into.
 """
 
@@ -28,28 +28,28 @@ from typing import Any, Optional
 # Controlled vocabularies (small, explicit)
 # ---------------------------------------------------------------------------
 
-# category — what kind of activity
+# category - what kind of activity
 CAT_DNS         = "dns"
 CAT_PROCESS     = "process"
 CAT_NETWORK     = "network"
 CAT_PERSISTENCE = "persistence"     # auto-start extension points (ASEPs)
 # Content convicted by the OS antimalware provider via AMSI (valkyrie/amsi.py).
 # Distinct from CAT_PROCESS on purpose: every other endpoint category carries a
-# Valkyrie *heuristic*, while this one carries an external engine's *verdict* —
+# Valkyrie *heuristic*, while this one carries an external engine's *verdict* -
 # a different kind of evidence that deserves its own meaning and response.
 CAT_MALWARE     = "malware"
 # Asset inventory (valkyrie/asset_inventory.py, CIS Controls #1/#2): a CHANGE
-# to what's installed/listening/loaded on the host — new software, a newly
+# to what's installed/listening/loaded on the host - new software, a newly
 # LISTENING port, a newly loaded kernel driver. Distinct from CAT_PERSISTENCE:
 # persistence_telemetry already owns autostart-entry changes at their own
 # (usually higher) severity; this category is deliberately always INFO, same
 # discipline as process_telemetry.classify_discovery's Discovery-tactic
-# labels — weak on its own, real as correlation input.
+# labels - weak on its own, real as correlation input.
 CAT_ASSET       = "asset"
 CATEGORIES  = frozenset({CAT_DNS, CAT_PROCESS, CAT_NETWORK, CAT_PERSISTENCE,
                          CAT_MALWARE, CAT_ASSET})
 
-# persistence activities — which ASEP class changed. Kept as a small vocab so the
+# persistence activities - which ASEP class changed. Kept as a small vocab so the
 # EDR correlator and dashboard can reason over persistence uniformly.
 PERSIST_RUN_KEY        = "registry_run_key"
 PERSIST_SERVICE        = "service_install"
@@ -57,14 +57,14 @@ PERSIST_SCHEDULED_TASK = "scheduled_task"
 PERSIST_STARTUP_FOLDER = "startup_folder"
 PERSIST_WMI            = "wmi_subscription"    # permanent WMI event consumer
 
-# action — the disposition Valkyrie applied / observed
+# action - the disposition Valkyrie applied / observed
 ACT_ALLOWED  = "allowed"
 ACT_BLOCKED  = "blocked"
 ACT_FLAGGED  = "flagged"
 ACT_OBSERVED = "observed"
 ACTIONS      = frozenset({ACT_ALLOWED, ACT_BLOCKED, ACT_FLAGGED, ACT_OBSERVED})
 
-# severity — ordered low→high
+# severity - ordered low->high
 SEV_INFO     = "info"
 SEV_LOW      = "low"
 SEV_MEDIUM   = "medium"
@@ -74,7 +74,7 @@ _SEV_RANK = {SEV_INFO: 0, SEV_LOW: 1, SEV_MEDIUM: 2, SEV_HIGH: 3, SEV_CRITICAL: 
 
 
 def severity_rank(sev: str) -> int:
-    """Numeric rank for ordering/compare; unknown → info."""
+    """Numeric rank for ordering/compare; unknown -> info."""
     return _SEV_RANK.get(sev, 0)
 
 
@@ -91,12 +91,12 @@ class TelemetryEvent:
     action:   str = ACT_OBSERVED        # ACT_*
     ts:       float = field(default_factory=time.time)   # epoch seconds (UTC)
 
-    # Actor — the process responsible, when known.
+    # Actor - the process responsible, when known.
     actor_pid:  int = 0
     actor_name: str = ""
     actor_path: str = ""
 
-    # Target — what was acted on (domain / ip / port / path…). Free-form but
+    # Target - what was acted on (domain / ip / port / path...). Free-form but
     # conventional keys: "domain", "ip", "port", "proto", "path".
     target: dict = field(default_factory=dict)
 
@@ -149,7 +149,7 @@ class TelemetryEvent:
 
 
 # ---------------------------------------------------------------------------
-# Adapters — map existing signal shapes into TelemetryEvent
+# Adapters - map existing signal shapes into TelemetryEvent
 # ---------------------------------------------------------------------------
 
 # The Store publishes DNS decisions as {"decision": "...", ...}. Map that

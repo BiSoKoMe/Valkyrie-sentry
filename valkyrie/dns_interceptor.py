@@ -5,21 +5,21 @@ pipeline, and either:
   - Returns a NXDOMAIN / sinkhole response (blocked)
   - Forwards the query to the upstream resolver and relays the real answer
 
-Decision pipeline (in order) — PURE ANALYSIS, no human-authored lists:
-  1. Threat-intel IOC feeds — highest-confidence known-bad signal
-  2. Intelligence memory — verdicts Valkyrie already learned (fast path); the
+Decision pipeline (in order) - PURE ANALYSIS, no human-authored lists:
+  1. Threat-intel IOC feeds - highest-confidence known-bad signal
+  2. Intelligence memory - verdicts Valkyrie already learned (fast path); the
      engine's own analysis-driven auto-blocks are enforced here, not via a list
-  3. Scanner — page-content analysis + positive tracker signals
-  4. Threat classifier — behavioural intelligence (anomaly + threat graph)
-  5. Baseline anomaly check — post-profiling phase
+  3. Scanner - page-content analysis + positive tracker signals
+  4. Threat classifier - behavioural intelligence (anomaly + threat graph)
+  5. Baseline anomaly check - post-profiling phase
 
 Every query is also recorded into the intelligence layer's baseline so
 the machine's "normal" keeps being learned; blocks feed the threat graph
 so related infrastructure is caught automatically.  The intelligence
-steps are additive — with intelligence=None the pipeline behaves exactly
+steps are additive - with intelligence=None the pipeline behaves exactly
 as before.
 
-OS-specific setup (NOT handled here — must be done externally):
+OS-specific setup (NOT handled here - must be done externally):
   Linux:
     iptables -t nat -A OUTPUT -p udp --dport 53 -j REDIRECT --to-port 5353
     iptables -t nat -A OUTPUT -p tcp --dport 53 -j REDIRECT --to-port 5353
@@ -88,7 +88,7 @@ except ImportError:
 
 # Precomputed wire-format QNAME for the health-probe domain (12-byte DNS header
 # + length-prefixed labels + root byte), so the serve loop can recognise a
-# heartbeat probe with a raw byte-slice compare — no dns.message parsing, no
+# heartbeat probe with a raw byte-slice compare - no dns.message parsing, no
 # worker-thread dispatch. See _serve_loop for why this matters under load.
 _HEALTH_PROBE_WIRE = dns.name.from_text(
     HEALTH_PROBE_DOMAIN).to_wire() if _DNSLIB else b""
@@ -168,7 +168,7 @@ class DNSInterceptor:
         # enforce on Windows, where kernel CIDR rules are a deliberate no-op.
         self._firewall      = firewall
         # IOC feed engine (abuse.ch C2/malware indicators). Consulted early in
-        # the decision pipeline — an intel hit is incident-grade and must
+        # the decision pipeline - an intel hit is incident-grade and must
         # outrank the learned known-good fast path, because a previously
         # trusted domain that turns up in a C2 feed is exactly the
         # compromised-infrastructure case feeds exist to catch.
@@ -179,7 +179,7 @@ class DNSInterceptor:
         self._upstream_host = upstream_host
         self._upstream_port = upstream_port
         # When False, allowed queries go ONLY to the configured local upstream
-        # (e.g. Unbound on 127.0.0.1) and never fall back to public resolvers —
+        # (e.g. Unbound on 127.0.0.1) and never fall back to public resolvers -
         # fail-closed, no DNS leak.  See config.DNS_LOCAL_ONLY.
         self._allow_external_fallback = allow_external_fallback
         self._debug         = debug
@@ -201,7 +201,7 @@ class DNSInterceptor:
         # Binding to 0.0.0.0 accepts on all interfaces and fixes this.
         bind_host = "0.0.0.0" if platform.system() == "Windows" else self._host
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        # Do NOT set SO_REUSEADDR on Windows — mDNS processes (Brave, svchost)
+        # Do NOT set SO_REUSEADDR on Windows - mDNS processes (Brave, svchost)
         # share port 5353 via REUSEADDR and will steal our packets.
         if platform.system() != "Windows":
             self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -211,7 +211,7 @@ class DNSInterceptor:
         try:
             self._thread.start()
         except RuntimeError:
-            # Thread objects are single-use — after a stop()/start() cycle
+            # Thread objects are single-use - after a stop()/start() cycle
             # (e.g. self-healing recovery) a fresh serve thread is needed.
             self._thread = threading.Thread(
                 target=self._serve_loop, daemon=True, name="dns-interceptor"
@@ -228,7 +228,7 @@ class DNSInterceptor:
         """Lightweight liveness probe for the self-healing watchdog.
 
         True while the serve loop is running with a bound socket.  Does not
-        depend on upstream reachability — an offline upstream must not be
+        depend on upstream reachability - an offline upstream must not be
         mistaken for a dead interceptor.
         """
         return self._running and self._sock is not None and self._thread.is_alive()
@@ -292,7 +292,7 @@ class DNSInterceptor:
             # never spawning a worker thread. Real queries each get their own
             # thread below (to avoid head-of-line blocking), but Python's GIL
             # still serializes CPU time across however many of those are alive
-            # at once — a burst of worker threads can delay a freshly-spawned
+            # at once - a burst of worker threads can delay a freshly-spawned
             # heartbeat-reply thread past its 1s probe budget purely from
             # scheduling contention. Verified live: heartbeat false-failures
             # correlated with concurrent query bursts, not just cold boot. The
@@ -330,8 +330,8 @@ class DNSInterceptor:
 
         # Liveness-probe shortcut. The protection heartbeat resolves a reserved
         # local name to confirm the interceptor is still answering. Serve it
-        # instantly and locally here — never consult _decide or upstream — so a
-        # legitimately OFFLINE machine (no internet → upstream times out) still
+        # instantly and locally here - never consult _decide or upstream - so a
+        # legitimately OFFLINE machine (no internet -> upstream times out) still
         # reports protection HEALTHY instead of flapping into a false "sinkhole
         # not answering" alarm. Not logged: it fires every 15s and is internal.
         if qname.lower() == HEALTH_PROBE_DOMAIN:
@@ -352,7 +352,7 @@ class DNSInterceptor:
 
         response = self._build_response(request, qname, qtype, decision)
 
-        # CNAME uncloaking — the step that catches trackers hiding behind a
+        # CNAME uncloaking - the step that catches trackers hiding behind a
         # first-party subdomain. _decide() judged the QUERIED name, which looks
         # first-party and is on no list; the tracker is in the answer's CNAME
         # chain (metrics.brand.com -> brand.eulerian.net). If any CNAME target is
@@ -375,7 +375,7 @@ class DNSInterceptor:
                     print(f"  [uncloak] {qname} -> {target} blocked ({why})")
                 response = self._sinkhole_response(request, qname, qtype)
 
-        # Answer-IP screening — the step that makes the firewall's threat-intel
+        # Answer-IP screening - the step that makes the firewall's threat-intel
         # CIDR ranges enforce on every platform. _decide() works on the DOMAIN;
         # a domain can be unknown/clean yet still resolve to an IP inside a
         # known-bad range (fast-flux, parked C2, a CDN edge a feed flagged).
@@ -402,11 +402,11 @@ class DNSInterceptor:
                     print(f"  [firewall] {qname} -> {bad_ip} blocked (threat-intel CIDR)")
                 response = self._sinkhole_response(request, qname, qtype)
 
-        # Resolution log — the list-free network scorer's strongest signal
+        # Resolution log - the list-free network scorer's strongest signal
         # (network_score.py S2: "was this destination ever resolved here?").
         # Recorded here, AFTER CNAME uncloaking and answer-IP screening can
         # both still flip an initially-allowed decision to "blocked" and
-        # rewrite `response` to the sinkhole — so this only ever sees the
+        # rewrite `response` to the sinkhole - so this only ever sees the
         # FINAL decision and the FINAL (possibly rewritten) wire response.
         # "allowed" and "flagged" both reach here as real forwarded answers;
         # "blocked"/"behavioral"/"deceived" never resolve to a real
@@ -419,7 +419,7 @@ class DNSInterceptor:
         # Defensive: guarantee the reply's transaction ID matches the
         # original client request, regardless of what ID was used internally
         # to reach upstream. A mismatched ID makes the client silently
-        # discard the reply — indistinguishable from a timeout.
+        # discard the reply - indistinguishable from a timeout.
         if response:
             response = _fix_transaction_id(response, request.id)
 
@@ -483,7 +483,7 @@ class DNSInterceptor:
 
     def _answer_ips(self, response_wire: bytes) -> list[str]:
         """Every A/AAAA answer IP in a wire response. Parse failures return
-        [] (fail-open — worst case is a missed resolution-log entry, never a
+        [] (fail-open - worst case is a missed resolution-log entry, never a
         crash on the reply path)."""
         try:
             msg = dns.message.from_wire(response_wire)
@@ -499,7 +499,7 @@ class DNSInterceptor:
 
     def _cname_targets(self, response_wire: bytes) -> list[str]:
         """Parse the CNAME target chain out of a DNS answer. Pure of policy;
-        parse failures return [] (fail-open — can only ever add blocks)."""
+        parse failures return [] (fail-open - can only ever add blocks)."""
         try:
             msg = dns.message.from_wire(response_wire)
         except Exception:
@@ -518,15 +518,15 @@ class DNSInterceptor:
         reason) to block on; else None.
 
         Each CNAME target is judged by the SAME criteria a queried name would
-        be — a curated known-cloaking-tracker set first, then threat-intel,
-        scanner and blocklist — so uncloaking adds no false-positive surface
+        be - a curated known-cloaking-tracker set first, then threat-intel,
+        scanner and blocklist - so uncloaking adds no false-positive surface
         beyond what those already decide. A CNAME that stays within the queried
         site's own registrable domain is skipped unless the target is itself a
         known tracker apex.
         """
         for target in self._cname_targets(response_wire):
             # First-party internal CNAME (a.brand.com -> b.brand.com) is not
-            # cloaking — skip, unless the target is a known tracker apex anyway.
+            # cloaking - skip, unless the target is a known tracker apex anyway.
             if same_registrable(qname, target) and matches_cname_tracker(target) is None:
                 continue
 
@@ -568,7 +568,7 @@ class DNSInterceptor:
         intel = self._intelligence
 
         # Queue the domain for background page-content analysis. This is O(1)
-        # and cannot raise — the fetch happens on a worker thread, never here,
+        # and cannot raise - the fetch happens on a worker thread, never here,
         # because this function is synchronous with a live DNS query waiting on
         # it. A verdict therefore informs LATER lookups, not this one.
         #
@@ -579,13 +579,13 @@ class DNSInterceptor:
             self._content_watch.observe(domain)
 
         # NO human-authored allow/block list is ever consulted. There is no
-        # "user:always_allow" / "user:always_block" verdict — Valkyrie ANALYSES
+        # "user:always_allow" / "user:always_block" verdict - Valkyrie ANALYSES
         # every domain and decides for itself. What follows is pure analysis:
         # threat-intel IOC feeds, the learned intelligence layer, then the site
         # scanner. (The engine's own analysis-driven auto-blocks are enforced
         # through the intelligence memory at stage 2 below, not through a list.)
 
-        # 1. Threat-intel IOC feeds — highest-confidence signal. Checked before
+        # 1. Threat-intel IOC feeds - highest-confidence signal. Checked before
         #    the intelligence fast path so a learned known-good domain that
         #    appears in a C2/malware feed still blocks (compromised-infra case).
         ti = self._threat_intel
@@ -606,7 +606,7 @@ class DNSInterceptor:
             if verdict == "bad":
                 reason = intel.memory_reason(domain) or "learned threat"
                 # A tracker/telemetry domain must never be served as a hard THREAT
-                # from memory — in Standard profile it is DECEIVED (decoy dead-end).
+                # from memory - in Standard profile it is DECEIVED (decoy dead-end).
                 # Belt-and-suspenders alongside the startup purge: covers a bad
                 # verdict still resident this session or matched via a bad parent.
                 from .decision import reason_denotes_deceivable, should_deceive
@@ -622,14 +622,14 @@ class DNSInterceptor:
             result = self._scanner.analyze(domain, proc.name)
             if result.decision == "block":
                 reason = "; ".join(result.reasons)
-                # Tracker/telemetry in Standard profile → DECEIVE (decoy dead-end
+                # Tracker/telemetry in Standard profile -> DECEIVE (decoy dead-end
                 # so the app keeps working) instead of a hard block. Stricter
                 # profiles fall through and hard-block.
                 from .decision import should_deceive
                 if should_deceive(result.category, _current_profile()):
                     # Do NOT remember_block a deceived domain. The intelligence
                     # fast path (stage 2b) only stores "bad" and would hard-BLOCK
-                    # every subsequent lookup — flipping deception into a block on
+                    # every subsequent lookup - flipping deception into a block on
                     # the very next query (the duplicate deceived+blocked pair seen
                     # in testing, e.g. an A then AAAA for the same tracker). Left
                     # unremembered, each lookup re-flows through the scanner, which
@@ -641,7 +641,7 @@ class DNSInterceptor:
                 return "blocked", reason, result.confidence, result.category
             if result.decision == "flag":
                 return "flagged", "; ".join(result.reasons), result.confidence, result.category
-            # Scanner says "allow" — fall through to strict/anomaly checks below
+            # Scanner says "allow" - fall through to strict/anomaly checks below
             score = result.confidence
         else:
             # Fallback: legacy blocklist + behavioral (when scanner not wired in)
@@ -655,7 +655,7 @@ class DNSInterceptor:
                     intel.remember_block(domain, beh_reason)
                 return "behavioral", beh_reason, score, "behavioral"
 
-        # 3b. Blocklist on top of scanner "allow" — since the cutover to the
+        # 3b. Blocklist on top of scanner "allow" - since the cutover to the
         #     built-in seed list this is always enforced (the seed is small,
         #     curated, and safe); --strict is therefore implied nowadays.
         if self._blocklist.is_blocked(domain):
@@ -663,7 +663,7 @@ class DNSInterceptor:
                 intel.remember_block(domain, "blocklist")
             return "blocked", "blocklist", 1.0, "blocklist"
 
-        # 3c. Threat classifier — behavioural intelligence on top of the
+        # 3c. Threat classifier - behavioural intelligence on top of the
         #     list-based checks.  Blocks feed memory + threat graph so the
         #     next hit takes the fast path and related infra is caught.
         if intel is not None:
@@ -785,7 +785,7 @@ class DNSInterceptor:
                   f"({self._upstream_host}:{self._upstream_port}), no external fallback")
 
         for upstream, port in servers:
-            # ── UDP ──────────────────────────────────────────────────────────
+            # --- UDP ---
             if self._debug:
                 print(f"  → forwarding {qname} to {upstream}:{port} (UDP)")
             sock = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
@@ -805,7 +805,7 @@ class DNSInterceptor:
                 except Exception:
                     pass
 
-            # ── TCP (DNS-over-TCP: 2-byte length prefix) ──────────────────
+            # --- TCP (DNS-over-TCP: 2-byte length prefix) ---
             if self._debug:
                 print(f"  → forwarding {qname} to {upstream}:{port} (TCP)")
             sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)

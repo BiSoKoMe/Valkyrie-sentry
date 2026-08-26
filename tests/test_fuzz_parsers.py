@@ -1,14 +1,14 @@
-"""Tier 2.10 — every parser survives hostile input.
+"""Tier 2.10 - every parser survives hostile input.
 
 This is the CrowdStrike lesson taken literally. On 2024-07-19 CrowdStrike bricked
 about 8.5 million machines because a **content parser read out of bounds on a
-malformed input file** running in kernel mode. Not a clever exploit — a parser
+malformed input file** running in kernel mode. Not a clever exploit - a parser
 that trusted its input's shape. Valkyrie parses plenty of attacker-influenced
 data (event XML, hostile web pages, a kernel ring buffer, YAML from disk) and
 had no malformed-input tests anywhere.
 
 The contract asserted here is deliberately weak, and that is the point. We do
-**not** assert a parser returns the right answer for garbage — there is no right
+**not** assert a parser returns the right answer for garbage - there is no right
 answer for garbage. We assert only what must hold for every input in the
 universe:
 
@@ -21,7 +21,7 @@ A parser that returns `{}` for nonsense is fine. A parser that raises
 is a crash in the DNS or telemetry path, and that is what this hunts.
 
 No `hypothesis` dependency: the generators are seeded, so a failure reproduces
-exactly from the printed seed. Reproducibility beats exploration for a CI gate —
+exactly from the printed seed. Reproducibility beats exploration for a CI gate -
 a fuzz failure nobody can re-run is a fuzz failure nobody fixes.
 """
 
@@ -42,11 +42,11 @@ SEED = 20260729
 # a denial-of-service surface, not merely slow.
 _HANG_SECONDS = 2.0
 # Default is the fast local pass (~10s). CI runs the full 10,000 per parser that
-# TEST_PLAN tier 2 requires — ~51s for all 110k inputs — via an explicit argv.
+# TEST_PLAN tier 2 requires - ~51s for all 110k inputs - via an explicit argv.
 _ITERATIONS = int(sys.argv[1]) if len(sys.argv) > 1 else 2000
 
 
-# ── Hostile input generators ────────────────────────────────────────────────
+# --- Hostile input generators ---
 
 _EVIL_SNIPPETS = (
     "", " ", "\x00", "\x00" * 64, "￿", "\ud800", "%s%s%s%n", "../../etc/passwd",
@@ -58,11 +58,11 @@ _EVIL_SNIPPETS = (
 
 # Structured attacks that specifically target XML parsers.
 _XML_BOMBS = (
-    # billion laughs — entity expansion
+    # billion laughs - entity expansion
     '<?xml version="1.0"?><!DOCTYPE l [<!ENTITY a "aaaaaaaaaa">'
     '<!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">'
     '<!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">]><Event>&c;</Event>',
-    # external entity — must not fetch anything
+    # external entity - must not fetch anything
     '<?xml version="1.0"?><!DOCTYPE l [<!ENTITY x SYSTEM "file:///etc/passwd">]>'
     '<Event><System>&x;</System></Event>',
     '<?xml version="1.0"?><!DOCTYPE l SYSTEM "http://169.254.169.254/latest/">'
@@ -151,7 +151,7 @@ def _rand_yaml(rng: random.Random) -> str:
     return rng.choice(shapes)
 
 
-# ── The fuzz driver ─────────────────────────────────────────────────────────
+# --- The fuzz driver ---
 
 def _fuzz(c: Checks, label: str, fn, gen, n: int, allowed=()) -> None:
     """Run *fn* over *n* generated inputs; record one check for the whole run.
@@ -171,7 +171,7 @@ def _fuzz(c: Checks, label: str, fn, gen, n: int, allowed=()) -> None:
             fn(payload)
         except allowed:
             pass
-        except BaseException as exc:            # noqa: BLE001 — that is the test
+        except BaseException as exc:            # noqa: BLE001 - that is the test
             failure = (i, type(exc).__name__, str(exc)[:120], repr(payload)[:220])
             break
         finally:
@@ -200,14 +200,14 @@ def main() -> int:
     print(f"seed={SEED}  iterations={_ITERATIONS} per parser "
           f"(pass a count as argv[1] to change)\n")
 
-    # 1. Windows event XML — attacker-influenced, and the closest analogue to
+    # 1. Windows event XML - attacker-influenced, and the closest analogue to
     #    the CrowdStrike channel-file parser.
     from valkyrie.etw.wineventlog import parse_event_xml, record_id_of
     print("[1] etw/wineventlog")
     _fuzz(c, "parse_event_xml", parse_event_xml, _rand_xml, _ITERATIONS)
     _fuzz(c, "record_id_of", record_id_of, _rand_xml, _ITERATIONS)
 
-    # 2. Hostile web pages — this parser reads pages chosen by an attacker by
+    # 2. Hostile web pages - this parser reads pages chosen by an attacker by
     #    design, so it is the most exposed parser in the product.
     from valkyrie.site_analyzer import analyze_content, third_party_hosts
     print("\n[2] site_analyzer")
@@ -216,7 +216,7 @@ def main() -> int:
     _fuzz(c, "third_party_hosts", lambda s: third_party_hosts(s, "x.test"),
           _rand_text, _ITERATIONS)
 
-    # 3. SIEM serialisers — a malformed field must not corrupt a record or
+    # 3. SIEM serialisers - a malformed field must not corrupt a record or
     #    escape the format (CEF injection).
     from valkyrie.siem import (format_cef, format_jsonl, incident_record,
                                dns_block_record)
@@ -226,14 +226,14 @@ def main() -> int:
     _fuzz(c, "incident_record", incident_record, _rand_record, _ITERATIONS)
     _fuzz(c, "dns_block_record", dns_block_record, _rand_record, _ITERATIONS)
 
-    # 4. Kernel ring buffer — raw bytes from kernel mode. This is literally the
+    # 4. Kernel ring buffer - raw bytes from kernel mode. This is literally the
     #    CrowdStrike shape: a binary record parsed in the trusted path.
     from valkyrie.kernel_bridge import record_to_event, parse_records
     print("\n[4] kernel_bridge")
     _fuzz(c, "record_to_event", record_to_event, _rand_bytes, _ITERATIONS)
     _fuzz(c, "parse_records", parse_records, _rand_bytes, _ITERATIONS)
 
-    # 5. YAML loaders — playbooks come off disk and drive automated response.
+    # 5. YAML loaders - playbooks come off disk and drive automated response.
     #    An unsafe loader here is remote code execution with extra steps.
     from valkyrie.edr.playbooks import _parse_playbook
     print("\n[5] playbook parsing")
@@ -270,13 +270,13 @@ def main() -> int:
         pbf.write_text(_rand_yaml(rng), encoding="utf-8", errors="replace")
         try:
             PlaybookEngine(None, path=pbf).load()
-        except BaseException as exc:      # noqa: BLE001 — that is the test
+        except BaseException as exc:      # noqa: BLE001 - that is the test
             engine_failure = f"{type(exc).__name__}: {str(exc)[:100]}"
             break
     c.check(f"PlaybookEngine.load survives a hostile playbook file "
             f"({engine_failure or 'no exception'})", engine_failure is None)
 
-    # 6. The YAML loader must be safe_load, not load — assert it directly rather
+    # 6. The YAML loader must be safe_load, not load - assert it directly rather
     #    than hoping the fuzzer stumbles onto the object-instantiation tag.
     print("\n[6] YAML deserialisation is not a code-execution primitive")
     import yaml

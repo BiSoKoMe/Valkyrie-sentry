@@ -1,15 +1,15 @@
-"""Tests for process_watcher.py — the port -> process attribution table.
+"""Tests for process_watcher.py - the port -> process attribution table.
 
 Why this module deserves its own tests: every DNS event Valkyrie records is
 labelled with the process that made the query, and that label comes from here.
-Downstream, *everything* treats it as ground truth — the EDR correlates on it,
+Downstream, *everything* treats it as ground truth - the EDR correlates on it,
 behavioural rules key on parent/child names, the UI shows it to the analyst.
 A wrong answer here is not a wrong answer in one place, it is a wrong answer
 everywhere, presented with full confidence.
 
 The bug this file was written around (verified, not assumed): `_refresh_loop`
 had no exception guard. `_build_table()` reaches into psutil, /proc parsing and
-Windows APIs, all of which raise transiently — a process exiting mid-enumeration
+Windows APIs, all of which raise transiently - a process exiting mid-enumeration
 is completely routine. One such raise killed the refresh thread permanently,
 froze the table at its last contents, and left `lookup()` confidently returning
 whichever process happened to own that port at the moment of death, forever,
@@ -17,7 +17,7 @@ with nothing anywhere indicating it had stopped working.
 
 That is the same shape as the frozen heartbeat found earlier in this codebase:
 a background thread dying quietly and leaving a stale-but-plausible value that
-reads as healthy. So the tests here assert both halves of the fix — the thread
+reads as healthy. So the tests here assert both halves of the fix - the thread
 must SURVIVE, and when data does go stale the module must ADMIT it rather than
 answer from a frozen table.
 """
@@ -46,7 +46,7 @@ def main() -> int:
     orig_build, orig_system = pw._build_table, pw._SYSTEM
 
     try:
-        # ── The refresh thread must survive a raising table build ────────
+        # --- The refresh thread must survive a raising table build ---
         print("\n[1] REGRESSION: one exception must not kill the refresh thread")
         calls = {"n": 0}
 
@@ -76,7 +76,7 @@ def main() -> int:
                 w.lookup("1.2.3.4", 1111).name != "proc1.exe")
         w.stop()
 
-        # ── Stale data must be admitted, not served ─────────────────────
+        # --- Stale data must be admitted, not served ---
         print("\n[2] a frozen table must ADMIT it, not answer from stale data")
         pw._SYSTEM = "Linux"          # bypass the Windows heuristic fallback
         pw._build_table = lambda: {("1.2.3.4", 1111):
@@ -98,7 +98,7 @@ def main() -> int:
         c.check("lookup returns UNKNOWN rather than the stale process name",
                 w2.lookup("1.2.3.4", 1111).name != "real.exe")
 
-        # ── Lifecycle contract (needed by the component registry) ────────
+        # --- Lifecycle contract (needed by the component registry) ---
         print("\n[3] lifecycle contract for the registry + watchdog")
         c.check("exposes start()", callable(getattr(w2, "start", None)))
         c.check("exposes stop()", callable(getattr(w2, "stop", None)))
@@ -115,7 +115,7 @@ def main() -> int:
                 w2.is_running() is True)
         w2.stop()
 
-        # ── start() must not explode if the first build fails ───────────
+        # --- start() must not explode if the first build fails ---
         print("\n[4] a failing first build must not break startup")
 
         def always_raises():

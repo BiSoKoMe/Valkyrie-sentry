@@ -1,8 +1,8 @@
-"""CNAME-cloak uncloaking — the modern tracker-evasion countermeasure.
+"""CNAME-cloak uncloaking - the modern tracker-evasion countermeasure.
 
 The single biggest way trackers evade DNS blocklists today is **CNAME cloaking**.
-A site publishes a *first-party-looking* subdomain — e.g. ``metrics.brand.com`` —
-as a CNAME to the tracker's own domain — e.g. ``brand.eulerian.net``. To every
+A site publishes a *first-party-looking* subdomain - e.g. ``metrics.brand.com`` -
+as a CNAME to the tracker's own domain - e.g. ``brand.eulerian.net``. To every
 DNS blocklist the queried name is ``metrics.brand.com``, which looks first-party
 and is on no list; the answer IP is just the tracker's CDN, in no IP blocklist.
 The tracker rides in on the CNAME chain, unseen. Criteo, Adobe (Experience
@@ -11,7 +11,7 @@ ship this as a product.
 
 Top-tier blockers (uBlock Origin, NextDNS, AdGuard) defeat it by **uncloaking**:
 resolve the CNAME chain and apply the block decision to the *targets*, not just
-the queried name. This module is the pure, list-driven core of that — the DNS
+the queried name. This module is the pure, list-driven core of that - the DNS
 interceptor feeds it the CNAME targets parsed from an upstream answer and blocks
 the reply if any target is a known first-party-disguised tracker (or trips the
 normal scanner/blocklist/threat-intel checks).
@@ -27,7 +27,7 @@ from typing import Optional
 
 # Curated apex domains of the well-known CNAME-cloaking tracker providers.
 # These are almost never seen as a *queried* name (so they rarely appear on a
-# general adblock domain list) — they exist only as CNAME targets behind a
+# general adblock domain list) - they exist only as CNAME targets behind a
 # customer's first-party subdomain, which is exactly why uncloaking is needed to
 # catch them. Sourced from the widely-used AdGuard / NextDNS "CNAME-cloaked
 # trackers" sets; this is a seed that grows the same way a blocklist does.
@@ -82,11 +82,11 @@ def matches_cname_tracker(host: str) -> Optional[str]:
 def same_registrable(a: str, b: str) -> bool:
     """Cheap check that two hosts share the last two labels (registrable-ish).
 
-    Used only to skip the *first-party* CNAME case (``www.brand.com`` →
-    ``brand.com.edgekey.net`` shares nothing, but ``a.brand.com`` →
+    Used only to skip the *first-party* CNAME case (``www.brand.com`` ->
+    ``brand.com.edgekey.net`` shares nothing, but ``a.brand.com`` ->
     ``b.brand.com`` does): a CNAME that stays within the queried site's own
     last-two-labels is not cloaking. This is a conservative helper, not a real
-    PSL lookup — it only ever *suppresses* a match, and the curated tracker set
+    PSL lookup - it only ever *suppresses* a match, and the curated tracker set
     is checked independently, so it cannot cause a tracker to be missed.
     """
     ha, hb = _norm(a).split("."), _norm(b).split(".")

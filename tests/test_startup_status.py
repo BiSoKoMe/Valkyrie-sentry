@@ -1,17 +1,17 @@
-"""Tier 3.16 (partial) — the startup status box tells the truth.
+"""Tier 3.16 (partial) - the startup status box tells the truth.
 
 `__main__.py` is 855 statements at 0% coverage, and `main()` alone is ~1,300
 lines. TEST_PLAN says not to test the god function but to extract from it,
 because the function is the bug. This file covers the first extraction:
 `build_status_rows` / `protection_state`.
 
-That piece was chosen first because it is not merely convenient — it is the
+That piece was chosen first because it is not merely convenient - it is the
 screen that tells a user whether they are protected. A row that renders green
 for a component that failed to start is the same class of failure as a
 heartbeat stuck on healthy: the user reads ACTIVE and behaves accordingly.
 
 The rest of the extraction is deliberately not done blind. See the tier 3.16
-note in docs/TEST_PLAN.md — the startup path binds DNS ports and rewrites
+note in docs/TEST_PLAN.md - the startup path binds DNS ports and rewrites
 firewall rules, so no extraction of it can be *executed* on a developer host to
 prove behaviour was preserved, and an unverified refactor of the entry point
 trades a documented structural problem for an undetected functional one.
@@ -47,7 +47,7 @@ def _label(rows, name):
 def main() -> int:
     c = Checks("startup status", expect_min=20)
 
-    # ── The row that matters most: a DNS sinkhole that did not bind ─────────
+    # --- The row that matters most: a DNS sinkhole that did not bind ---
     print("[1] a component that failed to start must render RED")
     rows = build_status_rows(args=_args(), dns_server=None)
     dns = _label(rows, "DNS Sinkhole")
@@ -64,7 +64,7 @@ def main() -> int:
     c.check("a bound DNS sinkhole is ok", dns and dns[0] is True)
     c.check("and reports the actual port", dns and "5353" in dns[1])
 
-    # ── Disabled is not the same as failed ──────────────────────────────────
+    # --- Disabled is not the same as failed ---
     print("\n[2b] an expected-but-missing component renders RED, not absent")
     # The firewall is optional/non-fatal at startup, so it can be None. The
     # pre-extraction code called firewall.count() unconditionally and raised
@@ -94,7 +94,7 @@ def main() -> int:
             "(fallback row aside)",
             isinstance(protection_state(rows), str))
 
-    # ── The leak guard: the one row that is red by default, on purpose ──────
+    # --- The leak guard: the one row that is red by default, on purpose ---
     print("\n[4] DNS leak guard reflects fail-closed vs fallback")
     rows = build_status_rows(args=_args(), dns_server=object(),
                              allow_external_fallback=False)
@@ -110,7 +110,7 @@ def main() -> int:
     c.check("fallback alone is enough to read DEGRADED",
             protection_state(rows) == "DEGRADED")
 
-    # ── Optional components appear only when present ────────────────────────
+    # --- Optional components appear only when present ---
     print("\n[5] optional components appear only when actually wired")
     rows = build_status_rows(args=_args(), dns_server=object())
     for absent in ("MAC Random", "TLS Inspect", "Heartbeat", "EDR",
@@ -140,18 +140,37 @@ def main() -> int:
     c.check("the dashboard row uses the configured web port",
             "8099" in _label(rows, "Dashboard")[1])
 
-    # Learning mode must be reported as learning, not as a threat count of 0 —
+    # Learning mode must be reported as learning, not as a threat count of 0 -
     # "0 threats learned" would read as broken rather than as still-training.
+    #
+    # STALE-CONTRACT FIX: this used to assert on learning_day/learning_days_total
+    # and "day 3". Intelligence stopped reporting progress in DAYS some time ago
+    # and now reports it in observed behaviour PAIRS
+    # (intelligence/__init__.py: learning_observed / learning_target /
+    # learning_percent). The test kept passing its own obsolete keys, so it was
+    # asserting against a contract nothing produces - and the day it finally
+    # ran, it surfaced as a KeyError in build_status_rows rather than as the
+    # stale test it actually was. Keys now match what the module really emits.
     rows = build_status_rows(
         args=_args(), dns_server=object(),
         intelligence=SimpleNamespace(status=lambda: {
             "learning": True, "threats_learned": 0,
-            "learning_day": 3, "learning_days_total": 7}))
+            "learning_observed": 300, "learning_target": 1000,
+            "learning_percent": 30}))
     intel = _label(rows, "Intelligence")
     c.check("learning mode says 'learning', not '0 threats'",
-            "learning" in intel[1] and "day 3" in intel[1])
+            "learning" in intel[1] and "300/1000" in intel[1])
 
-    # ── protection_state is a strict AND over the rows ──────────────────────
+    # And a PARTIAL status dict degrades this one row instead of taking the
+    # whole panel down - the failure mode that hid the stale contract above.
+    rows = build_status_rows(
+        args=_args(), dns_server=object(),
+        intelligence=SimpleNamespace(status=lambda: {"learning": True}))
+    intel = _label(rows, "Intelligence")
+    c.check("a status dict missing keys degrades one row, never raises",
+            intel is not None and "learning" in intel[1])
+
+    # --- protection_state is a strict AND over the rows ---
     print("\n[6] protection_state is strict")
     c.check("all-ok reads ACTIVE",
             protection_state([("a", True, ""), ("b", True, "")]) == "ACTIVE")

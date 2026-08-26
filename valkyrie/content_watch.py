@@ -1,8 +1,8 @@
-"""Background page-content analysis — the analyst's eye, running continuously.
+"""Background page-content analysis - the analyst's eye, running continuously.
 
 WHAT THIS FIXES
 ---------------
-``site_analyzer.py`` already scores a page by what it actually *does* —
+``site_analyzer.py`` already scores a page by what it actually *does* -
 cryptominers, fingerprinting scripts, packed/obfuscated JS, phishing forms,
 hidden iframes, tracker density. That is genuine analysis, and unlike a
 blocklist it works on a domain nobody has ever seen before, because it
@@ -18,7 +18,7 @@ resolved and analyses their content in the background.
 
 WHY IT IS ASYNCHRONOUS (this is not an optimisation, it is a requirement)
 ------------------------------------------------------------------------
-``DNSInterceptor._decide`` is synchronous — a real DNS query is blocked
+``DNSInterceptor._decide`` is synchronous - a real DNS query is blocked
 waiting on it. Content analysis needs an HTTP fetch, which takes up to
 ``timeout`` seconds. Calling it inline would add seconds of latency to
 every first lookup of every new domain, which would make browsing unusable
@@ -37,19 +37,19 @@ exactly the kind of signal that could do it a third time. A page is *not*
 auto-blocked just because it scored badly. Only categories where a false
 positive is close to impossible can auto-block:
 
-  * ``miner`` — an in-page cryptominer is essentially never legitimate.
+  * ``miner`` - an in-page cryptominer is essentially never legitimate.
 
 Everything else is recorded as EVIDENCE and surfaced, but never sinkholes
 a site on its own:
 
-  * ``fingerprinting`` — **banks and payment processors fingerprint
+  * ``fingerprinting`` - **banks and payment processors fingerprint
     deliberately, for fraud detection.** Auto-blocking this would recreate
     the world-banks incident precisely.
-  * ``malware`` (obfuscation) — minifiers and packers are everywhere on
+  * ``malware`` (obfuscation) - minifiers and packers are everywhere on
     legitimate sites.
-  * ``phishing`` — good signal, but wrongly blocking a real site is worse
+  * ``phishing`` - good signal, but wrongly blocking a real site is worse
     than missing one, per this product's stated asymmetry.
-  * tracker density — informational only; a site's own CDN counts as
+  * tracker density - informational only; a site's own CDN counts as
     third-party, so it is far too noisy to act on.
 
 Popular domains are never analysed at all: they carry the highest FP cost
@@ -65,13 +65,13 @@ from typing import Optional
 
 from .popular_domains import is_popular
 
-# Categories permitted to auto-block. Deliberately minimal — see the
+# Categories permitted to auto-block. Deliberately minimal - see the
 # false-positive policy in the module docstring before adding to this.
 AUTO_BLOCK_CATEGORIES = frozenset({"miner"})
 
 _MAX_QUEUE = 256          # bounded: a lookup storm must not grow memory
 _MAX_CACHE = 2048         # bounded LRU of completed verdicts
-_MIN_INTERVAL = 1.0       # seconds between fetches — never hammer a host
+_MIN_INTERVAL = 1.0       # seconds between fetches - never hammer a host
 
 
 class ContentWatcher:
@@ -120,7 +120,7 @@ class ContentWatcher:
         return bool(self._running and t is not None and t.is_alive())
 
     # ------------------------------------------------------------------
-    # Hot path — called from _decide. MUST be O(1) and MUST NOT raise.
+    # Hot path - called from _decide. MUST be O(1) and MUST NOT raise.
     # ------------------------------------------------------------------
 
     def observe(self, domain: str) -> None:
@@ -169,7 +169,7 @@ class ContentWatcher:
                 time.sleep(self._min_interval)     # be a good citizen
             except BaseException:
                 # A worker that dies silently would leave the feature looking
-                # enabled while analysing nothing — the exact failure mode this
+                # enabled while analysing nothing - the exact failure mode this
                 # codebase keeps finding. Never let the loop exit on an error.
                 self._errors += 1
                 time.sleep(1.0)
@@ -198,7 +198,7 @@ class ContentWatcher:
         decision = getattr(v, "decision", "") or ""
         reasons = "; ".join(getattr(v, "reasons", []) or [])
 
-        # Auto-block is deliberately narrow — see the module docstring.
+        # Auto-block is deliberately narrow - see the module docstring.
         if (self._auto_block and decision == "block"
                 and category in AUTO_BLOCK_CATEGORIES and not is_popular(domain)):
             self._blocked += 1

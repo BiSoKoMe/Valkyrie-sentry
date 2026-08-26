@@ -1,31 +1,31 @@
-"""Component platform — the uniform plugin contract over every subsystem.
+"""Component platform - the uniform plugin contract over every subsystem.
 
 Valkyrie's subsystems (DNS, firewall, threat-intel, SIEM, EDR, sensors,
-ransomware shield, playbooks, …) each already have lifecycle and their own
+ransomware shield, playbooks, ...) each already have lifecycle and their own
 ad-hoc ``status()``/``stats()`` shape. This module gives them ONE contract
 without rewriting any of them:
 
-    register → health → metrics → config → restart → events
+    register -> health -> metrics -> config -> restart -> events
 
 A :class:`Component` is a thin *adapter* around an existing service object.
 It introspects the service for the methods it already has
 (``available``/``is_healthy``/``is_running``/``status``/``stats``/
 ``start``/``stop``) and presents a normalized surface. Nothing about the
-wrapped service changes — this is composition, not inheritance, so it never
+wrapped service changes - this is composition, not inheritance, so it never
 duplicates a detection engine, database, or API.
 
 The :class:`ComponentRegistry` is the plugin host:
 
-  * **Fault isolation** — a component whose ``health()``/``metrics()`` raises
+  * **Fault isolation** - a component whose ``health()``/``metrics()`` raises
     is reported as ``error`` state; it can never crash the registry or the
     engine (the same guarantee the EventBus gives subscribers).
-  * **Event-driven** — health-state transitions publish a ``component`` event
+  * **Event-driven** - health-state transitions publish a ``component`` event
     onto the shared EventBus, so the dashboard/WebSocket and any future
     correlation can react to a subsystem degrading in real time.
-  * **Independent restart** — ``restart(name)`` stops and starts a single
+  * **Independent restart** - ``restart(name)`` stops and starts a single
     component without touching the others (used by the API and, optionally,
     by the self-heal watchdog as its recover action).
-  * **Uniform observability** — ``snapshot()`` returns every component's
+  * **Uniform observability** - ``snapshot()`` returns every component's
     kind, health, metrics, and config in one shape for ``/api/components``.
 
 This is the seam the platform vision (docs/ARCHITECTURE.md) calls the plugin
@@ -40,8 +40,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-# Health states, ordered worst→best for aggregation.
-STATE_ERROR = "error"        # health probe itself raised — unknown/bad
+# Health states, ordered worst->best for aggregation.
+STATE_ERROR = "error"        # health probe itself raised - unknown/bad
 STATE_DOWN = "down"          # wired but not running/healthy
 STATE_DEGRADED = "degraded"  # running but self-reported unhealthy
 STATE_DISABLED = "disabled"  # not applicable on this host (available()==False)
@@ -66,8 +66,8 @@ class Component:
 
     Args:
         name: stable component id (matches AppContext field names where possible).
-        service: the wrapped object (may be None → reported ``down``).
-        kind: category for the UI ("sensor", "network", "detection", …).
+        service: the wrapped object (may be None -> reported ``down``).
+        kind: category for the UI ("sensor", "network", "detection", ...).
         health_fn/metrics_fn/config_fn: optional overrides; when absent the
             adapter introspects the service.
         restartable: force restart capability on/off; None = auto-detect
@@ -92,13 +92,13 @@ class Component:
         self.restartable = restartable
 
     # ------------------------------------------------------------------
-    # Health (never raises — the registry relies on this)
+    # Health (never raises - the registry relies on this)
     # ------------------------------------------------------------------
 
     def health(self) -> Health:
         try:
             return self._probe_health()
-        except Exception as exc:   # noqa: BLE001 — a bad probe is a health signal
+        except Exception as exc:   # noqa: BLE001 - a bad probe is a health signal
             return Health(STATE_ERROR, f"{type(exc).__name__}: {exc}")
 
     def _probe_health(self) -> Health:
@@ -107,7 +107,7 @@ class Component:
             return Health(STATE_DOWN, "not wired")
         if self._health_fn is not None:
             return self._health_fn()
-        # available() == False → the subsystem doesn't apply on this host.
+        # available() == False -> the subsystem doesn't apply on this host.
         avail = getattr(svc, "available", None)
         if callable(avail) and not avail():
             return Health(STATE_DISABLED, "not available on this host")
@@ -269,7 +269,7 @@ class ComponentRegistry:
         return {"name": name, **res}
 
     # ------------------------------------------------------------------
-    # Self-heal integration — register every restartable component so the
+    # Self-heal integration - register every restartable component so the
     # existing watchdog probes it and recovers via restart(). No new loop.
     # ------------------------------------------------------------------
 

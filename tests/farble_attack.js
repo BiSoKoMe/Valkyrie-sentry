@@ -19,7 +19,7 @@ const inner = fs.readFileSync(scriptPath, 'utf8')
 
 // Contextify an EMPTY object so the sandbox gets its OWN complete, fresh
 // intrinsics (Object, Function, WeakMap, Reflect...). Injecting the harness
-// realm's intrinsics instead would corrupt cross-realm toString/coercion — a
+// realm's intrinsics instead would corrupt cross-realm toString/coercion - a
 // mistake that makes '' + fn appear to leak when it does not.
 const sb = vm.createContext({});
 vm.runInContext(`

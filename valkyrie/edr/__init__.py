@@ -1,11 +1,11 @@
-"""Valkyrie EDR layer — detection, incidents, hunting, response, investigation.
+"""Valkyrie EDR layer - detection, incidents, hunting, response, investigation.
 
 Valkyrie already has excellent *sensors* (the DNS sinkhole, firewall answer-IP
 screening, the behavioural + self-learning intelligence engines). This package
 is the *SOC layer* on top of them: it turns that live signal into things a
-defender actually works with — correlated **incidents** with **timelines**,
+defender actually works with - correlated **incidents** with **timelines**,
 a **threat-hunting** query surface, audited **response** actions (local and,
-via the fleet, remote), and an **AI-assisted investigation** writeup — all
+via the fleet, remote), and an **AI-assisted investigation** writeup - all
 extensible through a **plugin architecture**.
 
 The single entry point is :class:`EdrEngine`. Everything else is a component it

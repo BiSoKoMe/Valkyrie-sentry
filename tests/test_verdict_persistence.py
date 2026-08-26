@@ -1,4 +1,4 @@
-"""Tier 1.8 — a false positive must never become a permanent verdict.
+"""Tier 1.8 - a false positive must never become a permanent verdict.
 
 `test_popular_domains.py` proves the floor and the self-heal purge behave at the
 API level (`check()` stops answering 'bad'). This file tests the layer beneath
@@ -7,17 +7,17 @@ that, which is where the damage actually persists: **the database row**.
 The distinction matters because the two failures look identical from `check()`
 and are completely different in practice:
 
-  * *masked* — the bad row is still on disk, and only a read-time guard stops it
+  * *masked* - the bad row is still on disk, and only a read-time guard stops it
     being served. Remove or reorder that guard, change the popular list, or read
     the table from any other code path (`export_intelligence`, the web API, a
     future feature) and the false positive is live again.
-  * *purged* — the row is gone. There is nothing left to leak.
+  * *purged* - the row is gone. There is nothing left to leak.
 
 ADR 0040 promises the second. These checks hold it to that, by reading the table
 directly rather than trusting the accessor that is supposed to protect it.
 
 The asymmetry is deliberate throughout: a wrongly-remembered benign domain must
-be erased, while a genuine threat must survive everything — restart, purge,
+be erased, while a genuine threat must survive everything - restart, purge,
 repeated `remember_good`. A self-heal that also forgets real threats would be a
 worse bug than the one it fixes.
 """
@@ -40,7 +40,7 @@ _THREAT = "evil-c2-xyz.example"
 
 
 def _rows(store) -> dict[str, str]:
-    """Read intel_memory directly — bypassing every read-time guard."""
+    """Read intel_memory directly - bypassing every read-time guard."""
     conn = store.connection()
     try:
         return {d: v for d, v in
@@ -66,7 +66,7 @@ def _insert_bad(store, domain: str, reason: str = "query burst") -> None:
 def main() -> int:
     c = Checks("verdict persistence", expect_min=18)
 
-    # ── 1. An FP is never WRITTEN, not merely never served ──────────────────
+    # --- 1. An FP is never WRITTEN, not merely never served ---
     print("\n[1] a popular domain is never written to the table at all")
     with tempfile.TemporaryDirectory() as td:
         store = Store(db_path=Path(td) / "a.db")
@@ -86,7 +86,7 @@ def main() -> int:
                 (mem.remember_bad(_POPULAR), _POPULAR not in _rows(store))[1])
         store.stop()
 
-    # ── 2. Self-heal DELETES the row, it does not merely mask it ────────────
+    # --- 2. Self-heal DELETES the row, it does not merely mask it ---
     print("\n[2] self-heal purges the row from disk, not just from the answer")
     with tempfile.TemporaryDirectory() as td:
         store = Store(db_path=Path(td) / "b.db")
@@ -115,7 +115,7 @@ def main() -> int:
                 mem3.check(_THREAT) == "bad")
         store.stop()
 
-    # ── 3. Defense in depth: a bad row must not be served even before purge ─
+    # --- 3. Defense in depth: a bad row must not be served even before purge -
     print("\n[3] a lingering bad row is never SERVED, even pre-purge")
     with tempfile.TemporaryDirectory() as td:
         store = Store(db_path=Path(td) / "c.db")
@@ -129,7 +129,7 @@ def main() -> int:
                 mem.check(_POPULAR) != "bad")
         store.stop()
 
-    # ── 4. A popular domain cannot be condemned via its parent ──────────────
+    # --- 4. A popular domain cannot be condemned via its parent ---
     print("\n[4] parent-domain matching cannot condemn a popular domain")
     with tempfile.TemporaryDirectory() as td:
         store = Store(db_path=Path(td) / "d.db")
@@ -143,7 +143,7 @@ def main() -> int:
                 mem.check("login." + _POPULAR) != "bad")
         store.stop()
 
-    # ── 5. Normalisation — an FP must not slip through on case or a dot ─────
+    # --- 5. Normalisation - an FP must not slip through on case or a dot ---
     print("\n[5] normalisation closes the case/trailing-dot bypass")
     with tempfile.TemporaryDirectory() as td:
         store = Store(db_path=Path(td) / "e.db")
@@ -157,7 +157,7 @@ def main() -> int:
                 not any("paypal" in d.lower() for d in rows))
         store.stop()
 
-    # ── 6. Good verdicts persist; bad is never downgraded ───────────────────
+    # --- 6. Good verdicts persist; bad is never downgraded ---
     # The regression lock for the check() bug found in tier 0: the popular-domain
     # guard used to discard 'good' as well as 'bad', killing the fast path for
     # exactly the highest-traffic domains.

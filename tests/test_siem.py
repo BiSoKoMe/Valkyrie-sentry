@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SIEM export — offline unit + transport + EDR integration tests.
+"""SIEM export - offline unit + transport + EDR integration tests.
 
   [1] CEF formatting: header escaping, severity scale, extension escaping
   [2] JSONL formatting: valid single-line JSON with vendor fields
@@ -109,7 +109,7 @@ def main() -> int:
     except socket.timeout:
         _check("datagram received as CEF (timeout)", False)
     # The datagram can arrive before the sender thread increments the
-    # counter — wait for the count rather than racing it.
+    # counter - wait for the count rather than racing it.
     _check("status counts the send",
            _wait(lambda: exp.status()["sent"] == 1)
            and exp.status()["errors"] == 0)

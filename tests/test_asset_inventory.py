@@ -2,14 +2,14 @@
 """Asset inventory (valkyrie/asset_inventory.py, CIS Controls #1/#2 +
 Clinton ch.9).
 
-  [1]   Real, read-only enumeration against THIS host — proves the module
+  [1]   Real, read-only enumeration against THIS host - proves the module
         actually works, not just that it doesn't crash on empty input.
   [2-3] Pure diff/collector logic against constructed (not live) snapshots,
         for determinism.
   [4]   Removals are never emitted (the safe direction of change).
   [5]   is_trusted_os_path labeling, reused from trust.py, not reimplemented.
   [6]   Reuses PersistenceCollector for boot_items WITHOUT re-diffing/
-        re-emitting that signal — persistence_telemetry already owns it.
+        re-emitting that signal - persistence_telemetry already owns it.
   [7]   The 'asset_change' pre-gate hook in ingest_telemetry(): reaches
         correlation, never alone raises a standalone incident.
   [8]   GET /api/asset-inventory.
@@ -93,7 +93,7 @@ def test_diff_snapshots() -> None:
 
 
 # ---------------------------------------------------------------------------
-# [3] AssetInventoryCollector.poll_once() — baseline seeding + emit-on-add
+# [3] AssetInventoryCollector.poll_once() - baseline seeding + emit-on-add
 # ---------------------------------------------------------------------------
 
 def test_collector_seeds_baseline_and_emits_on_add() -> None:

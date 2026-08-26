@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """EventBus primitive + its adoption by Store (ADR-0007).
 
-Covers the delivery contract the old hand-rolled loops relied on — best-effort,
-isolated, in-order, thread-safe — plus the new type-filtering capability, and
+Covers the delivery contract the old hand-rolled loops relied on - best-effort,
+isolated, in-order, thread-safe - plus the new type-filtering capability, and
 proves end-to-end that a committed Store event still reaches a subscriber over
 the bus (the wiring the refactor changed).
 """
@@ -98,7 +98,7 @@ def main() -> int:
     bus.subscribe(handler)
     stop = False
 
-    # Reuse ONE handler object so the subscriber list stays bounded — this
+    # Reuse ONE handler object so the subscriber list stays bounded - this
     # exercises the lock under concurrent add/remove without growing the list.
     def _noop(_e):
         pass

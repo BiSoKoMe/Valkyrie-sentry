@@ -43,6 +43,14 @@ datas = [
     ("valkyrie/web/launcher.html",  "valkyrie/web"),
     ("valkyrie/defaults/rules.default.yaml", "valkyrie/defaults"),   # factory default
     ("valkyrie/defaults/playbooks.default.yaml", "valkyrie/defaults"),  # default SOAR playbooks
+    # The benign corpus the false-positive gates measure against. It loads
+    # fail-soft (missing file -> "we know less"), so leaving it out of the
+    # bundle would not crash - it would silently ship a build whose FP gate is
+    # 40x weaker than the one that was tested. Bundled deliberately.
+    ("valkyrie/defaults/benign_corpus.elastic.json", "valkyrie/defaults"),
+    # Imported detection content (Elastic 2.0 + SigmaHQ DRL 1.1). Also loads
+    # fail-soft, so omitting it would ship an engine quietly missing 111 rules.
+    ("valkyrie/defaults/imported_rules.json", "valkyrie/defaults"),
 ]
 
 binaries = []

@@ -3,13 +3,13 @@
 A live VM run produced strong detection but a wall of false positives: Valkyrie
 flagged Windows Update, Windows Defender, Edge's updater, SmartScreen, its own
 installer, and every reverse-DNS lookup as suspicious. For this product a false
-positive is the cardinal sin — a lawyer drowning in scary alerts about Windows
+positive is the cardinal sin - a lawyer drowning in scary alerts about Windows
 Update cannot see the one real attack, and in blocking mode an FP breaks a real
 site or app.
 
 Every check here asserts the pair that matters: the legitimate thing is NO
 LONGER flagged, AND a real threat of the *same shape* still fires. A fix that
-only did the first half would be worse than the bug — it would be a hole.
+only did the first half would be worse than the bug - it would be a hole.
 
 The four classes, each traced to source:
   1. reverse-DNS / local names raising baseline-anomaly + beacon incidents
@@ -37,7 +37,7 @@ from valkyrie.telemetry import SEV_MEDIUM, severity_rank
 
 
 def _incident(severity: str, action: str = "observed") -> bool:
-    """Mirror engine.py:164 — an event alerts only at >= medium or flagged."""
+    """Mirror engine.py:164 - an event alerts only at >= medium or flagged."""
     return severity_rank(severity) >= severity_rank(SEV_MEDIUM) or action == "flagged"
 
 
@@ -49,7 +49,7 @@ def _dns_event(domain, cat, reason, decision="flagged"):
 def main() -> int:
     c = Checks("false positives", expect_min=25)
 
-    # ── The trust primitive it all rests on ─────────────────────────────
+    # --- The trust primitive it all rests on ---
     print("\n[0] trusted-path judgement (by path, never by name)")
     c.check("Windows dir is trusted", trust.is_trusted_os_path(r"C:\WINDOWS\servicing\TrustedInstaller.exe"))
     c.check("Defender platform is trusted",
@@ -64,7 +64,7 @@ def main() -> int:
     c.check("a user path is NOT trusted", not trust.is_trusted_os_path(r"C:\Users\x\AppData\Local\Temp\m.exe"))
     c.check("a look-alike is NOT trusted", not trust.is_trusted_os_path(r"C:\notwindows\system32x\e.exe"))
 
-    # ── Class 1: reverse-DNS anomaly + beacon ───────────────────────────
+    # --- Class 1: reverse-DNS anomaly + beacon ---
     print("\n[1] reverse-DNS / local names are not a threat signal")
     c.check("in-addr.arpa is infrastructure", is_infrastructure_domain("169.56.49.23.in-addr.arpa"))
     c.check("ip6.arpa is infrastructure", is_infrastructure_domain("a.b.c.ip6.arpa"))
@@ -79,7 +79,7 @@ def main() -> int:
     c.check("STILL FIRES: beacon incident for a real domain",
             len(b.analyze(_dns_event("bad.example.com", "intelligence", "beacon regular interval"), None)) == 1)
 
-    # threat-graph "shares infrastructure" — a reverse-DNS name must not inherit
+    # threat-graph "shares infrastructure" - a reverse-DNS name must not inherit
     # the whole PTR namespace as shared infra (found live: 0.65 on every
     # x.in-addr.arpa). A real sibling of a recorded threat must still relate.
     import threading as _th
@@ -95,7 +95,7 @@ def main() -> int:
     c.check("STILL FIRES: a real sibling of a recorded threat still relates",
             g.is_related("login.example.com") > 0.0)
 
-    # ── Class 2: OS-maintenance persistence ─────────────────────────────
+    # --- Class 2: OS-maintenance persistence ---
     print("\n[2] OS self-maintenance does not raise persistence incidents")
     legit = classify_sysmon(13, {"TargetObject": r"HKLM\...\CurrentVersion\Run\x",
                                  "Image": r"C:\WINDOWS\servicing\TrustedInstaller.exe",
@@ -118,7 +118,7 @@ def main() -> int:
     c.check("STILL FIRES: a user binary writing Startup IS an incident",
             _incident(startup_evil["severity"]))
 
-    # ── Class 3: signed OS binary scored as masquerade/obfuscation ──────
+    # --- Class 3: signed OS binary scored as masquerade/obfuscation ---
     print("\n[3] a signed OS binary is not masquerade or obfuscation")
     fp = score_process("CHXSmartScreen.exe", "services.exe",
                        "CHXSmartScreen.exe -ServerName:App.AppXblob0987654321==",
@@ -138,8 +138,8 @@ def main() -> int:
             _incident(ev["severity"]))
     # Encoded PowerShell is BOTH T1059.001 (EncodedCommand execution, now the
     # primary technique from the behavioral rule) AND T1027 (obfuscation, from
-    # the anomaly nose). The obfuscation technique must still be carried — on
-    # `technique` or in the preserved `all_techniques` union — not dropped
+    # the anomaly nose). The obfuscation technique must still be carried - on
+    # `technique` or in the preserved `all_techniques` union - not dropped
     # because a more specific rule claimed the primary slot.
     _ev_techs = (ev.get("technique") or "") + " " + " ".join(ev.get("all_techniques") or [])
     c.check("  ...and still carries the T1027 obfuscation technique",
@@ -151,7 +151,7 @@ def main() -> int:
     c.check("STILL FIRES: the SAME name in TEMP is still scored (path-gated, not name-gated)",
             any(s.name == "machine_generated_name" for s in masq.signals))
 
-    # ── Class 4: temp/download execution ────────────────────────────────
+    # --- Class 4: temp/download execution ---
     print("\n[4] temp/download execution is weak, not a standalone incident")
     sev, _, _ = classify_process("ValkyrieSetup.exe", r"c:/users/x/downloads/ValkyrieSetup.exe", "explorer.exe")
     c.check("SUPPRESSED: an installer in Downloads is not an incident", not _incident(sev))

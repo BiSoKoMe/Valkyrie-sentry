@@ -1,4 +1,4 @@
-"""Test the FirewallManager in isolation — no root/admin required for the
+"""Test the FirewallManager in isolation - no root/admin required for the
 in-process IP lookup checks.  Kernel rule installation is tested separately
 and will print a warning if privileges are missing.
 
@@ -60,7 +60,7 @@ def main() -> None:
     _check("reject IPv6",            _parse_cidr("::1")            is None)
 
     # ------------------------------------------------------------------
-    # 3. Protected ranges — must never be blocked
+    # 3. Protected ranges - must never be blocked
     # ------------------------------------------------------------------
     print("\n[3] Never-block ranges")
     _check("127.0.0.1 is protected",       _in_never_block("127.0.0.1"))
@@ -108,12 +108,12 @@ not-valid-line
     _check("count correct",          ipset.count() == 3)
 
     # ------------------------------------------------------------------
-    # 6. DoH IP coverage — TWO DIFFERENT SURFACES, do not conflate them.
+    # 6. DoH IP coverage - TWO DIFFERENT SURFACES, do not conflate them.
     #
     # This section previously asserted `fw.is_blocked_ip(ip)` for every DoH IP
     # and had been FAILING 7/10 since commit 5418a61 added the public-resolver
     # exemption. It went unnoticed because the whole file was being skipped on
-    # host-safety grounds — the §9 live-rule hazard caused the other 46 pure
+    # host-safety grounds - the §9 live-rule hazard caused the other 46 pure
     # checks to be skipped with it. The failure was in the test, not the code.
     #
     #   _ipset.contains(ip)  = ENFORCEMENT. Is this IP in the loaded blocked
@@ -169,7 +169,7 @@ not-valid-line
     _check("127.0.0.1 not in ipset",     not fw2.is_blocked_ip("127.0.0.1"))
 
     # ------------------------------------------------------------------
-    # 8. IP blocklist load — offline default, downloads opt-in
+    # 8. IP blocklist load - offline default, downloads opt-in
     # ------------------------------------------------------------------
     print("\n[8] IP blocklist load (downloads are opt-in)")
     try:
@@ -191,7 +191,7 @@ not-valid-line
         print(f"  [!] SKIP — opt-in download unavailable offline: {exc}")
 
     # ------------------------------------------------------------------
-    # 8b. netsh return-code gating (mocked — no live firewall touched)
+    # 8b. netsh return-code gating (mocked - no live firewall touched)
     #     Guards the silent-success bug: a failed netsh call must NOT be
     #     counted as an installed rule, and a full success must report the
     #     EXACT expected count (not just >0, which a partial install passes).
@@ -226,7 +226,7 @@ not-valid-line
         _fwmod._run = _orig_run
 
     # ------------------------------------------------------------------
-    # 8c. DNS answer-IP screening — the threat-intel CIDR enforcement path.
+    # 8c. DNS answer-IP screening - the threat-intel CIDR enforcement path.
     #     A domain the pipeline "allows" can still resolve to a blocked IP;
     #     _answer_blocked_ip() is what catches that on every platform.
     # ------------------------------------------------------------------
@@ -267,12 +267,12 @@ not-valid-line
         print(f"  [-] SKIP — dnspython not available: {exc}")
 
     # ------------------------------------------------------------------
-    # 9. Kernel rule installation (admin/root required — HOST-AFFECTING)
+    # 9. Kernel rule installation (admin/root required - HOST-AFFECTING)
     #
     # start() installs REAL `netsh` outbound-block rules (on Windows: the DoH
     # resolver IPs on TCP/443). If this process is interrupted between start()
     # and stop(), those rules persist and can break DNS/connectivity on the
-    # host — which is exactly why this section is OPT-IN. It is skipped unless
+    # host - which is exactly why this section is OPT-IN. It is skipped unless
     # VALKYRIE_TEST_LIVE_FIREWALL=1, so a routine `run_tests.py` can never take
     # a live machine offline. CI still exercises every pure-logic check above.
     # To run it deliberately (in a throwaway VM): set the env var.

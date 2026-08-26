@@ -1,9 +1,9 @@
-"""Tests for the MAC identity layer — the wifi half of "stop tracking me".
+"""Tests for the MAC identity layer - the wifi half of "stop tracking me".
 
 `test_mac.py` exists but is on the host-safety exclusion list, because parts of
 it touch real adapters. This file is the pure-logic half: everything here can
 run on any machine, in CI, without changing a single network interface. That
-split matters — it means the properties below are actually checked on every
+split matters - it means the properties below are actually checked on every
 run instead of being skipped indefinitely.
 
 What is asserted, and why each one is load-bearing:
@@ -51,7 +51,7 @@ _HEX_MAC = re.compile(r"^([0-9A-F]{2}:){5}[0-9A-F]{2}$")
 def main() -> int:
     c = Checks("mac identity", expect_min=20)
 
-    # ── Wire-legality of generated addresses ────────────────────────────
+    # --- Wire-legality of generated addresses ---
     print("\n[1] every generated address must be legal on the wire")
     macs = [generate_mac() for _ in range(300)]
     c.check("all generated MACs are well-formed",
@@ -63,7 +63,7 @@ def main() -> int:
     c.check("all are LOCALLY ADMINISTERED (not impersonating a real vendor OUI)",
             all(is_locally_administered(m) for m in macs))
 
-    # ── Randomness quality ──────────────────────────────────────────────
+    # --- Randomness quality ---
     print("\n[2] addresses must be unpredictable")
     c.check(f"300 generations produce 300 distinct addresses "
             f"(got {len(set(macs))})", len(set(macs)) == 300)
@@ -72,7 +72,7 @@ def main() -> int:
     c.check(f"the random payload is not repeating ({len(tails)} distinct tails)",
             len(tails) == 300)
 
-    # ── Vendor blend keeps the address legal ────────────────────────────
+    # --- Vendor blend keeps the address legal ---
     print("\n[3] vendor-blend mode is still wire-legal")
     blends = [generate_mac(vendor_blend=True) for _ in range(100)]
     c.check("blended MACs are well-formed", all(_is_valid_mac(m) for m in blends))
@@ -81,7 +81,7 @@ def main() -> int:
             "they sit behind a real OUI)",
             all(not is_locally_administered(m) for m in blends))
 
-    # ── The privacy claim: stable per network, unlinkable across ────────
+    # --- The privacy claim: stable per network, unlinkable across ---
     print("\n[4] THE privacy property: stable per network, unlinkable across")
     key_a = b"\x01" * 32
     home1 = mac_for_network(key_a, "wifi:HomeNet")
@@ -97,7 +97,7 @@ def main() -> int:
     c.check("per-network addresses are locally administered",
             all(is_locally_administered(m) for m in (home1, cafe, airport)))
 
-    # ── The key is what makes it unpredictable ──────────────────────────
+    # --- The key is what makes it unpredictable ---
     print("\n[5] the install key is what makes addresses unpredictable")
     key_b = b"\x02" * 32
     c.check("a DIFFERENT install key gives a different address for the same "
@@ -107,7 +107,7 @@ def main() -> int:
     c.check(f"200 networks -> 200 distinct addresses (got {len(many)})",
             len(many) == 200)
 
-    # ── REGRESSION: the install key must not be world-readable ──────────
+    # --- REGRESSION: the install key must not be world-readable ---
     # Found 2026-07-30: _load_or_create_key only chmod'd on POSIX
     # (`if os.name == "posix"`), so on Windows the key sat readable by
     # BUILTIN\Users. Anyone reading it can compute every address the machine
@@ -124,7 +124,7 @@ def main() -> int:
         ok2, _ = sf.verify(keyfile)
         c.check("verification confirms it is not world-readable", ok2 is True)
 
-    # ── REGRESSION: dash-separated MACs must not crash ──────────────────
+    # --- REGRESSION: dash-separated MACs must not crash ---
     # Windows reports MACs with dashes (ipconfig / getmac / the registry).
     # _is_valid_mac accepted them; is_unicast/is_locally_administered split on
     # ':' only and raised ValueError on the very format the validator allowed.
@@ -145,7 +145,7 @@ def main() -> int:
     c.check("dash and colon forms agree on the LA bit",
             dl == is_locally_administered(colon))
 
-    # ── Robustness ──────────────────────────────────────────────────────
+    # --- Robustness ---
     print("\n[8] malformed input is rejected, not crashed on")
     for bad in ("", "not-a-mac", "AA:BB:CC", "GG:HH:II:JJ:KK:LL",
                 "AA:BB:CC:DD:EE:FF:00"):

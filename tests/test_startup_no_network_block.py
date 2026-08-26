@@ -4,12 +4,12 @@
 WHY THIS EXISTS (the regression it pins)
 ----------------------------------------
 Enabling threat-feed downloads by default (USE_EXTERNAL_LISTS = True) is the
-right call for detection value — feeds that never run protect nobody. But the
+right call for detection value - feeds that never run protect nobody. But the
 first implementation left the fetch on the SYNCHRONOUS startup path, so the
 engine blocked on a ~500,000-domain download before it protected anything:
 
   * minutes of dead startup on a slow link, indistinguishable from a hang;
-  * up to 30s PER FEED of urllib timeout on an offline machine — and
+  * up to 30s PER FEED of urllib timeout on an offline machine - and
     offline/air-gapped is a target environment for this product, not an
     edge case;
   * `test_startup_smoke` went from 9/9 passing to timing out.

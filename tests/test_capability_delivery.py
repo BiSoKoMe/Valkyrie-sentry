@@ -1,18 +1,18 @@
 """Are the new capabilities actually DELIVERED in the real app, not just in
-a mocked unit test? — the gap test_startup_smoke.py leaves open for
+a mocked unit test? - the gap test_startup_smoke.py leaves open for
 anything added after it.
 
 Every test written for items 2-6 of the cybersecurity-analysis pass
 (control_taxonomy, coverage, MTTD/MTTR, impact, asset_inventory)
 constructs its own EdrEngine/AppContext/CoverageContext by hand, or patches
 `valkyrie.web.server.state` directly. That proves the LOGIC is correct. It
-cannot prove the WIRING is correct — that `__main__.py` actually
+cannot prove the WIRING is correct - that `__main__.py` actually
 instantiates `AssetInventoryCollector` with the right constructor args,
 that `AppContext` actually has an `asset_inventory` field, that
 `valkyrie.edr.impact` actually imports cleanly inside the real process,
 that the route decorators actually registered. A NameError or
 AttributeError in any of that is invisible to a test that never goes
-through the real composition root in `__main__.py` — which is exactly the
+through the real composition root in `__main__.py` - which is exactly the
 class of bug `test_startup_smoke.py`'s own docstring describes for
 *earlier* wiring, and exactly the class of bug the "Final" step of that
 pass (re-running `live_safe.py`) did NOT re-check: `live_safe.py` scores
@@ -20,7 +20,7 @@ Discovery-tactic detection only, using a REDUCED flag set, and never once
 polled any of the five endpoints this file exists to check.
 
 This boots ONE real, sandboxed engine (identical safety posture to
-`test_startup_smoke.py` — throwaway data dir, ephemeral port, DNS/firewall/
+`test_startup_smoke.py` - throwaway data dir, ephemeral port, DNS/firewall/
 resolver/Sysmon-install all disabled) and hits every endpoint those five
 items added or changed, checking both that they answer and, where the
 answer doesn't require a live incident, that the DATA is real and
@@ -67,8 +67,39 @@ def _free_port() -> int:
 
 
 def _get(url: str, timeout: float = 5.0):
-    with urllib.request.urlopen(url, timeout=timeout) as r:
-        return json.load(r), r.status
+    """Return (body, status) for ANY response, including errors.
+
+    This used to let urllib raise on a non-2xx, which made the returned `status`
+    unreachable for exactly the cases worth asserting on. A 503 from a subsystem
+    that was still warming up therefore surfaced as an unhandled HTTPError and
+    took the whole file down, instead of being a value the test could check.
+    """
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return json.load(r), r.status
+    except urllib.error.HTTPError as e:
+        try:
+            return json.load(e), e.code
+        except Exception:   # noqa: BLE001 — non-JSON error body
+            return {}, e.code
+
+
+def _get_ready(url: str, tries: int = 30, delay: float = 2.0,
+               timeout: float = 5.0):
+    """GET, retrying while the server says the subsystem is STILL STARTING.
+
+    The engine binds /api/health in about a second and warms subsystems behind
+    it, so a test that queries an endpoint the instant health answers is racing
+    the architecture's own design. The server distinguishes the two states
+    (`starting: true`), so wait on that rather than on a fixed sleep.
+    """
+    body, status = _get(url, timeout=timeout)
+    for _ in range(tries):
+        if status != 503 or not (isinstance(body, dict) and body.get("starting")):
+            return body, status
+        time.sleep(delay)
+        body, status = _get(url, timeout=timeout)
+    return body, status
 
 
 def main() -> int:
@@ -120,9 +151,9 @@ def main() -> int:
         if health is None:
             return c.finish()
 
-        # ── Item 2: control taxonomy ────────────────────────────────────
+        # --- Item 2: control taxonomy ---
         print("[1] GET /api/controls/taxonomy (item 2)")
-        body, status = _get(f"{base}/api/controls/taxonomy")
+        body, status = _get_ready(f"{base}/api/controls/taxonomy")
         c.check("responds 200", status == 200)
         c.check("has categories + gaps", {"categories", "gaps"} <= set(body.keys()))
         cats = body.get("categories", {})
@@ -133,9 +164,9 @@ def main() -> int:
                 "just in the unit test's imported copy",
                 any(x.get("name") == "decoys" for x in cats.get("deterrent", [])))
 
-        # ── Item 3: coverage metric ──────────────────────────────────────
+        # --- Item 3: coverage metric ---
         print("\n[2] GET /api/controls/coverage (item 3)")
-        body, status = _get(f"{base}/api/controls/coverage")
+        body, status = _get_ready(f"{base}/api/controls/coverage")
         c.check("responds 200", status == 200)
         c.check("has fraction_effective/counts/total/gaps",
                 {"fraction_effective", "counts", "total", "gaps"} <= set(body.keys()))
@@ -144,9 +175,9 @@ def main() -> int:
         c.check("fraction_effective is a real fraction in [0, 1]",
                 0.0 <= body.get("fraction_effective", -1) <= 1.0)
 
-        # ── Item 4: MTTD/MTTR ─────────────────────────────────────────────
+        # --- Item 4: MTTD/MTTR ---
         print("\n[3] GET /api/edr/metrics/mttd-mttr (item 4)")
-        body, status = _get(f"{base}/api/edr/metrics/mttd-mttr")
+        body, status = _get_ready(f"{base}/api/edr/metrics/mttd-mttr")
         c.check("responds 200 (not 503 -- EDR is wired) and not a crash",
                 status == 200)
         c.check("has mttd + mttr, each with n/total/median_seconds/p95_seconds",
@@ -172,10 +203,10 @@ def main() -> int:
                         isinstance(_m["median_seconds"], (int, float))
                         and _m["median_seconds"] >= 0)
 
-        # ── Item 5: incident impact (reachability + shape only, see the ──
-        # module docstring's HONEST LIMITATION -- no live incident exists) ──
+        # --- Item 5: incident impact (reachability + shape only, see the ---
+        # module docstring's HONEST LIMITATION -- no live incident exists) ---
         print("\n[4] GET /api/edr/incidents (item 5's impact field lives here)")
-        body, status = _get(f"{base}/api/edr/incidents")
+        body, status = _get_ready(f"{base}/api/edr/incidents")
         print(f"  DEBUG {len(body) if isinstance(body, list) else '?'} incident(s): "
               f"{json.dumps(body, indent=2)[:2000]}")
         c.check("responds 200 (edr/impact.py imports cleanly in the real "
@@ -187,11 +218,11 @@ def main() -> int:
                 "the endpoint and its imports are wired)",
                 isinstance(body, list))
 
-        # ── Item 6: asset inventory -- the strongest check here, because ──
-        # it needs no live incident: real data on a real host, right now. ──
+        # --- Item 6: asset inventory -- the strongest check here, because ---
+        # it needs no live incident: real data on a real host, right now. ---
         print("\n[5] GET /api/asset-inventory (item 6)")
         _t0 = time.time()
-        body, status = _get(f"{base}/api/asset-inventory", timeout=45.0)
+        body, status = _get_ready(f"{base}/api/asset-inventory", timeout=45.0)
         print(f"  DEBUG asset-inventory took {time.time() - _t0:.1f}s")
         c.check("responds 200 (not 503 -- AssetInventoryCollector actually "
                 "started: proves __main__.py's pre-init + AppContext field + "
@@ -209,7 +240,7 @@ def main() -> int:
                 "started, not just importable)",
                 body.get("collector_running") is True)
 
-        # ── No traceback anywhere in startup/runtime output ──────────────
+        # --- No traceback anywhere in startup/runtime output ---
         print("\n[6] no traceback anywhere in startup or request-handling output")
         proc.terminate()
         try:

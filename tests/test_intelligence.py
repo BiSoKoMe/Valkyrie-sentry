@@ -1,4 +1,4 @@
-"""Test the intelligence layer — baseline, anomaly, threat graph, memory,
+"""Test the intelligence layer - baseline, anomaly, threat graph, memory,
 classifier.
 
 Standalone script, no pytest required:
@@ -87,7 +87,7 @@ def test_baseline() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2 + 3. Anomaly scoring — heartbeat HIGH, normal traffic LOW
+# 2 + 3. Anomaly scoring - heartbeat HIGH, normal traffic LOW
 # ---------------------------------------------------------------------------
 
 def test_anomaly() -> None:
@@ -99,7 +99,7 @@ def test_anomaly() -> None:
     detector = AnomalyDetector(
         learner,
         is_background_fn=lambda p: p == "telemetry_agent.exe",
-        is_running_fn=lambda p: None,      # liveness unknown → signal off
+        is_running_fn=lambda p: None,      # liveness unknown -> signal off
     )
 
     # Background process beaconing every 30s with identical tiny payloads
@@ -158,8 +158,8 @@ def test_threat_graph() -> None:
     store.stop()
 
     # Regression: a popular domain's own subdomain being "confirmed" must NEVER
-    # poison its own base — live bug where a Microsoft delivery-optimization
-    # host (array508.prod.do.dsp.mp.microsoft.com — "dsp" reads as ad-tech) got
+    # poison its own base - live bug where a Microsoft delivery-optimization
+    # host (array508.prod.do.dsp.mp.microsoft.com - "dsp" reads as ad-tech) got
     # recorded, and every subsequent microsoft.com query then "shared
     # infrastructure" with its own sibling subdomain and got flagged.
     print("\n[4b] a popular domain's subdomain must never self-poison its base")
@@ -239,7 +239,7 @@ def test_memory() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 6. Classifier — surveillance blocked, normal allowed, learning damped
+# 6. Classifier - surveillance blocked, normal allowed, learning damped
 # ---------------------------------------------------------------------------
 
 def _stack(store: Store, learning_days: float):

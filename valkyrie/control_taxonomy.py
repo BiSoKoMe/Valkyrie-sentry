@@ -1,4 +1,4 @@
-"""Control taxonomy — every Valkyrie control classified by function.
+"""Control taxonomy - every Valkyrie control classified by function.
 
 IIBA/IEEE's *Cybersecurity Analysis* handbook (§4.2.3) sorts security
 controls into seven functional classes: preventive, detective, corrective,
@@ -10,17 +10,17 @@ rather than hides:
   * **deterrent was an unnamed category.** ``decoys.py`` (and, to a lesser
     extent, ``ransomware_shield.py``'s canaries) plant bait specifically so
     an intruder announces themselves by touching it. That is textbook
-    deterrence — a sophisticated attacker who suspects tripwires exist
-    behaves more cautiously even before triggering one — but nothing in
+    deterrence - a sophisticated attacker who suspects tripwires exist
+    behaves more cautiously even before triggering one - but nothing in
     the codebase ever named it that; both were filed purely as detection.
 
   * **compensating was EMPTY before this pass.** When Sysmon (the sensor
     ``docs/adr/0048-sysmon-dependency.md`` names as Valkyrie's most-depended-
-    on) goes dark, nothing actively substituted for the lost visibility —
+    on) goes dark, nothing actively substituted for the lost visibility -
     detection just silently fell back to whatever ran independently of it.
     ``sensor_tamper.py`` now activates a real compensating action (tightening
     ``process_telemetry.ProcessCollector``'s poll interval) on that specific
-    transition. This is PARTIAL and the module says so below — a userland
+    transition. This is PARTIAL and the module says so below - a userland
     poll cannot see the ETW-only signals Sysmon uniquely provides.
 
   * **recovery is populated almost entirely by Valkyrie undoing its OWN
@@ -28,24 +28,24 @@ rather than hides:
     The reversibility work (``valkyrie/edr/reversibility.py``,
     ``restore_persistence``, ``release_isolation``, ``mac_randomizer.restore``,
     ``telemetry_killer.restore``) is genuine recovery in the NIST CSF
-    "Recover" sense — it restores the host to its pre-action state. But
+    "Recover" sense - it restores the host to its pre-action state. But
     there is NO backup-and-restore of a user's actual files before/after
     ransomware encrypts them; ``ransomware_shield`` detects and kills the
     encrypting process, and re-arms its own canaries, but never recovers
     the user's real documents. That gap is reported honestly, not filled
-    with an invented control — building real file backup is a substantial
+    with an invented control - building real file backup is a substantial
     feature, out of scope for a taxonomy pass.
 
   * **directive over-promises in one place.** ``decision.py``'s CONTAIN
     action narrates "isolate + kill + quarantine" in its human-readable
     reason text, but no ``quarantine_file`` responder exists anywhere in
-    ``valkyrie/edr/response.py`` — only isolate_host and kill_process are
+    ``valkyrie/edr/response.py`` - only isolate_host and kill_process are
     real. The prose describes a control that was never built. Left
     unbuilt here too (quarantine is exactly the kind of new destructive
     action this audit's hard safety rules say not to add casually), but
     now it is a tracked, visible gap instead of an invisible one.
 
-This is a classification of MECHANISMS, not of every Python file — plumbing
+This is a classification of MECHANISMS, not of every Python file - plumbing
 modules (store.py, eventbus.py, config.py, telemetry.py's schema) aren't
 "controls" any more than a database driver is. ``CONTROLS`` below covers
 every module whose job is a direct security or privacy effect.
@@ -280,7 +280,7 @@ CONTROLS: list[Control] = [
 
 def by_category() -> dict:
     """{category: [Control, ...]} for every CATEGORIES entry, including
-    empty lists — an empty category must be visible, not absent."""
+    empty lists - an empty category must be visible, not absent."""
     out = {cat: [] for cat in CATEGORIES}
     for ctl in CONTROLS:
         out[ctl.category].append(ctl)

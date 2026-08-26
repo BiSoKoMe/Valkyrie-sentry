@@ -6,7 +6,7 @@ automatically.  Supports SIGHUP on POSIX systems.
 Rule schema:
   always_allow:
     - domain: "*.zoom.us"
-      process: "zoom"          # optional — if omitted, applies to any process
+      process: "zoom"          # optional - if omitted, applies to any process
   always_block:
     - domain: "*.doubleclick.net"
 
@@ -30,7 +30,7 @@ def _sanitize(entries) -> list[dict]:
     """Coerce a parsed YAML rule list into well-formed {domain, process} dicts.
 
     The rules file is hand-edited and hot-reloaded, and its matcher runs on the
-    synchronous DNS path — so a malformed entry used to raise there and break
+    synchronous DNS path - so a malformed entry used to raise there and break
     name resolution for the entire machine until the file was fixed. Verified
     shapes that crashed: a null domain (``- domain:``), a numeric or list
     domain, a bare-string entry, and a null entry.
@@ -43,7 +43,7 @@ def _sanitize(entries) -> list[dict]:
 
     instead of ``- domain: evil.com`` is the single most likely mistake a user
     makes with this format, and honouring it does exactly what they meant.
-    Silently dropping their rule would be worse — they would believe a domain
+    Silently dropping their rule would be worse - they would believe a domain
     was blocked when it was not.
     """
     out: list[dict] = []
@@ -57,12 +57,12 @@ def _sanitize(entries) -> list[dict]:
             if isinstance(raw, (int, float)) and not isinstance(raw, bool):
                 raw = str(raw)                    # `- domain: 12345`
             if not isinstance(raw, str):
-                continue                          # null/list/other → unusable
+                continue                          # null/list/other -> unusable
             dom = raw.strip()
             proc = e.get("process")
             proc = proc.strip() if isinstance(proc, str) else ""
         else:
-            continue                              # None, list, … → unusable
+            continue                              # None, list, ... -> unusable
         if not dom:
             continue
         out.append({"domain": dom, "process": proc})
@@ -125,7 +125,7 @@ class RuleSet:
                     continue    # rule is process-specific and doesn't match
             # fnmatchcase against pre-lowered values, NOT fnmatch: fnmatch
             # applies os.path.normcase, which folds case on Windows and does
-            # not on Linux — so the same rules file silently behaved
+            # not on Linux - so the same rules file silently behaved
             # differently per platform. Domains are case-insensitive by
             # definition, so both sides are lowered explicitly instead.
             if fnmatch.fnmatchcase(dom, pattern.lower().rstrip(".")):

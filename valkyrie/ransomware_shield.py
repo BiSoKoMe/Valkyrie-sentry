@@ -1,20 +1,20 @@
-"""Ransomware Shield — local behavioral ransomware defense.
+"""Ransomware Shield - local behavioral ransomware defense.
 
 Strategy (all local, no cloud, no signatures, no global telemetry):
 
-  1. **Canary tripwires** — decoy files planted in the file areas ransomware
+  1. **Canary tripwires** - decoy files planted in the file areas ransomware
      targets (every real user's Documents / Desktop / Pictures / Downloads).
      Ransomware enumerating and encrypting files hits them. Because normal
      software never touches these specific files, a modified/deleted/renamed
      canary is a near-zero-false-positive, high-confidence signal.
-  2. **Entropy confirmation** — a tripped canary is read back; encrypted content
+  2. **Entropy confirmation** - a tripped canary is read back; encrypted content
      is ~7.99 bits/byte (near-maximal Shannon entropy). This distinguishes real
      encryption from an accidental touch.
-  3. **I/O attribution (heuristic)** — the process most likely responsible is
+  3. **I/O attribution (heuristic)** - the process most likely responsible is
      ranked by recent disk-write bytes (psutil per-process io_counters) sampled
      each poll, corroborated by open file handles in the affected directory.
-  4. **Response** — per configured mode: *monitor* (alert only), *suspend*
-     (default — reversible, halts encryption in place), or *kill*. A CRITICAL
+  4. **Response** - per configured mode: *monitor* (alert only), *suspend*
+     (default - reversible, halts encryption in place), or *kill*. A CRITICAL
      incident (MITRE T1486 Data Encrypted for Impact) is raised through the EDR
      correlation pipeline, and tripped canaries are restored.
 
@@ -124,7 +124,7 @@ class CanaryManager:
     # -- target discovery ---------------------------------------------------
     def target_dirs(self) -> list[Path]:
         """Directories to plant canaries in. Enumerates EVERY real user profile
-        (the engine runs as SYSTEM, so ~ would be the service profile — wrong),
+        (the engine runs as SYSTEM, so ~ would be the service profile - wrong),
         placing a dedicated 'Valkyrie Protected' subfolder in each target area."""
         if self._explicit_dirs is not None:
             return [d for d in self._explicit_dirs]
@@ -309,7 +309,7 @@ class RansomwareShield:
             return
         snap: dict[int, int] = {}
         for p in psutil.process_iter():
-            # p.pid is a plain attribute set at construction — it never raises and
+            # p.pid is a plain attribute set at construction - it never raises and
             # is never absent, unlike p.info["pid"], which KeyError'd here and
             # crash-looped the whole monitor thread.
             try:
@@ -378,7 +378,7 @@ class RansomwareShield:
 
         # Always restore canaries so the tripwire re-arms.
         restored = self.manager.restore(tripped)
-        # Reload manifest hashes for restored ones (content is identical → hash same).
+        # Reload manifest hashes for restored ones (content is identical -> hash same).
 
         self.stats["detections"] += 1
         self.stats["processes_stopped"] += len(stopped)

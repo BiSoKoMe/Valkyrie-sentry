@@ -3,7 +3,7 @@
 
 CNAME cloaking is the #1 modern DNS-blocklist evasion: a first-party-looking
 subdomain (metrics.brand.com) is a CNAME to the tracker (brand.eulerian.net).
-This proves Valkyrie uncloaks it — and, just as important, that it does NOT
+This proves Valkyrie uncloaks it - and, just as important, that it does NOT
 break legitimate CNAMEs to CDNs (Cloudflare/Akamai/Fastly), which is where a
 naive uncloaker would take down half the web.
 
@@ -31,8 +31,8 @@ def _check(label: str, ok: bool) -> None:
         _FAILURES.append(label)
 
 
-# ── Lightweight stubs so we can exercise the real interceptor method without a
-#    live socket / process watcher / store. ────────────────────────────────────
+# --- Lightweight stubs so we can exercise the real interceptor method without a
+#    live socket / process watcher / store. ---
 class _StubStore:
     def log(self, *a, **k):
         pass
@@ -140,14 +140,14 @@ def main() -> int:
         _check(f"CDN CNAME not blocked: {cdn}", res is None)
 
     print("\n[6] Multi-hop chain + a plain no-CNAME answer")
-    # Legit first hop then a tracker deeper in the chain — still caught.
+    # Legit first hop then a tracker deeper in the chain - still caught.
     wire = _make_answer("t.brand.com",
                         [("t.brand.com", "edge.brand.com"),
                          ("edge.brand.com", "collect.ati-host.net")])
     res = itc._uncloak_block(wire, "t.brand.com", _UNKNOWN)
     _check("tracker deeper in a multi-hop chain is caught",
            res is not None and res[0] == "collect.ati-host.net")
-    # Plain A answer, no CNAME → nothing to uncloak.
+    # Plain A answer, no CNAME -> nothing to uncloak.
     import dns.message, dns.rrset, dns.rdatatype
     q = dns.message.make_query("clean.example", dns.rdatatype.A)
     r = dns.message.make_response(q)

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Component platform — the uniform plugin contract, offline tests.
+"""Component platform - the uniform plugin contract, offline tests.
 
   [1] Adapter introspection: available()/is_healthy()/is_running()/status()
       map to the normalized health + metrics surface
   [2] Fault isolation: a service whose health/metrics probe RAISES becomes
-      an 'error'/'_error' report — never propagates
+      an 'error'/'_error' report - never propagates
   [3] Independent restart: restart() stops+starts one component; a failing
       start is reported, not raised
   [4] Aggregate: overall() picks the worst non-disabled state; disabled is

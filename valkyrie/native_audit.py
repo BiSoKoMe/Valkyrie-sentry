@@ -1,15 +1,15 @@
 r"""Turn on Windows' native process-creation auditing (Security 4688 + cmdline).
 
 This is what makes `etw/native_process.py` work, and it is the piece that lets
-Valkyrie give command-line detection with **nothing to download** — because
+Valkyrie give command-line detection with **nothing to download** - because
 everything here is a built-in Windows configuration change, not an install:
 
   1. `auditpol /set /subcategory:{GUID} /success:enable`
-     — makes Windows write Security event 4688 on every process start.
+     - makes Windows write Security event 4688 on every process start.
   2. a registry policy value:
      `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit`
      `ProcessCreationIncludeCmdLine_Enabled = 1 (DWORD)`
-     — makes 4688 include the full command line, which is the whole point.
+     - makes 4688 include the full command line, which is the whole point.
 
 Both require administrator/SYSTEM. Valkyrie runs as the ValkyrieShield service
 (SYSTEM), so the engine can enable this itself at startup; the functions here
@@ -17,7 +17,7 @@ are also exposed via `--enable-native-audit` for a manual run.
 
 Design choices that matter:
   * The subcategory is selected by its stable GUID, not the localised display
-    name "Process Creation" — auditpol matches the name by locale, so a
+    name "Process Creation" - auditpol matches the name by locale, so a
     name-based call fails on a non-English Windows exactly like a name-based
     ACL does. Same bug class fixed in secure_file.py.
   * Enabling is IDEMPOTENT and reports whether it actually changed anything, so
@@ -37,7 +37,7 @@ _IS_WINDOWS = platform.system() == "Windows"
 _AUDIT_KEY = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit"
 _CMDLINE_VALUE = "ProcessCreationIncludeCmdLine_Enabled"
 
-# The Process Creation subcategory's stable GUID — locale-independent, unlike
+# The Process Creation subcategory's stable GUID - locale-independent, unlike
 # the display name "Process Creation" that auditpol otherwise matches by locale.
 _PROC_CREATION_GUID = "{0CCE922B-69AE-11D9-BED3-505054503030}"
 
@@ -45,7 +45,7 @@ _SYS32_AUDITPOL = r"C:\Windows\System32\auditpol.exe"
 _TIMEOUT = 20
 
 
-# ── Pure command construction (unit-tested; no execution) ───────────────────
+# --- Pure command construction (unit-tested; no execution) ---
 
 def _enable_audit_cmd() -> list[str]:
     return [_SYS32_AUDITPOL, "/set", "/subcategory:" + _PROC_CREATION_GUID,
@@ -56,7 +56,7 @@ def _query_audit_cmd() -> list[str]:
     return [_SYS32_AUDITPOL, "/get", "/subcategory:" + _PROC_CREATION_GUID]
 
 
-# ── Execution (guarded; never raises) ───────────────────────────────────────
+# --- Execution (guarded; never raises) ---
 
 def _run(cmd: list[str]) -> tuple[int, str]:
     try:
@@ -94,7 +94,7 @@ def _set_cmdline_reg() -> bool:
 
 
 def is_process_auditing_enabled() -> bool:
-    """True when 4688 fires AND carries the command line — both must hold.
+    """True when 4688 fires AND carries the command line - both must hold.
 
     Either half alone is useless: auditing without the cmdline policy gives
     image+parent but no command line (so encoded-PowerShell etc. slip through),
@@ -114,7 +114,7 @@ def enable_process_auditing() -> tuple[bool, str]:
     """Enable 4688 + command-line auditing. Idempotent. Needs admin/SYSTEM.
 
     Returns ``(enabled_now, detail)``. ``enabled_now`` reflects the state AFTER
-    the call (verified by re-reading), not merely that the commands returned 0 —
+    the call (verified by re-reading), not merely that the commands returned 0 -
     the same verify-don't-assume discipline used for the file-permission fixes.
     """
     if not _IS_WINDOWS:

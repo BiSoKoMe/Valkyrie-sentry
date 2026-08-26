@@ -1,4 +1,4 @@
-"""Test the Unbound local resolver — stdlib DNS only, no dnspython.
+"""Test the Unbound local resolver - stdlib DNS only, no dnspython.
 
 Checks:
   1. Unbound is reachable on 127.0.0.1:5301
@@ -19,7 +19,7 @@ import time
 
 
 # ---------------------------------------------------------------------------
-# Minimal DNS wire codec (stdlib only — same as test_dns.py)
+# Minimal DNS wire codec (stdlib only - same as test_dns.py)
 # ---------------------------------------------------------------------------
 
 def _encode_name(name: str) -> bytes:
@@ -186,7 +186,7 @@ def main() -> None:
     )
 
     # ------------------------------------------------------------------
-    # 5. Multiple domains — latency spot-check
+    # 5. Multiple domains - latency spot-check
     # ------------------------------------------------------------------
     print("\n[5] Latency (3 sequential queries)")
     domains = ["cloudflare.com", "github.com", "example.org"]

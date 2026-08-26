@@ -1,9 +1,9 @@
-"""Nyx privacy-efficacy battery — the differentiator's scoreboard.
+"""Nyx privacy-efficacy battery - the differentiator's scoreboard.
 
 The EDR side has Tier B (real Atomic Red Team on a live VM). Nyx is the privacy
 core, and it needs the SAME kind of honest measurement: run real-world tracking /
 fingerprinting / exfil attempts through Nyx's ACTUAL code paths and score how many
-are defended — plus a hard false-positive guard, because for a privacy tool that
+are defended - plus a hard false-positive guard, because for a privacy tool that
 sits in front of all your traffic, BREAKING A SITE is a worse failure than missing
 one tracker (the prime directive: "protection must never break the page").
 
@@ -12,7 +12,7 @@ deception, nyx.inspect_outbound), driven with a real corpus, offline / CI-safe (
 browser, no mitmproxy socket). Tier 3 (a headless real browser through the live
 proxy against CreepJS / browserleaks) is the next rung up.
 
-Honesty: a MISS here is a real gap from the user's chair — an uncaught tracker is
+Honesty: a MISS here is a real gap from the user's chair - an uncaught tracker is
 uncaught whatever the reason (short list vs logic bug). The battery names every
 miss so it becomes the fix list. It hard-FAILS only on a false positive, because
 that is the unforgivable one.
@@ -58,7 +58,7 @@ def defend(label: str, ok: bool) -> None:
 
 
 def benign(label: str, unbroken: bool) -> None:
-    """A benign case that must be left ALONE. Failing this is a false positive —
+    """A benign case that must be left ALONE. Failing this is a false positive -
     the unforgivable failure for a tool in front of all your traffic."""
     global _fp, _fp_total
     _fp_total += 1
@@ -81,7 +81,7 @@ def _clean(html: bytes, domain: str) -> tuple[bytes, int]:
 def main() -> int:
     print("NYX PRIVACY BATTERY\n")
 
-    # ── A. Tracker script removal (real cleaner) ────────────────────────────
+    # --- A. Tracker script removal (real cleaner) ---
     print("[A] third-party tracker scripts are stripped from the page")
     trackers = [
         "google-analytics.com", "googletagmanager.com", "connect.facebook.net",
@@ -97,7 +97,7 @@ def main() -> int:
         _body, removed = _clean(html, "example.com")
         defend(f"script: {host}", removed > 0)
 
-    # ── B. Inline analytics calls are neutralised ───────────────────────────
+    # --- B. Inline analytics calls are neutralised ---
     print("\n[B] inline analytics calls are neutralised (tag kept, call no-op'd)")
     inline = {
         "facebook fbq": b"fbq('track','PageView')",
@@ -113,7 +113,7 @@ def main() -> int:
         _body, removed = _clean(html, "example.com")
         defend(f"inline: {name}", removed > 0)
 
-    # ── C. Beacon / pixel request paths are recognised ──────────────────────
+    # --- C. Beacon / pixel request paths are recognised ---
     print("\n[C] tracking beacon/pixel request paths are recognised")
     beacon_paths = [
         "/collect", "/g/collect", "/j/collect", "/pixel", "/beacon", "/track",
@@ -123,7 +123,7 @@ def main() -> int:
     for p in beacon_paths:
         defend(f"path: {p}", _is_tracker_path(p))
 
-    # ── D. Fingerprinting scripts are recognised ────────────────────────────
+    # --- D. Fingerprinting scripts are recognised ---
     print("\n[D] fingerprinting scripts are recognised by path")
     fp_paths = [
         "/fingerprintjs/v3.js", "/fp.js", "/fpjs/agent", "/evercookie.js",
@@ -132,7 +132,7 @@ def main() -> int:
     for p in fp_paths:
         defend(f"fp-script: {p}", _is_fingerprint_path(p))
 
-    # ── E. CNAME-cloaked trackers are uncloaked ─────────────────────────────
+    # --- E. CNAME-cloaked trackers are uncloaked ---
     print("\n[E] CNAME-cloaked trackers are uncloaked (caught on the chain target)")
     cloaked = [
         "brand.eulerian.net", "cust-1.demdex.net", "sub.omtrdc.net",
@@ -142,7 +142,7 @@ def main() -> int:
     for host in cloaked:
         defend(f"uncloak: {host}", cu.matches_cname_tracker(host) is not None)
 
-    # ── F. Beacon deception serves a plausible LIE, not silence ─────────────
+    # --- F. Beacon deception serves a plausible LIE, not silence ---
     print("\n[F] intercepted beacons get a served LIE (persona), not a failure")
     beacons = [
         ("GET",  "/collect", "v=1&tid=UA-1"),
@@ -159,7 +159,7 @@ def main() -> int:
             ok = False
         defend(f"deceive: {method} {path}", ok)
 
-    # ── G. Personal data leaving to a third party is caught (Nyx brain) ─────
+    # --- G. Personal data leaving to a third party is caught (Nyx brain) ---
     print("\n[G] personal data crossing to a third party is caught")
     FP_ORIGIN = "https://news.example/x"
     THIRD = "https://collector.tracker.example/submit"
@@ -174,7 +174,23 @@ def main() -> int:
         obs = nyx.inspect_outbound("POST", THIRD, H, body)
         defend(f"exfil: {name}", len(obs) > 0)
 
-    # ── G2. ACT: the leak is not just watched, it is FED A LIE ──────────────
+    # --- G1b. MODERN fingerprinting surfaces (2026's #1 tracking vector) ---
+    print("\n[G1b] modern high-entropy fingerprinting is caught "
+          "(audio / fonts / WebRTC local-IP leak)")
+    # An audio + fonts + WebRTC-private-IP bundle IS a fingerprinter - the
+    # deanonymising kind that leaks your LAN IP from behind a VPN.
+    modern_fp = (b"audiocontext=124.043475&fontlist=Arial,Calibri,Verdana,Tahoma"
+                 b"&rtcpeerconnection=1&candidate=192.168.1.37")
+    defend("fingerprint: audio+fonts+webrtc bundle is caught",
+           any(o.category == nyx.CAT_FINGERPRINT
+               for o in nyx.inspect_outbound("POST", THIRD, H, modern_fp)))
+    defend("fingerprint: a WebRTC-leaked private IP counts as a surface",
+           any(o.category == nyx.CAT_FINGERPRINT
+               for o in nyx.inspect_outbound(
+                   "POST", THIRD, H,
+                   b"audio_hash=ab12&fonts=Arial,Calibri&ip=10.0.0.14")))
+
+    # --- G2. ACT: the leak is not just watched, it is FED A LIE ---
     print("\n[G2] Nyx ACTS — the tracker gets consistent persona fakes, not your data")
     from valkyrie.persona import current_persona as _cp
     _p = _cp()
@@ -188,7 +204,7 @@ def main() -> int:
         _u, nb, fk = nyx.fake_outbound("POST", THIRD, H, payload, _p)
         defend(f"act: {name} replaced with a persona fake", bool(fk) and real not in nb)
 
-    # ── G3. expanded categories: payment cards + persistent cookies ─────────
+    # --- G3. expanded categories: payment cards + persistent cookies ---
     print("\n[G3] expanded coverage — payment cards and third-party tracking cookies")
     defend("card: a Luhn-valid card to a tracker is caught",
            any(o.category == nyx.CAT_FINANCIAL
@@ -200,7 +216,7 @@ def main() -> int:
                for o in nyx.inspect_outbound(
                    "GET", THIRD, {"Referer": FP_ORIGIN, "Cookie": "uid=a1b2c3d4e5f6g7h8i9j0"}, None)))
 
-    # ── H. Fingerprint spoofing actually defeats an execution attack ────────
+    # --- H. Fingerprint spoofing actually defeats an execution attack ---
     print("\n[H] fingerprint spoofing defeats a real execution-based attack")
     node = shutil.which("node")
     harness = Path(__file__).resolve().parent / "farble_attack.js"
@@ -221,7 +237,7 @@ def main() -> int:
     else:
         print("  [skip] node/farble_attack.js not available")
 
-    # ── FALSE-POSITIVE GUARD (must be 0 — breaking a site is unforgivable) ──
+    # --- FALSE-POSITIVE GUARD (must be 0 - breaking a site is unforgivable) ---
     print("\n[FP] benign traffic is left completely alone")
     # A normal article page with no trackers must lose nothing.
     article = (b"<html><head><title>News</title></head><body>"
@@ -234,7 +250,7 @@ def main() -> int:
     fp_post = nyx.inspect_outbound(
         "POST", "https://news.example/login", H, b"e=alice%40example.com")
     benign("first-party login not flagged as exfil", fp_post == [])
-    # The ACT path must respect the same first-party boundary — never rewrite
+    # The ACT path must respect the same first-party boundary - never rewrite
     # your own data to the site you are actually on.
     _u, afb, aff = nyx.fake_outbound(
         "POST", "https://news.example/login", H, b"e=alice%40example.com", _p)
@@ -248,6 +264,17 @@ def main() -> int:
            not any(o.category == nyx.CAT_COOKIE
                    for o in nyx.inspect_outbound(
                        "GET", THIRD, {"Referer": FP_ORIGIN, "Cookie": "lang=en; s=1"}, None)))
+    # The new fingerprint surfaces must NOT fire on ONE benign signal - the >=3
+    # bundle guard is what keeps them safe. A lone private IP (an internal API
+    # call), or a single font/audio mention, is not a fingerprint.
+    benign("a lone private IP is not flagged as a fingerprint",
+           not any(o.category == nyx.CAT_FINGERPRINT
+                   for o in nyx.inspect_outbound("POST", THIRD, H,
+                       b"callback_host=192.168.1.10")))
+    benign("a single font value (styling) is not a fingerprint",
+           not any(o.category == nyx.CAT_FINGERPRINT
+                   for o in nyx.inspect_outbound("POST", THIRD, H,
+                       b"font=Arial&size=14")))
     # Legit CDNs / sites are not uncloaked as trackers.
     for legit in ["www.github.com", "cdn.jsdelivr.net", "fonts.googleapis.com",
                   "api.stripe.com", "www.wikipedia.org"]:
@@ -261,17 +288,59 @@ def main() -> int:
                  "/adventure-tours"]:   # must NOT match "/adsct"
         benign(f"benign path not a tracker beacon: {path}", not _is_tracker_path(path))
 
-    # ── Scoreboard ──────────────────────────────────────────────────────────
+    # --- The "accepted non-coverage" claim, PROVEN not asserted -------------
+    # These three path patterns are deliberately NOT matched by
+    # _is_tracker_path (a path rule generic enough to catch them - "/tr",
+    # "/v1/batch", "/b/ss" - would also match ordinary site routes and break
+    # pages, which is the one unforgivable failure for this module). The claim
+    # is that each is still defended by a DIFFERENT signal. That claim used to
+    # live only in a comment string and was live-verified once by hand, off
+    # the record, rather than checked here - which is exactly the shape of
+    # claim this project has been burned by trusting without evidence
+    # elsewhere tonight. So it is checked directly against the real functions
+    # below, and the checks below are what determine `_ACCEPTED`, not a
+    # hand-written dict.
+    #
+    # The mechanism is NOT uniform, and saying "domain rules" for all three
+    # would be wrong: TRACKER_SLDS-based blocking (_check_script/_check_pixel
+    # in tls_addon.py) derives its SLD as `domain.split('.')[-2]` - a naive
+    # split, not proper registrable-domain extraction - so
+    # 'connect.facebook.net' -> sld 'facebook' and 'api.segment.com' -> sld
+    # 'segment', and NEITHER is in TRACKER_SLDS. Only 'scorecardresearch' is.
+    # What actually catches all three, uniformly, is the HTML content cleaner
+    # (TRACKING_SCRIPT_DOMAINS, ValkyrieAddon._clean_html_regex) stripping the
+    # <script src="..."> tag outright - a response-body rewrite, not a
+    # connection-level domain block.
+    _cleaned, _ = ValkyrieAddon._clean_html_regex(
+        None,
+        b'<script src="https://connect.facebook.net/en_US/fbevents.js"></script>'
+        b'<script src="https://cdn.segment.com/analytics.js/v1/K/a.min.js"></script>'
+        b'<script src="https://sb.scorecardresearch.com/beacon.js"></script>'
+        b'<script src="https://cdn.jsdelivr.net/npm/vue.js"></script>',
+        "shop.example.com")
+    _cleaned_s = _cleaned.decode("utf-8", "replace")
+    benign("legit CDN script is NOT stripped by the tracker cleaner "
+          "(precision check on the mechanism being proven, not just its recall)",
+          "cdn.jsdelivr.net" in _cleaned_s)
+
+    def _sld(host: str) -> str:
+        return host.split(".")[-2] if "." in host else host
+
+    from valkyrie.config import TRACKER_SLDS
+
+    _ACCEPTED = {}
+    for label, host in (("path: /tr", "connect.facebook.net"),
+                        ("path: /v1/batch", "cdn.segment.com"),
+                        ("path: /b/ss", "sb.scorecardresearch.com")):
+        cleaner_catches = host not in _cleaned_s
+        sld_catches = _sld(host) in TRACKER_SLDS
+        defend(f"{label} (host {host}): caught by content-cleaner "
+              f"and/or SLD block", cleaner_catches or sld_catches)
+        via = ("content-cleaner" if cleaner_catches else "") + \
+              (" + SLD-block" if sld_catches else "")
+        _ACCEPTED[label] = f"not path-matched by design; caught via {via}"
     pct = (100.0 * _defended / _attacks) if _attacks else 0.0
     print("\n" + "=" * 68)
-    # Known, deliberate non-coverage — real trackers we do NOT match by PATH
-    # because a path rule would break sites, but which are still caught by the
-    # DOMAIN rules (so the tracker is handled, just not via this signal).
-    _ACCEPTED = {
-        "path: /tr": "Facebook pixel — '/tr/' is the Turkish locale; caught by facebook.net domain",
-        "path: /v1/batch": "Segment — too generic to path-match; caught by segment.com domain",
-        "path: /b/ss": "Comscore — too generic to path-match; caught by scorecardresearch.com domain",
-    }
     if _misses:
         real = [m for m in _misses if m not in _ACCEPTED]
         if real:
@@ -289,7 +358,7 @@ def main() -> int:
             print("   !", f)
     print(f"\nNYX-BATTERY defended={_defended}/{_attacks} ({pct:.0f}%)  "
           f"false_positives={_fp}/{_fp_total}")
-    # Breaking a site fails the build. Coverage gaps are reported, not fatal —
+    # Breaking a site fails the build. Coverage gaps are reported, not fatal -
     # they are the honest to-do list that drives the hardening loop.
     if _fp > 0:
         print("RESULT: FAIL — false positive(s) present.")

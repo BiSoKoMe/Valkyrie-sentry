@@ -2,12 +2,12 @@
 """Multi-stage kill-chain correlation tests.
 
 Pins the fix for the measured correlation gap: the base correlator groups
-detections by SAME category, so one intrusion (execution → C2 → persistence
+detections by SAME category, so one intrusion (execution -> C2 -> persistence
 on the same process) fragmented into several individually-unremarkable
 incidents. The kill-chain correlator scores the *sequence* and raises one
 escalating incident.
 
-  [1] Pure mapping + scoring: technique→tactic, score rises with distinct
+  [1] Pure mapping + scoring: technique->tactic, score rises with distinct
       tactics, high-impact bump, severity thresholds
   [2] Correlator: emits only on >=2 distinct tactics, only on GROWTH (no
       alert storm), window eviction, unattributable/unmapped inputs ignored
@@ -67,12 +67,12 @@ def main() -> int:
     print("\n[1b] SHIPPED DEFAULT requires 3 tactics, not 2")
     # Regression for a live FP: the class default had drifted to min_tactics=2,
     # which raised "multi-stage attack" incidents against ordinary powershell.exe
-    # admin scripting and TiWorker.exe (Windows Modules Installer — a legitimate
+    # admin scripting and TiWorker.exe (Windows Modules Installer - a legitimate
     # OS component) purely from two loosely-related tactic labels within the
     # 10-minute window. The module's own docstring says "three distinct tactics
-    # ... is an attack" — this pins the DEFAULT constructor (no explicit
+    # ... is an attack" - this pins the DEFAULT constructor (no explicit
     # min_tactics) actually enforces that, not the weaker threshold.
-    kdef = KillChainCorrelator(window_seconds=600)   # no min_tactics → use default
+    kdef = KillChainCorrelator(window_seconds=600)   # no min_tactics -> use default
     now_d = 2000.0
     _check("1st tactic via default ctor → no chain",
            kdef.observe("TiWorker.exe", "T1059.001", "exec", now_d) is None)
@@ -92,10 +92,10 @@ def main() -> int:
     _check("chain names the actor", c and c["actor"] == "powershell.exe")
     _check("chain lists 2 distinct tactics", c and c["distinct_tactics"] == 2)
     _check("chain explains itself", c and "independent ATT&CK tactics" in c["explanation"])
-    # Same tactic again → no NEW tactic → stays quiet (no alert storm)
+    # Same tactic again -> no NEW tactic -> stays quiet (no alert storm)
     _check("repeat tactic does not re-alert",
            kc.observe("powershell.exe", "T1071.004", "DNS beacon 2", now + 6) is None)
-    # Third distinct tactic → grows → re-emits, higher score
+    # Third distinct tactic -> grows -> re-emits, higher score
     c3 = kc.observe("powershell.exe", "T1547.001", "run key", now + 7)
     _check("new tactic re-emits with growth", c3 is not None and c3["distinct_tactics"] == 3)
     _check("score grew with the third stage", c3 and c3["score"] > c["score"])
@@ -125,7 +125,7 @@ def main() -> int:
            cl and set(cl["actors"]) == {"powershell.exe", "rundll32.exe"})
     _check("explanation names the linked processes",
            cl and "linked processes" in cl["explanation"])
-    # Grandchild (pid 300, ppid 200) adds persistence → 3 tactics, 3 processes
+    # Grandchild (pid 300, ppid 200) adds persistence -> 3 tactics, 3 processes
     cg = kl.observe("reg.exe", "T1547.001", "run key", 1002.0, pid=300, ppid=200)
     _check("grandchild extends the same chain", cg is not None and cg["processes"] == 3)
     _check("three-stage lineage chain scores higher", cg and cg["score"] > cl["score"])
@@ -142,7 +142,7 @@ def main() -> int:
 
     # [2c] A realistic multi-tactic intrusion, each step a REAL command run
     # through the actual classifier, must correlate into ONE critical incident
-    # that reaches an objective tactic — detect-AND-block at the chain level.
+    # that reaches an objective tactic - detect-AND-block at the chain level.
     from valkyrie.behavioral_rules import classify_behavior
     _bn = lambda p: (p or "").replace("/", "\\").rsplit("\\", 1)[-1].lower()
     intrusion = [
@@ -182,16 +182,25 @@ def main() -> int:
         store = Store(db_path=Path(td) / "kc.db"); store.start()
         engine = EdrEngine(store); engine.start()
 
-        # Same process, three ATT&CK tactics, in-window.
+        # Same process, three ATT&CK tactics, in-window. process_pid is the
+        # SAME real attributed PID across all three (this is genuinely one
+        # process, per the test's own docstring) - added alongside the
+        # confidence-model fix so this fixture matches what real telemetry
+        # actually provides (process_telemetry/Sysmon always carry a pid;
+        # the ADR itself says so) rather than relying on process_name string
+        # equality, which is the weaker, unverified-lineage path.
         engine.report_detection(Detection(source="etw.ps", severity="medium",
             category="process", title="encoded PowerShell", entity="C:/x",
-            process_name="powershell.exe", technique="T1059.001 — PowerShell"))
+            process_name="powershell.exe", process_pid=4242,
+            technique="T1059.001 — PowerShell"))
         engine.report_detection(Detection(source="dns.beacon", severity="high",
             category="intelligence", title="C2 beacon", entity="evil-c2.example",
-            process_name="powershell.exe", technique="T1071.004 — DNS C2"))
+            process_name="powershell.exe", process_pid=4242,
+            technique="T1071.004 — DNS C2"))
         engine.report_detection(Detection(source="etw.persist", severity="high",
             category="persistence", title="Run key", entity="HKCU\\...\\Run",
-            process_name="powershell.exe", technique="T1547.001 — Run key"))
+            process_name="powershell.exe", process_pid=4242,
+            technique="T1547.001 — Run key"))
         time.sleep(0.2)
 
         incidents = engine.list_incidents()
@@ -227,20 +236,20 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         store = Store(db_path=Path(td) / "kc2.db"); store.start()
         engine = EdrEngine(store); engine.start()
-        # Parent powershell (pid 100) — execution.
+        # Parent powershell (pid 100) - execution.
         engine.ingest_telemetry({
             "category": "process", "activity": "exec", "action": "flagged",
             "severity": "high", "labels": ["stealth_flags"], "reason": "stealthy PS",
             "actor_name": "powershell.exe", "actor_pid": 100, "fields": {}})
-        # Child rundll32 (pid 200, ppid 100) — defense-evasion (injection).
+        # Child rundll32 (pid 200, ppid 100) - defense-evasion (injection).
         engine.ingest_telemetry({
             "category": "process", "activity": "inject", "action": "flagged",
             "severity": "high", "labels": ["remote_thread_injection"],
             "reason": "remote thread", "actor_name": "rundll32.exe",
             "actor_pid": 200, "fields": {"ppid": 100, "parent_name": "powershell.exe"}})
-        # Same rundll32 (pid 200) — credential-access (a 3rd distinct tactic).
+        # Same rundll32 (pid 200) - credential-access (a 3rd distinct tactic).
         # The shipped default is min_tactics=3 (see [1b] above), so the engine
-        # end-to-end wiring needs a genuine 3-tactic chain to exercise it —
+        # end-to-end wiring needs a genuine 3-tactic chain to exercise it -
         # this also matches the real inject-then-creds attack shape.
         engine.ingest_telemetry({
             "category": "process", "activity": "lsass_access", "action": "flagged",

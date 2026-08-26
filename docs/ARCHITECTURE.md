@@ -1,6 +1,6 @@
 # Valkyrie Platform Architecture
 
-**The enterprise security platform vision, mapped onto what actually exists —
+**The enterprise security platform vision, mapped onto what actually exists -
 with every capability marked as shipped, buildable-locally, or an honest
 infrastructure boundary.** This document is the reference the continuous
 gap-analysis cycle (docs/GAP_ANALYSIS.md) selects work from. Nothing here is
@@ -8,8 +8,8 @@ marketing; every "Shipped" row has code, tests, and an ADR behind it.
 
 ## 1. One architecture, not bolted-together products
 
-Every capability — DNS filtering, endpoint sensors, ransomware defense,
-threat intel, SIEM export, fleet — plugs into the **same four spines**:
+Every capability - DNS filtering, endpoint sensors, ransomware defense,
+threat intel, SIEM export, fleet - plugs into the **same four spines**:
 
 ```
                     ┌──────────────────────────────────────────────┐
@@ -29,10 +29,32 @@ threat intel, SIEM export, fleet — plugs into the **same four spines**:
                    (one DB, RAM-able) (CEF/JSONL)     (AppContext DI)
 ```
 
+```mermaid
+flowchart TD
+    subgraph Sensors["Sensors (real telemetry, not simulated)"]
+        direction LR
+        S1["Process\n(cmdline, ancestry)"]
+        S2["Network\n(connections, IP reputation)"]
+        S3["Persistence\n(Run keys, services,\ntasks, startup, WMI)"]
+        S4["ETW\n(PowerShell 4104, WMI,\nSysmon EID 1/3/7/8/10)"]
+        S5["DNS pipeline"]
+        S6["Ransomware\n(canary + entropy)"]
+    end
+    Sensors --> TE["TelemetryEvent\n(one normalized schema, ADR 0011)"]
+    TE --> EB["EventBus\n(thread-safe pub/sub, ADR 0007)"]
+    EB --> N["Normalization + classifiers\n(behavioral_rules.py, process_telemetry.py,\nnetwork_score.py — list-free signals)"]
+    N --> KC["Correlation\n(killchain.py multi-tactic,\nbehavioral_sequences.py named IOAs,\nsame-category base correlator)"]
+    KC --> INC["Incident + timeline\n(EdrEngine, MITRE-labeled,\nseverity escalation)"]
+    INC --> INV["Investigation\n(plain-language decision layer:\nwhat/how/why/confidence/action)"]
+    INC --> STORE[("SQLite store\n(one DB, RAM-able)")]
+    INC --> SIEM["SIEM export\n(CEF / JSONL)"]
+    INV --> UI["Electron app / API\n(loopback FastAPI backend)"]
+```
+
 **Plugin contract (ADR 0021).** Every subsystem also registers with the
 `ComponentRegistry` (valkyrie/components.py), which adapts its existing
-lifecycle into one uniform surface — health, metrics, config, independent
-restart, and health-transition events on the bus — exposed at
+lifecycle into one uniform surface - health, metrics, config, independent
+restart, and health-transition events on the bus - exposed at
 `GET /api/components`. This is the plugin host the vision calls for; it wraps
 services rather than rewriting them, and composes with (never duplicates) the
 self-heal watchdog's curated recovery.
@@ -42,20 +64,20 @@ Rules that keep it one platform:
 1. **One event schema.** Every sensor emits `TelemetryEvent`
    (valkyrie/telemetry.py). New sensors never invent formats.
 2. **One correlation engine.** Detections become `Incident`s only through
-   `EdrEngine` — the ransomware shield, ETW sensors, and network collector
+   `EdrEngine` - the ransomware shield, ETW sensors, and network collector
    all use the same `ingest_telemetry`/`report_detection` seams.
 3. **One store.** A single SQLite database (RAM-mapped in zero-log mode)
    holds events, incidents, baselines, learned intelligence. Deterministic
    handle lifecycle (close-on-exit sessions; RAM anchor connection).
 4. **One composition root.** `__main__.py` builds `AppContext` and injects
-   it; services are `Optional` and every consumer degrades gracefully —
+   it; services are `Optional` and every consumer degrades gracefully -
    removing any module never breaks another (fault isolation by design).
 5. **One UI surface.** The Electron desktop app; the FastAPI layer on
    loopback is its backend, not a second product.
 
 ## 2. Capability map (honest status)
 
-### Shipped — code + tests + ADR in this repo
+### Shipped - code + tests + ADR in this repo
 | Pillar | Implementation |
 |---|---|
 | DNS intelligence | Sinkhole resolver, process attribution, Unbound local recursion, no-leak fail-closed mode |
@@ -72,18 +94,18 @@ Rules that keep it one platform:
 | Application firewall | netsh + in-process CIDR sets (Rust-accelerated lookup, ADR 0010), bogon never-block guard (ADR 0038) |
 | Platform engineering | Event bus, DI context, normalized schema, preflight + heartbeat self-tests, self-healing watchdogs, windowless service, audit-gated installer |
 
-### Buildable next — locally honest, on existing seams
+### Buildable next - locally honest, on existing seams
 | Pillar | Seam it extends |
 |---|---|
-| Digital forensics triage collection | EDR incident → artifact bundle (process tree, ASEP snapshot, event slice) |
+| Digital forensics triage collection | EDR incident -> artifact bundle (process tree, ASEP snapshot, event slice) |
 | Memory/exploit signals (partial) | ETW channels + AMSI provider; documented as partial without a driver |
 | Browser protection | TLS inspector (exists, opt-in) + URLhaus full-URL IOCs |
 | SOAR-style automation | EDR response actions + rules engine already exist; add playbooks |
-| Compliance reporting | Store + incident history → report generator |
+| Compliance reporting | Store + incident history -> report generator |
 | Vulnerability visibility | Installed-software inventory vs. local CVE feed (OSV/NVD mirrors) |
-| AI assistant (explain/summarize) | `edr/investigate.py` seam exists (`use_ai=` flag); AI only explains, never detects — per AI philosophy |
+| AI assistant (explain/summarize) | `edr/investigate.py` seam exists (`use_ai=` flag); AI only explains, never detects - per AI philosophy |
 
-### Infrastructure boundaries — documented, never faked
+### Infrastructure boundaries - documented, never faked
 | Pillar | Why it can't be honest single-endpoint code | Extension point |
 |---|---|---|
 | Kernel minifilter / ELAM / pre-write blocking | Requires signed driver + Microsoft attestation | `report_detection()` seam; ADR-documented |
@@ -107,7 +129,7 @@ Rules that keep it one platform:
   broken sensors are isolated and restarted.
 - **Explainability.** Every block/incident carries its reason string and
   provenance (`threat_intel:urlhaus:malware_distribution`, timeline entries,
-  MITRE technique labels). Any future AI layer explains — it never silently
+  MITRE technique labels). Any future AI layer explains - it never silently
   decides.
 - **No silent success.** Release-blocking audits, honest capability
   boundaries in every doc, and tests that verify live behavior, not mocks

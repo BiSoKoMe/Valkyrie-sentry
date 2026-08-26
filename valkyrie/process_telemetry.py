@@ -1,4 +1,4 @@
-"""Process telemetry collector — endpoint visibility beyond DNS.
+"""Process telemetry collector - endpoint visibility beyond DNS.
 
 Valkyrie historically saw only DNS. This collector adds the first real endpoint
 signal: it watches the process table and emits a normalized ``TelemetryEvent``
@@ -9,11 +9,11 @@ Scope and honesty:
   * This is a **userland poller** (psutil), not a kernel sensor. It sees process
     starts on a short interval; a process that starts and exits between polls can
     be missed. Real-time, tamper-resistant capture (ETW on Windows, eBPF on
-    Linux) is the next step — this collector is the portable seam those plug into
+    Linux) is the next step - this collector is the portable seam those plug into
     and emits the same schema.
   * No privileges are required for the current user's processes; more are visible
     as root/admin. It degrades gracefully (does nothing) if psutil is absent or
-    access is denied — it never raises into the caller.
+    access is denied - it never raises into the caller.
 
 The suspicious-process heuristics are deliberately small and explainable
 (LOLBins, Office-spawns-shell, execution from temp/download dirs). They are a
@@ -57,7 +57,7 @@ _LOLBINS = frozenset({
     "curl.exe", "schtasks.exe", "at.exe", "sc.exe",
 })
 
-# Office apps that should essentially never spawn a shell/script host — a classic
+# Office apps that should essentially never spawn a shell/script host - a classic
 # macro-malware pattern.
 _OFFICE = frozenset({
     "winword.exe", "excel.exe", "powerpnt.exe", "outlook.exe", "onenote.exe",
@@ -81,7 +81,7 @@ def classify_process(name: str, path: str = "",
                      parent_name: str = "") -> tuple[str, list[str], str]:
     """Return (severity, labels, reason) for a process start.
 
-    Pure and deterministic — the whole heuristic surface lives here so it can be
+    Pure and deterministic - the whole heuristic surface lives here so it can be
     unit-tested without touching the OS.
     """
     n = (name or "").lower()
@@ -112,7 +112,7 @@ def classify_process(name: str, path: str = "",
         # false-positived on Valkyrie's OWN installer and on NSIS uninstallers
         # (Un_A.exe in ~nsu.tmp). So it only ESCALATES to medium when it
         # corroborates another signal (a LOLBin, an Office-spawned shell); on
-        # its own it stays LOW — logged/observed, not an alerting incident. A
+        # its own it stays LOW - logged/observed, not an alerting incident. A
         # truly malicious binary from temp is virtually always accompanied by
         # one of those other tells or by the command-line/anomaly scorers.
         corroborated = bool(labels)      # office_child_shell or lolbin already set
@@ -132,7 +132,7 @@ _ENCODED_PS = ("-enc ", "-enc:", "-encodedcommand", "-ec ", " -e ")
 _HIDDEN_FLAGS = ("-w hidden", "-windowstyle hidden", "-nop ", "-noprofile",
                  "-noni", "-noninteractive",
                  # WScript/CScript silent-batch mode ("wscript //b //nologo x.vbs")
-                 # — a common way to run VBScript/JScript with no window or
+                 # - a common way to run VBScript/JScript with no window or
                  # error prompts. Trailing space keeps this off URLs (`//blah`).
                  "//b ", "//nologo")
 _DOWNLOAD_CRADLES = (
@@ -177,7 +177,7 @@ def classify_cmdline(name: str, cmdline: str) -> tuple[str, list[str], str]:
 # Discovery-tactic labeling (pure, unit-tested). Deliberately INFO-only and
 # NEVER escalates severity by itself: whoami/systeminfo/tasklist/net view/net
 # user are each individually indistinguishable from routine administration
-# (redteam/evaluation's disc-* findings — Discovery is architecturally the one
+# (redteam/evaluation's disc-* findings - Discovery is architecturally the one
 # ATT&CK tactic where firing an alerting incident on a single command is a
 # guaranteed false-positive generator, per this project's own precision-over-
 # aggression rule). The only thing this function does is attach a technique-
@@ -191,7 +191,7 @@ _DISCOVERY_SOLO_BINS = {
     "whoami.exe":     "T1033 — System Owner/User Discovery",
     # Added 2026-08-05 after redteam/evaluation/live_safe.py RUN A measured
     # these as a VERIFIED gap (no code path at all, not a guess): ipconfig,
-    # netstat, hostname. None of these has a mutating form worth excluding —
+    # netstat, hostname. None of these has a mutating form worth excluding -
     # unlike reg/sc below, every ipconfig/netstat/hostname invocation is
     # equally a discovery read, so a solo-bin entry (unconditional on the
     # binary name) is correct here the same way it already is for
@@ -201,7 +201,7 @@ _DISCOVERY_SOLO_BINS = {
     "hostname.exe":   "T1082 — System Information Discovery",
     # AdFind is the near-universal AD-recon tool in ransomware intrusions
     # (LockBit/Black Basta/Conti playbooks). It exists to enumerate Active
-    # Directory, so — like the LOLBins above — it earns only an INFO discovery
+    # Directory, so - like the LOLBins above - it earns only an INFO discovery
     # label that FEEDS the recon-burst sequence; it never alerts alone, keeping
     # this name-based entry an honest supplement, not a standalone list-detector.
     "adfind.exe":     "T1087.002 — Account Discovery: Domain Account",
@@ -221,7 +221,7 @@ _DISCOVERY_SOLO_BINS = {
 # not discovery, and some of those already have their own alerting rules
 # (behavioral_rules.py's sc.exe 'stop windefend' / 'create' rules) that must
 # never be double-labeled as a mere INFO-level discovery command. Only the
-# QUERY verb, and nothing else, earns the discovery label — same
+# QUERY verb, and nothing else, earns the discovery label - same
 # positive-keyword-AND-NOT-a-mutating-keyword shape as net.exe's 'net user'
 # vs 'net user ... /add' below. \b word boundaries (not bare `in`) because
 # 'query' must be the verb, not a substring of an unrelated key/service name.
@@ -232,14 +232,14 @@ _SC_MUTATING_VERBS = ("create", "delete", "config", "start", "stop",
 
 
 def _discovery_cmdline_technique(n: str, candidates: tuple) -> str:
-    """The cmdline-shape half of classify_discovery — factored out so it can
+    """The cmdline-shape half of classify_discovery - factored out so it can
     be evaluated against both the raw and de-obfuscated command line.
 
     `candidates` holds the raw lowercased cmdline, plus its normalized form
     when normalization actually changed anything. Both the POSITIVE match
     (a keyword appears) and the EXCLUSION check (a flag that hands the event
     to a different, already-alerting rule) are evaluated against every
-    candidate — an obfuscated exclusion flag must not slip a duplicate,
+    candidate - an obfuscated exclusion flag must not slip a duplicate,
     wrongly-labeled event past the exclusion any more than an obfuscated
     keyword should slip past the positive match.
     """
@@ -247,7 +247,7 @@ def _discovery_cmdline_technique(n: str, candidates: tuple) -> str:
         excluded = any(t in c for c in candidates for t in ("/dclist", "/domain_trusts"))
         if not excluded:
             # nltest WITH those flags already has its own real MEDIUM rule
-            # (behavioral_rules.py nltest-domain) — don't double-label that case.
+            # (behavioral_rules.py nltest-domain) - don't double-label that case.
             return "T1482 — Domain Trust Discovery"
     elif n == "net.exe":
         if any("view" in c for c in candidates):
@@ -255,13 +255,25 @@ def _discovery_cmdline_technique(n: str, candidates: tuple) -> str:
         add_present = any("/add" in c for c in candidates)
         if any("net group" in c for c in candidates) and not add_present:
             # 'net group' enumerates DOMAIN groups ("domain admins", "enterprise
-            # admins") — a domain-account discovery distinct from local 'net
+            # admins") - a domain-account discovery distinct from local 'net
             # user'/'net localgroup'. /add is group creation, handled elsewhere.
             return "T1087.002 — Account Discovery: Domain Account"
-        listing = any("net user" in c or "net localgroup administrators" in c
-                     for c in candidates)
-        if listing and not add_present:
-            # Bare listing only — /add is real account creation, already
+        if any("net localgroup" in c for c in candidates) and not add_present:
+            # 'net localgroup' (bare, or with a group name such as
+            # 'administrators') enumerates LOCAL GROUP membership - MITRE's
+            # own canonical example command for T1069.001. This used to be
+            # folded into the same bucket as 'net user' below and returned
+            # T1087.001 (Account Discovery) instead - a real live-fire
+            # evaluation gap: the T1069.001 atomic test's exact command,
+            # 'net localgroup administrators', already matched the old check
+            # but under the wrong technique ID, so a live scorer that (per
+            # this project's own rule) never credits a technique under the
+            # wrong label never credited it. Checked before the bare 'net
+            # user' case below since 'net localgroup' is the more specific
+            # command shape.
+            return "T1069.001 — Permission Groups Discovery: Local Groups"
+        if any("net user" in c for c in candidates) and not add_present:
+            # Bare listing only - /add is real account creation, already
             # covered (and alerted on) by behavioral_rules.py's own rules.
             return "T1087.001 — Account Discovery: Local Account"
     elif n == "reg.exe":
@@ -277,7 +289,7 @@ def _discovery_cmdline_technique(n: str, candidates: tuple) -> str:
         if query and not mutating:
             return "T1007 — System Service Discovery"
     elif n in ("powershell.exe", "pwsh.exe"):
-        # RSAT ActiveDirectory-module recon cmdlets — the PowerShell equivalent
+        # RSAT ActiveDirectory-module recon cmdlets - the PowerShell equivalent
         # of dsquery/adfind (APT29, ransomware crews). Read-only enumeration, so
         # discovery labels that feed the recon-burst rather than alert alone.
         if any("get-adcomputer" in c for c in candidates):
@@ -294,12 +306,12 @@ def _discovery_cmdline_technique(n: str, candidates: tuple) -> str:
 
 def classify_discovery(name: str, cmdline: str) -> tuple[str, list[str], str, str]:
     """Return (severity, labels, reason, technique) for a Discovery-tactic
-    LOLBin invocation. Severity is ALWAYS SEV_INFO — see module note above."""
+    LOLBin invocation. Severity is ALWAYS SEV_INFO - see module note above."""
     n = (name or "").lower()
     c = (cmdline or "").lower()
 
     # Same "match raw AND normalized" discipline as behavioral_rules.
-    # match_process — otherwise this weak-labeling path is trivially defeated
+    # match_process - otherwise this weak-labeling path is trivially defeated
     # by the exact obfuscation classify_behavior already survives (found by
     # redteam/evaluation/evasion_harness.py: `net v^iew` / `net u^ser` evaded
     # this function while the already-normalized IOA rule engine did not).
@@ -324,7 +336,7 @@ class ProcInfo:
     parent_name: str = ""
     create_time: float = 0.0
     cmdline: str = ""
-    parent_chain: tuple = ()      # (immediate parent, grandparent, …) names
+    parent_chain: tuple = ()      # (immediate parent, grandparent, ...) names
 
     def key(self) -> tuple[int, float]:
         # pid alone is not unique over time (reused); pair with create_time.
@@ -339,13 +351,21 @@ class ProcInfo:
         labels = labels + clabels
         reason = "; ".join(r for r in (reason, creason) if r)
 
-        # Behavioral IOA rule engine — the broad, MITRE-mapped content layer.
+        # Behavioral IOA rule engine - the broad, MITRE-mapped content layer.
         # Its top hit's technique is carried explicitly so the EDR attaches the
         # exact ATT&CK id (and the kill-chain gets the exact tactic) rather than
         # inferring one from labels.
         technique = ""
+        # Signature state is looked up here rather than inside the matcher so
+        # the rule engine stays pure and I/O-free. Cached and revocation-free,
+        # so this costs microseconds after the first sighting of a binary.
+        try:
+            from .signature import trust_of
+            _sig = trust_of(self.path)
+        except Exception:   # noqa: BLE001 — unknown signature must never break
+            _sig = ""       # classification; rules keying on it fail closed
         behavior = classify_behavior(self.name, self.parent_name,
-                                     self.cmdline, self.path)
+                                     self.cmdline, self.path, _sig)
         if behavior is not None:
             if severity_rank(behavior["severity"]) > severity_rank(severity):
                 severity = behavior["severity"]
@@ -355,7 +375,7 @@ class ProcInfo:
             reason = "; ".join(r for r in (reason, behavior["reason"]) if r)
             technique = behavior["technique"]
 
-        # Behavioral anomaly scorer — the *generalizing* layer. Where the rule
+        # Behavioral anomaly scorer - the *generalizing* layer. Where the rule
         # engine and classifiers key on known shapes, the nose scores intrinsic
         # wrongness (masquerade, obfuscation, impossible ancestry) and so catches
         # shapes no rule was written for. It only surfaces when it FIRES (crossed
@@ -372,7 +392,7 @@ class ProcInfo:
             if not technique:
                 technique = anomaly["technique"]
 
-        # Discovery-tactic weak labeling — the weakest tier, so it only fills
+        # Discovery-tactic weak labeling - the weakest tier, so it only fills
         # in a technique when nothing stronger already fired (a real rule/
         # anomaly hit always wins). See classify_discovery's module note.
         _, dlabels, dreason, dtechnique = classify_discovery(self.name, self.cmdline)
@@ -412,7 +432,7 @@ class ProcessCollector:
 
     ``emit`` is called with each ``TelemetryEvent`` (typically wired to
     ``bus.publish(ev.bus_message())``). The first poll establishes a baseline
-    silently — only processes that appear *after* start are reported, so we don't
+    silently - only processes that appear *after* start are reported, so we don't
     flood the pipeline with every already-running process at launch.
     """
 
@@ -443,7 +463,7 @@ class ProcessCollector:
     # next sleep with no thread restart.
     def tighten(self, factor: float = 4.0) -> float:
         """Poll up to `factor`x more often (floored at 0.25s). Returns the
-        new interval. Idempotent — calling it again while already tightened
+        new interval. Idempotent - calling it again while already tightened
         does not compound."""
         self._interval = max(0.25, self._base_interval / max(1.0, factor))
         return self._interval

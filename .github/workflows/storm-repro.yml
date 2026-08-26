@@ -1,0 +1,84 @@
+name: Incident Storm Investigation (isolated repro)
+
+# One-off investigation workflow (see redteam/evaluation/storm_repro.py's own
+# docstring for the full rationale). Reproduces T1090/T1197/T1216 in
+# isolation, plus a zero-technique control phase, on a disposable
+# windows-latest runner - the same class of environment Run 3's incident
+# storm (2,447 incidents vs. Run 1's 49) was observed on - and preserves the
+# raw SQLite incident/detection rows as an artifact BEFORE the runner is
+# destroyed, which the original battery run never did.
+#
+# Adds no detection rules, changes no thresholds, changes no correlation
+# code. Investigation only.
+
+on:
+  workflow_dispatch:
+  # Re-run after the incident-storm fix (resolution_log.py tri-state +
+  # trust.is_self() PID match) to verify the mechanism is actually gone -
+  # validation step H of the approved fix.
+  # workflow_dispatch requires the file to exist on the default branch before
+  # the API/CLI can see it at all - not the case yet for a brand-new workflow
+  # on a feature branch. This push trigger fires directly from THIS branch's
+  # own copy of the file (GitHub evaluates push-triggered workflows from the
+  # pushed commit, unlike workflow_dispatch), same pattern redteam-tierb.yml
+  # already uses for its own feature-branch push trigger.
+  push:
+    branches: [feat/efficacy-etw-coverage]
+    paths:
+      - ".github/workflows/storm-repro.yml"
+      - "redteam/evaluation/storm_repro.py"
+
+jobs:
+  storm-repro:
+    name: Isolated storm reproduction (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Valkyrie dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements_modular.txt
+
+      - name: Provision (Sysmon + PS logging) - same environment as Run 3
+        shell: pwsh
+        run: redteam\provision.ps1
+
+      - name: Run isolated storm reproduction
+        shell: pwsh
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONUTF8: "1"
+        run: python redteam\evaluation\storm_repro.py
+
+      - name: Print raw row dump to the run log (artifact-independent)
+        if: always()
+        shell: pwsh
+        run: |
+          $rows = Get-ChildItem redteam\evaluation\results\*storm_repro_rows.json -ErrorAction SilentlyContinue | Select-Object -Last 1
+          if ($rows) {
+            Write-Host "==================== RAW INCIDENT/DETECTION ROWS ===================="
+            Get-Content $rows.FullName
+          } else {
+            Write-Host "(no row dump produced)"
+          }
+
+      - name: Upload storm-repro evidence (DB + JSON, before runner destruction)
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: storm-repro-results
+          path: |
+            redteam/evaluation/results/*storm_repro*.json
+            redteam/evaluation/results/*storm_repro*.db
+          if-no-files-found: warn
+          retention-days: 30

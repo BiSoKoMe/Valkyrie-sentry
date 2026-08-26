@@ -1,25 +1,25 @@
-"""Persistence (ASEP) telemetry collector — endpoint visibility for the places
+"""Persistence (ASEP) telemetry collector - endpoint visibility for the places
 attackers establish persistence.
 
 Auto-Start Extension Points (ASEPs) are where malware survives reboot: registry
 Run keys, Windows services, Scheduled Tasks and Startup folders. This collector
 snapshots those locations and emits a normalized ``TelemetryEvent`` (category
-``persistence``) whenever a NEW entry appears — the highest-signal, lowest-noise
+``persistence``) whenever a NEW entry appears - the highest-signal, lowest-noise
 endpoint telemetry available without a kernel sensor.
 
 Scope and honesty:
   * **Read-only pollers** over the registry (stdlib ``winreg``) and the
-    filesystem — no ETW, no kernel, no external process, no console window. It
+    filesystem - no ETW, no kernel, no external process, no console window. It
     detects persistence shortly after it is written (poll interval), not at the
     instant of the write. Real-time capture (ETW registry/file providers) is the
     documented next increment; it plugs into the same schema and pipeline.
   * The first poll establishes a silent baseline, so the hundreds of legitimate
-    pre-existing ASEPs are not reported — only entries created *after* start.
+    pre-existing ASEPs are not reported - only entries created *after* start.
   * Degrades gracefully to a no-op on non-Windows or when a key is unreadable;
     never raises into the caller.
 
-Every event carries a MITRE-ish label (run key → T1547, service → T1543, task →
-T1053, startup folder → T1547) that the EDR engine maps to a technique, and a
+Every event carries a MITRE-ish label (run key -> T1547, service -> T1543, task ->
+T1053, startup folder -> T1547) that the EDR engine maps to a technique, and a
 suspicious command line (encoded PowerShell, download cradle, temp path) escalates
 the severity via the same heuristics the process collector uses.
 """
@@ -57,18 +57,18 @@ _ACTIVITY_LABEL = {
 }
 
 def _enum_loaded_user_sids() -> list[str]:
-    """SIDs of currently-LOADED user hives under HKEY_USERS — i.e. actual
+    """SIDs of currently-LOADED user hives under HKEY_USERS - i.e. actual
     logged-on interactive users.
 
     Valkyrie ships as a Windows service with no configured logon account, so
     nssm runs it as LocalSystem. From that process, HKEY_CURRENT_USER is
-    LocalSystem's OWN hive (effectively HKU\\.DEFAULT) — NOT the interactive
+    LocalSystem's OWN hive (effectively HKU\\.DEFAULT) - NOT the interactive
     desktop user's. A registry Run-key write via the interactive user's HKCU
     (by far the most common real-world persistence path, since it needs no
     admin rights) was therefore structurally invisible: the poller was reading
     the wrong hive, not failing to detect in time. HKEY_USERS instead lists
     every hive actually loaded (i.e. every logged-on user), so a service can
-    read them directly — the same capability every real EDR/AV agent relies on.
+    read them directly - the same capability every real EDR/AV agent relies on.
     Mirrors _startup_dirs() below, which already solves the identical
     service-vs-interactive-user problem for the filesystem case by enumerating
     C:\\Users explicitly instead of trusting "current user" context.
@@ -95,7 +95,7 @@ def _run_key_specs() -> list:
         (H.HKEY_CURRENT_USER,  r"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce", "HKCU\\...\\RunOnce"),
         (H.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon", "HKLM\\...\\Winlogon"),
     ]
-    # Per-user Run/RunOnce via HKEY_USERS\<SID> — see _enum_loaded_user_sids.
+    # Per-user Run/RunOnce via HKEY_USERS\<SID> - see _enum_loaded_user_sids.
     # The static HKEY_CURRENT_USER entries above are kept too: harmless, and
     # meaningful in the (less common) case Valkyrie runs interactively rather
     # than as a service.
@@ -108,6 +108,10 @@ def _run_key_specs() -> list:
     return specs
 
 _SERVICES_KEY = r"SYSTEM\CurrentControlSet\Services"
+# How often the cooperative snapshot yields the GIL. Small enough that the web
+# loop never starves (the 253s-freeze bug), large enough that the yields add
+# negligible overhead to a normal, fast snapshot.
+_YIELD_EVERY = 128
 _TASKS_DIR = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "Tasks")
 
 
@@ -182,8 +186,8 @@ def _persistence_severity(activity: str, command: str) -> tuple[str, list[str], 
     """New persistence is inherently notable (medium); a suspicious command line
     or temp-dir target escalates to high.
 
-    OS self-maintenance — Windows Update (TrustedInstaller), Defender, Edge's
-    updater, signed drivers — legitimately creates autostart entries constantly,
+    OS self-maintenance - Windows Update (TrustedInstaller), Defender, Edge's
+    updater, signed drivers - legitimately creates autostart entries constantly,
     and on real hardware that was the largest single source of persistence false
     positives. When the entry's target is a trusted OS binary, start at INFO so
     it is OBSERVED (logged, no alert) rather than flagged. Escalation below still
@@ -215,12 +219,41 @@ def _persistence_severity(activity: str, command: str) -> tuple[str, list[str], 
 class PersistenceCollector:
     """Polls ASEP locations and emits a TelemetryEvent per newly-created entry."""
 
-    def __init__(self, emit: Callable[[TelemetryEvent], None], interval: float = 15.0) -> None:
+    def __init__(self, emit: Callable[[TelemetryEvent], None], interval: float = 15.0,
+                 snapshot_budget: float = 4.0, startup_grace: float = 5.0) -> None:
         self._emit = emit
         self._interval = max(2.0, float(interval))
         self._last: Optional[dict] = None      # {activity: {identity: value}}
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        # Wall-clock cap on a single snapshot so it can never freeze the process
+        # the way the unbounded version froze the web loop for 253s (see
+        # snapshot() docstring). Truncated sections are recorded here.
+        self._snapshot_budget = max(1.0, float(snapshot_budget))
+        self._truncated: list[str] = []
+        # Seconds to wait before the first baseline snapshot, keeping the engine's
+        # startup + readiness window clear of the heavy enumeration.
+        # 5s, not 45s. MEASURED, not guessed.
+        #
+        # The 45-second grace was introduced when a full snapshot took 253
+        # seconds and blocked the event loop. Since then this collector gained a
+        # cooperative yield every 128 entries and a hard snapshot_budget, and
+        # the same snapshot now costs FOUR MILLISECONDS over 901 entries -
+        # roughly 60,000x faster. The grace was protecting against a problem
+        # that no longer exists.
+        #
+        # It was not free. 45s of grace plus a 15s poll, against Tier B's 30s
+        # detection window, meant a persistence technique executed early in a
+        # run was measured against a collector that had not begun looking -
+        # persist-startup-folder flipped DETECTED/MISSED across two runs of the
+        # same build for exactly this reason. Worse in production than in test:
+        # the first minute after boot is when autostart malware runs.
+        #
+        # 5s leaves the baseline at ~5s and the first poll at ~20s, both inside
+        # a 30s window, while still letting startup settle. snapshot_budget
+        # remains the real protection against a slow host, which is where that
+        # protection belongs.
+        self._startup_grace = float(startup_grace)
 
     def available(self) -> bool:
         return os.name == "nt" and _WINREG
@@ -228,35 +261,93 @@ class PersistenceCollector:
     # -- snapshot -----------------------------------------------------------
     def snapshot(self) -> dict:
         """Return {activity: {identity: command}} across all ASEP classes.
-        Never raises."""
+        Never raises.
+
+        COOPERATIVE + BOUNDED (2026-08-24). Measured on a CI runner, a naive
+        snapshot held the thread for **253 seconds** enumerating the services
+        registry and the Tasks tree - and because it never released the GIL, it
+        froze the web server's asyncio loop for that whole time, so /api/health
+        went deaf and every Tier B run failed at the readiness gate (confirmed by
+        the [loop-stall]/[persist-poll] instrumentation; see
+        valkyrie_startup_deafness). Two guarantees fix that here:
+
+          1. GIL yield: every _YIELD_EVERY items we call time.sleep(0) so the
+             event-loop thread (and everything else) gets to run. A snapshot can
+             never again monopolise the interpreter.
+          2. Time budget: the whole snapshot is capped at self._snapshot_budget
+             seconds. A section that would run away is truncated and the fact is
+             recorded (self._truncated). A partial persistence snapshot is
+             vastly better than a multi-minute freeze - and a persistence
+             monitor that takes minutes is useless anyway (it would report the
+             change long after the attacker used it)."""
         snap = {PERSIST_RUN_KEY: {}, PERSIST_SERVICE: {},
                 PERSIST_SCHEDULED_TASK: {}, PERSIST_STARTUP_FOLDER: {}}
+        deadline = time.monotonic() + self._snapshot_budget
+        truncated: list[str] = []
+        n = 0
+
+        def _tick() -> bool:
+            """Yield the GIL periodically; return True when the budget is spent."""
+            nonlocal n
+            n += 1
+            if n % _YIELD_EVERY == 0:
+                time.sleep(0)                 # release the GIL to the web loop
+            return time.monotonic() >= deadline
+
         try:
-            # Run / RunOnce / Winlogon values.
+            # Run / RunOnce / Winlogon values (cheap; always completes).
             for hive, subkey, loc in _run_key_specs():
                 for name, data in _read_values(hive, subkey).items():
                     snap[PERSIST_RUN_KEY][f"{loc}::{name}"] = data
-            # Services — track names cheaply; ImagePath is read lazily on emit.
-            for svc in _subkeys(winreg.HKEY_LOCAL_MACHINE, _SERVICES_KEY) if _WINREG else []:
-                snap[PERSIST_SERVICE][svc] = ""
-            # Scheduled tasks — file names under the Tasks tree.
-            if os.path.isdir(_TASKS_DIR):
+                    _tick()
+            # Services - enumerated INLINE (not via _subkeys) so the GIL yield
+            # and the budget apply to the enumeration itself, which is a prime
+            # suspect for the runaway. ImagePath is still read lazily on emit.
+            if _WINREG:
+                try:
+                    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _SERVICES_KEY) as k:
+                        i = 0
+                        while True:
+                            try:
+                                svc = winreg.EnumKey(k, i)
+                            except OSError:
+                                break
+                            snap[PERSIST_SERVICE][svc] = ""
+                            i += 1
+                            if _tick():
+                                truncated.append("services")
+                                break
+                except OSError:
+                    pass
+            # Scheduled tasks - file names under the Tasks tree (os.walk is
+            # incremental, so the yield/budget bite per file).
+            if time.monotonic() < deadline and os.path.isdir(_TASKS_DIR):
+                stop = False
                 for root, _dirs, files in os.walk(_TASKS_DIR):
                     for f in files:
                         full = os.path.join(root, f)
                         rel = os.path.relpath(full, _TASKS_DIR)
                         snap[PERSIST_SCHEDULED_TASK][rel] = ""
-            # Startup folders — files.
+                        if _tick():
+                            truncated.append("scheduled_tasks")
+                            stop = True
+                            break
+                    if stop:
+                        break
+            # Startup folders - files (cheap).
             for d in _startup_dirs():
                 try:
                     for f in os.listdir(d):
                         if f.lower() == "desktop.ini":
                             continue
                         snap[PERSIST_STARTUP_FOLDER][os.path.join(d, f)] = os.path.join(d, f)
+                        _tick()
                 except OSError:
                     continue
         except Exception:
             pass
+
+        self._truncated = truncated
         return snap
 
     # -- emit helpers -------------------------------------------------------
@@ -285,6 +376,36 @@ class PersistenceCollector:
             pass
 
     # -- poll ---------------------------------------------------------------
+    def status(self) -> dict:
+        """Is this collector actually able to detect anything YET?
+
+        It works by DIFFING snapshots, so until the first baseline exists it can
+        detect nothing at all - a persistence change made before then has
+        nothing to be compared against and is invisible forever.
+
+        That is not hypothetical. Tier B runs a 30-second detection window per
+        technique, while this collector waits `_startup_grace` (45s) before its
+        first snapshot and then polls every `_interval` (15s). A persistence
+        technique executed early in a run is therefore measured against a
+        collector that has not started looking, and `persist-startup-folder`
+        duly flipped between DETECTED and MISSED across two runs of the same
+        build - which reads as flaky detection and is really a race between a
+        45s grace and a 30s window.
+
+        Exposing this lets a harness WAIT for `baseline_ready` instead of
+        racing it, and lets an operator see "this sensor is not armed yet"
+        rather than assuming silence means safety.
+        """
+        return {
+            "running": self.is_running(),
+            "baseline_ready": self._last is not None,
+            "startup_grace_s": self._startup_grace,
+            "poll_interval_s": self._interval,
+            # The honest headline: a caller that acts on this collector's
+            # silence before the baseline exists is acting on nothing.
+            "detects_before_baseline": False,
+        }
+
     def poll_once(self) -> int:
         new = self.snapshot()
         if self._last is None:
@@ -304,7 +425,13 @@ class PersistenceCollector:
     def start(self) -> None:
         if self._running or not self.available():
             return
-        self._last = self.snapshot()     # silent baseline
+        # The baseline snapshot is NOT taken here any more. On a slow host it can
+        # hold the thread for many seconds, and start() runs on the engine's
+        # startup path - blocking it (and, via the GIL, the web loop) exactly
+        # when the readiness gate is trying to confirm the engine is alive. The
+        # background thread takes the first (silent) baseline after a short grace
+        # delay, so startup and the readiness window stay clear of it.
+        self._last = None
         self._running = True
         self._thread = threading.Thread(target=self._loop, daemon=True, name="persistence-collector")
         self._thread.start()
@@ -316,11 +443,51 @@ class PersistenceCollector:
         return bool(self._thread and self._thread.is_alive())
 
     def _loop(self) -> None:
+        # Grace delay before the FIRST snapshot so the engine can finish starting
+        # and the readiness gate can confirm it live during a persistence-quiet
+        # window. Capped so it never delays real detection by much.
+        grace = min(self._startup_grace, self._interval * 3)
+        waited = 0.0
+        while self._running and waited < grace:
+            try:
+                time.sleep(0.5)
+                waited += 0.5
+            except Exception:   # noqa: BLE001 — a worker loop never dies
+                waited += 0.5
+
+        # GUARDED. The baseline snapshot was moved onto this thread so it would
+        # stop blocking start(), and it was left OUTSIDE the try/except below.
+        # A single raise here killed the whole collector before it ever reached
+        # the guarded poll loop - the sensor would be dead for the life of the
+        # process while the engine went on reporting itself healthy. Silent
+        # sensor death is the failure mode this project keeps getting burned by,
+        # so the baseline gets the same guard every other poll has.
+        if self._running and self._last is None:
+            try:
+                self._last = self.snapshot()     # silent baseline, on THIS thread
+            except Exception:   # noqa: BLE001
+                self._last = None                # retry on the next poll instead
         while self._running:
             time.sleep(self._interval)
             if not self._running:
                 break
             try:
+                # Diagnostic timing (2026-08-24): a full snapshot enumerates every
+                # HKLM service subkey + os.walk of the Tasks tree + registry run
+                # keys - GIL-heavy Python work. The first poll lands at ~15s,
+                # exactly when the uvicorn event loop goes deaf under Tier B
+                # (valkyrie_startup_deafness). Log each poll's duration to stderr
+                # so the CI transcript shows whether THIS is the loop-stall's GIL
+                # hog. If a poll takes several seconds and the [loop-stall] line
+                # fires at the same moment, the collector is confirmed as the
+                # cause. Cheap; safe to leave on.
+                _t0 = time.monotonic()
                 self.poll_once()
+                _dur = time.monotonic() - _t0
+                if _dur > 1.0:
+                    import sys as _sys
+                    print(f"[persist-poll] {time.strftime('%H:%M:%S')} snapshot "
+                          f"held the thread for {_dur:.1f}s", file=_sys.stderr,
+                          flush=True)
             except Exception:
                 pass

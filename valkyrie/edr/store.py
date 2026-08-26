@@ -1,4 +1,4 @@
-"""EDR persistence — detections, incidents, and a response audit log.
+"""EDR persistence - detections, incidents, and a response audit log.
 
 Deliberately reuses the main :class:`valkyrie.store.Store`'s connection factory
 so EDR state lives in the *same* SQLite database as DNS events. That gives two
@@ -9,7 +9,7 @@ things for free:
     because the connection URI is whatever the Store is using.
 
 Writes here are low-volume (a detection per notable event, not per query) so a
-simple lock + short-lived connection is plenty — no async writer needed.
+simple lock + short-lived connection is plenty - no async writer needed.
 """
 
 from __future__ import annotations

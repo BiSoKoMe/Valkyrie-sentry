@@ -1,9 +1,9 @@
-"""Persona engine — one CONSISTENT synthetic identity for the deception layer.
+"""Persona engine - one CONSISTENT synthetic identity for the deception layer.
 
 WHY THIS EXISTS
 ---------------
 `decision.py` has had a DECEIVE action since the beginning, but what it
-actually did was return `0.0.0.0` — the same answer as BLOCK, under a different
+actually did was return `0.0.0.0` - the same answer as BLOCK, under a different
 name. That is not deception, and it is worse than it sounds:
 
   * The tracker learns nothing false. It learns *nothing*, which is itself
@@ -13,7 +13,7 @@ name. That is not deception, and it is worse than it sounds:
     is a fingerprint. The user set out to be less identifiable and became more
     identifiable in a rarer bucket.
 
-The alternative is to answer — plausibly. But an inconsistent lie is worse
+The alternative is to answer - plausibly. But an inconsistent lie is worse
 still, and this is the trap this module exists to avoid:
 
     Session 1: locale en-US, timezone America/New_York, screen 1920x1080
@@ -24,15 +24,15 @@ than blocking, because it is unique to synthetic traffic. Real users are
 boring: the same person, on the same laptop, in the same city, for months.
 
 So the lie must be:
-  1. INTERNALLY COHERENT  — locale, timezone, and language agree with each
+  1. INTERNALLY COHERENT  - locale, timezone, and language agree with each
      other; screen metrics are physically possible.
-  2. STABLE ACROSS SESSIONS — the same machine tells the same story next week.
-  3. COMMON, NOT RANDOM — drawn from configurations many real people have.
+  2. STABLE ACROSS SESSIONS - the same machine tells the same story next week.
+  3. COMMON, NOT RANDOM - drawn from configurations many real people have.
      Uniform randomness maximises entropy, which is the opposite of the goal:
      a 3-in-a-billion screen size identifies you as precisely as your real one.
      We aim for a large crowd, not a novel disguise.
 
-RELATIONSHIP TO farble.py — THEY PULL IN OPPOSITE DIRECTIONS, DELIBERATELY
+RELATIONSHIP TO farble.py - THEY PULL IN OPPOSITE DIRECTIONS, DELIBERATELY
 --------------------------------------------------------------------------
 `farble.py` makes browser-surface values DIFFER per site and per session, so
 two trackers cannot correlate one user. This module makes values IDENTICAL
@@ -41,7 +41,7 @@ across sessions. That is not a contradiction; they defend different things:
   * farble operates on surfaces the tracker reads from a REAL browser, where
     the honest answer would be a durable ID. Decorrelation is the win.
   * persona operates on answers WE fabricate for beacons we already
-    intercepted. Here the tracker has no true value to correlate — the only
+    intercepted. Here the tracker has no true value to correlate - the only
     thing that can betray us is our own inconsistency. Stability is the win.
 
 Put plainly: farble hides a real user in noise; persona builds a fake user who
@@ -52,7 +52,7 @@ HONEST BOUNDARIES
 * This does not make a user untrackable. A tracker with a first-party cookie,
   a login, or an IP address does not need any of these fields.
 * The persona is per-machine, not per-site. A tracker present on two sites sees
-  one consistent identity — which is what a real user looks like. Cross-site
+  one consistent identity - which is what a real user looks like. Cross-site
   decorrelation is farble's job, on surfaces we can actually rewrite.
 * Nothing here touches real system values. It never reads or reports the user's
   actual locale, timezone, or screen; it fabricates a plausible one instead.
@@ -93,10 +93,10 @@ PERSONA_SCHEMA = 2
 # DST-observing zone is itself a contradiction.
 # ---------------------------------------------------------------------------
 #
-# `region`/`city`/`lat`/`lon` add COARSE geo — the resolution an IP-based geo
+# `region`/`city`/`lat`/`lon` add COARSE geo - the resolution an IP-based geo
 # lookup actually gives a real beacon (tens of km), never GPS precision. Kept
 # in the SAME row as locale/tz/country/std_offset so geo is physically
-# incapable of disagreeing with the timezone it lives beside — there is no
+# incapable of disagreeing with the timezone it lives beside - there is no
 # separate "pick a city" step that a different persona-derived channel could
 # get wrong. lat/lon are rounded to 1 decimal (~11km) on purpose: a location
 # reported to six decimal places is street-level precision no IP-geo service

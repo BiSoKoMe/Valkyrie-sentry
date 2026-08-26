@@ -1,15 +1,15 @@
-"""Sysmon — a first-class Valkyrie dependency, not a bundled binary.
+"""Sysmon - a first-class Valkyrie dependency, not a bundled binary.
 
 WHY SYSMON IS A DEPENDENCY, NOT AN OPTIONAL EXTRA
 --------------------------------------------------
-Three techniques Valkyrie claims to detect — T1055 (process injection) and
-both T1003.001 paths (LSASS credential dumping) — are ONLY observable
+Three techniques Valkyrie claims to detect - T1055 (process injection) and
+both T1003.001 paths (LSASS credential dumping) - are ONLY observable
 through Sysmon's EID 8 (CreateRemoteThread) and EID 10 (ProcessAccess to
 lsass.exe); nothing else in this product's sensor stack sees them. And
 without Sysmon EID 1, command-line-shaped detection (the 40-rule IOA engine,
 cmdline_normalize, the reconnaissance-burst sequence) falls back to a 2-second
-psutil poll that most native Windows tools — which exit in well under a
-second — simply outrun. A shipped client silently running that degraded path
+psutil poll that most native Windows tools - which exit in well under a
+second - simply outrun. A shipped client silently running that degraded path
 is not an edge case worth a TODO; it is the difference between the product's
 advertised detection rate and its real one. Hence: Sysmon is treated here as
 a real dependency, the way a database or a TLS library would be, not as a
@@ -23,7 +23,7 @@ control. Instead: download the official signed build from Microsoft's own
 Sysinternals live endpoint at install/first-run time (`config.SYSMON_
 DOWNLOAD_URL`), verify its Authenticode signature names Microsoft BEFORE
 executing anything extracted from the archive, then install it with
-Valkyrie's own minimal event config (`VALKYRIE_SYSMON_CONFIG` below) —
+Valkyrie's own minimal event config (`VALKYRIE_SYSMON_CONFIG` below) -
 narrowly scoped to exactly the event types Valkyrie's detectors read
 (1/3/7/8/10/11/13/25), not the much larger SwiftOnSecurity community config
 used only by the dev/red-team provisioning script (redteam/provision.ps1),
@@ -38,7 +38,7 @@ no clean-uninstall trail (no SCM removal event, no uninstall command in any
 shell history) sometime after a successful install, and Sysmon64 crashed 25
 seconds after the next boot trying to reach its now-missing driver. Worse:
 even an elevated Administrator token could not delete the resulting broken
-service registration — `DeleteService` returned Access Denied despite a
+service registration - `DeleteService` returned Access Denied despite a
 service DACL that explicitly grants Administrators the delete right. That
 combination (readable and queryable, but not modifiable, by an admin, against
 a driver-backed service, despite a DACL that says it should work) is the
@@ -46,22 +46,22 @@ signature of a security product's self-defense driver intercepting the SCM
 call, not a permissions bug on this host.
 
 This is not a one-off. A very common class of consumer AV treats any new
-kernel-driver-backed monitoring tool as suspicious by construction — that is
+kernel-driver-backed monitoring tool as suspicious by construction - that is
 what Sysmon looks like to a behavioral AV engine, and it is exactly the kind
 of interference a real fleet of client machines will hit. So this module
 treats "Sysmon install was blocked by other security software" as a expected,
-first-class OUTCOME with its own reported reason — not a caught exception on
-the way to a generic error — and Valkyrie must come up and clearly report
+first-class OUTCOME with its own reported reason - not a caught exception on
+the way to a generic error - and Valkyrie must come up and clearly report
 which detection mode it is running in regardless of which branch fires.
 Never fail closed: a missing or blocked Sysmon must degrade coverage, never
 prevent the agent from starting.
 
 SENSOR TAMPER DETECTION
 ------------------------
-Nothing previously noticed when Valkyrie's OWN sensors disappeared — which is
+Nothing previously noticed when Valkyrie's OWN sensors disappeared - which is
 exactly what happened live, with zero audit trail, on this development
 machine while this ADR was being written. A detection sensor vanishing is
-itself an attack technique (T1562.001 — Impair Defenses: Disable or Modify
+itself an attack technique (T1562.001 - Impair Defenses: Disable or Modify
 Tools), and a security product that cannot notice its own blinding is not
 defensible. See `sensor_tamper.py` for the periodic health check that turns
 "a sensor silently died" into a CRITICAL incident instead of silence.
@@ -73,7 +73,7 @@ dependency entirely once it ships: it needs no third-party AV's cooperation
 to see process/thread/image-load events, because it IS a kernel component
 with its own callback registrations, not a second driver an AV's behavioral
 engine has to be talked into tolerating. Until it is signed and loadable in
-production (it is currently unsigned and MUST NOT be loaded — see
+production (it is currently unsigned and MUST NOT be loaded - see
 driver/BRINGUP.md), Sysmon is the best available substitute for that
 visibility and is treated with the seriousness of a real dependency, not a
 nice-to-have.
@@ -97,7 +97,7 @@ from typing import Optional
 from .config import DATA_DIR, SYSMON_DOWNLOAD_URL
 
 # ---------------------------------------------------------------------------
-# Environment probe (moved from redteam/evaluation/environment.py — this is
+# Environment probe (moved from redteam/evaluation/environment.py - this is
 # now product code the running agent depends on, not just evaluation
 # tooling. redteam/evaluation/environment.py re-exports from here so the
 # red-team evaluation scores against the SAME probe the product uses,
@@ -134,13 +134,42 @@ class SysmonEnvironment:
     config_hash: str = ""
     detail: str = ""
     errors: tuple = field(default_factory=tuple)
+    # True when a probe step could not run because this process lacks the
+    # privilege to look -- NOT because the thing being probed was absent.
+    #
+    # This distinction is load-bearing and its absence caused two false
+    # diagnoses on 2026-08-23. The Sysmon operational log is
+    # Administrators-only, and every read below uses -ErrorAction
+    # SilentlyContinue, so an unprivileged probe produced log_enabled=False,
+    # record_count=0, newest_event=None, collection_live=False -- byte-identical
+    # to a genuinely dead sensor. The product then told a human it was blind
+    # while it was in fact collecting 49,000 events. "I am not allowed to look"
+    # and "there is nothing there" are different facts and must not render the
+    # same.
+    access_denied: bool = False
+
+    @property
+    def determinable(self) -> bool:
+        """False when this probe could not establish the truth either way."""
+        return not self.access_denied
 
     def provides(self, eid: int) -> bool:
-        """True only if this host will actually deliver `eid` to a classifier."""
+        """True only if this host will actually deliver `eid` to a classifier.
+
+        Stays False when undeterminable: authority must never be granted on an
+        unverified sensor. Callers that need to explain themselves to a human
+        must consult `determinable`/`why_not` rather than reading this as
+        evidence of absence.
+        """
         return (self.present and self.collection_live
                 and eid in self.configured_eids)
 
     def why_not(self, eid: int) -> str:
+        if self.access_denied:
+            return ("cannot determine -- the Sysmon operational log is "
+                    "readable only by Administrators and this probe ran "
+                    "unprivileged. This is NOT evidence that Sysmon is dark; "
+                    "re-run elevated to establish the truth")
         if not self.present:
             return f"Sysmon not installed/running on this host ({self.service_state})"
         if not self.collection_live:
@@ -168,6 +197,28 @@ def _powershell(script: str, timeout: int = 30) -> tuple:
         return p.returncode == 0, (p.stdout or "") + (p.stderr or "")
     except (OSError, subprocess.SubprocessError) as exc:
         return False, f"{type(exc).__name__}: {exc}"
+
+
+# Substrings Windows/PowerShell emit when a read failed for PRIVILEGE reasons
+# rather than because the target was missing. Matched case-insensitively.
+_ACCESS_DENIED_MARKERS = (
+    "unauthorizedaccessexception",
+    "access is denied",
+    "attempted to perform an unauthorized operation",
+    "requested registry access is not allowed",
+)
+
+
+def _is_access_denied(text: str) -> bool:
+    """True when this output is a permission failure, not a negative finding.
+
+    Deliberately a text match: `Get-WinEvent -ErrorAction SilentlyContinue`
+    gives us no structured error, so the only evidence available is what it
+    printed. A false positive here costs a "cannot determine" instead of a
+    definite answer, which is the safe direction to be wrong in.
+    """
+    low = (text or "").lower()
+    return any(m in low for m in _ACCESS_DENIED_MARKERS)
 
 
 def _decode_sysmon_config(raw: str) -> str:
@@ -203,14 +254,18 @@ def probe_sysmon() -> SysmonEnvironment:
         return env
     env.present = True
 
+    denied = False
+
     ok, out = _powershell(
         "(Get-WinEvent -ListLog '" + _LOG_NAME + "' -ErrorAction SilentlyContinue).IsEnabled"
     )
+    denied = denied or _is_access_denied(out)
     env.log_enabled = ok and out.strip().lower().endswith("true")
 
     ok, out = _powershell(
         "(Get-WinEvent -ListLog '" + _LOG_NAME + "' -ErrorAction SilentlyContinue).RecordCount"
     )
+    denied = denied or _is_access_denied(out)
     tail = out.strip().splitlines()[-1].strip() if out.strip() else ""
     try:
         env.log_record_count = int(float(tail))
@@ -223,18 +278,37 @@ def probe_sysmon() -> SysmonEnvironment:
         "-ErrorAction SilentlyContinue; "
         "if ($e) { ((Get-Date) - $e.TimeCreated).TotalSeconds } else { -1 }"
     )
+    denied = denied or _is_access_denied(out)
     tail = out.strip().splitlines()[-1].strip() if out.strip() else ""
     try:
         a = float(tail)
         env.newest_event_age_seconds = None if a < 0 else a
     except ValueError:
-        errors.append(f"unparsable newest-event age {tail!r}")
+        # An access-denied here is a PRIVILEGE fact, not a malformed number.
+        # Recording it as "unparsable" (the old behaviour) buried the one piece
+        # of evidence that distinguished "cannot look" from "nothing there".
+        if not _is_access_denied(out):
+            errors.append(f"unparsable newest-event age {tail!r}")
+
+    env.access_denied = denied
 
     env.collection_live = bool(
         env.log_enabled
         and env.newest_event_age_seconds is not None
         and env.newest_event_age_seconds <= FRESHNESS_SECONDS
     )
+
+    if denied:
+        # Do not let three swallowed permission errors masquerade as three
+        # negative observations. collection_live stays False (authority is
+        # never granted on an unverified sensor) but the DETAIL now says which
+        # of the two worlds we are in.
+        errors.append("Sysmon log reads were denied (probe is not elevated); "
+                      "log_enabled/record_count/event-age above are NOT "
+                      "observations")
+        env.detail = ("cannot determine Sysmon collection state: the "
+                      "operational log requires Administrator and this probe "
+                      "ran unprivileged")
 
     ok, out = _powershell(
         "$p = (Get-CimInstance Win32_Service -Filter \"Name='Sysmon64' or Name='Sysmon'\" "
@@ -256,12 +330,27 @@ def probe_sysmon() -> SysmonEnvironment:
         errors.append("could not read active Sysmon rule configuration")
 
     env.errors = tuple(errors)
-    env.detail = (
-        f"service={env.service_state} log_enabled={env.log_enabled} "
-        f"records={env.log_record_count} "
-        f"newest_event_age={env.newest_event_age_seconds}s "
-        f"configured_eids={list(env.configured_eids)}"
-    )
+    if env.access_denied:
+        # The raw field dump below is actively misleading when the reads were
+        # refused: "log_enabled=False records=0 newest_event_age=None" states
+        # three negatives that were never observed. Lead with the truth and
+        # keep the raw values behind an explicit label.
+        env.detail = (
+            "CANNOT DETERMINE Sysmon collection state -- the operational log "
+            "requires Administrator and this probe ran unprivileged. The "
+            "following are NOT observations: "
+            f"log_enabled={env.log_enabled} records={env.log_record_count} "
+            f"newest_event_age={env.newest_event_age_seconds}s. "
+            f"Established: service={env.service_state} "
+            f"configured_eids={list(env.configured_eids)}"
+        )
+    else:
+        env.detail = (
+            f"service={env.service_state} log_enabled={env.log_enabled} "
+            f"records={env.log_record_count} "
+            f"newest_event_age={env.newest_event_age_seconds}s "
+            f"configured_eids={list(env.configured_eids)}"
+        )
     return env
 
 
@@ -283,19 +372,19 @@ def check_requirements(requires: tuple, sysmon: SysmonEnvironment) -> tuple:
 # ---------------------------------------------------------------------------
 
 # Narrowly scoped to exactly what Valkyrie's own detectors read:
-#   1  ProcessCreate      — command-line detection (IOA rules, cmdline_normalize,
+#   1  ProcessCreate      - command-line detection (IOA rules, cmdline_normalize,
 #                           reconnaissance-burst)
-#   3  NetworkConnect     — corroborates network_score.py's list-free signals
-#   7  ImageLoad          — unsigned modules + kernel-driver-load (BYOVD)
-#   8  CreateRemoteThread — T1055 process injection (etw/sysmon.py EID 8)
-#   10 ProcessAccess      — T1003.001 LSASS credential dumping (EID 10),
-#                           scoped to lsass.exe only — this is not a general
+#   3  NetworkConnect     - corroborates network_score.py's list-free signals
+#   7  ImageLoad          - unsigned modules + kernel-driver-load (BYOVD)
+#   8  CreateRemoteThread - T1055 process injection (etw/sysmon.py EID 8)
+#   10 ProcessAccess      - T1003.001 LSASS credential dumping (EID 10),
+#                           scoped to lsass.exe only - this is not a general
 #                           process-access monitor
-#   11 FileCreate         — startup-folder persistence
-#   13 RegistryEvent      — Run-key persistence
-#   25 ProcessTampering   — process hollowing
+#   11 FileCreate         - startup-folder persistence
+#   13 RegistryEvent      - Run-key persistence
+#   25 ProcessTampering   - process hollowing
 # Deliberately NOT the SwiftOnSecurity community config used by
-# redteam/provision.ps1 for red-team research — that config is appropriate
+# redteam/provision.ps1 for red-team research - that config is appropriate
 # for a researcher's box, not for a shipped agent's telemetry footprint.
 VALKYRIE_SYSMON_CONFIG = """<Sysmon schemaversion="4.90">
   <EventFiltering>
@@ -339,7 +428,7 @@ _MICROSOFT_SIGNER_MARKER = "O=Microsoft Corporation"
 
 _MANAGED_MARKER_PATH = DATA_DIR / "sysmon_managed_by_valkyrie.json"
 
-# Outcomes of install_or_verify(). Every branch is a real, expected shape —
+# Outcomes of install_or_verify(). Every branch is a real, expected shape -
 # not a caught exception dressed up as a string.
 MODE_ALREADY_OURS       = "already_ours"            # our config, healthy
 MODE_INSTALLED          = "installed"               # fresh install succeeded
@@ -352,7 +441,7 @@ MODE_NOT_WINDOWS        = "not_windows"
 MODE_UNKNOWN_ERROR      = "unknown_error"
 
 # Modes in which Sysmon-dependent detection cannot be relied on. Never used to
-# decide whether Valkyrie starts — only to decide what the status/ADR-mandated
+# decide whether Valkyrie starts - only to decide what the status/ADR-mandated
 # warning says.
 DEGRADED_MODES = frozenset({
     MODE_FOREIGN_CONFIG, MODE_BLOCKED, MODE_BROKEN_NEEDS_REPAIR,
@@ -371,7 +460,7 @@ class SysmonInstallResult:
 
 def verify_microsoft_signed(path: Path) -> bool:
     """True only if *path* has a Valid Authenticode signature naming Microsoft
-    as the signer. Best-effort, never raises, fails CLOSED on any error —
+    as the signer. Best-effort, never raises, fails CLOSED on any error -
     an unverifiable binary must never be treated as trusted."""
     try:
         if not path.is_file():
@@ -385,7 +474,7 @@ def verify_microsoft_signed(path: Path) -> bool:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         return r.returncode == 0 and _MICROSOFT_SIGNER_MARKER in (r.stdout or "")
-    except Exception:      # noqa: BLE001 — signature check must never raise
+    except Exception:      # noqa: BLE001 - signature check must never raise
         return False
 
 
@@ -403,7 +492,7 @@ def download_sysmon(dest_dir: Path) -> Optional[Path]:
             SYSMON_DOWNLOAD_URL, headers={"User-Agent": "Valkyrie-SysmonSetup/1.0"})
         with urllib.request.urlopen(req, timeout=30) as resp:
             blob = resp.read()
-    except Exception:      # noqa: BLE001 — offline/blocked network is expected
+    except Exception:      # noqa: BLE001 - offline/blocked network is expected
         return None
 
     try:
@@ -415,7 +504,7 @@ def download_sysmon(dest_dir: Path) -> Optional[Path]:
             data = zf.read(names[0])
         exe_path = dest_dir / "Sysmon64.exe"
         exe_path.write_bytes(data)
-    except Exception:      # noqa: BLE001 — corrupt/unexpected archive shape
+    except Exception:      # noqa: BLE001 - corrupt/unexpected archive shape
         return None
 
     if not verify_microsoft_signed(exe_path):
@@ -465,7 +554,7 @@ def install_or_verify(workdir: Optional[Path] = None) -> SysmonInstallResult:
 
     NEVER raises, and never blocks startup: this only ever informs the
     caller what detection mode is available. Every branch below is a real,
-    expected outcome — see the module docstring for why "blocked by another
+    expected outcome - see the module docstring for why "blocked by another
     security product" specifically gets its own reported mode instead of
     reading as a generic failure.
     """
@@ -480,7 +569,7 @@ def install_or_verify(workdir: Optional[Path] = None) -> SysmonInstallResult:
             return SysmonInstallResult(MODE_ALREADY_OURS, False,
                                        "Sysmon already installed and healthy "
                                        "(installed by Valkyrie)", env)
-        # Someone else's Sysmon. Do NOT clobber it — their config may be
+        # Someone else's Sysmon. Do NOT clobber it - their config may be
         # load-bearing for their own tooling. Report whether it happens to
         # cover what Valkyrie needs; degraded is judged on EID coverage, not
         # on authorship.
@@ -502,7 +591,7 @@ def install_or_verify(workdir: Optional[Path] = None) -> SysmonInstallResult:
 
     if env.present and not env.collection_live:
         # Registered and "Running" per SCM, but not actually delivering
-        # events — the exact broken shape found live on 2026-08-04 (driver
+        # events - the exact broken shape found live on 2026-08-04 (driver
         # gone, service crash-looping). This is NOT ours to force-fix: an
         # automated uninstall/reinstall cycle risks repeating the same
         # self-defense collision that made THIS exact state undeletable even
@@ -535,7 +624,7 @@ def install_or_verify(workdir: Optional[Path] = None) -> SysmonInstallResult:
     if rc == 0 and post.present:
         _mark_managed(VALKYRIE_SYSMON_CONFIG)
         # A driver that gets removed by another security product minutes
-        # after a "successful" install is exactly what this ADR documents —
+        # after a "successful" install is exactly what this ADR documents -
         # a clean rc==0 here is necessary but not sufficient. The caller
         # (sensor_tamper.py) is what catches a LATER disappearance; this
         # function reports what it can observe right now.
@@ -544,7 +633,7 @@ def install_or_verify(workdir: Optional[Path] = None) -> SysmonInstallResult:
 
     # Install reported success but the driver isn't actually live, OR the
     # install call itself failed. Either way, this is the "blocked by
-    # another security product" shape this ADR exists to name explicitly —
+    # another security product" shape this ADR exists to name explicitly -
     # never surfaced as a bare/generic error.
     return SysmonInstallResult(
         MODE_BLOCKED, True,
@@ -561,7 +650,7 @@ def uninstall_valkyrie_sysmon() -> tuple:
     """Remove Sysmon ONLY if Valkyrie was the one that installed it.
 
     Returns (removed: bool, reason: str). A pre-existing, foreign Sysmon
-    installation is never touched — Valkyrie has no way to know it is safe
+    installation is never touched - Valkyrie has no way to know it is safe
     to remove someone else's monitoring setup, and assuming so is exactly
     the kind of "clobber the existing config" behavior Part 1c rules out.
     """

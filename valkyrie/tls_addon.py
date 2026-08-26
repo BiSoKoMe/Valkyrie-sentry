@@ -1,4 +1,4 @@
-"""mitmproxy addon — runs inside the mitmproxy worker process.
+"""mitmproxy addon - runs inside the mitmproxy worker process.
 
 Intercepts every HTTPS request after TLS termination and applies the same
 decision pipeline as the DNS path (blocklist / behavioral / user rules),
@@ -14,7 +14,7 @@ strips tracking query parameters from all href/src attributes.
 
 This module is loaded by mitmproxy via `mitmdump -s tls_addon.py`
 (see tls_inspector.py), so it talks to the rest of Valkyrie only through
-the Store — it does not import the DNS/behavioral engines directly to
+the Store - it does not import the DNS/behavioral engines directly to
 keep mitmproxy's subprocess lightweight and independently restartable.
 """
 
@@ -40,7 +40,7 @@ from .config import (
 from . import farble, nyx
 from .store import DnsEvent, Store
 
-# 1x1 transparent PNG — returned for suppressed tracking pixels
+# 1x1 transparent PNG - returned for suppressed tracking pixels
 _TRANSPARENT_PNG = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
     b"\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
@@ -51,7 +51,7 @@ _TRANSPARENT_PNG = (
 # Fingerprint protection now comes from farble.py, which generates a DIFFERENT
 # script per origin per session. The constant-valued snippet that used to live
 # here was actively counterproductive: every user returned the same fake canvas
-# hash, the same empty plugin list, the same colour depth — values no real
+# hash, the same empty plugin list, the same colour depth - values no real
 # browser reports, identical across every site and session, which is precisely
 # the durable cross-site identifier the feature exists to prevent. See the
 # module docstring in farble.py for the full reasoning.
@@ -121,11 +121,11 @@ def _strip_tracking_params(url: str) -> str:
 
 def _is_tracker_path(path: str) -> bool:
     # Segment-exact, NOT substring. A bare `p in path` match blocked ordinary
-    # content paths whose word merely *contains* a pattern — e.g. "/collections/
+    # content paths whose word merely *contains* a pattern - e.g. "/collections/
     # shoes" matched "/collect" and every e-commerce category page got blocked
     # as a beacon (a real false positive found by the Nyx privacy battery). A
     # pattern now hits only when it is a whole path segment, or that segment plus
-    # a file extension ("/pixel.gif") — never just a prefix of a longer word.
+    # a file extension ("/pixel.gif") - never just a prefix of a longer word.
     # Strictly more precise than the old check, so it can only REMOVE false
     # matches, never add one. Query string is dropped first.
     lower = (path or "/").split("?", 1)[0].lower()
@@ -144,7 +144,7 @@ def _is_fingerprint_path(path: str) -> bool:
 
 
 class ValkyrieAddon:
-    """mitmproxy addon class — methods are mitmproxy event hooks."""
+    """mitmproxy addon class - methods are mitmproxy event hooks."""
 
     def __init__(self, store: Store, blocklist=None, behavioral=None, rules=None,
                  threat_intel=None) -> None:
@@ -154,7 +154,7 @@ class ValkyrieAddon:
         self.rules           = rules
         self.threat_intel    = threat_intel
         self.intercept_count = 0
-        # response cache: url → (expiry_time, cleaned_bytes | None)
+        # response cache: url -> (expiry_time, cleaned_bytes | None)
         self._resp_cache: dict[str, tuple[float, bytes | None]] = {}
 
     # ------------------------------------------------------------------
@@ -210,7 +210,7 @@ class ValkyrieAddon:
 
         elapsed_ms = (time.monotonic() - t0) * 1000
         if elapsed_ms > 50:
-            # Processing took too long — cache a None (passthrough) for this URL
+            # Processing took too long - cache a None (passthrough) for this URL
             self._resp_cache[url] = (time.monotonic() + RESPONSE_CACHE_TTL, None)
             return
 
@@ -229,12 +229,12 @@ class ValkyrieAddon:
 
         self.intercept_count += 1
 
-        # 1. User rules — always_allow wins outright
+        # 1. User rules - always_allow wins outright
         if self.rules is not None and self.rules.get().is_always_allowed(domain, proc):
             self._strip_params(flow)
             return
 
-        # 2. User rules — always_block
+        # 2. User rules - always_block
         if self.rules is not None and self.rules.get().is_always_blocked(domain, proc):
             self._block(flow, domain, url, proc, "user rule: always_block", category="rule_block")
             return
@@ -242,7 +242,7 @@ class ValkyrieAddon:
         # 3. Threat-intel FULL-URL match (path-level). Checked before the
         # domain blocklist because it is the more specific verdict and the
         # only one that can act on malware hosted at one path of an otherwise
-        # legitimate, compromised site — where blocking the whole domain
+        # legitimate, compromised site - where blocking the whole domain
         # would be the false positive. This seam exists only here: DNS never
         # sees a path, so a URL indicator is unreachable without TLS
         # inspection.
@@ -276,7 +276,7 @@ class ValkyrieAddon:
             self._block(flow, domain, url, proc, f"fingerprinting script: {path}", category="fingerprint")
             return
 
-        # 8. Data exfiltration heuristic — large POST body to a flagged domain
+        # 8. Data exfiltration heuristic - large POST body to a flagged domain
         if req.method == "POST":
             body_len = len(req.raw_content or b"")
             if body_len > EXFIL_BODY_SIZE_BYTES and (
@@ -288,14 +288,14 @@ class ValkyrieAddon:
                              category="exfil")
                 return
 
-        # 8.5 Nyx — SEE & REPORT (observe-only). Read the raw request and note
+        # 8.5 Nyx - SEE & REPORT (observe-only). Read the raw request and note
         # any personal data (device ID, location, contact, fingerprint bundle)
         # crossing to a third party. This never touches the flow and never
-        # blocks — it only records what left, so the user can be told. Blocking
+        # blocks - it only records what left, so the user can be told. Blocking
         # or lying on outbound theft is a deliberate later slice.
         self._nyx_observe(flow, domain, url, proc)
 
-        # 9. Allowed — strip tracking params and log
+        # 9. Allowed - strip tracking params and log
         self._strip_params(flow)
         self._log(domain, url, proc, "allowed", "", category="https")
 
@@ -329,9 +329,9 @@ class ValkyrieAddon:
                                   "Nyx fed fake data for your "
                                   + ", ".join(faked) + f" to {domain}",
                                   category="nyx_fake")
-                        return   # acted — do not also log an observe event
+                        return   # acted - do not also log an observe event
                     except Exception:
-                        pass     # rewrite failed → fall through to observe log
+                        pass     # rewrite failed -> fall through to observe log
 
             for ob in observations:
                 self._log(domain, url, proc, "flagged", ob.sentence,
@@ -350,7 +350,7 @@ class ValkyrieAddon:
         removed = 0
         # The farbling script is derived per-ORIGIN, so the page's own origin
         # has to reach the injectors. Two different sites must receive two
-        # different scripts — that difference is the entire mechanism that
+        # different scripts - that difference is the entire mechanism that
         # stops them correlating the same user (see farble.py).
         origin = farble.origin_of(flow.request.pretty_url)
 
@@ -586,5 +586,5 @@ class ValkyrieAddon:
             return "unknown"
 
 
-def load(loader) -> None:  # pragma: no cover — mitmproxy entrypoint convention
+def load(loader) -> None:  # pragma: no cover - mitmproxy entrypoint convention
     pass

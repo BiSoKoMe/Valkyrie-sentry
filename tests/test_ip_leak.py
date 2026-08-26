@@ -1,4 +1,4 @@
-"""IP-leak test — prove Valkyrie's firewall drops connections that skip
+"""IP-leak test - prove Valkyrie's firewall drops connections that skip
 DNS entirely and dial a known-bad IP directly.
 
 Two enforcement layers are exercised:
@@ -6,13 +6,13 @@ Two enforcement layers are exercised:
   1. Kernel drop (Linux iptables VALKYRIE chain / Windows netsh):
      a real outbound socket to a target IP is DROPped before it completes.
      We use a *reachable* control IP as a documented stand-in for a
-     Firehol/Spamhaus-listed tracker IP — the enforcement path is
+     Firehol/Spamhaus-listed tracker IP - the enforcement path is
      identical regardless of which CIDR is loaded, and using a reachable
      IP is the only way to prove the DROP *caused* the failure (an
      unroutable TEST-NET address would fail with or without the rule).
 
   2. In-process _IPSet: membership for a documented RFC5737 TEST-NET-3
-     range (203.0.113.0/24 — reserved for documentation, never routable)
+     range (203.0.113.0/24 - reserved for documentation, never routable)
      standing in for a threat-feed CIDR, plus the hardcoded DoH resolver
      IPs Valkyrie blocks by default (the real-world "app hardcodes a DoH
      server IP to bypass our DNS" case).
@@ -38,10 +38,10 @@ _PASS = 0
 _FAIL = 0
 _SKIP = 0
 
-# RFC5737 documentation range — safe, reserved, never routable.
+# RFC5737 documentation range - safe, reserved, never routable.
 TEST_FEED_CIDR = "203.0.113.0/24"
 TEST_FEED_IP   = "203.0.113.66"     # "known-bad" tracker IP (documentation range)
-SAFE_IP        = "198.51.100.7"     # different RFC5737 range — must NOT be blocked
+SAFE_IP        = "198.51.100.7"     # different RFC5737 range - must NOT be blocked
 
 
 def check(label: str, cond: bool, detail: str = "") -> None:
@@ -61,7 +61,7 @@ def skip(label: str, why: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 1. In-process IP set — the layer that flags/logs every blocked-range hit
+# 1. In-process IP set - the layer that flags/logs every blocked-range hit
 # ---------------------------------------------------------------------------
 
 def test_ipset() -> None:
@@ -82,7 +82,7 @@ def test_ipset() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2. Kernel drop — a real connection to a bad IP is dropped before it lands
+# 2. Kernel drop - a real connection to a bad IP is dropped before it lands
 # ---------------------------------------------------------------------------
 
 def _tcp_reachable(ip: str, port: int, timeout: float = 3.0) -> bool:
@@ -147,21 +147,21 @@ def test_kernel_drop() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. Full FirewallManager wiring — DoH IPs enforced on start()
+# 3. Full FirewallManager wiring - DoH IPs enforced on start()
 # ---------------------------------------------------------------------------
 
 def test_manager() -> None:
     print("\n[3] FirewallManager — DoH resolver IPs blocked (offline, no feeds)")
     fw = FirewallManager()
-    # allow_download=False → no network; DoH IPs are hardcoded and always loaded
+    # allow_download=False -> no network; DoH IPs are hardcoded and always loaded
     count = fw.start(allow_download=False)
     try:
-        # TWO SURFACES, DELIBERATELY DIFFERENT — this test used to assert the
+        # TWO SURFACES, DELIBERATELY DIFFERENT - this test used to assert the
         # wrong one and reported a working protection as broken.
         #
         #   _ipset.contains()  = ENFORCEMENT. Is this IP in the blocked set
         #                        (and covered by an installed kernel rule)?
-        #                        DoH resolver IPs ARE here — that is what stops
+        #                        DoH resolver IPs ARE here - that is what stops
         #                        a process hardcoding 1.1.1.1:443 to tunnel DNS
         #                        past the interceptor.
         #
@@ -169,7 +169,7 @@ def test_manager() -> None:
         #                        as malicious?" It deliberately EXEMPTS public
         #                        resolvers (trust.is_public_resolver_ip), because
         #                        Valkyrie's own upstream DNS goes to exactly
-        #                        those addresses — without the exemption the
+        #                        those addresses - without the exemption the
         #                        network collector flags the engine's own
         #                        resolver traffic as C2. Added in the FP-cleanup
         #                        pass (5418a61).
@@ -182,7 +182,7 @@ def test_manager() -> None:
               fw._ipset.contains("9.9.9.9"))
         check("ordinary site IP is NOT enforced",
               not fw._ipset.contains(SAFE_IP))
-        # The exemption itself is intentional — pin it, so removing it (and
+        # The exemption itself is intentional - pin it, so removing it (and
         # thereby re-flagging our own upstream DNS as C2) fails loudly.
         check("reputation surface EXEMPTS public resolvers (own-upstream FP guard)",
               not fw.is_blocked_ip("1.1.1.1") and not fw.is_blocked_ip("9.9.9.9"))

@@ -1,4 +1,4 @@
-"""Sysmon sensor (optional, auto-detected) — the richest native endpoint source.
+"""Sysmon sensor (optional, auto-detected) - the richest native endpoint source.
 
 Sysmon (Sysinternals) is an optional driver+service that writes deeply-contextual
 events to ``Microsoft-Windows-Sysmon/Operational``: process creation with SHA-256
@@ -7,7 +7,7 @@ connections *with process context*; image/DLL loads; CreateRemoteThread
 (injection); ProcessAccess to LSASS (credential theft); registry and file events.
 
 This sensor is **strictly optional**: ``available()`` returns False when Sysmon
-isn't installed, so the SensorManager simply skips it — Valkyrie never requires
+isn't installed, so the SensorManager simply skips it - Valkyrie never requires
 Sysmon, and degrades to its own polling + PowerShell/WMI sensors without it. When
 Sysmon *is* present we adopt it as a superior source and correlate its events
 into the same EDR pipeline.
@@ -51,20 +51,20 @@ _DRIVER_DROP_DIRS = ("\\appdata\\", "\\temp\\", "\\downloads\\",
                      "\\users\\public\\", "\\programdata\\", "\\$recycle")
 
 # Known LSASS-read access masks that indicate credential dumping (Mimikatz-
-# style) — a fast path of the common values, NOT the only signal (see below).
+# style) - a fast path of the common values, NOT the only signal (see below).
 _LSASS_READ_MASKS = {"0x1010", "0x1410", "0x1438", "0x143a", "0x1fffff", "0x1010h"}
 
 # The one access right EVERY lsass memory read needs, whatever the tool: reading
 # another process's memory requires PROCESS_VM_READ (0x10). Keying on this BIT
-# generalises past the fixed list above — a novel dumper with an unseen mask
+# generalises past the fixed list above - a novel dumper with an unseen mask
 # (0x1018, 0x0410, custom syscall combos) is still caught as long as it opened
-# lsass to READ it — while a benign query-only open (e.g. 0x1000
+# lsass to READ it - while a benign query-only open (e.g. 0x1000
 # QUERY_LIMITED_INFORMATION, no VM_READ) does NOT fire, which is the FP boundary.
 _PROCESS_VM_READ = 0x10
 
 
 def _mask_reads_memory(granted: str) -> bool:
-    """True if a GrantedAccess mask includes PROCESS_VM_READ — i.e. it can read
+    """True if a GrantedAccess mask includes PROCESS_VM_READ - i.e. it can read
     the target's memory. Robust to the '0x' prefix and Sysmon's trailing 'h'."""
     try:
         return bool(int(granted.strip().rstrip("h"), 16) & _PROCESS_VM_READ)
@@ -73,7 +73,7 @@ def _mask_reads_memory(granted: str) -> bool:
 
 
 def parse_hashes(s: str) -> dict:
-    """'SHA256=ABC,MD5=DEF,IMPHASH=123' → {'sha256':'abc', ...} (lower-cased)."""
+    """'SHA256=ABC,MD5=DEF,IMPHASH=123' -> {'sha256':'abc', ...} (lower-cased)."""
     out: dict = {}
     for part in (s or "").split(","):
         if "=" in part:
@@ -84,7 +84,7 @@ def parse_hashes(s: str) -> dict:
 
 def _context(d: dict) -> dict:
     """Rich endpoint context common to Sysmon process events (T-numbers aside,
-    this is the 'Endpoint Context' payload: hashes, signature, integrity, …)."""
+    this is the 'Endpoint Context' payload: hashes, signature, integrity, ...)."""
     hashes = parse_hashes(d.get("Hashes", "") or d.get("Hash", ""))
     return {
         "command_line": d.get("CommandLine", ""),
@@ -112,7 +112,7 @@ def _name(path: str) -> str:
     return (path or "").replace("/", "\\").rsplit("\\", 1)[-1]
 
 
-# ── per-EID classification (pure) ───────────────────────────────────────────
+# --- per-EID classification (pure) ---
 def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
     """Return a dict of TelemetryEvent kwargs to emit, or None to skip.
 
@@ -120,13 +120,13 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
     event id so each mapping (and MITRE technique) is unit-testable."""
     eid = int(event_id)
 
-    # EID 1 — process creation. Emit ONLY when suspicious (the poller covers the
+    # EID 1 - process creation. Emit ONLY when suspicious (the poller covers the
     # rest), but enrich heavily so correlation has full context.
     #
     # This runs the SAME four-classifier stack as the polling collector
     # (process_telemetry.ProcessRecord.to_event). It previously ran only
     # classify_process(), which judges image name / path / parent and never
-    # sees the command line — so `powershell.exe -enc <base64>` launched from
+    # sees the command line - so `powershell.exe -enc <base64>` launched from
     # explorer.exe scored as ordinary PowerShell, fell under the SEV_LOW gate
     # below, and was discarded before the 32 MITRE-mapped IOA rules ever ran.
     #
@@ -135,8 +135,8 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
     # entirely, and it carries the full command line), yet it was running a
     # strictly weaker pipeline than the poller. Execution, Defense Evasion and
     # Discovery are almost entirely command-line-shaped techniques, which is
-    # why those three tactics measured 0% while persistence and C2 — which key
-    # off registry and network artefacts — did not.
+    # why those three tactics measured 0% while persistence and C2 - which key
+    # off registry and network artefacts - did not.
     #
     # The severity gate is unchanged and still applies; it is simply evaluated
     # AFTER every classifier has had the command line, so an escalation can
@@ -175,7 +175,7 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
             technique = behavior["technique"]
             all_techniques = list(behavior.get("all_techniques") or [])
 
-        # The generalizing anomaly scorer — catches shapes no rule was written
+        # The generalizing anomaly scorer - catches shapes no rule was written
         # for (masquerade, obfuscation, impossible ancestry). Defers to a
         # rule's exact technique when one already fired.
         anomaly = classify_anomaly(name, parent, cmdline, image)
@@ -191,14 +191,14 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
             # Preserve the anomaly's technique even when a rule already claimed
             # the primary slot: an encoded PowerShell is BOTH T1059.001
             # (EncodedCommand, from the rule) AND T1027 (obfuscation, from the
-            # anomaly nose) — dropping either loses real ATT&CK context.
+            # anomaly nose) - dropping either loses real ATT&CK context.
             if anomaly.get("technique") and anomaly["technique"] not in all_techniques:
                 all_techniques.append(anomaly["technique"])
 
         # Discovery-tactic weak labeling. Must run on THIS path, not just the
         # poller: a lone discovery command is INFO by design (never alerts on
         # its own), but the reconnaissance-burst sequence needs to SEE several
-        # of them to fire — and these commands (whoami, tasklist, net view)
+        # of them to fire - and these commands (whoami, tasklist, net view)
         # exit in milliseconds, so the 2s poller is exactly the source that
         # loses them. Sysmon/4688 is the only source that reliably catches
         # them, which makes this the delivery path the burst depends on.
@@ -215,7 +215,7 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
         # A discovery-labeled event is deliberately INFO and would otherwise be
         # dropped by the gate below. Let it through: the engine's ingest
         # chokepoint routes 'discovery_command' to the sequence engine BEFORE
-        # its own severity gate, and drops it afterwards — so this stays
+        # its own severity gate, and drops it afterwards - so this stays
         # non-alerting on its own while still feeding the burst combiner.
         if "discovery_command" in labels:
             return {
@@ -239,13 +239,13 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
             "context": _context(d),
         }
 
-    # EID 3 — network connection (process context DNS/firewall lacks).
+    # EID 3 - network connection (process context DNS/firewall lacks).
     if eid == 3:
         if str(d.get("Initiated", "true")).lower() != "true":
             return None
         dip = d.get("DestinationIp", "")
         if _is_private(dip):
-            return None                       # LAN chatter — low value, high volume
+            return None                       # LAN chatter - low value, high volume
         image = d.get("Image", "")
         return {
             "category": CAT_NETWORK, "activity": "connect",
@@ -258,14 +258,14 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
             "technique": "", "context": {"user": d.get("User", "")},
         }
 
-    # EID 6 — kernel driver load. BYOVD (bring-your-own-vulnerable-driver) is
+    # EID 6 - kernel driver load. BYOVD (bring-your-own-vulnerable-driver) is
     # the dominant EDR-killer technique of 2024-25 (Backstab, AuKill, Terminator
-    # and friends): load a signed-but-vulnerable — or plainly unsigned — kernel
+    # and friends): load a signed-but-vulnerable - or plainly unsigned - kernel
     # driver, then use its raw kernel access to terminate protection. Two
     # list-free tells, either of which is abnormal on a healthy host:
-    #   * unsigned / invalid signature — modern Windows blocks unsigned drivers
+    #   * unsigned / invalid signature - modern Windows blocks unsigned drivers
     #     via DSE, so a load getting through means signing was subverted;
-    #   * loaded from a user-writable directory — real drivers ship signed in
+    #   * loaded from a user-writable directory - real drivers ship signed in
     #     System32\drivers / DriverStore and never load out of %TEMP%/Downloads.
     # A signed driver loading from the OS driver store (the normal case) is
     # ignored, so this does not fire on ordinary GPU/AV/VPN driver loads.
@@ -299,7 +299,7 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
                         "signed": d.get("Signed", "")},
         }
 
-    # EID 7 — image/DLL load. Emit only unsigned / invalid-signature loads.
+    # EID 7 - image/DLL load. Emit only unsigned / invalid-signature loads.
     if eid == 7:
         status = (d.get("SignatureStatus", "") or "").lower()
         signed = (d.get("Signed", "") or "").lower()
@@ -318,7 +318,7 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
                         "signature_status": d.get("SignatureStatus", "")},
         }
 
-    # EID 8 — CreateRemoteThread → classic code injection.
+    # EID 8 - CreateRemoteThread -> classic code injection.
     if eid == 8:
         return {
             "category": CAT_PROCESS, "activity": "remote_thread",
@@ -334,14 +334,14 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
                         "start_function": d.get("StartFunction", "")},
         }
 
-    # EID 10 — ProcessAccess. Flag reads of LSASS (credential dumping).
+    # EID 10 - ProcessAccess. Flag reads of LSASS (credential dumping).
     if eid == 10:
         target = _name(d.get("TargetImage", "")).lower()
         if target != "lsass.exe":
             return None
         granted = (d.get("GrantedAccess", "") or "").lower()
         # Generalised: HIGH when the mask is a known dump mask OR simply includes
-        # PROCESS_VM_READ (reads lsass memory) — so an unseen variant is caught,
+        # PROCESS_VM_READ (reads lsass memory) - so an unseen variant is caught,
         # not just the six enumerated masks. Query-only opens stay MEDIUM.
         sev = (SEV_HIGH if (granted in _LSASS_READ_MASKS
                             or _mask_reads_memory(granted))
@@ -360,7 +360,7 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
             "context": {"call_trace": (d.get("CallTrace", "") or "")[:400]},
         }
 
-    # EID 11 — file create in a startup / autorun location.
+    # EID 11 - file create in a startup / autorun location.
     if eid == 11:
         fn = (d.get("TargetFilename", "") or "")
         low = fn.lower().replace("/", "\\")
@@ -385,7 +385,7 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
             "context": {},
         }
 
-    # EID 12/13 — registry create/set in an autorun key.
+    # EID 12/13 - registry create/set in an autorun key.
     if eid in (12, 13):
         obj = (d.get("TargetObject", "") or "")
         low = obj.lower()
@@ -395,7 +395,7 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
         writer = d.get("Image", "")
         target = d.get("Details", "")
         # OS self-maintenance (services.exe, sihost, TrustedInstaller, Defender,
-        # Edge, dismhost, WMIADAP) writes autorun keys constantly — the single
+        # Edge, dismhost, WMIADAP) writes autorun keys constantly - the single
         # largest source of persistence false positives on a live box. Trust the
         # write when a trusted OS binary makes it and the target is not in a
         # world-writable scratch dir; a trusted process dropping an autorun into
@@ -415,7 +415,7 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
             "context": {},
         }
 
-    # EID 25 — process tampering (process hollowing / herpaderping).
+    # EID 25 - process tampering (process hollowing / herpaderping).
     if eid == 25:
         return {
             "category": CAT_PROCESS, "activity": "process_tamper",
@@ -452,7 +452,7 @@ class SysmonSensor(Sensor):
         self._reader = ChannelReader(_CHANNEL, _EVENT_IDS)
 
     def available(self) -> bool:
-        # False when Sysmon isn't installed → SensorManager skips us cleanly.
+        # False when Sysmon isn't installed -> SensorManager skips us cleanly.
         return self._reader.available()
 
     def _collect_once(self) -> None:

@@ -1,20 +1,20 @@
-"""SOAR playbooks — declarative incident → response automation.
+"""SOAR playbooks - declarative incident -> response automation.
 
 An analyst-authored YAML file maps incident conditions onto the response
 actions the EDR already ships (``block_domain``, ``kill_process``,
 ``isolate_host``, plugin-provided actions). Every execution flows through
-the same audited ``ResponseManager`` path a human operator uses — a
+the same audited ``ResponseManager`` path a human operator uses - a
 playbook is an *operator that never sleeps*, not a second response system.
 
 Safety model (automation of response is the most dangerous feature in an
 EDR, so every default is conservative):
 
   * **Dry-run by default.** A playbook simulates unless it explicitly says
-    ``mode: enforce`` — and even then each execution is audited with
+    ``mode: enforce`` - and even then each execution is audited with
     ``operator: playbook:<id>`` so the timeline shows exactly which rule
     acted.
   * **Cooldowns.** A (playbook, target) pair will not re-fire inside
-    ``cooldown_seconds`` (default 300) — no response loops, no hammering.
+    ``cooldown_seconds`` (default 300) - no response loops, no hammering.
   * **Severity floor + category allowlist.** A playbook only sees incidents
     at/above its ``min_severity`` and, if given, in its ``categories``.
   * **Fail-open to humans.** A malformed playbook is skipped with a load
@@ -152,8 +152,8 @@ class PlaybookEngine:
                 except ValueError as exc:
                     errors.append(str(exc))
         except FileNotFoundError:
-            pass          # no playbooks configured — engine stays idle
-        except Exception as exc:   # noqa: BLE001 — bad YAML must not kill EDR
+            pass          # no playbooks configured - engine stays idle
+        except Exception as exc:   # noqa: BLE001 - bad YAML must not kill EDR
             errors.append(f"playbook file unreadable: {exc}")
         with self._lock:
             self._playbooks = playbooks
@@ -203,7 +203,7 @@ class PlaybookEngine:
                 if pb.matches(incident):
                     self._run_playbook(pb, incident)
         except Exception:
-            # A playbook bug must never break incident correlation — but it
+            # A playbook bug must never break incident correlation - but it
             # must not vanish either. This used to be a bare `pass`, which
             # made a real failure here indistinguishable from "no playbook
             # matched": both looked like "nothing happened," with nothing

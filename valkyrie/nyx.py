@@ -1,14 +1,14 @@
-"""Nyx — the data-guard brain (first slice: SEE & REPORT, observe-only).
+"""Nyx - the data-guard brain (first slice: SEE & REPORT, observe-only).
 
 Valkyrie is a digital-privacy protector, not an antivirus. Nyx is the core
 component that watches your *data*: it reads each outbound request in the raw
-and decides, from the SHAPE of what's inside, whether a piece of *you* — a
+and decides, from the SHAPE of what's inside, whether a piece of *you* - a
 device/advertising ID, your location, an email or phone number, a browser
-fingerprint — is being handed to a third party you did not mean to talk to.
+fingerprint - is being handed to a third party you did not mean to talk to.
 
 This module is the SEEING half. It is a pure function: request in, a list of
 plain-language observations out. It never touches the flow, never blocks, never
-lies — that is a deliberate later slice. Observe-first means Nyx cannot break a
+lies - that is a deliberate later slice. Observe-first means Nyx cannot break a
 page or an app, so it can be trusted on before it is ever allowed to act.
 
 Design choices that keep this honest and low-false-positive:
@@ -20,8 +20,8 @@ Design choices that keep this honest and low-false-positive:
     Origin header) Nyx stays silent rather than guess.
 
   * DECIDE BY DATA-SHAPE, NOT A DOMAIN LIST. There is no allow/deny list of
-    trackers here. Nyx recognises the data itself — a UUID under an ad-id key, a
-    lat/lon pair, an email, a bundle of fingerprint surfaces in one request — so
+    trackers here. Nyx recognises the data itself - a UUID under an ad-id key, a
+    lat/lon pair, an email, a bundle of fingerprint surfaces in one request - so
     it catches a tracker it has never seen, which a blocklist cannot.
 
   * NEVER STORE THE RAW VALUE. Observations carry a MASKED sample only. Nyx must
@@ -42,15 +42,15 @@ from urllib.parse import parse_qsl, quote, urlsplit
 from .dns_tunnel import registrable_base
 
 # Nyx runs on EVERY outbound request, so it must stay fast. Personal-data leaks
-# live in small beacon / analytics payloads (a real tracker POST is 1–8 KB); a
+# live in small beacon / analytics payloads (a real tracker POST is 1-8 KB); a
 # multi-MB POST is a file upload, not a tracking beacon. Scan only the first
-# 16 KB of a body so a huge upload can never add browsing latency — bounds Nyx
+# 16 KB of a body so a huge upload can never add browsing latency - bounds Nyx
 # to a few ms even on a giant body, and <1 ms on a real beacon. Honest tradeoff:
-# a leak past the first 16 KB of a large body is not seen (rare — beacons are
+# a leak past the first 16 KB of a large body is not seen (rare - beacons are
 # small). Paired with length-bounded regexes so no single scan can go O(n^2).
 _MAX_SCAN_BYTES = 16 * 1024
 
-# ── categories ──────────────────────────────────────────────────────────────
+# --- categories ---
 CAT_IDENTIFIER  = "identifier"     # advertising / device ID
 CAT_LOCATION    = "location"       # GPS / coarse geo coordinates
 CAT_CONTACT     = "contact"        # email / phone number
@@ -58,7 +58,7 @@ CAT_FINGERPRINT = "fingerprint"    # a bundle of device-fingerprint surfaces
 CAT_FINANCIAL   = "financial"      # a payment-card number (Luhn-valid)
 CAT_COOKIE      = "cookie"         # a persistent third-party tracking cookie
 
-# Human label per category — used to build the sentence the user reads.
+# Human label per category - used to build the sentence the user reads.
 _LABEL = {
     CAT_IDENTIFIER:  "device ID",
     CAT_LOCATION:    "location",
@@ -70,7 +70,7 @@ _LABEL = {
 
 
 def _tracking_cookie(headers_lower: dict) -> bool:
-    """True if the request carries a persistent, high-entropy cookie value — the
+    """True if the request carries a persistent, high-entropy cookie value - the
     shape of a cross-site tracking id, not a short functional flag. Only ever
     consulted on THIRD-party requests (see the gate in inspect_outbound), where
     a durable id cookie is the oldest tracking trick there is."""
@@ -87,7 +87,7 @@ def _tracking_cookie(headers_lower: dict) -> bool:
             return True
     return False
 
-# ── data-shape signals (generalising, not a domain list) ────────────────────
+# --- data-shape signals (generalising, not a domain list) ---
 _ID_KEY = re.compile(
     r"(adid|idfa|gaid|aaid|advertis|device[_-]?id|deviceid|"
     r"client[_-]?id|clientid|visitor|fingerprint|installation|"
@@ -110,14 +110,14 @@ _LATLON_PAIR = re.compile(
 )
 
 # Length-bounded on purpose: an unbounded [chars]+ chasing an '@' that may not
-# exist backtracks O(n^2) over a long run of letters — a request with a big
+# exist backtracks O(n^2) over a long run of letters - a request with a big
 # text body would hang Nyx. Real emails fit these bounds (local<=64, domain<=255).
 _EMAIL = re.compile(r"[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]{1,255}\.[A-Za-z]{2,24}")
 _PHONE = re.compile(r"(?<!\d)\+\d{9,15}(?!\d)")   # E.164 only (leading + required)
 
-# A payment-card-shaped run of 13–19 digits, optionally split by spaces/dashes.
+# A payment-card-shaped run of 13-19 digits, optionally split by spaces/dashes.
 # Card detection is gated on a LUHN check (below), so a random 16-digit session
-# id or order number does NOT trip it — Luhn is the precision boundary that
+# id or order number does NOT trip it - Luhn is the precision boundary that
 # separates "a card number" from "sixteen digits".
 _CARD = re.compile(r"(?<![\d.])(?:\d[ -]?){12,18}\d(?![\d.])")
 
@@ -162,7 +162,7 @@ def _fp_signals(blob: str, body_text: str) -> int:
         n += 1
     return n
 
-# Fingerprint-bundle surfaces — each contributes ONE signal; >=3 together in a
+# Fingerprint-bundle surfaces - each contributes ONE signal; >=3 together in a
 # single third-party request is the tell.
 _FP_SCREEN = re.compile(r"(screen|resolution|avail(width|height)|\bsw\b|\bsh\b)", re.I)
 _FP_WXH    = re.compile(r"\b\d{3,4}\s*[x×]\s*\d{3,4}\b")
@@ -172,6 +172,32 @@ _FP_LANG   = re.compile(r"(language|\blang\b|\blocale\b)", re.I)
 _FP_CORES  = re.compile(r"(hardwareconcurrency|\bcores\b|\bcpu\b|devicememory)", re.I)
 _FP_GPU    = re.compile(r"(canvas|webgl|\brenderer\b|\bgpu\b)", re.I)
 _FP_UA     = re.compile(r"mozilla/5\.0", re.I)
+# Modern high-entropy surfaces (added 2026-08-24). 2026 privacy research
+# (docs/VENDOR_ARCHITECTURE_2026.md sources: "fingerprinting has replaced cookies
+# as the primary tracking vector", "30+ techniques") ranks audio, font
+# enumeration and the WebRTC local-IP leak among the most identifying signals,
+# and NYX bundled only canvas/WebGL/screen/tz/lang/cores. These match the
+# RESULT as it appears in an exfil payload (an audio hash, a font list, a leaked
+# private IP), not the collecting script. Each only CONTRIBUTES to the >=3
+# surface count, so the false-positive guard is unchanged - a single benign
+# mention never triggers on its own.
+_FP_AUDIO  = re.compile(r"(audiocontext|offlineaudiocontext|oscillator|"
+                        r"audio[_-]?(fp|hash|fingerprint|print))", re.I)
+_FP_FONTS  = re.compile(r"(font[_-]?(list|hash|fingerprint|print)|"
+                        r"installed[_-]?fonts|enumerate[_-]?fonts|"
+                        # a bare `fonts=` key whose value is a comma-separated
+                        # LIST (>=2 items) - the actual shape a font-enumeration
+                        # fingerprinter exfiltrates. The comma requirement keeps
+                        # a single `font=Arial` (benign styling) from matching.
+                        r"\bfonts?=[^&\s]+,[^&\s]+)", re.I)
+_FP_WEBRTC = re.compile(r"(rtcpeerconnection|ice[_-]?candidate|srflx|"
+                        r"webrtc[_-]?(ip|leak|fp|local))", re.I)
+# The WebRTC leak's payoff is a PRIVATE (RFC1918) IP crossing to a third party -
+# your real LAN address, exposed even behind a VPN. That IS the deanonymisation.
+_FP_PRIVIP = re.compile(
+    r"\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+    r"|192\.168\.\d{1,3}\.\d{1,3}"
+    r"|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b")
 
 
 @dataclass(frozen=True)
@@ -185,7 +211,7 @@ class Observation:
     sentence:           str
 
 
-# ── helpers ─────────────────────────────────────────────────────────────────
+# --- helpers ---
 def _host_of(url: str) -> str:
     try:
         return urlsplit(url).hostname or ""
@@ -195,7 +221,7 @@ def _host_of(url: str) -> str:
 
 def first_party_of(headers) -> str:
     """Registrable domain of the page that issued the request, from Referer or
-    Origin. Empty string when neither is present — the caller then stays silent
+    Origin. Empty string when neither is present - the caller then stays silent
     (nothing can be judged "third party" without a first party)."""
     h = _lower_headers(headers)
     ref = h.get("referer") or h.get("origin") or ""
@@ -216,7 +242,7 @@ def _mask(value: str) -> str:
     """Never echo the raw value back. Keep just enough for the user to recognise
     it without Nyx storing a usable copy."""
     v = value.strip()
-    if "@" in v and _EMAIL.match(v):          # email → first char + domain
+    if "@" in v and _EMAIL.match(v):          # email -> first char + domain
         local, _, dom = v.partition("@")
         return (local[:1] or "?") + "***@" + dom
     if len(v) <= 6:
@@ -226,7 +252,7 @@ def _mask(value: str) -> str:
 
 def _decode_body(body, content_type: str) -> tuple[list[tuple[str, str]], str]:
     """Return (key/value pairs, flat text blob) from a request body. Handles
-    form-urlencoded and JSON; falls back to raw text. Pure and defensive — a
+    form-urlencoded and JSON; falls back to raw text. Pure and defensive - a
     malformed body yields empty pairs, never an exception."""
     if not body:
         return [], ""
@@ -276,11 +302,11 @@ def _flatten_json(obj, prefix: str = "") -> list[tuple[str, str]]:
     return out
 
 
-# ── the brain ───────────────────────────────────────────────────────────────
+# --- the brain ---
 def inspect_outbound(method: str, url: str, headers=None, body=None,
                      first_party_origin: str | None = None) -> list[Observation]:
     """Read one outbound request and report any personal data crossing to a
-    third party. Pure: same input → same output, no side effects, never blocks.
+    third party. Pure: same input -> same output, no side effects, never blocks.
     """
     dest_host = _host_of(url)
     if not dest_host:
@@ -289,7 +315,7 @@ def inspect_outbound(method: str, url: str, headers=None, body=None,
 
     h = _lower_headers(headers)
     first_party = (first_party_origin or "").strip() or first_party_of(headers)
-    # THIRD-PARTY GATE: no first party to compare, or same registrable domain →
+    # THIRD-PARTY GATE: no first party to compare, or same registrable domain ->
     # this is the user talking to their own site. Not a leak. Stay silent.
     if not first_party or first_party == dest_base:
         return []
@@ -301,7 +327,7 @@ def inspect_outbound(method: str, url: str, headers=None, body=None,
         query_pairs = []
     body_pairs, body_text = _decode_body(body, h.get("content-type", ""))
     pairs = query_pairs + body_pairs
-    # Scan the DECODED values too — a percent-encoded email (alice%40x.com) is
+    # Scan the DECODED values too - a percent-encoded email (alice%40x.com) is
     # invisible in the raw body text but present once parse_qsl decodes it.
     blob = url + " " + body_text + " " + " ".join(v for _, v in pairs)
 
@@ -321,7 +347,7 @@ def inspect_outbound(method: str, url: str, headers=None, body=None,
                       f"server ({dest_host})"),
         ))
 
-    # 1) Advertising / device identifier — keyed id with an id-shaped value,
+    # 1) Advertising / device identifier - keyed id with an id-shaped value,
     #    or a bare UUID anywhere in the payload.
     for k, v in pairs:
         if _ID_KEY.search(k) and (_UUID.search(v) or _LONG_TOKEN.match(v.strip())):
@@ -342,7 +368,7 @@ def inspect_outbound(method: str, url: str, headers=None, body=None,
                 add(CAT_IDENTIFIER, hv)
                 break
 
-    # 2) Location — a latitude AND a longitude value, or a lat,lon pair.
+    # 2) Location - a latitude AND a longitude value, or a lat,lon pair.
     lat = lon = False
     for k, v in pairs:
         vs = v.strip()
@@ -355,14 +381,14 @@ def inspect_outbound(method: str, url: str, headers=None, body=None,
     elif _LATLON_PAIR.search(blob):
         add(CAT_LOCATION, _LATLON_PAIR.search(blob).group(0))
 
-    # 3) Contact — email or E.164 phone.
+    # 3) Contact - email or E.164 phone.
     em = _EMAIL.search(blob)
     if em:
         add(CAT_CONTACT, em.group(0))
     elif _PHONE.search(blob):
         add(CAT_CONTACT, _PHONE.search(blob).group(0))
 
-    # 4) Fingerprint bundle — >=3 distinct device surfaces in one request.
+    # 4) Fingerprint bundle - >=3 distinct device surfaces in one request.
     signals = 0
     if _FP_SCREEN.search(blob) or _FP_WXH.search(blob):
         signals += 1
@@ -376,15 +402,22 @@ def inspect_outbound(method: str, url: str, headers=None, body=None,
         signals += 1
     if _FP_UA.search(body_text):
         signals += 1
+    # Modern high-entropy surfaces - audio, fonts, and the WebRTC local-IP leak.
+    if _FP_AUDIO.search(blob):
+        signals += 1
+    if _FP_FONTS.search(blob):
+        signals += 1
+    if _FP_WEBRTC.search(blob) or _FP_PRIVIP.search(body_text):
+        signals += 1
     if signals >= 3:
         add(CAT_FINGERPRINT, f"{signals} surfaces")
 
-    # 5) Payment card — a Luhn-valid card number crossing to a third party.
+    # 5) Payment card - a Luhn-valid card number crossing to a third party.
     card = _find_card(blob)
     if card:
         add(CAT_FINANCIAL, card)
 
-    # 6) Persistent third-party tracking cookie — the oldest cross-site id.
+    # 6) Persistent third-party tracking cookie - the oldest cross-site id.
     #    Observe-only: NOT added to the act/rewrite path, because blanking a
     #    third-party cookie can break a legitimately logged-in embed (SSO).
     if _tracking_cookie(h):
@@ -398,17 +431,17 @@ def _is_float(s: str, lo: float, hi: float) -> bool:
         f = float(s)
     except (TypeError, ValueError):
         return False
-    return lo <= f <= hi and "." in s   # require a decimal → not a plain count
+    return lo <= f <= hi and "." in s   # require a decimal -> not a plain count
 
 
-# ── ACT: feed the tracker fake data instead of blocking ─────────────────────
+# --- ACT: feed the tracker fake data instead of blocking ---
 # The observe path (above) only watches. This path ACTS: it rewrites the
 # personal data crossing to a third party into ONE consistent fake identity
-# (the persona — "John"), so the tracker/app receives a well-formed request
+# (the persona - "John"), so the tracker/app receives a well-formed request
 # carrying believable-but-false data and the request STILL COMPLETES. That is
 # the deliberate design: deception, not blocking. Blocking breaks apps; a
 # coherent lie protects the user AND keeps the page working. Consistency is the
-# whole game — every fake value comes from the SAME persona, so a machine that
+# whole game - every fake value comes from the SAME persona, so a machine that
 # lies never contradicts itself (the tell that would give a spoof away).
 #
 # Fingerprint BUNDLES are intentionally not rewritten outbound here: they span
@@ -418,7 +451,7 @@ def _is_float(s: str, lo: float, hi: float) -> bool:
 def _personal_values(url, headers, body, first_party_origin=None):
     """The raw third-party personal values to overwrite. Same gate + signals as
     inspect_outbound; returns (category, kind, raw_value) tuples. Used only to
-    rewrite them away — the raw value is never logged."""
+    rewrite them away - the raw value is never logged."""
     dest_host = _host_of(url)
     if not dest_host:
         return []
@@ -450,7 +483,7 @@ def _personal_values(url, headers, body, first_party_origin=None):
             idv = m.group(0)
     if idv:
         found.append((CAT_IDENTIFIER, "", idv))
-    # location — the actual lat and lon value strings
+    # location - the actual lat and lon value strings
     latv = lonv = None
     for k, v in pairs:
         vs = v.strip()
@@ -473,7 +506,7 @@ def _personal_values(url, headers, body, first_party_origin=None):
     card = _find_card(blob)
     if card:
         found.append((CAT_FINANCIAL, "card", card))
-    # fingerprint bundle → rewrite each recognised device field to a persona
+    # fingerprint bundle -> rewrite each recognised device field to a persona
     # value. Gated on the FULL bundle (>=3 surfaces) so a lone benign field
     # (a single 'lang') is never touched. Matters most for native apps, where
     # farble's browser-side spoofing does not reach.
@@ -528,7 +561,7 @@ def _fake_for(category: str, raw: str, kind: str, persona):
 
 def _apply_repl(text: str, repl: dict) -> str:
     """Replace each raw value with its fake, in plain, URL-encoded, and
-    JSON-safe forms — so the substitution lands whether the value sits in a
+    JSON-safe forms - so the substitution lands whether the value sits in a
     query string, a form body, or a JSON blob."""
     for raw, fake in repl.items():
         if raw and raw in text:
@@ -578,12 +611,12 @@ def fake_outbound(method, url, headers=None, body=None, persona=None,
     return new_url, new_body, faked
 
 
-# ── SELF-TEST: prove the guard live, on demand ──────────────────────────────
+# --- SELF-TEST: prove the guard live, on demand ---
 def self_test() -> dict:
     """Run a fixed set of SYNTHETIC third-party leaks through the real observe +
     act pipeline and report what Nyx caught and what it faked. Uses only made-up
     values (a test card, a fake email), so it is safe to expose as a live demo /
-    health check — it proves the data guard works without needing a real tracker
+    health check - it proves the data guard works without needing a real tracker
     to show up. This is the 'watch it happen' button."""
     fp = "https://demo.example/"
     third = "https://tracker.example/collect"

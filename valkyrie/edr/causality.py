@@ -1,37 +1,37 @@
-"""Causality graph — process ancestry as a first-class, queryable structure.
+"""Causality graph - process ancestry as a first-class, queryable structure.
 
 WHAT THIS ADDS THAT VALKYRIE DID NOT HAVE
 -----------------------------------------
 ``killchain.py`` already folds a child process into its parent's chain via the
-parent→child PID edge, but it does that at *scoring* time and keeps only a flat
-deque of tactic steps. The structure — who spawned whom, what each process
-touched — is computed and thrown away. Nothing persists ancestry, so there is
+parent->child PID edge, but it does that at *scoring* time and keeps only a flat
+deque of tactic steps. The structure - who spawned whom, what each process
+touched - is computed and thrown away. Nothing persists ancestry, so there is
 no tree to query, no way to ask "what else did this attack do?", and nothing to
 render.
 
 This module keeps the structure. It is the layer both major commercial EDRs are
 built on: Cortex XDR calls it the *causality chain* and names its root the
 **Causality Group Owner (CGO)**; Falcon calls the same thing the process tree /
-threat graph. Every process becomes a node, every parent→child relationship an
+threat graph. Every process becomes a node, every parent->child relationship an
 edge, and every non-process observation (a network connection, a DNS query, a
 file write, a detection) is *attributed* to the process that caused it.
 
     explorer.exe                     <- causality terminator, chain stops here
-      └─ winword.exe                 <- CGO: the process that owns this chain
-           └─ cmd.exe
-                └─ powershell.exe    <- the process a detection fired on
-                     ├─ [dns]    c2.example.test
-                     └─ [detect] Encoded PowerShell command
+      └- winword.exe                 <- CGO: the process that owns this chain
+           └- cmd.exe
+                └- powershell.exe    <- the process a detection fired on
+                     ├- [dns]    c2.example.test
+                     └- [detect] Encoded PowerShell command
 
 Asking "what is the CGO of this alert" answers the question an analyst actually
-has — *what started this* — which a bare pid/ppid pair cannot.
+has - *what started this* - which a bare pid/ppid pair cannot.
 
 WHY A TERMINATOR LIST IS THE WHOLE TRICK
 ----------------------------------------
 Naively walking ppid links upward always ends at the same place: every process
 on Windows descends from ``System``. A chain rooted at ``System`` tells you
 nothing. What makes the CGO meaningful is stopping the walk at OS
-*infrastructure* — the processes whose job is to spawn unrelated work
+*infrastructure* - the processes whose job is to spawn unrelated work
 (``explorer.exe`` launches whatever the user clicks, ``services.exe`` launches
 every service, ``svchost.exe`` hosts scheduled tasks). Those are causality
 terminators: the walk stops below them, so the CGO is the first process that
@@ -39,7 +39,7 @@ represents a real actor rather than a launcher.
 
 Terminator status is PATH-AWARE, which matters for evasion. A process named
 ``svchost.exe`` running out of ``%TEMP%`` is not the service host, it is a
-masquerade — and if its name alone terminated the walk, the graph would hide
+masquerade - and if its name alone terminated the walk, the graph would hide
 exactly the ancestry worth seeing. So a terminator name only terminates from a
 trusted OS path (``trust.is_trusted_os_path``). See ``is_terminator``.
 
@@ -55,10 +55,10 @@ HONEST BOUNDARIES (read these before trusting a chain)
     caller can never silently present a guess as an observation.
   * PIDs are reused. Nodes are keyed on ``(pid, create_time)``, and parent
     resolution rejects a candidate parent that started AFTER its supposed child
-    (``_resolve_parent``) — a reused PID cannot be the parent. Where a
+    (``_resolve_parent``) - a reused PID cannot be the parent. Where a
     collector supplies no create_time the key degrades to the pid alone and
     that protection is unavailable; such nodes are marked inferred.
-  * Ancestry above Valkyrie's own start time is unobservable — processes that
+  * Ancestry above Valkyrie's own start time is unobservable - processes that
     were already running are picked up by the poller with their ppid, but their
     parents may have long exited. Those resolve to inferred placeholders.
   * This module raises NO detections and changes no verdict. It is structure,
@@ -80,12 +80,12 @@ from typing import Optional
 from ..trust import is_trusted_os_path
 
 # ---------------------------------------------------------------------------
-# Causality terminators — OS infrastructure whose job is to launch unrelated
+# Causality terminators - OS infrastructure whose job is to launch unrelated
 # work. The upward walk stops BELOW these, so the CGO is the first process that
 # represents an actor instead of a launcher.
 #
 # Scoped deliberately narrow: only processes that genuinely spawn work on behalf
-# of something else. cmd.exe / powershell.exe / wscript.exe are NOT here — they
+# of something else. cmd.exe / powershell.exe / wscript.exe are NOT here - they
 # are the interesting middle of a chain and truncating there would discard the
 # ancestry that explains them.
 # ---------------------------------------------------------------------------
@@ -133,9 +133,9 @@ def is_terminator(name: str, path: str = "") -> bool:
     exposes it.
 
     An UNKNOWN path is treated as trusted for this purpose. That is not
-    sloppiness — the processes whose paths Valkyrie's non-elevated userland
+    sloppiness - the processes whose paths Valkyrie's non-elevated userland
     poller cannot read are overwhelmingly the protected system processes that
-    genuinely are terminators. The alternative default (unknown → not a
+    genuinely are terminators. The alternative default (unknown -> not a
     terminator) would root nearly every chain at ``System`` on an unprivileged
     install, which is the failure mode this list exists to prevent.
     """
@@ -143,7 +143,7 @@ def is_terminator(name: str, path: str = "") -> bool:
         return False
     p = str(path or "").strip()
     if not p:
-        return True                       # unreadable path → assume the real one
+        return True                       # unreadable path -> assume the real one
     return is_trusted_os_path(p)
 
 
@@ -155,8 +155,8 @@ def is_terminator(name: str, path: str = "") -> bool:
 class Artifact:
     """One non-process observation attributed to the process that caused it.
 
-    ``kind`` is a free-form but conventional label — ``dns``, ``network``,
-    ``file``, ``registry``, ``detection`` — matching the collector vocabulary
+    ``kind`` is a free-form but conventional label - ``dns``, ``network``,
+    ``file``, ``registry``, ``detection`` - matching the collector vocabulary
     already used elsewhere in Valkyrie.
     """
     kind:    str
@@ -173,7 +173,7 @@ class Artifact:
 class ProcessNode:
     """One process instance in the graph.
 
-    Identity is ``(pid, create_time)``, not pid — see the PID-reuse note in the
+    Identity is ``(pid, create_time)``, not pid - see the PID-reuse note in the
     module docstring. ``inferred`` is True when the graph created this node to
     fill an ancestry hole (a ppid referencing a process no collector reported)
     rather than from a real observation; callers must never present an inferred
@@ -223,7 +223,7 @@ def node_key(pid: int, create_time: float = 0.0) -> str:
 
     ``create_time`` is what makes this safe against PID reuse. When a collector
     cannot supply one the key degrades to ``"<pid>/~"``, which is honest about
-    being a weaker identity — two different processes that reused a pid will
+    being a weaker identity - two different processes that reused a pid will
     collide in that namespace, and the node is marked inferred as a result.
     """
     p = int(pid or 0)
@@ -242,7 +242,7 @@ class CausalityGraph:
     ``cgo``, ``subgraph``).
 
     Bounded by ``max_nodes``; when full, the least-recently-seen nodes are
-    evicted first. Eviction can orphan a child whose parent was dropped — the
+    evicted first. Eviction can orphan a child whose parent was dropped - the
     child's chain then simply starts at the child, and ``subgraph()`` reports
     ``evicted`` so the truncation is visible rather than silent.
     """
@@ -250,11 +250,11 @@ class CausalityGraph:
     def __init__(self, max_nodes: int = 8192) -> None:
         self._max = max(64, int(max_nodes))
         self._nodes: dict[str, ProcessNode] = {}
-        # pid → key of the most recently STARTED instance of that pid. Parent
+        # pid -> key of the most recently STARTED instance of that pid. Parent
         # lookup goes through here because a child knows its ppid but not its
         # parent's create_time.
         self._latest: dict[int, str] = {}
-        # parent key → set of child keys (maintained incrementally so descendant
+        # parent key -> set of child keys (maintained incrementally so descendant
         # walks don't have to scan every node).
         self._children: dict[str, set] = {}
         self._evicted = 0
@@ -270,15 +270,15 @@ class CausalityGraph:
                         ts: float = 0.0) -> str:
         """Record a process (idempotent) and return its node key.
 
-        Called for EVERY process the collector sees, not just suspicious ones —
+        Called for EVERY process the collector sees, not just suspicious ones -
         a causality chain is useless if the benign ancestors are missing, and
         the ancestors of an attack are benign by definition until the moment
         they are not.
 
         ``parent_name`` (which Valkyrie's process collector already carries on
         ``ProcInfo``) is used to give an unobserved parent a *named* inferred
-        placeholder instead of an anonymous one — the difference between a chain
-        reading ``winword.exe → cmd.exe`` and one reading ``? → cmd.exe``.
+        placeholder instead of an anonymous one - the difference between a chain
+        reading ``winword.exe -> cmd.exe`` and one reading ``? -> cmd.exe``.
         """
         pid = int(pid or 0)
         if pid <= 0:
@@ -333,7 +333,7 @@ class CausalityGraph:
         """Attach a non-process observation to the process that caused it.
 
         Returns False when the pid is unknown AND no ``name`` was supplied to
-        create a node from — an unattributable observation (a DNS query the
+        create a node from - an unattributable observation (a DNS query the
         resolver could not map to a process, say) is dropped rather than
         guessed at. That is the same honest limit killchain.py documents; the
         graph does not paper over it.
@@ -350,7 +350,7 @@ class CausalityGraph:
             node = self._nodes.get(key) if key else None
             if node is None:
                 if not name:
-                    return False           # unattributable → dropped, not guessed
+                    return False           # unattributable -> dropped, not guessed
                 key = self.observe_process(pid, name, ppid=ppid,
                                            create_time=create_time, ts=ts)
                 node = self._nodes.get(key)
@@ -393,7 +393,7 @@ class CausalityGraph:
             return list(reversed(self._walk_up(node)))
 
     def cgo(self, pid: int, create_time: float = 0.0) -> Optional[ProcessNode]:
-        """The Causality Group Owner — the process that owns this chain.
+        """The Causality Group Owner - the process that owns this chain.
 
         This is the answer to "what started this?". For an alert on
         ``powershell.exe`` spawned by ``cmd.exe`` spawned by ``winword.exe``
@@ -434,9 +434,9 @@ class CausalityGraph:
 
     def subgraph(self, pid: int, create_time: float = 0.0, *,
                  max_nodes: int = 512) -> dict:
-        """Wire-format causality subgraph for one process — what a console draws.
+        """Wire-format causality subgraph for one process - what a console draws.
 
-        Contains the upward chain (CGO → target), the full descendant tree under
+        Contains the upward chain (CGO -> target), the full descendant tree under
         the CGO (so sibling branches of the same attack are visible, not just
         the one process that happened to alert), and every artifact attributed
         anywhere in that tree.
@@ -444,7 +444,7 @@ class CausalityGraph:
         Every honesty flag the module can raise is on this payload:
         ``inferred_nodes`` counts guessed ancestry, ``truncated`` says the walk
         hit its bound, and ``evicted`` says nodes were dropped for memory before
-        this query ran — so a UI can render "partial chain" instead of
+        this query ran - so a UI can render "partial chain" instead of
         presenting a hole as the whole story.
         """
         with self._lock:
@@ -481,7 +481,7 @@ class CausalityGraph:
             }
 
     def stats(self) -> dict:
-        """Graph size and health — for the components/coverage surface."""
+        """Graph size and health - for the components/coverage surface."""
         with self._lock:
             inferred = sum(1 for n in self._nodes.values() if n.inferred)
             artifacts = sum(len(n.artifacts) for n in self._nodes.values())
@@ -525,7 +525,7 @@ class CausalityGraph:
 
         THE PID-REUSE GUARD applies to the fallback path, where all we have is a
         ppid. If the process currently holding that pid started AFTER this child
-        did, it demonstrably cannot be its parent — the pid was recycled.
+        did, it demonstrably cannot be its parent - the pid was recycled.
         Returning None there is correct: an honest hole beats a fabricated edge
         that would put an unrelated process at the head of an attack chain.
         """
@@ -544,7 +544,7 @@ class CausalityGraph:
             return None
         if (parent.create_time and node.create_time
                 and parent.create_time > node.create_time):
-            return None                    # recycled pid — not the real parent
+            return None                    # recycled pid - not the real parent
         return parent
 
     def _link_parent(self, node: ProcessNode, parent_name: str,
@@ -555,7 +555,7 @@ class CausalityGraph:
         The placeholder is what keeps a chain readable across the poller's blind
         spot: the collector hands us ``parent_name`` even when the parent
         process itself exited before any poll saw it, so the chain can still say
-        ``winword.exe → cmd.exe`` rather than dead-ending. The node is flagged
+        ``winword.exe -> cmd.exe`` rather than dead-ending. The node is flagged
         ``inferred`` and counted in ``subgraph()['inferred_nodes']``, so the
         guess is always distinguishable from an observation.
         """
@@ -583,7 +583,7 @@ class CausalityGraph:
         Without this the graph silently forks. A child that named an unobserved
         parent creates a ``"<pid>/~"`` placeholder and hangs itself off that;
         when the parent is later observed for real it gets a ``"<pid>/<ctime>"``
-        key, and the graph now holds two nodes for one process — parent lookups
+        key, and the graph now holds two nodes for one process - parent lookups
         follow ``_latest`` to the real one while the child edges still point at
         the ghost, so ``chain()`` and ``descendants()`` disagree about the same
         process. Merging on promotion is what keeps those two views consistent.
@@ -592,7 +592,7 @@ class CausalityGraph:
         be a *wrong* guess is pid reuse: the ghost described the process that
         held this pid earlier, and what we are now observing is a different
         process that inherited it. Names differing is the cheap, sound signal
-        for exactly that case — so when they differ the two nodes stay separate
+        for exactly that case - so when they differ the two nodes stay separate
         and the graph carries an honest fork instead of a fabricated identity.
         """
         ghost_key = node_key(pid, 0.0)
@@ -651,7 +651,7 @@ class CausalityGraph:
             if parent is None or parent.key in seen:
                 break
             if parent.terminator:
-                break                      # stop BELOW the terminator — cur is CGO
+                break                      # stop BELOW the terminator - cur is CGO
             out.append(parent)
             seen.add(parent.key)
             cur = parent
@@ -662,7 +662,7 @@ class CausalityGraph:
 
         Eviction is the only way this module loses information, so it is counted
         (``_evicted``) and surfaced on every ``subgraph()`` rather than being
-        silent — a chain that looks short because its head was evicted must be
+        silent - a chain that looks short because its head was evicted must be
         distinguishable from one that is genuinely short.
         """
         over = len(self._nodes) - self._max

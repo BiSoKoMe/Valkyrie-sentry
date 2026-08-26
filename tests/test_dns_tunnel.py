@@ -3,8 +3,8 @@
 
 Pins the fix for a measured miss: an Atomic Red Team DNS burst
 (atomicredteam-<rand>.127.0.0.1.nip.io) was ALLOWED by the live product
-because every layer judged each query alone — DGA analysis saw only the
-registrable label (nip.io → too short), entropy capped below the flag
+because every layer judged each query alone - DGA analysis saw only the
+registrable label (nip.io -> too short), entropy capped below the flag
 threshold, and the rate limiter needed >30 q/10s.
 
   [1] Pure helpers: registrable base, effective label, embedded IPs,

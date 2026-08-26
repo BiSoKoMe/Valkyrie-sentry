@@ -1,4 +1,4 @@
-"""Application context — the composition root's service container.
+"""Application context - the composition root's service container.
 
 Holds the shared, long-lived services that are wired together once at startup.
 Passing this single object explicitly (constructor/parameter injection) is the
@@ -9,7 +9,7 @@ build an isolated one instead of mutating a process-global singleton.
 Every service is Optional and defaults to None. Many are enabled only by a flag
 (``--web``, ``--tls``, ``--mac-rand``, EDR, the self-heal watchdog), so "not
 wired" is a first-class state that the dashboard and health checks already
-handle — ``components()`` reports exactly what is present.
+handle - ``components()`` reports exactly what is present.
 
 This replaces the anonymous ``_AppState`` bag that previously lived inside
 ``web/server.py``: same fields, but a documented, typed, reusable type that the
@@ -57,6 +57,21 @@ class AppContext:
     sensor_tamper:  Optional[object] = None   # valkyrie.sensor_tamper.SensorTamperMonitor
     doh:            Optional[object] = None   # valkyrie.doh_detector.DoHDetector
     asset_inventory: Optional[object] = None  # valkyrie.asset_inventory.AssetInventoryCollector
+
+    # LIVENESS IS NOT READINESS, and every endpoint has to be able to say which.
+    #
+    # The web server binds in about a second with a store-only context and
+    # subsystems attach behind it. During that window `ctx.edr is None` is TRUE
+    # and indistinguishable from "the user ran with --no-edr" - so
+    # /api/edr/metrics/mttd-mttr answered 503 "EDR not enabled" while the EDR was
+    # simply three seconds from existing, and /api/components returned the exact
+    # payload it returns when the feature is switched off. A caller cannot tell
+    # "not yet" from "never", and the desktop app polls both.
+    #
+    # Set True once the composition root has finished wiring. An endpoint whose
+    # subsystem is missing should report STARTING while this is False, and
+    # DISABLED once it is True.
+    ready: bool = False
 
     start_time: float = 0.0
     dns_port:   int   = 0     # actual DNS listen port (for dashboard display)

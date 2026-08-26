@@ -1,18 +1,18 @@
-"""Deception endpoint — answer tracker beacons instead of failing them.
+"""Deception endpoint - answer tracker beacons instead of failing them.
 
 WHAT WAS WRONG BEFORE
 ---------------------
 DECEIVE resolved to `0.0.0.0`. That is BLOCK with a different label in the UI.
 The tracker's request fails at connect; nothing false is ever said. And a
 machine whose beacons reliably fail while the rest of its traffic succeeds is
-wearing a sign that reads "runs a blocker" — a small, stable, high-entropy
+wearing a sign that reads "runs a blocker" - a small, stable, high-entropy
 population that is *easier* to single out than the default one.
 
 WHAT THIS DOES
 --------------
 DECEIVE now resolves to a loopback address where this server is listening. The
 beacon connects, gets a well-formed reply of the shape its family expects, and
-goes away satisfied. The data it carries home is fabricated — but coherent,
+goes away satisfied. The data it carries home is fabricated - but coherent,
 and identical to what it was told last week, because every persona-derived
 value comes from `persona.py`'s single stable identity.
 
@@ -21,23 +21,23 @@ The two failure modes this is built around:
   * A lie that is INCONSISTENT is worse than silence. If /collect reports
     timezone America/New_York and /pixel reports Europe/Berlin, the pair is
     unique to synthetic traffic. Real clients do not contradict themselves. So
-    every field here is read from ONE `Persona` object per reply — there is no
+    every field here is read from ONE `Persona` object per reply - there is no
     second source that could drift.
   * A lie that is IMPLAUSIBLE is also a fingerprint. Empty JSON, HTTP 204 for
     everything, or a body of literal zeros is not what these services return.
     Each family gets the shape that family actually uses.
 
-`build_reply()` is a pure function — method/path/query/headers in, status +
+`build_reply()` is a pure function - method/path/query/headers in, status +
 headers + body out. The socket server is a thin wrapper over it, so the
 interesting behaviour is testable without binding a port.
 
-HONEST BOUNDARIES — read before believing this hides anything
+HONEST BOUNDARIES - read before believing this hides anything
 -------------------------------------------------------------
 * **HTTPS is not solved here.** Nearly all real beacons are HTTPS. A TLS
   handshake against this endpoint fails unless Valkyrie's mitmproxy CA
   (`tls_inspector.py`) is installed AND trusted on the device, which is opt-in
   and off by default. Without it, an HTTPS beacon pointed here fails at
-  handshake rather than at connect — better than `0.0.0.0` (the connection is
+  handshake rather than at connect - better than `0.0.0.0` (the connection is
   accepted, so the "blocker" signal is weaker) but it is NOT a served lie.
   Plain-HTTP beacons are fully served. I have tested the HTTP path; I have not
   tested an end-to-end HTTPS beacon through the CA.
@@ -46,7 +46,7 @@ HONEST BOUNDARIES — read before believing this hides anything
 * The reply bodies are modelled on the SHAPE of common beacon responses, not
   captured from any specific vendor's live API. A vendor that validates a
   signed/nonce'd response will notice. The goal is to satisfy fire-and-forget
-  telemetry, which is the overwhelming majority of it — not to defeat an
+  telemetry, which is the overwhelming majority of it - not to defeat an
   adversary who is actively probing for a deception endpoint.
 * Serving on loopback means only this machine reaches it. It is not a network
   service and must never be bound off-loopback.
@@ -97,7 +97,7 @@ def classify_beacon(path: str, query: str = "") -> str:
     Path-shape only. Deliberately NOT dependent on the Host header: the same
     beacon endpoint is reachable under many hostnames (and under a CNAME
     cloak), and keying off host would make the reply differ depending on which
-    alias was used — a self-inconsistency of exactly the kind this module
+    alias was used - a self-inconsistency of exactly the kind this module
     exists to avoid.
     """
     p = (path or "/").lower()
@@ -171,7 +171,7 @@ def build_reply(method: str, path: str, query: str = "",
     """Pure: produce the reply for one intercepted beacon.
 
     No sockets, no clock, no randomness. Given the same request and persona
-    this returns byte-identical output — which is both what makes it testable
+    this returns byte-identical output - which is both what makes it testable
     and what makes the lie stable across sessions.
     """
     p = persona if persona is not None else current_persona()
@@ -203,7 +203,7 @@ def build_reply(method: str, path: str, query: str = "",
         # A no-fill is the single most common real ad response, and it is fully
         # benign: nothing renders, no creative is fetched, and the exchange
         # treats it as ordinary inventory with no demand. Critically it is NOT
-        # an error — an error would look like interference.
+        # an error - an error would look like interference.
         body = {"id": pb["id"], "seatbid": [], "nbr": 3,
                 "cur": "USD", "ext": {"client": pb}}
         return _json_reply(200, common, body, fam)
@@ -225,7 +225,7 @@ def build_reply(method: str, path: str, query: str = "",
                 "endpoints": {}, "features": {}, "client": pb}
         return _json_reply(200, common, body, fam)
 
-    # Generic: a plain 200 with a minimal ack. Not 404 — a 404 for every path
+    # Generic: a plain 200 with a minimal ack. Not 404 - a 404 for every path
     # on a host that resolves is anomalous, and not 204 either, because some
     # SDKs treat an empty body as a transport failure and retry.
     return _json_reply(200, common, {"status": "ok", "client": pb}, FAMILY_GENERIC)

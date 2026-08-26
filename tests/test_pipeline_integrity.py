@@ -9,11 +9,11 @@ Specifically pins:
   1. The interceptor, the AppContext, and the web layer all reference the *same*
      Store object (no duplicate Store / no wrong injection).
   2. A logged event reaches an EventBus subscriber (the source the dashboard's
-     WebSocket forwards) — i.e. subscribers are actually attached.
+     WebSocket forwards) - i.e. subscribers are actually attached.
   3. /api/events reads that same Store (so it reflects live writes, not a stale
      snapshot).
   4. The /ws route delivers the event live through the app.
-  5. A WebSocket implementation is installed — the missing dependency that made
+  5. A WebSocket implementation is installed - the missing dependency that made
      uvicorn answer /ws with HTTP 404 and left the dashboard frozen on its first
      snapshot. Removing `websockets` from the environment fails this test.
 """

@@ -1,22 +1,22 @@
-"""MTTD / MTTR — first-class product metrics for REAL incidents.
+"""MTTD / MTTR - first-class product metrics for REAL incidents.
 
 Clinton's *Cybersecurity for Business* (ch. 10) and IIBA/IEEE's
 *Cybersecurity Analysis* handbook (§9.1.2) both name the same two numbers as
 THE headline security metrics: Mean Time To Detect and Mean Time To
 Respond. ``redteam/evaluation/live_safe.py`` already computes a latency
 number, but only for the eval harness, where the red-team script knows
-``exec_ts`` (the exact moment it ran a technique) — ground truth a real
+``exec_ts`` (the exact moment it ran a technique) - ground truth a real
 production incident never has. This module is the analogous measurement
 for the live product, built honestly around what Valkyrie can actually
 know rather than borrowing the eval harness's privileged viewpoint.
 
-**MTTD — time from first observable event to incident raised.**
+**MTTD - time from first observable event to incident raised.**
 "First observable event" is the EARLIEST Detection's own ``timestamp``
 among the detections that make up the incident. Until this module,
 ``Detection.timestamp`` on the ``ingest_telemetry()`` path always defaulted
 to "now" (when the engine got around to processing the event), discarding
 the collector's own ``TelemetryEvent.ts`` (when the collector itself first
-observed it) — see ``EdrEngine.ingest_telemetry``'s ``iso_from_epoch(ts)``
+observed it) - see ``EdrEngine.ingest_telemetry``'s ``iso_from_epoch(ts)``
 fix. That fix is what makes this metric non-trivial: a polling collector
 (process/persistence/network telemetry, 2-second interval) can now show a
 real, non-zero gap between "the process actually started" and "Valkyrie's
@@ -25,15 +25,15 @@ MTTD is honestly scoped: it measures Valkyrie's OWN observe-to-record
 latency, not "time since the attacker's action," which no production
 system can know without the ground truth only a red-team harness has.
 
-**MTTR — time from incident raised to responder completed.**
+**MTTR - time from incident raised to responder completed.**
 The FIRST non-dry-run ResponseAction on the incident to reach a terminal
-status (succeeded/failed/skipped — dry_run and pending are not
+status (succeeded/failed/skipped - dry_run and pending are not
 "completed"). This is standard SOC usage: the metric that matters is how
 fast the FIRST real remediation attempt finished, not the average of every
 audit-trail row.
 
 Both are reported as median + p95 (not a single average, which one slow
-outlier — or the 0ms happy path dominating a mostly-instant pipeline —
+outlier - or the 0ms happy path dominating a mostly-instant pipeline -
 would distort) via :func:`summarize`.
 """
 
@@ -55,7 +55,7 @@ def mttd_seconds(incident: dict) -> Optional[float]:
     with ``created_at`` and a ``detections`` list of Detection dicts (each
     carrying its own ``timestamp``). Returns None when there's nothing to
     measure (no detections, or unparseable timestamps) rather than a
-    fabricated 0 — an absent measurement must not look like a perfect one.
+    fabricated 0 - an absent measurement must not look like a perfect one.
     """
     dets = incident.get("detections") or []
     ts_values = [parse_iso(d.get("timestamp")) for d in dets]

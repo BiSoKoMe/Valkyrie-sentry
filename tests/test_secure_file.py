@@ -1,10 +1,10 @@
-"""Tests for secure_file.py — protecting the TLS CA private key.
+"""Tests for secure_file.py - protecting the TLS CA private key.
 
 Why this file matters more than its size suggests: whoever can read
 `valkyrie-ca.key` can mint a trusted certificate for ANY domain and
 impersonate it to this machine with a valid padlock. On Windows the engine's
 data directory sits under %ProgramData%, whose default ACL grants
-BUILTIN\\Users read — so "we wrote the key to our data dir" means "every
+BUILTIN\\Users read - so "we wrote the key to our data dir" means "every
 local account can read it" unless something actively prevents it.
 
 The properties tested here:
@@ -12,12 +12,12 @@ The properties tested here:
   * an exposed file is REPORTED exposed (a checker that cannot see the
     problem is worse than no checker, because it manufactures confidence);
   * hardening actually REMOVES the dangerous grant, verified by re-reading
-    the ACL rather than trusting the command's exit code — the first draft of
+    the ACL rather than trusting the command's exit code - the first draft of
     this module returned success while the file was still readable, because
     an explicit non-inherited ACE survived `/inheritance:r`;
   * the process's OWN account keeps access, or the engine locks itself out of
     the key it just protected;
-  * the public CERTIFICATE is deliberately NOT hardened — the user has to be
+  * the public CERTIFICATE is deliberately NOT hardened - the user has to be
     able to open it to install it, and it grants nothing on its own. Getting
     this backwards would break the install flow for no security gain.
 """
@@ -58,7 +58,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         tdp = Path(td)
 
-        # ── Detection: an exposed secret must be reported as exposed ─────
+        # --- Detection: an exposed secret must be reported as exposed ---
         print("\n[1] an exposed key is REPORTED exposed")
         key = tdp / "ca.key"
         key.write_text("-----BEGIN RSA PRIVATE KEY-----\nfake\n", encoding="utf-8")
@@ -74,7 +74,7 @@ def main() -> int:
                 c.check("the Users SID is genuinely present before hardening",
                         sf.SID_USERS in sids)
 
-        # ── Hardening actually removes the grant ─────────────────────────
+        # --- Hardening actually removes the grant ---
         print("\n[2] hardening REMOVES the dangerous grant")
         ok, detail = sf.harden(key)
         c.check(f"harden() reports success ({detail[:60]})", ok is True)
@@ -94,12 +94,12 @@ def main() -> int:
             mode = key.stat().st_mode & 0o777
             c.check(f"POSIX mode is 0600 (got {oct(mode)})", mode == 0o600)
 
-        # ── Idempotence ──────────────────────────────────────────────────
+        # --- Idempotence ---
         print("\n[3] hardening twice is safe")
         ok3, _ = sf.harden(key)
         c.check("harden() is idempotent", ok3 is True)
 
-        # ── Directories, so a key created LATER is already protected ─────
+        # --- Directories, so a key created LATER is already protected ---
         print("\n[4] a directory can be hardened before the key exists")
         d = tdp / "confdir"
         d.mkdir()
@@ -112,7 +112,7 @@ def main() -> int:
         c.check("a key created INSIDE a hardened dir is already protected",
                 okc is True)
 
-        # ── The public certificate must stay readable ────────────────────
+        # --- The public certificate must stay readable ---
         print("\n[5] the PUBLIC cert is deliberately left readable")
         cert = tdp / "ca.pem"
         cert.write_text("-----BEGIN CERTIFICATE-----\nfake\n", encoding="utf-8")
@@ -121,7 +121,7 @@ def main() -> int:
         c.check("an un-hardened public cert reads as 'not restricted' "
                 "(correct — users must open it to install it)", okcert is False)
 
-        # ── Robustness ───────────────────────────────────────────────────
+        # --- Robustness ---
         print("\n[6] robustness")
         missing = tdp / "nope.key"
         okm, dm = sf.verify(missing)

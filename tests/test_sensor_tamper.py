@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sensor tamper detection (ADR 0048) — fires on healthy->unhealthy transitions
+"""Sensor tamper detection (ADR 0048) - fires on healthy->unhealthy transitions
 only, never on a host that never had the sensor, never twice for one death.
 """
 

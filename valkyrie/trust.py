@@ -3,19 +3,19 @@
 This is the single judgment behind a whole class of false positives found on
 real hardware: Valkyrie flagged Windows Update (TrustedInstaller), Windows
 Defender (MpDefenderCoreService, WdAiNisDrv.sys), Edge's updater, SmartScreen
-(CHXSmartScreen.exe), and even its own installer as suspicious — because the
+(CHXSmartScreen.exe), and even its own installer as suspicious - because the
 *shape* of what they do (create an autostart entry, carry a machine-looking
 name) matches what malware does. What separates them is provenance: they are
 signed OS components living in OS-owned locations, doing OS maintenance.
 
 The rigorous signal is Authenticode code-signing, but verifying a signature
 per event is a subprocess and far too expensive for the hot path. The standard
-EDR proxy — used here — is the **trusted path**: a binary under a Windows-owned
+EDR proxy - used here - is the **trusted path**: a binary under a Windows-owned
 root that a non-administrator cannot write to. An attacker who can already
 write to ``C:\\Windows\\System32`` holds SYSTEM, at which point an autostart
 entry is the least of the endpoint's problems and other signals will have
 fired. So trusted-path is a sound noise-reduction proxy, not a security
-boundary — and it is applied ONLY to downgrade noise, never to suppress a
+boundary - and it is applied ONLY to downgrade noise, never to suppress a
 signal that stands on its own.
 
 Deliberately EXCLUDED from trust even though they sit inside trusted roots:
@@ -62,7 +62,7 @@ _TRUSTED_PREFIXES = tuple(sorted({
     _pref(_PF, "Common Files", "Microsoft Shared"),
 }, key=len, reverse=True))
 
-# World-writable scratch inside otherwise-trusted roots — never trusted.
+# World-writable scratch inside otherwise-trusted roots - never trusted.
 _UNTRUSTED_WITHIN = ("/temp/", "/tmp/", "/tasks/",
                      "/downloaded program files/", "/appdata/local/temp/")
 
@@ -104,7 +104,7 @@ def is_trusted_os_command(command: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Valkyrie's own components — the security tool must never report ITSELF as the
+# Valkyrie's own components - the security tool must never report ITSELF as the
 # threat. Its resolver forwards to upstream DNS (so it "connects to 8.8.8.8"),
 # its service writes an autostart entry, and its frozen engine is a native,
 # LOLBin-shaped exe. All legitimate; flagging any of it is a pure false positive
@@ -119,8 +119,25 @@ _SELF_PATH_MARKERS = (
 )
 
 
-def is_self(name: str = "", path: str = "") -> bool:
-    """True for Valkyrie's own processes / binaries / data directories."""
+def is_self(name: str = "", path: str = "", pid: int = 0) -> bool:
+    """True for Valkyrie's own processes / binaries / data directories.
+
+    ``pid``, when the caller has it, is checked against THIS process's own
+    PID (``os.getpid()``) - exact identity, not a name or path guess. The
+    name/path checks below only ever recognize a *packaged, installed*
+    Valkyrie (``valkyrie.exe``, or a path under Program Files/ProgramData) -
+    they cannot recognize Valkyrie running as ``python -m valkyrie`` from a
+    source checkout, which is how every CI/Tier-B job (and this dev
+    environment) actually runs it. Found via the incident-storm
+    investigation (2026-08-26): Valkyrie's own loopback API traffic was
+    attributed to "python.exe", which matched neither check, so its own
+    network activity was never suppressed and got scored as an external
+    actor's traffic. A PID match can never whitelist an unrelated Python
+    process - `os.getpid()` is THIS running process's own identity, so it
+    only ever equals the actor PID when the actor IS this process.
+    """
+    if pid and pid == os.getpid():
+        return True
     if (name or "").strip().lower() in _SELF_NAMES:
         return True
     p = _norm(path)
@@ -131,7 +148,7 @@ def is_self(name: str = "", path: str = "") -> bool:
 
 
 # Well-known public DNS resolvers / anycast infra. A connection to one of these
-# — Valkyrie's own upstream forwarders, or any app's DNS/DoH — is not C2, so a
+# - Valkyrie's own upstream forwarders, or any app's DNS/DoH - is not C2, so a
 # stale learned-threat or an over-broad range can never paint Google/Cloudflare/
 # Quad9 DNS as malicious.
 _PUBLIC_RESOLVER_IPS = frozenset({
@@ -150,7 +167,7 @@ def is_public_resolver_ip(ip: str) -> bool:
     return (ip or "").strip().lower() in _PUBLIC_RESOLVER_IPS
 
 
-# LOLBins never get the "reputable app" pass — they are signed by Microsoft yet
+# LOLBins never get the "reputable app" pass - they are signed by Microsoft yet
 # are exactly what attackers abuse, so a chain through them must always correlate.
 _LOLBIN_NAMES = frozenset({
     "powershell.exe", "pwsh.exe", "cmd.exe", "wscript.exe", "cscript.exe",
@@ -167,7 +184,7 @@ def is_signed_reputable(path: str) -> bool:
 
     Best-effort, cached per path, never raises, fail-CLOSED (returns False on any
     error or timeout). Used ONLY to keep a signed third-party app/installer's
-    benign multi-process activity from forming a fake 'multi-stage attack' — it
+    benign multi-process activity from forming a fake 'multi-stage attack' - it
     never allows or suppresses a real detection, only downgrades a *correlation*.
     A short timeout keeps it off the critical path if the shell is slow."""
     p = (path or "").strip().strip('"')
@@ -181,7 +198,7 @@ def is_signed_reputable(path: str) -> bool:
             capture_output=True, text=True, timeout=6,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         return r.returncode == 0 and "Valid" in (r.stdout or "")
-    except Exception:      # noqa: BLE001 — signature check must never raise
+    except Exception:      # noqa: BLE001 - signature check must never raise
         return False
 
 
@@ -193,11 +210,11 @@ def is_reputable_app_noise(name: str, path: str, severity_rank_value: int,
     True only when ALL hold: the detection is below HIGH severity, the process is
     NOT a LOLBin, NOT a signed OS binary, AND it IS a signed reputable third
     party. That is the fingerprint of an installer/app doing its own thing across
-    many child processes — the class that trips 'N-tactic multi-stage attack'
+    many child processes - the class that trips 'N-tactic multi-stage attack'
     false positives. A HIGH/critical step (LSASS, injection) from the SAME signed
     app still correlates, because this returns False for it."""
     if severity_rank_value >= high_rank:
-        return False                                   # real high-severity → chain it
+        return False                                   # real high-severity -> chain it
     if (name or "").strip().lower() in _LOLBIN_NAMES:
         return False                                   # LOLBins always chain
     if is_trusted_os_path(path):
@@ -211,7 +228,7 @@ def is_benign_os_autorun(writer: str, target: str = "") -> bool:
 
     This silences the constant legitimate autorun writes (services.exe,
     sihost.exe, TrustedInstaller, dismhost, WMIADAP) that otherwise flood as
-    "autorun registry modification" false positives — while KEEPING the real
+    "autorun registry modification" false positives - while KEEPING the real
     abuse case, a trusted process dropping an autorun into %TEMP%, alerting.
     (The persistence collector remains the authoritative persistence detector
     and still raises a removable incident for genuine new autostart entries.)

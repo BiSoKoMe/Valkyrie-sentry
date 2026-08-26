@@ -1,4 +1,4 @@
-"""Time-boxed enforcement leases — every automatic action expires by default.
+"""Time-boxed enforcement leases - every automatic action expires by default.
 
 WHY THIS EXISTS
 ---------------
@@ -7,12 +7,12 @@ into the base-rate problem: on a normal machine benign events outnumber
 malicious ones by roughly a million to one, so precision at any usable
 threshold is punishing. Waiting for certainty means never acting; acting
 without it means acting wrongly, permanently, on your own machine. Valkyrie
-has done exactly that twice on this host — a MAC-randomiser cycle that left
+has done exactly that twice on this host - a MAC-randomiser cycle that left
 the adapter disabled, and an isolate/release cycle that cut WiFi.
 
 A lease changes the shape of the problem. Instead of asking "am I sure enough
 to do this forever?", the engine asks "am I sure enough to do this for fifteen
-minutes?" — and those are very different bars. An action that reverts itself
+minutes?" - and those are very different bars. An action that reverts itself
 is one you can afford to fire at 0.6 confidence, where an irreversible one
 needs 0.95.
 
@@ -28,7 +28,7 @@ until someone notices" to "a domain was unreachable for a quarter of an hour".
 
 WHAT THIS MODULE DOES NOT DO
 ----------------------------
-It executes nothing — deliberately, exactly like
+It executes nothing - deliberately, exactly like
 :mod:`valkyrie.edr.reversibility`. It owns lease *state* and answers "what is
 due to be reverted right now?". The caller (the response layer) dispatches the
 actual reverse action. That split keeps every rule here unit-testable without
@@ -40,7 +40,7 @@ FAIL-SAFE ON RESTART
 Leases are persisted, not in-memory. If they were in-memory, an engine crash
 would strand the enforcement it had already applied to the host: the firewall
 rule survives the crash, the lease that was supposed to lift it does not, and
-a temporary block silently becomes permanent — the precise outcome this module
+a temporary block silently becomes permanent - the precise outcome this module
 exists to prevent. On load, any lease whose deadline passed while the engine
 was down is immediately due, so recovery reverts it at the next sweep.
 """

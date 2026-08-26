@@ -83,7 +83,7 @@ class DoHDetector:
         # _scan() only caught psutil.AccessDenied around net_connections(), but
         # that call also raises OSError/psutil.Error transiently, and the rest of
         # the scan body was unguarded entirely. One raise killed this thread and
-        # DoH-bypass detection stopped silently for the life of the run — the
+        # DoH-bypass detection stopped silently for the life of the run - the
         # detector that exists to notice DNS being routed around Valkyrie would
         # itself be gone, with nothing reporting it.
         while self._running:

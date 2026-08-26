@@ -1,6 +1,6 @@
 """Tests for telemetry_killer's backup/restore lifecycle.
 
-`test_telemetry.py` requires Administrator and skips entirely without it —
+`test_telemetry.py` requires Administrator and skips entirely without it -
 which, on any dev machine or CI runner, is always. So the module that edits
 a user's Windows privacy settings had effectively no coverage of the one
 property that matters most: **can the user get their settings back?**
@@ -17,7 +17,7 @@ success while handing back the killed values. Reachable with two clicks of
 the Privacy page's "Kill Telemetry" button.
 
 For a privacy tool, silently making a system change irreversible is close to
-the worst non-security failure available — the user trusted it to be undoable.
+the worst non-security failure available - the user trusted it to be undoable.
 """
 
 from __future__ import annotations
@@ -80,7 +80,7 @@ def main() -> int:
         h2, sk2, vn2, vt2, killed2 = spec["advertising_id"]
         pristine = {(h, sk, vn): 3, (h2, sk2, vn2): 1}
 
-        # ── One kill, one restore: the basic contract ───────────────────
+        # --- One kill, one restore: the basic contract ---
         print("\n[1] a single kill/restore round-trip returns the originals")
         with tempfile.TemporaryDirectory() as td:
             reg = _FakeRegistry(pristine); reg.install()
@@ -96,7 +96,7 @@ def main() -> int:
             c.check("restore() also restores a second setting",
                     reg.values[(h2, sk2, vn2)] == 1)
 
-        # ── REGRESSION: a second kill must not destroy the originals ────
+        # --- REGRESSION: a second kill must not destroy the originals ---
         print("\n[2] REGRESSION: kill() twice must not eat the real settings")
         with tempfile.TemporaryDirectory() as td:
             reg = _FakeRegistry(pristine); reg.install()
@@ -111,7 +111,7 @@ def main() -> int:
             c.check("restore() after two kills still returns the TRUE original",
                     reg.values[(h, sk, vn)] == 3)
 
-        # ── Three kills, for good measure ──────────────────────────────
+        # --- Three kills, for good measure ---
         print("\n[3] repeated kills stay safe")
         with tempfile.TemporaryDirectory() as td:
             reg = _FakeRegistry(pristine); reg.install()
@@ -122,7 +122,7 @@ def main() -> int:
             c.check("three kills then restore still yields the original",
                     reg.values[(h, sk, vn)] == 3)
 
-        # ── A setting that did NOT exist must be deleted, not invented ──
+        # --- A setting that did NOT exist must be deleted, not invented ---
         print("\n[4] a setting absent beforehand is removed, not set to a value")
         with tempfile.TemporaryDirectory() as td:
             reg = _FakeRegistry({})            # nothing pre-existing at all
@@ -137,7 +137,7 @@ def main() -> int:
             c.check("the deletion was recorded against the right key",
                     (h, sk, vn) in reg.deleted)
 
-        # ── Backup lifecycle ───────────────────────────────────────────
+        # --- Backup lifecycle ---
         print("\n[5] the backup is cleared only after a full restore")
         with tempfile.TemporaryDirectory() as td:
             reg = _FakeRegistry(pristine); reg.install()
@@ -149,7 +149,7 @@ def main() -> int:
             c.check("the backup is cleared after a successful restore "
                     "(so a later kill records fresh originals)", not bp.exists())
 
-        # ── Restore with no backup must be a no-op, not a crash ────────
+        # --- Restore with no backup must be a no-op, not a crash ---
         print("\n[6] restore() with no backup is a safe no-op")
         with tempfile.TemporaryDirectory() as td:
             reg = _FakeRegistry(pristine); reg.install()

@@ -1,4 +1,4 @@
-"""Meeting Mode — a one-command network kill switch for sensitive moments.
+"""Meeting Mode - a one-command network kill switch for sensitive moments.
 
 Activating flips the Windows Firewall to default-deny **outbound** on every
 profile, which instantly stops all internet egress from the machine. Windows
@@ -14,7 +14,7 @@ Windows-only. On other platforms every method degrades gracefully with a clear
 message rather than raising.
 
 SAFETY: activate() genuinely cuts the machine off the internet. It requires
-Administrator rights and never runs automatically — only in response to an
+Administrator rights and never runs automatically - only in response to an
 explicit --meeting-on, or an authenticated dashboard/API request.
 """
 
@@ -84,7 +84,7 @@ class MeetingMode:
     def activate(self) -> dict:
         """Block all outbound network traffic. Returns a status dict.
 
-        No-op with an ``error`` field when not on Windows or not elevated —
+        No-op with an ``error`` field when not on Windows or not elevated -
         never raises, never partially applies.
         """
         if not _is_windows():
@@ -93,7 +93,7 @@ class MeetingMode:
             return {"active": False,
                     "error": "Administrator rights required to change the firewall policy"}
         if self.status().get("active"):
-            return self.status()   # already on — idempotent
+            return self.status()   # already on - idempotent
 
         ok, detail = _set_firewall_policy(_BLOCK_POLICY)
         if not ok:
@@ -119,7 +119,7 @@ class MeetingMode:
         ok, detail = _set_firewall_policy(restore)
         if not ok:
             # Leave the state file in place so the kill switch is still shown as
-            # active — a failed restore must not be reported as success.
+            # active - a failed restore must not be reported as success.
             return {"active": True, "error": f"could not restore firewall policy: {detail}"}
 
         self._clear()

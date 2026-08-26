@@ -5,23 +5,23 @@ AI vendor. It talks only to the :class:`AIProvider` interface below; which
 concrete backend answers is a runtime configuration choice:
 
     AIProvider (interface)
-        ├── AnthropicProvider    (Claude / Anthropic Messages API)
-        ├── OpenAIProvider       (OpenAI Chat Completions API)
-        ├── LocalProvider        (any OpenAI-compatible local server —
-        │                         Ollama, LM Studio, llama.cpp, vLLM …)
-        └── OfflineProvider      (no backend; forces the offline analyst)
+        ├--- AnthropicProvider    (Claude / Anthropic Messages API)
+        ├--- OpenAIProvider       (OpenAI Chat Completions API)
+        ├--- LocalProvider        (any OpenAI-compatible local server -
+        │                         Ollama, LM Studio, llama.cpp, vLLM ...)
+        └--- OfflineProvider      (no backend; forces the offline analyst)
 
 All network providers speak plain HTTP over ``httpx`` (already a Valkyrie
-dependency) — there is **no vendor SDK dependency**. A provider is only
+dependency) - there is **no vendor SDK dependency**. A provider is only
 "available" when it has both a transport and whatever credential it needs, so a
 missing key or missing ``httpx`` degrades cleanly to the offline analyst.
 
 Selection (all optional; sensible auto-detection when unset):
 
-  * ``VALKYRIE_AI_PROVIDER``  — ``anthropic`` | ``openai`` | ``local`` | ``offline``
-  * ``VALKYRIE_AI_MODEL``     — model id (per-provider default otherwise)
-  * ``VALKYRIE_AI_KEY``       — API key (generic)
-  * ``VALKYRIE_AI_BASE_URL``  — override the endpoint (custom / local servers)
+  * ``VALKYRIE_AI_PROVIDER``  - ``anthropic`` | ``openai`` | ``local`` | ``offline``
+  * ``VALKYRIE_AI_MODEL``     - model id (per-provider default otherwise)
+  * ``VALKYRIE_AI_KEY``       - API key (generic)
+  * ``VALKYRIE_AI_BASE_URL``  - override the endpoint (custom / local servers)
 
 Backward compatible: ``ANTHROPIC_API_KEY`` and ``OPENAI_API_KEY`` are still read
 as fall-backs for their respective providers, so existing deployments keep
@@ -69,8 +69,8 @@ class AIProvider(ABC):
 
         ``system``/``user`` are the prompts; ``schema`` is the JSON Schema the
         reply must conform to (providers that support server-side JSON mode use
-        it; all providers also validate by parsing). Any failure — no transport,
-        network error, unparseable reply — returns None so the caller falls back
+        it; all providers also validate by parsing). Any failure - no transport,
+        network error, unparseable reply - returns None so the caller falls back
         to the offline analyst. Never raises.
         """
 
@@ -114,7 +114,7 @@ class OfflineProvider(AIProvider):
 
 
 # ---------------------------------------------------------------------------
-# Anthropic (Claude) — Messages API over HTTP
+# Anthropic (Claude) - Messages API over HTTP
 # ---------------------------------------------------------------------------
 
 class AnthropicProvider(AIProvider):
@@ -203,7 +203,7 @@ class OpenAIProvider(AIProvider):
 
 class LocalProvider(OpenAIProvider):
     """Any OpenAI-compatible server running on the box (Ollama, LM Studio,
-    llama.cpp, vLLM). Keeps everything local — nothing leaves the machine."""
+    llama.cpp, vLLM). Keeps everything local - nothing leaves the machine."""
     name = "local"
     _DEFAULT_MODEL = "llama3.1"
     _DEFAULT_BASE = "http://localhost:11434/v1"    # Ollama default

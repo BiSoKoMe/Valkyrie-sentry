@@ -2,13 +2,13 @@
 """Version-aware playbook seeding/migration (valkyrie/config.py).
 
 A client never runs a manual step, so the product must arm itself on install in
-EVERY case — fresh install and upgrade over an older build. These tests pin that
+EVERY case - fresh install and upgrade over an older build. These tests pin that
 contract against temp files (no touching the real %ProgramData% copy):
 
-  [1] Fresh install (no file)        → bundled armed default copied verbatim
-  [2] Upgrade (old/no version)       → built-ins refreshed to the armed set,
+  [1] Fresh install (no file)        -> bundled armed default copied verbatim
+  [2] Upgrade (old/no version)       -> built-ins refreshed to the armed set,
                                         user-added playbooks preserved, backup made
-  [3] Current or user-ahead version  → file left untouched (deliberate edits kept)
+  [3] Current or user-ahead version  -> file left untouched (deliberate edits kept)
 """
 
 from __future__ import annotations
@@ -101,7 +101,7 @@ def test_current_version_untouched() -> None:
         path.write_text(custom, encoding="utf-8")
         _seed_or_migrate_playbooks(path=path)
         ids = _ids(path)
-        # Same version → the user's deliberate dry_run edit must survive.
+        # Same version -> the user's deliberate dry_run edit must survive.
         _check("user's dry_run edit preserved at current version",
                ids.get("kill-critical-process", {}).get("mode") == "dry_run")
         _check("no backup made when nothing migrated", not any(Path(d).glob("*.bak")))

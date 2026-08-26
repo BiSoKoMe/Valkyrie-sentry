@@ -442,6 +442,31 @@ html, body {
 /* ====================== Page intro + status rows ====================== */
 .page-intro { color: var(--text-1); font-size: 13.5px; margin: 0 2px 22px; max-width: 720px; line-height: 1.55; }
 
+/* NYX "who's tracking you" headline — the one conclusion, before the raw
+   feed. Strictly monochrome like everything else here: weight and border
+   carry the distinction the old .allow/.flag dot color would have, never a
+   new hue — --crit stays reserved for actual critical severity. */
+.headline-block {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 20px 22px; margin: 0 2px 22px;
+}
+.hl-top {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-2); margin-bottom: 10px;
+}
+.hl-main { font-size: 19px; font-weight: 700; color: var(--text-0); line-height: 1.35; }
+.hl-sub { font-size: 13px; color: var(--text-1); margin-top: 6px; }
+.hl-pair { display: flex; gap: 28px; margin-top: 16px; }
+.hl-num {
+  font-family: var(--font-mono); font-size: 22px; font-weight: 700; color: var(--text-0);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.hl-num.hl-num-dim { color: var(--text-2); }
+.hl-num small {
+  font-family: inherit; font-size: 10.5px; font-weight: 600;
+  letter-spacing: 0.03em; text-transform: uppercase; color: var(--text-2);
+}
+
 .panel {
   background: transparent; border: 1px solid var(--line); border-radius: var(--radius);
   padding: 2px 15px; margin-top: 6px;

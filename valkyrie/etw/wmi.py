@@ -1,20 +1,20 @@
 """WMI-Activity sensor (ETW-backed, real-time).
 
 Consumes Microsoft-Windows-WMI-Activity/Operational, focusing on the highest-
-signal events: **permanent WMI event-subscription persistence** — the
+signal events: **permanent WMI event-subscription persistence** - the
 ``__FilterToConsumerBinding`` that ties an ``__EventFilter`` (trigger) to a
 ``CommandLineEventConsumer`` / ``ActiveScriptEventConsumer`` (payload). This is a
 classic fileless persistence + privilege-survival technique (MITRE **T1546.003**),
 and remote WMI method calls map to **T1047**.
 
 Event IDs of interest (Operational channel):
-  * **5861** — permanent consumer→filter binding registered (persistence).
-  * **5860** — temporary event consumer registered.
-  * **5859** — ESS (event subscription service) started.
+  * **5861** - permanent consumer->filter binding registered (persistence).
+  * **5860** - temporary event consumer registered.
+  * **5859** - ESS (event subscription service) started.
 
 The binding details live in the event's ``<UserData>`` (Consumer, Query,
 PossibleCause, Namespace). ``classify_wmi`` is pure and tolerant of the schema
-differences between Windows versions — it scores over the concatenated text.
+differences between Windows versions - it scores over the concatenated text.
 """
 
 from __future__ import annotations
@@ -78,7 +78,7 @@ def classify_wmi(text: str, consumer_cmd: str = "") -> tuple[str, list[str], str
         reasons.append("timer/logon-triggered filter")
         raise_to(SEV_MEDIUM, "T1546.003")
 
-    # Cross-apply the PowerShell classifier to any embedded consumer command —
+    # Cross-apply the PowerShell classifier to any embedded consumer command -
     # a WMI consumer that runs an encoded PowerShell payload is doubly damning.
     if consumer_cmd:
         ps_sev, ps_labels, ps_tech, ps_reason = classify_powershell(consumer_cmd)

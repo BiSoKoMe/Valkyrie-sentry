@@ -1,9 +1,9 @@
-"""Shared test harness — makes a test's result mean something.
+"""Shared test harness - makes a test's result mean something.
 
 The failure this exists to prevent: a standalone test file that records no
 failures prints "ALL PASSED" and exits 0 **even when it executed zero
 assertions**. The runner judged on exit code alone, so a test whose every check
-was skipped — no admin, no optional dependency, wrong OS — was counted as a
+was skipped - no admin, no optional dependency, wrong OS - was counted as a
 passing test. Three files in this suite did exactly that, silently covering the
 telemetry-killer pillar, the TLS path, and the Rust accelerator with nothing.
 
@@ -121,7 +121,7 @@ def skip_file(name: str, why: str) -> int:
 
     Use when a precondition makes the entire file inapplicable (not
     Administrator, optional dependency absent, wrong OS). The point is that the
-    runner records it as *skipped* — visibly absent coverage — rather than
+    runner records it as *skipped* - visibly absent coverage - rather than
     letting an exit code of 0 pass it off as a tested subsystem.
     """
     print(f"  [~] {name}: SKIP — {why}")

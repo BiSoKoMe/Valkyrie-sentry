@@ -4,7 +4,7 @@
 These pin the FP classes a live Atomic Red Team run exposed, so they cannot
 regress: Valkyrie flagging ITSELF, public DNS resolvers scored as C2, and the
 constant legit Windows autorun churn (services.exe/sihost/TrustedInstaller).
-Each fix must NOT weaken a real detection — the negative controls check that.
+Each fix must NOT weaken a real detection - the negative controls check that.
 
   [1] is_self recognises Valkyrie's own binaries/processes, not third parties
   [2] public DNS resolvers are never threat IPs; a real bad IP still is

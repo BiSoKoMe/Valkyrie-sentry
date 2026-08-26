@@ -26,7 +26,7 @@ from valkyrie.telemetry import (  # noqa: E402
 _WINDOWS = os.name == "nt"
 
 
-# ── command-line heuristics ─────────────────────────────────────────────────
+# --- command-line heuristics ---
 def test_cmdline_encoded_powershell_is_high():
     sev, labels, reason = classify_cmdline(
         "powershell.exe", "powershell -nop -w hidden -enc SQBFAFgA")
@@ -57,12 +57,12 @@ def test_procinfo_event_carries_cmdline_and_chain():
     assert ev.category == CAT_PROCESS
     assert ev.fields["cmdline"] == "powershell -enc AAAA"
     assert ev.fields["parent_chain"] == ["winword.exe", "explorer.exe"]
-    # office parent + shell AND encoded cmdline → high
+    # office parent + shell AND encoded cmdline -> high
     assert ev.severity == SEV_HIGH
     assert "office_child_shell" in ev.labels and "encoded_powershell" in ev.labels
 
 
-# ── persistence severity ────────────────────────────────────────────────────
+# --- persistence severity ---
 def test_persistence_severity_baseline_medium():
     sev, labels, _ = _persistence_severity(PERSIST_RUN_KEY, r"C:\Program Files\App\app.exe")
     assert sev == SEV_MEDIUM
@@ -82,7 +82,7 @@ def test_exe_from_command():
     assert _exe_from_command("") == ""
 
 
-# ── persistence collector: real baseline+diff via a temp HKCU Run value ─────
+# --- persistence collector: real baseline+diff via a temp HKCU Run value ---
 def test_persistence_collector_detects_new_run_key():
     if not _WINDOWS:
         print("  SKIP (non-Windows)")
@@ -117,15 +117,15 @@ def test_persistence_collector_detects_new_run_key():
             pass
 
 
-# ── regression: HKEY_USERS enumeration (the LocalSystem-service blind spot) ──
+# --- regression: HKEY_USERS enumeration (the LocalSystem-service blind spot) ---
 def test_run_key_specs_reads_via_hkey_users_not_just_hkcu():
     """Valkyrie ships as a Windows service with no configured logon account, so
     nssm runs it as LocalSystem. From that process, HKEY_CURRENT_USER is
-    LocalSystem's OWN hive — NOT the interactive desktop user's — so a Run-key
+    LocalSystem's OWN hive - NOT the interactive desktop user's - so a Run-key
     write via the interactive user's HKCU (the common, no-admin-required real
     persistence path) was structurally invisible no matter how long the poller
     waited. Found live on a VM re-test. The fix reads every LOADED user hive
-    via HKEY_USERS\\<SID> instead of trusting "current user" context — this
+    via HKEY_USERS\\<SID> instead of trusting "current user" context - this
     pins that HKEY_USERS enumeration actually surfaces a real interactive
     user's SID and that _run_key_specs() includes an HKU entry for it."""
     if not _WINDOWS:
@@ -144,7 +144,7 @@ def test_run_key_specs_reads_via_hkey_users_not_just_hkcu():
 def test_persistence_collector_detects_run_key_via_hkey_users():
     """The faithful regression: write to the SAME per-user Run key a
     LocalSystem service would have to read via HKEY_USERS\\<SID> (not
-    HKEY_CURRENT_USER, which this test process could also see — but a real
+    HKEY_CURRENT_USER, which this test process could also see - but a real
     LocalSystem service cannot). Confirms the collector's diff logic actually
     detects a change surfaced only through the HKEY_USERS path."""
     if not _WINDOWS:
@@ -202,11 +202,11 @@ def test_persistence_collector_detects_startup_file(tmp_path=None):
 
 def test_first_poll_is_silent_baseline():
     coll = PersistenceCollector(emit=lambda e: (_ for _ in ()).throw(AssertionError("emitted on baseline")))
-    # _last is None → first poll only baselines, emits nothing.
+    # _last is None -> first poll only baselines, emits nothing.
     assert coll.poll_once() == 0
 
 
-# ── benchmark ───────────────────────────────────────────────────────────────
+# --- benchmark ---
 def test_persistence_snapshot_is_reasonable():
     if not _WINDOWS:
         print("  SKIP (non-Windows)")
@@ -222,7 +222,7 @@ def test_persistence_snapshot_is_reasonable():
     assert elapsed < 2.0, f"persistence snapshot too slow: {elapsed:.2f}s"
 
 
-# ── standalone runner ───────────────────────────────────────────────────────
+# --- standalone runner ---
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

@@ -1,9 +1,9 @@
-"""EdrEngine — the correlation core and the single facade the web API / CLI use.
+"""EdrEngine - the correlation core and the single facade the web API / CLI use.
 
 The engine subscribes to Valkyrie's live DNS-decision stream (the same
 ``Store.subscribe`` feed the dashboard uses), runs the registered detection
 plugins over every event, and **correlates** the resulting detections into a
-much smaller set of incidents — each with a running timeline and a severity
+much smaller set of incidents - each with a running timeline and a severity
 that escalates as related detections arrive.
 
 Correlation rule (deliberately simple and explainable): a detection joins the
@@ -24,15 +24,19 @@ import time
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
+from pathlib import Path
+
 from ..eventbus import EventBus
 from .builtin import register_builtin
 from .causality import CausalityGraph
+from .causal_detect import CausalBaseline, score_subgraph
 from .investigate import Investigator
 from .hunt import ThreatHunter
 from .killchain import KillChainCorrelator
 from ..behavioral_sequences import SequenceEngine
 from .plugins import PluginContext, PluginRegistry
 from .response import ResponseManager, register_responders
+from .remediation import plan as _remediation_plan
 from .schema import (
     Detection, Incident, TimelineEntry, iso_from_epoch, max_severity,
     severity_rank,
@@ -65,7 +69,7 @@ _TELEMETRY_TECHNIQUE = {
     "injection_primitive": "T1055 — Process Injection",
     "stealth_flags":       "T1059.001 — PowerShell",
     "obfuscation":         "T1027 — Obfuscated/Encoded Command",
-    # AMSI conviction (valkyrie/amsi.py) — an external engine's verdict, not a
+    # AMSI conviction (valkyrie/amsi.py) - an external engine's verdict, not a
     # Valkyrie heuristic. The sensor sets an exact technique when it knows one;
     # this is the fallback for content convicted with no other tell.
     "amsi_detected":       "T1059 — Command & Scripting Interpreter (malicious content)",
@@ -85,7 +89,7 @@ from .store import EdrStore
 
 
 class EdrEngine:
-    """Detection → correlation → incident pipeline + response/hunt/investigate facade."""
+    """Detection -> correlation -> incident pipeline + response/hunt/investigate facade."""
 
     def __init__(self, store, *, intelligence=None, firewall=None, rules=None,
                  blocklist=None, plugin_dir=None,
@@ -116,13 +120,28 @@ class EdrEngine:
         # ESP-style named behavioural-sequence IOAs (specific attack patterns).
         self._sequences = SequenceEngine()
         # Process-ancestry graph. Unlike the two correlators above it produces no
-        # detections and casts no verdict — it records STRUCTURE (who spawned
+        # detections and casts no verdict - it records STRUCTURE (who spawned
         # whom, what each process touched) so an alert can be explained by the
         # chain that led to it. Fed from ingest_telemetry for every process
         # event, benign ones included: the ancestors of an attack are benign by
         # definition right up until they aren't, and a chain missing them is
         # useless. See edr/causality.py.
         self._causality = CausalityGraph()
+        # The causality graph as a DETECTOR (edr/causal_detect.py). Unlike the
+        # correlators above, this one CAN originate a primary signal: an
+        # intrusion whose every individual event is unremarkable still has a
+        # suspicious *structure*, and that structure is scored against what is
+        # normal ON THIS MACHINE. The baseline persists across sessions because
+        # it must MATURE (300 structures / 3 sessions) before it may fire at all
+        # - an in-memory-only baseline would restart at zero every launch and
+        # therefore never emit anything.
+        self._causal_baseline = CausalBaseline()
+        self._causal_baseline_path: Optional[Path] = None
+        self._causal_unsaved = 0
+        # Checkpoint cadence. Small enough that a hard kill costs little, large
+        # enough that learning does not turn into a write amplifier.
+        self._CAUSAL_SAVE_EVERY = 50
+        self._causal_seen: set = set()   # subgraph keys already scored this run
         self._running = False
 
     # ------------------------------------------------------------------
@@ -161,10 +180,10 @@ class EdrEngine:
 
     def ingest_telemetry(self, event) -> Optional[str]:
         """Ingest a normalized TelemetryEvent (dict or object) from a non-DNS
-        collector — e.g. the process collector.
+        collector - e.g. the process collector.
 
         Flagged / medium-and-above observations become Detections and flow
-        through the same correlation → incident pipeline as DNS detections; plain
+        through the same correlation -> incident pipeline as DNS detections; plain
         low/info observations are visibility only and are not escalated (avoids
         turning every process start into an incident). Returns the incident id
         when a detection was created, else None.
@@ -179,14 +198,15 @@ class EdrEngine:
         # at ingest also stops these from feeding the kill-chain correlator, so
         # no "multi-stage attack on valkyrie.exe" can form either.
         from ..trust import is_self
-        if is_self(str(d.get("actor_name", "")), str(d.get("actor_path", ""))):
+        if is_self(str(d.get("actor_name", "")), str(d.get("actor_path", "")),
+                  int(d.get("actor_pid", 0) or 0)):
             return None
 
-        # Causality graph is fed HERE — above the severity gate below — and that
+        # Causality graph is fed HERE - above the severity gate below - and that
         # placement is the whole point. The gate exists so a routine process
         # start never becomes an incident, but a causality chain made only of
         # things that already alerted is not a chain at all: the ancestry that
-        # explains an alert (explorer → winword → cmd) is entirely info-severity
+        # explains an alert (explorer -> winword -> cmd) is entirely info-severity
         # until the moment the last hop isn't. Recording structure is not the
         # same act as raising an alert, so the gate that governs alerting must
         # not govern this. Never allowed to break ingest.
@@ -200,7 +220,7 @@ class EdrEngine:
 
         labels = list(d.get("labels") or [])
         # Decoy tripwire (honeytokens): if this event references a planted decoy
-        # file/credential — in its command line, target path, or entity — an
+        # file/credential - in its command line, target path, or entity - an
         # intruder is browsing the box for confidential data. Near-zero FP, so
         # force it CRITICAL and tag it 'decoy'; the decision policy routes that
         # straight to CONTAIN. Checked BEFORE the medium-severity gate so a decoy
@@ -223,7 +243,7 @@ class EdrEngine:
 
         # A behavioral rule (behavioral_rules.py) carries its exact ATT&CK id on
         # the event; prefer it over inferring one from a label. Falls back to the
-        # label→technique map for events from other collectors. Computed BEFORE
+        # label->technique map for events from other collectors. Computed BEFORE
         # the severity gate below so the reconnaissance-burst pre-check (same
         # reason) can use it too.
         technique = str((d.get("fields") or {}).get("technique") or "")
@@ -235,11 +255,11 @@ class EdrEngine:
 
         # Reconnaissance-burst pre-check: 'discovery_command' is deliberately
         # INFO-severity (process_telemetry.classify_discovery) and, by design,
-        # NEVER alone clears the gate below — a lone whoami/tasklist/net view
+        # NEVER alone clears the gate below - a lone whoami/tasklist/net view
         # must never raise an incident (precision-over-aggression; Discovery is
         # the one tactic where a single-command alert is a guaranteed FP, per
-        # the redteam-evaluation disc-* findings). But BREADTH — several
-        # distinct discovery techniques from the same actor in a short window —
+        # the redteam-evaluation disc-* findings). But BREADTH - several
+        # distinct discovery techniques from the same actor in a short window -
         # is real signal, and the sequence engine can only see that if these
         # sub-threshold events reach it. Feed it here, before the gate would
         # otherwise drop the event outright; the completed-sequence incident
@@ -268,8 +288,8 @@ class EdrEngine:
 
         entity = str(d.get("actor_path") or d.get("actor_name") or "")
         category = str(d.get("category", "") or "process")
-        # Persistence detections carry a structured, *actionable* entity —
-        # "<asep_type>::<identity>" — so the remove_persistence responder can be
+        # Persistence detections carry a structured, *actionable* entity -
+        # "<asep_type>::<identity>" - so the remove_persistence responder can be
         # driven straight from a playbook with `target_from: entity` and knows
         # exactly which task/service/run-key/startup file to rip out. Each ASEP
         # is thereby its own incident (distinct entity), which is also the right
@@ -285,7 +305,7 @@ class EdrEngine:
         # Process lineage, when the collector captured it (process_telemetry
         # fields ppid/parent_name/parent_chain; sysmon parent_pid/parent_image).
         # Carried in details so kill-chain correlation can link a child process
-        # to its parent's chain — no DB-schema change (details is JSON).
+        # to its parent's chain - no DB-schema change (details is JSON).
         fields = d.get("fields") or {}
         ppid = int(fields.get("ppid") or fields.get("parent_pid") or 0)
         parent_name = str(fields.get("parent_name") or fields.get("parent_image") or "")
@@ -321,7 +341,7 @@ class EdrEngine:
             except (TypeError, ValueError):
                 pass
         det = Detection(**det_kwargs)
-        # _ingest_detection takes the correlation lock itself — do not wrap.
+        # _ingest_detection takes the correlation lock itself - do not wrap.
         self._ingest_detection(det)
         return det.incident_id
 
@@ -337,7 +357,7 @@ class EdrEngine:
         becomes an ARTIFACT hanging off the process that caused it.
 
         On create_time, which is what protects the graph from PID reuse: only
-        ``process_collector``'s exec events may use the event ``ts`` as one —
+        ``process_collector``'s exec events may use the event ``ts`` as one -
         ``ProcInfo.to_event`` sets ``ts=self.create_time`` explicitly, so there
         it is the real process start. Sysmon stamps ``ts=time.time()`` at emit,
         which is an arrival time and would be a *wrong* identity if treated as a
@@ -389,6 +409,156 @@ class EdrEngine:
             data={"activity": activity, "subject": str(subject),
                   "severity": str(d.get("severity", "")), "source": source},
             name=name, ppid=ppid)
+        # The graph is now also a DETECTOR: learn this lineage's shape, and -
+        # when the event actually changed the structure (persistence, egress) -
+        # score it. Never raises into the ingest path.
+        try:
+            self._causal_check(pid, str(category or "").lower(), create_time)
+        except Exception:
+            pass
+
+    # -- the graph as a detector ------------------------------------------
+    # Kinds that meaningfully CHANGE a lineage's shape. Scoring on every event
+    # would be pure overhead (a process writing 500 files does not become 500
+    # times more suspicious); scoring when persistence or egress appears is
+    # where the structure actually becomes interesting.
+    _CAUSAL_TRIGGER_KINDS = frozenset({
+        "registry", "persistence", "autostart", "service", "scheduled_task",
+        "startup_folder", "dns", "network", "connection",
+    })
+
+    def _causal_check(self, pid: int, kind: str, create_time: float = 0.0) -> None:
+        """Learn this lineage's structure, and score it for structural suspicion.
+
+        Two jobs, and the learning half runs unconditionally - including on the
+        activity that turns out to be an attack. That is deliberate: a baseline
+        that only learns "known-good" activity is a baseline someone has to
+        curate, which is exactly the manual-tuning burden that makes static
+        behavioural baselines painful in practice. Learning everything and
+        scoring RARITY means the machine's own normal emerges without anyone
+        maintaining a list, and a one-off intrusion cannot move a distribution
+        built from thousands of structures.
+        """
+        if pid <= 0:
+            return
+        try:
+            sub = self._causality.subgraph(pid, create_time, max_nodes=128)
+        except Exception:
+            return
+        if not sub or not sub.get("found"):
+            return
+
+        # 1. LEARN (always, silently)
+        try:
+            self._causal_baseline.observe_subgraph(sub)
+            self._causal_unsaved += 1
+            # CHECKPOINT. Saving only at shutdown loses the whole session
+            # whenever the process is killed rather than asked to stop - which
+            # is the normal way a Windows service ends. A baseline that needs
+            # 3 sessions to mature cannot afford to lose them, so it is
+            # checkpointed as it learns.
+            if self._causal_unsaved >= self._CAUSAL_SAVE_EVERY:
+                self._causal_unsaved = 0
+                self.save_causal_baseline()
+        except Exception:
+            pass
+
+        # 2. SCORE - only on a structure-changing event, and only once per
+        #    (lineage, kind) per run so a chatty process cannot spam.
+        if kind not in self._CAUSAL_TRIGGER_KINDS:
+            return
+        cgo = sub.get("cgo") or {}
+        key = f"{cgo.get('key', '')}|{kind}"
+        if key in self._causal_seen:
+            return
+        self._causal_seen.add(key)
+        if len(self._causal_seen) > 4096:      # bounded
+            self._causal_seen.clear()
+
+        try:
+            finding = score_subgraph(sub, self._causal_baseline)
+        except Exception:
+            return
+        if not finding.fires:
+            return
+
+        owner = str(cgo.get("name") or "?")
+        det = Detection(
+            source="edr.causal",
+            severity="high",
+            category="anomaly",
+            title=f"Suspicious causal structure under {owner}",
+            entity=owner,
+            process_name=owner,
+            process_pid=int(cgo.get("pid") or 0),
+            technique=finding.technique,
+            details={
+                "causal_score": finding.score,
+                "causal_rarity": finding.rarity,
+                "motifs": list(finding.motifs),
+                "rare_edges": list(finding.rare_edges),
+                # The explanation rides on the detection: this is the one
+                # detection type with no rule behind it, so it must carry its
+                # own justification or an analyst cannot audit it.
+                "reason": ("The lineage's STRUCTURE is suspicious and rare on "
+                           "this machine, even though no individual step "
+                           "tripped a rule: " + "; ".join(finding.reasons)),
+                "labels": ["causal_structure"],
+                "all_techniques": [finding.technique] if finding.technique else [],
+            },
+        )
+        self._ingest_detection(det)
+
+    def load_causal_baseline(self, path) -> None:
+        """Load the per-host causal baseline and start a session. Never raises -
+        a missing/corrupt baseline just means the detector stays immature (and
+        therefore silent), which is the safe direction."""
+        import json
+        self._causal_baseline_path = Path(path)
+        try:
+            with open(self._causal_baseline_path, "r", encoding="utf-8") as fh:
+                self._causal_baseline = CausalBaseline.from_dict(json.load(fh))
+        except Exception:
+            self._causal_baseline = CausalBaseline()
+        self._causal_baseline.start_session()
+
+    def save_causal_baseline(self) -> bool:
+        """Persist the baseline so it can mature across sessions. ATOMIC.
+
+        Written to a temporary file and then replaced into place, because this
+        is now checkpointed *while learning* rather than only at shutdown. A
+        plain truncating write that is interrupted - a service kill, a power
+        loss - leaves a half-written JSON file, and load_causal_baseline treats
+        an unreadable baseline as "start fresh". That would silently discard
+        every session's learning at the exact moment persistence was supposed to
+        protect it. os.replace is atomic on Windows and POSIX alike, so a reader
+        sees either the previous baseline or the new one, never a torn one.
+        """
+        import json
+        import os
+        if self._causal_baseline_path is None:
+            return False
+        tmp = self._causal_baseline_path.with_suffix(".json.tmp")
+        try:
+            self._causal_baseline_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(self._causal_baseline.to_dict(), fh)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, self._causal_baseline_path)
+            return True
+        except Exception:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:   # noqa: BLE001
+                pass
+            return False
+
+    def causal_status(self) -> dict:
+        b = self._causal_baseline
+        return {"observations": b.observations, "sessions": b.sessions,
+                "mature": b.mature, "edges": len(b.edges),
+                "artifact_patterns": len(b.artifacts)}
 
     def _enrich_causality(self, det: Detection) -> None:
         """Record the detection on its process node and stamp the CGO on it.
@@ -397,12 +567,12 @@ class EdrEngine:
         visible *inside* the graph (so a subgraph query shows what fired and
         where). The stamp makes the graph's answer visible *on* the alert:
         ``details['causality']`` carries the owning process, the chain as a
-        readable ``a → b → c`` path, and whether any hop in it was inferred.
+        readable ``a -> b -> c`` path, and whether any hop in it was inferred.
 
         The inferred flag is not decoration. A chain that reads
-        ``winword.exe → powershell.exe`` because the graph guessed at a parent
+        ``winword.exe -> powershell.exe`` because the graph guessed at a parent
         it never observed must not be presented with the same confidence as one
-        every hop of which was seen — so the flag rides along with the answer
+        every hop of which was seen - so the flag rides along with the answer
         and any consumer can qualify it.
         """
         pid = int(det.process_pid or 0)
@@ -432,7 +602,7 @@ class EdrEngine:
 
     def causality_subgraph(self, pid: int, create_time: float = 0.0,
                            max_nodes: int = 512) -> dict:
-        """The causality subgraph around one process — CGO, chain, descendant
+        """The causality subgraph around one process - CGO, chain, descendant
         tree and attributed artifacts. See edr/causality.py for the honesty
         flags on the payload (``inferred_nodes`` / ``truncated`` / ``evicted``)."""
         return self._causality.subgraph(pid, create_time, max_nodes=max_nodes)
@@ -444,7 +614,7 @@ class EdrEngine:
     def report_detection(self, det: Detection) -> Optional[str]:
         """Public entry for sensors that produce a fully-formed Detection (e.g.
         the ransomware shield) rather than raw telemetry. Flows through the same
-        correlation → incident → timeline → WebSocket pipeline. Returns the
+        correlation -> incident -> timeline -> WebSocket pipeline. Returns the
         incident id, or None if the engine isn't running."""
         if not self._running:
             return None
@@ -479,7 +649,7 @@ class EdrEngine:
                           "source": det.source}).to_dict())
                 # Record the graded, profile-aware decision (allow / alert /
                 # deceive / block / contain) with a plain-language reason and user
-                # message on the incident at birth — the explainable "why" behind
+                # message on the incident at birth - the explainable "why" behind
                 # any response. Enforcement itself stays with the audited
                 # playbooks; this never enforces and never breaks correlation.
                 try:
@@ -512,6 +682,34 @@ class EdrEngine:
                                   "limited_by": list(_au.limited_by),
                                   "reasons": list(_au.reasons),
                                   "vetoed": _au.vetoed}).to_dict())
+
+                    # WHAT WOULD ACTUALLY BE DONE, and why each step is
+                    # justified. The decision says how bad this is and the
+                    # authority verdict says how far we may go; neither says
+                    # which concrete actions the evidence supports. remediation
+                    # .plan() derives that from the causality subgraph, citing
+                    # the artifact behind every action and refusing to plan
+                    # irreversible steps where the graph has holes.
+                    #
+                    # Attached to the timeline, NOT executed - enforcement stays
+                    # with the audited playbooks. This module was built and
+                    # tested and then left with no caller at all, which meant an
+                    # analyst could see "kill_process was permitted" and never
+                    # see what would have been killed or on what grounds.
+                    _pl = _remediation_plan(
+                        self._causality.subgraph(
+                            det.pid, getattr(det, "create_time", 0.0),
+                            max_nodes=128),
+                        _sig, _dec)
+                    if _pl is not None and _pl.actions:
+                        inc.timeline.append(TimelineEntry(
+                            kind="remediation_plan",
+                            summary=(f"{len(_pl.actions)} action(s) justified by "
+                                     f"evidence"
+                                     + (f"; {len(_pl.blind_spots)} blind spot(s) "
+                                        f"cap irreversible steps"
+                                        if _pl.blind_spots else "")),
+                            data=_pl.to_dict()).to_dict())
                 except Exception:
                     pass
                 det.incident_id = inc.id
@@ -541,7 +739,7 @@ class EdrEngine:
                 self._notify({"type": "incident", "incident": _inc_wire(existing),
                               "new": False})
 
-        # Correlation runs AFTER the correlation lock is released — it may
+        # Correlation runs AFTER the correlation lock is released - it may
         # re-enter _ingest_detection to raise a derived incident, and _corr_lock
         # is a plain Lock (re-acquiring would deadlock). Derived detections carry
         # category "attack_chain"/"attack_sequence" and are never fed back into a
@@ -555,7 +753,7 @@ class EdrEngine:
         actor now spans multiple ATT&CK tactics, raise ONE escalating
         'attack_chain' incident that grows as new stages appear."""
         # A signed, reputable, non-LOLBin third-party app/installer legitimately
-        # spawns many child processes doing benign install work — do NOT let that
+        # spawns many child processes doing benign install work - do NOT let that
         # form a fake 'N-tactic multi-stage attack'. Its individual detections are
         # still recorded; a HIGH/critical step (or any LOLBin) from it still
         # correlates. This only stops low/medium signed-app noise from chaining.
@@ -572,7 +770,8 @@ class EdrEngine:
                 actor=det.process_name, technique=det.technique,
                 title=det.title, ts=time.monotonic(),
                 pid=det.process_pid,
-                ppid=int((det.details or {}).get("ppid") or 0))
+                ppid=int((det.details or {}).get("ppid") or 0),
+                severity=det.severity)
         except Exception:
             return
         if not chain:
@@ -585,13 +784,26 @@ class EdrEngine:
         # per child process.
         origin = (chain.get("actors") or [actor])[0]
         span = f" across {procs} linked processes" if procs > 1 else ""
+        # entity is the underlying killchain chain_id, NOT the origin's display
+        # name. Found via real-data audit: find_open_incident folds detections
+        # together when EITHER entity OR process_name matches, so giving two
+        # genuinely different chains (different chain_id - killchain's own
+        # union-find already keeps them structurally separate) the same
+        # process_name/entity (the shared origin display name, e.g. an IDE
+        # that is the first-observed actor of many unrelated terminal
+        # sessions) silently re-merged them into one ever-growing incident at
+        # the STORE layer, undoing killchain's own correlation. process_name
+        # is left blank for the same reason - a non-empty value here would
+        # re-open the identical hole through find_open_incident's OTHER
+        # match clause. The human-readable origin name is still fully
+        # available via details["chain"]["actors"] and the title text.
         chain_det = Detection(
             source="edr.killchain",
             severity=chain["severity"],
             category="attack_chain",
             title=f"Multi-stage attack on {origin}: {n} ATT&CK tactics{span}",
-            entity=origin,
-            process_name=origin,
+            entity=f"chain:{chain['chain_id']}",
+            process_name="",
             process_pid=det.process_pid,
             technique="; ".join(chain["techniques"]),
             details={"chain": chain, "reason": chain["explanation"],
@@ -601,7 +813,7 @@ class EdrEngine:
 
     def _correlate_sequence(self, det: Detection) -> None:
         """Feed a detection to the ESP sequence engine; if it completes a named
-        behavioural sequence (e.g. injection→credential-access) on one lineage,
+        behavioural sequence (e.g. injection->credential-access) on one lineage,
         raise ONE high-confidence 'attack_sequence' incident naming the pattern.
         This is the specific-pattern complement to the generic kill-chain."""
         try:
@@ -631,7 +843,7 @@ class EdrEngine:
             details={"sequence": seq, "reason": seq["explanation"],
                      "confidence": seq["score"], "labels": ["attack_sequence"],
                      # The individual techniques that built a breadth step
-                     # (e.g. reconnaissance-burst's T1082/T1057/T1018 trio) —
+                     # (e.g. reconnaissance-burst's T1082/T1057/T1018 trio) -
                      # real, distinct detections that contributed to this
                      # incident, not just the sequence's own named technique.
                      "all_techniques": seq.get("contributing_techniques") or []},
@@ -652,7 +864,7 @@ class EdrEngine:
         self._bus.publish(payload)
 
     # ------------------------------------------------------------------
-    # Facade — incidents
+    # Facade - incidents
     # ------------------------------------------------------------------
 
     def list_incidents(self, status=None, severity=None, limit=100,
@@ -660,7 +872,7 @@ class EdrEngine:
         incs = self._edr.list_incidents(status=status, severity=severity, limit=limit)
         # brief: raw incident rows only (id/technique/severity/timestamps). Skips
         # the per-incident _incident_explanation() + NIST impact assessment that
-        # make _inc_wire O(incidents) heavy — under live-eval polling the full
+        # make _inc_wire O(incidents) heavy - under live-eval polling the full
         # view times out (the scorer's 10s poll returned empty and every real
         # detection scored MISS). The scorer only needs technique + created_at to
         # match and measure latency; the dashboard still gets the rich view.
@@ -714,7 +926,7 @@ class EdrEngine:
         return self.get_incident(inc_id)
 
     # ------------------------------------------------------------------
-    # Facade — response / hunt / investigate / plugins / stats
+    # Facade - response / hunt / investigate / plugins / stats
     # ------------------------------------------------------------------
 
     def respond(self, action: str, target: str = "", *, dry_run: bool = True,
@@ -825,10 +1037,10 @@ def _incident_explanation(inc: Incident) -> str:
     """One plain-language line for why this incident exists.
 
     Without this, seeing the "why" behind an incident meant opening the full
-    replay view to read the timeline — the list a user actually scans showed
+    replay view to read the timeline - the list a user actually scans showed
     only a title. Prefers the profile-aware decision engine's own reasoning
     (`kind="decision"`, written by `decide()` specifically to be read by a
-    human — see engine.py's ingest path), which explains the ACTION taken,
+    human - see engine.py's ingest path), which explains the ACTION taken,
     not just what was observed; falls back to the first detection's summary,
     then the bare title, so this is never empty.
     """
@@ -850,7 +1062,7 @@ def _inc_wire(inc: Incident) -> dict:
 
     ``explanation`` answers WHY this incident exists (what triggered it);
     ``impact`` (NIST SP 800-30 harm-to-individuals vocabulary, see
-    edr/impact.py) answers what it MEANS for the person reading it — what
+    edr/impact.py) answers what it MEANS for the person reading it - what
     was exposed, to whom, is it reversible, what to do. Deliberately not a
     color or a 0-100 score (Clinton ch.4's specific critique) -- severity
     stays the machine-readable field correlation/playbooks key off.

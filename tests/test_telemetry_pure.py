@@ -1,22 +1,22 @@
-"""Tier 3.17 — telemetry_killer's logic, verified without Administrator.
+"""Tier 3.17 - telemetry_killer's logic, verified without Administrator.
 
 `test_telemetry.py` needs elevation and skips without it, which left this
-module at 21% and — until tier 0 — made that skip look like a passing test. The
+module at 21% and - until tier 0 - made that skip look like a passing test. The
 whole "randomizer" pillar was effectively unverified on every unelevated
 machine, which is most of them, including CI.
 
 The fix is not to demand elevation. It is to notice that most of what can be
 wrong here needs no registry access at all:
 
-  * the SPEC — which keys are touched, what they are set to, and that the
+  * the SPEC - which keys are touched, what they are set to, and that the
     "killed" values are actually the privacy-preserving ones. A typo here
     silently disables the wrong setting, or worse, enables telemetry while
     reporting success. No elevation needed to check it.
-  * the BACKUP round-trip — restore() can only work if the backup written by
+  * the BACKUP round-trip - restore() can only work if the backup written by
     kill() reloads exactly. A backup that silently fails to parse means the
     machine can never be put back, and the user has permanently altered system
     settings on the promise that it was reversible.
-  * the DEGRADATION contract — the module docstring promises scan/kill/restore
+  * the DEGRADATION contract - the module docstring promises scan/kill/restore
     "degrade gracefully (return {} / all-False) when not elevated rather than
     raising". That is precisely what an unelevated test can verify.
 
@@ -42,7 +42,7 @@ def main() -> int:
     c = Checks("telemetry killer (pure)", expect_min=22)
     print(f"winreg available: {tk._WINREG_OK}   admin: {tk.is_admin()}\n")
 
-    # ── 1. Degradation contract — the documented promise, unelevated ────────
+    # --- 1. Degradation contract - the documented promise, unelevated ---
     print("[1] degrades gracefully without elevation (the documented contract)")
     with tempfile.TemporaryDirectory() as td:
         killer = tk.TelemetryKiller(backup_path=Path(td) / "backup.json")
@@ -70,7 +70,7 @@ def main() -> int:
             c.check("a refused kill() writes no backup file",
                     not (Path(td) / "backup.json").exists())
 
-    # ── 2. The spec is well-formed and privacy-correct ──────────────────────
+    # --- 2. The spec is well-formed and privacy-correct ---
     print("\n[2] the settings spec")
     spec = tk._spec()
     if not tk._WINREG_OK:
@@ -91,7 +91,7 @@ def main() -> int:
                     if not name or not isinstance(name, str)]
         c.check(f"every entry names a value ({bad_name[:3] or 'clean'})",
                 not bad_name)
-        # Keys are never deleted, only values — assert no subkey is a bare hive
+        # Keys are never deleted, only values - assert no subkey is a bare hive
         # root, which would be a catastrophic edit.
         rooty = [k for k, (_h, sub, _n, _t, _v) in spec.items()
                  if sub.strip("\\").count("\\") < 1]
@@ -130,7 +130,7 @@ def main() -> int:
         c.check(f"no subkey is claimed under two hives ({conflict[:2] or 'clean'})",
                 not conflict)
 
-    # ── 3. Backup round-trip — restore() is only as good as this ────────────
+    # --- 3. Backup round-trip - restore() is only as good as this ---
     print("\n[3] backup round-trip (restore depends entirely on it)")
     with tempfile.TemporaryDirectory() as td:
         bpath = Path(td) / "nested" / "backup.json"

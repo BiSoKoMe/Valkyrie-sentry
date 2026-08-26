@@ -1,7 +1,7 @@
-"""DNS tunnelling / exfiltration detection — unique-subdomain flood analysis.
+"""DNS tunnelling / exfiltration detection - unique-subdomain flood analysis.
 
-The signature this module hunts (MITRE T1048.003 — Exfiltration Over
-Alternative Protocol, and the transport layer of T1071.004 — DNS C2):
+The signature this module hunts (MITRE T1048.003 - Exfiltration Over
+Alternative Protocol, and the transport layer of T1071.004 - DNS C2):
 
     payload-chunk-1.evil.example   ┐
     payload-chunk-2.evil.example   │  many NEVER-SEEN, machine-generated
@@ -10,11 +10,11 @@ Alternative Protocol, and the transport layer of T1071.004 — DNS C2):
 
 Ordinary browsing never does this. A page load queries a handful of distinct
 *bases*; a CDN queries repeated or slowly-rotating shard names; only DNS
-tunnelling (exfil, C2 heartbeats, or red-team simulations of them — e.g.
+tunnelling (exfil, C2 heartbeats, or red-team simulations of them - e.g.
 Atomic Red Team's `atomicredteam-<rand>.<ip>.nip.io` probes) produces a
 sustained stream of unique cryptic labels under a single registrable base.
 
-Why the older layers missed this shape (measured, not guessed — this module
+Why the older layers missed this shape (measured, not guessed - this module
 exists because an Atomic Red Team DNS burst sailed through as "allowed"):
 
   * ``classify_dga`` deliberately judges only the REGISTRABLE label, so a
@@ -25,14 +25,14 @@ exists because an Atomic Red Team DNS burst sailed through as "allowed"):
   * the per-process rate limiter needs >30 queries/10s; a tunnel can idle
     along far slower and still move data.
 
-The flood detector closes the gap by scoring the *aggregate shape* — unique
-label count per base per window — which no single-query signal can see.
+The flood detector closes the gap by scoring the *aggregate shape* - unique
+label count per base per window - which no single-query signal can see.
 
 Precision guards (this product's rule: a false positive breaks someone's
 site, so precision beats aggression):
 
-  * only "cryptic" labels count — length ≥ 10 AND (≥3 digits OR Shannon
-    entropy > 3.2), and never a common service label (www, api, cdn, …);
+  * only "cryptic" labels count - length >= 10 AND (>=3 digits OR Shannon
+    entropy > 3.2), and never a common service label (www, api, cdn, ...);
   * media/CDN roots that legitimately fan out shard hostnames are exempt
     (config.TUNNEL_EXEMPT_ROOTS) as are Microsoft trusted roots;
   * thresholds: 3 unique cryptic labels/60s is only a combining signal,
@@ -75,7 +75,7 @@ def _shannon_entropy(s: str) -> float:
 
 
 def registrable_base(domain: str) -> str:
-    """Last two labels — same registrable-domain convention the scanner uses."""
+    """Last two labels - same registrable-domain convention the scanner uses."""
     parts = domain.lower().rstrip(".").split(".")
     return ".".join(parts[-2:]) if len(parts) >= 2 else domain.lower()
 
@@ -86,7 +86,7 @@ def is_dyndns_root(domain: str) -> bool:
 
 
 def effective_label(domain: str) -> str:
-    """The leftmost label — the attacker-controlled payload slot on a
+    """The leftmost label - the attacker-controlled payload slot on a
     wildcard provider, where the registrable label is the provider's own."""
     return domain.lower().rstrip(".").split(".")[0]
 
@@ -104,7 +104,7 @@ def embedded_ip(domain: str) -> Optional[str]:
 
 
 def embedded_private_ip(domain: str) -> Optional[str]:
-    """An embedded IPv4 that is loopback/private/link-local — a hostname that
+    """An embedded IPv4 that is loopback/private/link-local - a hostname that
     publicly resolves into the caller's own network (rebinding-adjacent, and
     the shape of localhost-targeted test/malware traffic)."""
     ip = embedded_ip(domain)
@@ -119,11 +119,11 @@ def embedded_private_ip(domain: str) -> Optional[str]:
 def is_cryptic_label(label: str) -> bool:
     """A label that looks machine-generated rather than named by a human.
 
-    Length ≥ 10 keeps ordinary shard names ("avatars0", "s3-us-west-2" — only
+    Length >= 10 keeps ordinary shard names ("avatars0", "s3-us-west-2" - only
     two digits) out; the digit/entropy test then requires the label to carry
     actual encoded-data texture. Common service labels never qualify, and the
     entropy floor (3.5, same as ENTROPY_THRESHOLD) sits above ordinary English
-    compounds like "downloadcenter" (~3.2) — encoded payloads (hex, base32/64
+    compounds like "downloadcenter" (~3.2) - encoded payloads (hex, base32/64
     chunks) virtually always carry digits and are caught by the digit test
     even when their entropy is modest.
     """
@@ -140,16 +140,16 @@ class SubdomainFloodDetector:
     _MAX_BASES = 4096   # bound total memory across bases
 
     def __init__(self) -> None:
-        # base → deque[(monotonic_time, label)] — unique labels in window
+        # base -> deque[(monotonic_time, label)] - unique labels in window
         self._seen: dict[str, collections.deque] = {}
         self._lock = threading.RLock()
 
     def record_and_score(self, domain: str, now: Optional[float] = None) -> tuple[float, str]:
         """Record one query; return (score, reason) for the flood signal.
 
-        score 0.75 → block-alone (≥ TUNNEL_BLOCK_UNIQUE unique labels)
-        score 0.35 → combining   (≥ TUNNEL_FLAG_UNIQUE)
-        score 0.0  → no signal
+        score 0.75 -> block-alone (>= TUNNEL_BLOCK_UNIQUE unique labels)
+        score 0.35 -> combining   (>= TUNNEL_FLAG_UNIQUE)
+        score 0.0  -> no signal
         """
         domain = domain.lower().rstrip(".")
         base = registrable_base(domain)

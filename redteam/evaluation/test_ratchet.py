@@ -139,6 +139,34 @@ def main() -> int:
     c.check("render of a broken ratchet says BROKEN",
             "BROKEN" in R.render(badrep))
 
+    # ----------------------------------------------------------------- [10]
+    print("\n[10] a growing catalog lowers the aggregate rate WITHOUT any "
+          "previously-resisted technique regressing - the ratchet must hold")
+    # Same real bug this catches: 2026-08-26's Detection Coverage milestone
+    # added new, not-yet-detected techniques to the evasion catalog. That
+    # alone dragged every transform's rate down even though zero techniques
+    # that used to resist stopped resisting.
+    seed = _summary(caret_escape=(1.0, ["a", "b", "c", "d", "e"], []))
+    led10, _ = R.update_ledger(None, seed)
+    grown = _summary(caret_escape=(5 / 7, ["a", "b", "c", "d", "e"], ["g", "h"]))
+    led10b, rep = R.update_ledger(led10, grown)
+    c.check("ratchet holds when new techniques cause the rate drop", rep.ok)
+    c.check("no technique is reported as regressed", not rep.regressions)
+    c.check("the new techniques are surfaced as headroom, not a failure",
+            set(rep.deltas[0].headroom) == {"g", "h"})
+    c.check("best_rate is unaffected by the population-driven dip",
+            led10b["transforms"]["caret_escape"]["best_rate"] == 1.0)
+    c.check("population_grew is recorded on the delta",
+            rep.deltas[0].population_grew)
+
+    print("\n[11] but a real regression still fires even while the catalog "
+          "is simultaneously growing (growth never masks a real backslide)")
+    mixed = _summary(caret_escape=(4 / 7, ["a", "b", "c", "d"], ["e", "g", "h"]))
+    _, rep = R.update_ledger(led10, mixed)
+    c.check("a real regression amid growth still breaks the ratchet", not rep.ok)
+    c.check("the regressed technique (e) is named despite new techniques too",
+            "e" in rep.regressions[0].regressed)
+
     return c.finish()
 
 

@@ -1,7 +1,7 @@
 """A small, thread-safe publish/subscribe event bus.
 
-Valkyrie has two independent, hand-rolled pub/sub implementations — one in
-``Store`` (DNS-decision events) and one in ``EdrEngine`` (incident events) — each
+Valkyrie has two independent, hand-rolled pub/sub implementations - one in
+``Store`` (DNS-decision events) and one in ``EdrEngine`` (incident events) - each
 with its own subscriber list, lock, and "swallow subscriber exceptions" loop.
 This module provides a single tested primitive they both adopt, removing the
 duplication and giving the platform one place to reason about event delivery.
@@ -16,7 +16,7 @@ Contract (matches the behavior the existing subscribers already rely on):
     ``subscribe``/``unsubscribe`` may be called from request threads; a snapshot
     of handlers is taken under a lock so the set can mutate during delivery.
   * **Synchronous, in-order.** Handlers run on the publishing thread in
-    subscription order — identical to the loops it replaces. (Back-pressure and
+    subscription order - identical to the loops it replaces. (Back-pressure and
     async fan-out belong to the transport layer, e.g. the WebSocket queue, not
     here.)
 
@@ -25,8 +25,8 @@ single shared bus can carry several event kinds without every subscriber seeing
 all of them. Passing ``types=None`` (the default) subscribes to everything,
 preserving the old "deliver every message" behavior exactly.
 
-Events are plain dicts with a ``"type"`` key — the shape the current code already
-publishes — so adoption requires no change to any existing subscriber.
+Events are plain dicts with a ``"type"`` key - the shape the current code already
+publishes - so adoption requires no change to any existing subscriber.
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ class EventBus:
             self._subs.append((handler, allowed))
 
     def unsubscribe(self, handler: Handler) -> None:
-        """Remove ``handler``. Idempotent — unknown handlers are ignored.
+        """Remove ``handler``. Idempotent - unknown handlers are ignored.
 
         Removes every registration of the same handler object (identity match).
         """

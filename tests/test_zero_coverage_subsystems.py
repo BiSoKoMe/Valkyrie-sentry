@@ -1,4 +1,4 @@
-"""Tier 3.14/3.15 — the 0%-covered subsystems, tested where it is safe to.
+"""Tier 3.14/3.15 - the 0%-covered subsystems, tested where it is safe to.
 
 `fingerprint.py` (139 stmts), `resolver.py` (168), `tls_addon.py` (275) and
 `doh_detector.py` (64) had **no test file at all**. They are also the modules
@@ -8,16 +8,16 @@ live mitmproxy interception path.
 So this file draws a hard line and states it, rather than quietly testing
 whatever happened to be convenient:
 
-  * TESTED — the pure and read-only surface: URL/param stripping, path
+  * TESTED - the pure and read-only surface: URL/param stripping, path
     classification, status reporting, backup round-tripping, platform guards.
     This is most of the decision logic, and all of it was previously unverified.
-  * NOT TESTED HERE — anything that writes the registry, spawns a daemon, or
+  * NOT TESTED HERE - anything that writes the registry, spawns a daemon, or
     binds a port. Those belong in the VM pass (TEST_PLAN tier 4). Running them
     on a developer's machine is how this project previously lost its WiFi.
 
 The guards themselves are worth asserting: `normalize()` must refuse and
 explain rather than half-apply when it cannot work, because a partially applied
-TCP fingerprint is worse than an untouched one — it is a *new* unique
+TCP fingerprint is worse than an untouched one - it is a *new* unique
 fingerprint rather than a normalized one.
 """
 
@@ -37,7 +37,7 @@ from harness import Checks
 def main() -> int:
     c = Checks("zero-coverage subsystems", expect_min=28)
 
-    # ── tls_addon: URL and path classification (pure) ───────────────────────
+    # --- tls_addon: URL and path classification (pure) ---
     print("[1] tls_addon — tracking-parameter stripping")
     from valkyrie.tls_addon import (_strip_url_params, _strip_tracking_params,
                                     _is_tracker_path, _is_fingerprint_path)
@@ -69,7 +69,7 @@ def main() -> int:
     c.check("explicit stripping is case-insensitive on the key",
             "A=1" not in _strip_url_params("https://a.test/p?A=1&b=2", ["a"]))
 
-    # Degenerate inputs must not raise — these come off the wire.
+    # Degenerate inputs must not raise - these come off the wire.
     weird = []
     for bad in ("", "not a url", "http://", "https://a.test/?" + "&" * 50,
                 "https://a.test/?a=" + "x" * 5000, "://", "https://a.test/?=v"):
@@ -91,7 +91,7 @@ def main() -> int:
     c.check("fingerprint-path classification returns a bool",
             isinstance(_is_fingerprint_path("/fp.js"), bool))
 
-    # ── fingerprint: status + backup round-trip (read-only) ─────────────────
+    # --- fingerprint: status + backup round-trip (read-only) ---
     print("\n[3] fingerprint — status and backup (no registry writes)")
     from valkyrie.fingerprint import NetworkFingerprint
     import valkyrie.fingerprint as fp
@@ -120,7 +120,7 @@ def main() -> int:
         c.check("the backup file is valid JSON on disk",
                 json.loads(bpath.read_text(encoding="utf-8"))["ttl"] == 128)
 
-        # A corrupt backup must degrade to None, not raise — restore() runs at
+        # A corrupt backup must degrade to None, not raise - restore() runs at
         # shutdown, where an exception would leave settings permanently changed.
         bpath.write_text("{not json", encoding="utf-8")
         c.check("a corrupt backup loads as None rather than raising",
@@ -146,7 +146,7 @@ def main() -> int:
         finally:
             fp._is_windows = real_is_windows
 
-    # ── resolver: pure helpers only (no daemon spawned) ─────────────────────
+    # --- resolver: pure helpers only (no daemon spawned) ---
     print("\n[4] resolver — pure helpers (no Unbound spawned)")
     from valkyrie.resolver import _which, UnboundManager
 
@@ -163,7 +163,7 @@ def main() -> int:
     c.check("is_running() answers without starting anything",
             isinstance(mgr.is_running(), bool))
 
-    # ── doh_detector: construction and guards (no scan loop started) ────────
+    # --- doh_detector: construction and guards (no scan loop started) ---
     print("\n[5] doh_detector — construction and alert plumbing")
     from valkyrie.doh_detector import DoHDetector
     from valkyrie.store import Store

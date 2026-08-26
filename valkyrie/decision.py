@@ -1,4 +1,4 @@
-"""Incident decision policy — confidence → graded action, profile-aware.
+"""Incident decision policy - confidence -> graded action, profile-aware.
 
 This is the layer that turns "many strong detectors" into "the engine decides
 well." It is **deterministic**: no LLM in the hot path (an always-on agent
@@ -8,24 +8,24 @@ message, so every automated response is explainable and testable.
 
 Design (the "Big V" model, done as pure code):
 
-  Threat class   ─┐
-  Confidence     ─┼──▶  ACTION ∈ {ALLOW, ALERT, DECEIVE, BLOCK, CONTAIN}
-  User profile   ─┘
+  Threat class   -┐
+  Confidence     -┼---▶  ACTION ∈ {ALLOW, ALERT, DECEIVE, BLOCK, CONTAIN}
+  User profile   -┘
 
   * THREAT CLASS   surveillance | compromise | metadata_leakage |
-                   decoy_trigger | other  — derived from category + labels.
-  * CONFIDENCE     low | medium | high — from severity, named sequences, and
+                   decoy_trigger | other  - derived from category + labels.
+  * CONFIDENCE     low | medium | high - from severity, named sequences, and
                    any explicit confidence the detector supplied.
-  * PROFILE        standard | high_risk | travel | clean_room — shifts the
+  * PROFILE        standard | high_risk | travel | clean_room - shifts the
                    block-vs-deceive trade-off (minimal disruption ↔ lock down).
 
 Principles enforced here (from the high-risk-user threat model):
   * Safety first: when unsure on a *targeted* signal, prefer CONTAIN+ALERT over
-    silent ALLOW — the stricter the profile, the more this dominates.
+    silent ALLOW - the stricter the profile, the more this dominates.
   * Minimal disruption: common telemetry/trackers prefer DECEIVE (feed fake
-    data) over hard BLOCK in Standard, so essential apps keep working — but
+    data) over hard BLOCK in Standard, so essential apps keep working - but
     High-Risk/Travel/Clean-Room block by default.
-  * High-confidence compromise / any decoy access → immediate CONTAIN.
+  * High-confidence compromise / any decoy access -> immediate CONTAIN.
 
 The policy is pure and unit-tested (tests/test_decision.py). It returns a
 recommendation; the caller (EDR engine / playbooks) is what actually enforces
@@ -79,7 +79,7 @@ def _step_up(action: Action, notches: int = 1) -> Action:
     return _ACTION_ORDER[i]
 
 
-# ── Label vocabularies (substring match, lower-cased) ───────────────────────
+# --- Label vocabularies (substring match, lower-cased) ---
 _DECOY_LABELS = ("decoy", "canary", "honeytoken", "honey_credential", "honeyfile")
 _COMPROMISE_LABELS = (
     "lsass", "credential_access", "credential", "injection", "remote_thread",
@@ -141,7 +141,7 @@ class Decision:
         }
 
 
-# ── Classification ──────────────────────────────────────────────────────────
+# --- Classification ---
 
 def classify_threat(sig: Signal) -> ThreatClass:
     if sig._has(_DECOY_LABELS):
@@ -198,7 +198,7 @@ def apply_sensor_state(conf: Confidence, sig: Signal,
 
 
 def assess_confidence(sig: Signal) -> Confidence:
-    # A detector that measured a probability wins — it is the most direct signal.
+    # A detector that measured a probability wins - it is the most direct signal.
     if sig.confidence is not None:
         if sig.confidence >= 0.80:
             return Confidence.HIGH
@@ -221,7 +221,7 @@ def assess_confidence(sig: Signal) -> Confidence:
     return Confidence.LOW
 
 
-# ── The policy ──────────────────────────────────────────────────────────────
+# --- The policy ---
 
 def decide(sig: Signal, profile: Profile = Profile.STANDARD) -> Decision:
     """Return the single recommended action + reasoning for a signal. Pure."""
@@ -320,7 +320,7 @@ def _base_decision(sig: Signal, tc: ThreatClass, conf: Confidence,
                              f"could expose confidential information.",
                 recommended_step="Choose Block (keep it private) or Allow once.",
                 forensics=forensics)
-        # Ordinary telemetry/trackers — minimal disruption in Standard.
+        # Ordinary telemetry/trackers - minimal disruption in Standard.
         return Decision(
             Action.DECEIVE, tc, conf,
             reason=f"Telemetry/tracker flow from {who} to {sig.entity}. Feed fake "
@@ -358,7 +358,7 @@ def _apply_profile(base: Decision, sig: Signal, tc: ThreatClass,
         act = Action.BLOCK
 
     # Clean Room is the most aggressive posture: step medium-confidence
-    # compromise/surveillance up one notch (block → contain), because in a
+    # compromise/surveillance up one notch (block -> contain), because in a
     # clean-room session any targeted signal is treated as hostile.
     if profile == Profile.CLEAN_ROOM and tc in (
             ThreatClass.COMPROMISE, ThreatClass.SURVEILLANCE) and conf != Confidence.LOW:
@@ -374,7 +374,7 @@ def _apply_profile(base: Decision, sig: Signal, tc: ThreatClass,
                     forensics=base.forensics)
 
 
-# Categories the analysis engine tags on tracker / telemetry / analytics flows —
+# Categories the analysis engine tags on tracker / telemetry / analytics flows -
 # the class where DECEPTION (feed a dead/decoy answer so the app keeps working)
 # beats a hard block that could break it.
 _DECEIVE_CATEGORIES = frozenset({
@@ -384,7 +384,7 @@ _DECEIVE_CATEGORIES = frozenset({
 
 def should_deceive(category: str, profile: Profile) -> bool:
     """True when a would-be-blocked tracker/telemetry flow should instead be
-    DECEIVED — resolved to a decoy dead-end rather than hard-failed.
+    DECEIVED - resolved to a decoy dead-end rather than hard-failed.
 
     Only in Standard (minimal-disruption) profile: a journalist/lawyer on
     High-Risk, Travel, or Clean-Room wants telemetry HARD-blocked, no decoy.
@@ -395,7 +395,7 @@ def should_deceive(category: str, profile: Profile) -> bool:
 
 # Substrings that mark a stored/derived REASON string as a tracker/telemetry
 # class. Used to recognise deceivable domains when only the reason survives (the
-# intelligence memory stores a reason, not a category) — so a tracker the old
+# intelligence memory stores a reason, not a category) - so a tracker the old
 # duplicate-block bug learned as a "threat" is re-routed to deception and purged
 # from the threat memory/graph instead of hard-blocking forever.
 #
@@ -407,7 +407,7 @@ _DECEIVABLE_REASON_MARKERS = ("tracker", "analytics", "advertising", "telemetry"
 
 
 def reason_denotes_deceivable(reason: str) -> bool:
-    """True when a reason denotes a tracker/telemetry/analytics class — a privacy
+    """True when a reason denotes a tracker/telemetry/analytics class - a privacy
     nuisance to DECEIVE, never a hard THREAT to learn into memory/graph."""
     r = (reason or "").lower()
     return any(m in r for m in _DECEIVABLE_REASON_MARKERS)

@@ -9,17 +9,17 @@ behavioural heuristics (query burst, never-seen-from-process) learned them
   [1] Match popular domains + their subdomains, boundary-safe; NOT protect
       trackers (doubleclick.net) or look-alikes (notmicrosoft.com)
   [2] Memory: never LEARN a popular domain bad; never SERVE it bad
-  [3] Memory: SELF-HEAL — purge pre-existing popular 'bad' verdicts on start()
+  [3] Memory: SELF-HEAL - purge pre-existing popular 'bad' verdicts on start()
   [4] Classifier: a behavioural block on a popular domain downgrades to flag,
       while a non-popular domain still blocks
 
 Sections [5]-[7] are the mirror-image bug: a live VM run had Valkyrie learn
-"malware-c2-test.example.com" — a stock red-team test lookup — as known-good
+"malware-c2-test.example.com" - a stock red-team test lookup - as known-good
 after enough clean-looking queries, then permanently allow it. RFC 2606
 reserved test/documentation domains (example.com/.net/.org/.edu, .test,
 .invalid, .example) must never be eligible for that "N clean queries ->
 known-good" promotion, since "queried repeatedly without another signal
-firing" is not evidence of legitimacy — it is exactly what a red-team script
+firing" is not evidence of legitimacy - it is exactly what a red-team script
 (or a patient real C2 domain) also looks like.
 """
 
@@ -96,7 +96,7 @@ def main() -> int:
             conn.commit()
         finally:
             conn.close()
-        # Fresh memory instance simulates the next launch → start() self-heals.
+        # Fresh memory instance simulates the next launch -> start() self-heals.
         mem = IntelligenceMemory(store); mem.start()
         _check("microsoft.com no longer bad after start()", mem.check("microsoft.com") != "bad")
         _check("bing.com no longer bad after start()", mem.check("bing.com") != "bad")
@@ -164,7 +164,7 @@ def main() -> int:
             mem.remember_good("malware-c2-test.example.com", process="nslookup.exe")
         _check("STILL NEVER 'good' after repeated remember_good calls",
                mem.check("malware-c2-test.example.com") != "good")
-        # A genuine site must still be promotable — this must not become a
+        # A genuine site must still be promotable - this must not become a
         # blanket "nothing ever gets promoted" regression.
         mem.remember_good("some-real-clean-site.dev")
         _check("STILL FIRES: an ordinary domain IS promoted to good",
@@ -196,7 +196,7 @@ def main() -> int:
             conn.commit()
         finally:
             conn.close()
-        # Fresh memory instance simulates the next launch → start() self-heals.
+        # Fresh memory instance simulates the next launch -> start() self-heals.
         mem = IntelligenceMemory(store); mem.start()
         _check("malware-c2-test.example.com no longer good after start()",
                mem.check("malware-c2-test.example.com") != "good")

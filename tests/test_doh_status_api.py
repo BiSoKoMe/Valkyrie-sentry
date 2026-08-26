@@ -4,20 +4,20 @@
 DoH-bypass attempts (a process resolving DNS-over-HTTPS straight to a public
 resolver's IP, routing around Valkyrie's interception entirely) have always
 landed in the event store (raw_category="doh_bypass") and the live
-DoHDetector has always tracked its own health via .status() — but neither
+DoHDetector has always tracked its own health via .status() - but neither
 ever reached an API endpoint, so the packaged app had zero visibility into
 this despite the detector actively running. This pins:
 
-  1. Store.doh_bypass_stats() — reads doh_detector.py's own raw_category
+  1. Store.doh_bypass_stats() - reads doh_detector.py's own raw_category
      label (never redefines it, so it cannot drift from what the detector
      actually found) into counts + a "most recent attempt" a UI can render.
-  2. GET /api/doh/status — combines the LIVE detector's own health (is
+  2. GET /api/doh/status - combines the LIVE detector's own health (is
      psutil available, is the scan loop actually running) with those store
      counts, so "detector can't run here" and "detector fine, nothing
      found" render as the two distinct states they are.
 
 Requires fastapi + httpx (the test client). Skips cleanly if either is
-absent — same convention as tests/test_web_auth.py.
+absent - same convention as tests/test_web_auth.py.
 """
 
 from __future__ import annotations
@@ -99,7 +99,7 @@ def main() -> int:
 
     from testclient_compat import make_client                     # noqa: E402
 
-    # 2a. No live detector wired (state.doh is None) — must degrade honestly,
+    # 2a. No live detector wired (state.doh is None) - must degrade honestly,
     # never 500, and never claim the detector is running when it is not.
     state.store = store
     state.doh = None
@@ -116,7 +116,7 @@ def main() -> int:
             body.get("bypass_attempts_24h") == 3
             and body.get("bypass_processes_24h") == 2)
 
-    # 2b. A live detector IS wired — its own health reaches the same payload.
+    # 2b. A live detector IS wired - its own health reaches the same payload.
     from valkyrie.doh_detector import DoHDetector
     live = DoHDetector(store=store)
     state.doh = live

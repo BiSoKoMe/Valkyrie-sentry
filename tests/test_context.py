@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """AppContext service container + dependency injection into the web server (ADR-0008).
 
-Verifies the context's defaults and introspection, and — end to end — that a
+Verifies the context's defaults and introspection, and - end to end - that a
 context injected via create_app(ctx=...) is what the dashboard routes actually
 read (not a module-global set behind their back).
 """

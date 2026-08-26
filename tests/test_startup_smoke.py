@@ -1,4 +1,4 @@
-"""Does Valkyrie actually START? — the gap every other test leaves open.
+"""Does Valkyrie actually START? - the gap every other test leaves open.
 
 `__main__.py` is 874 statements at ~8% coverage. It is the composition root:
 the place where every subsystem is constructed, wired to the event bus,
@@ -6,7 +6,7 @@ registered with the component registry, and handed to the self-healing
 watchdog. Nothing else in the suite executes `main()`.
 
 That combination is the dangerous one. A NameError, a bad import, a wiring
-mistake or an ordering bug in that file bricks the entire product — and every
+mistake or an ordering bug in that file bricks the entire product - and every
 other test in this repo still passes, because they all import modules directly
 and never boot the thing. During one session this file's startup path was
 edited repeatedly (a secret-permission sweep, a content-analysis worker, two
@@ -18,13 +18,13 @@ SAFETY. This boots a real engine, so it is deliberately constrained:
     read or corrupt the live install's database, keys or rules;
   * an ephemeral free port is used, so it cannot collide with a running
     instance on the default 8090;
-  * `--no-dns --no-firewall --no-unbound` — it never touches system DNS,
+  * `--no-dns --no-firewall --no-unbound` - it never touches system DNS,
     never installs a firewall rule, never starts a resolver. Those are the
     paths that have taken this machine offline before.
-  * `--no-sysmon-setup` — sysmon_manager.install_or_verify() (ADR 0048) would
+  * `--no-sysmon-setup` - sysmon_manager.install_or_verify() (ADR 0048) would
     otherwise attempt a REAL download-and-install of Sysmon on whatever host
     runs this suite every single time it boots the agent. That is a live
-    system change with its own failure modes (see the ADR — a mainstream
+    system change with its own failure modes (see the ADR - a mainstream
     consumer AV can silently collide with it), and a unit-test smoke boot
     must never trigger it.
 It is therefore safe on a developer workstation, which is the only reason it
@@ -106,10 +106,27 @@ def main() -> int:
         if health is None:
             return c.finish()
 
-        # ── The composition root actually wired things together ─────────
+        # --- The composition root actually wired things together ---
+        # LIVENESS IS NOT READINESS. The engine deliberately binds /api/health in
+        # about a second and then warms subsystems up behind it, so asking for
+        # the component list the instant health answers tests the architecture's
+        # own design decision and calls it a failure. Poll until the registry
+        # fills, with a bound - that asserts the real property ("everything gets
+        # wired") without asserting a false one ("everything is wired instantly").
         print("[1] the component registry is populated")
-        comps = _get(f"http://127.0.0.1:{port}/api/components")
-        items = comps.get("components", comps) if isinstance(comps, dict) else comps
+        comps, items = {}, []
+        _rdl = time.time() + 90
+        while time.time() < _rdl:
+            comps = _get(f"http://127.0.0.1:{port}/api/components") or {}
+            items = comps.get("components", []) if isinstance(comps, dict) else (comps or [])
+            if len(items) >= 5:
+                break
+            if proc.poll() is not None:
+                break
+            time.sleep(2)
+        c.check("/api/components never reports 'disabled' while starting "
+                "(a warming engine must not look like a switched-off feature)",
+                isinstance(comps, dict) and comps.get("enabled") is not False)
         names = {x.get("name") for x in items}
         print(f"  {len(items)} components: {', '.join(sorted(n for n in names if n))}")
         c.check(f"components are registered ({len(items)} found)", len(items) >= 5)
@@ -121,7 +138,7 @@ def main() -> int:
         c.check("process_watcher is registered (so the watchdog can see it)",
                 "process_watcher" in names)
 
-        # ── Nothing came up reporting a broken state ────────────────────
+        # --- Nothing came up reporting a broken state ---
         print("\n[2] no component reports a hard failure")
         bad = [(x.get("name"), (x.get("health") or {}).get("state"))
                for x in items
@@ -130,14 +147,14 @@ def main() -> int:
             print(f"  !! {n}: {s}")
         c.check(f"no component is in an error state ({len(bad)} bad)", not bad)
 
-        # ── The API surface the UI depends on responds ──────────────────
+        # --- The API surface the UI depends on responds ---
         print("\n[3] the endpoints the desktop app polls actually answer")
         stats = _get(f"http://127.0.0.1:{port}/api/stats")
         c.check("/api/stats returns a payload", isinstance(stats, dict))
         c.check("/api/stats carries the fields the dashboard reads",
                 {"dns_blocked", "protection_healthy"} <= set(stats))
 
-        # ── And it did all that without a traceback ─────────────────────
+        # --- And it did all that without a traceback ---
         print("\n[4] startup produced no traceback")
         proc.terminate()
         try:

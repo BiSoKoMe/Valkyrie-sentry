@@ -1,38 +1,38 @@
-"""Behavioral anomaly scorer — Valkyrie's *own nose*, not a list of known smells.
+"""Behavioral anomaly scorer - Valkyrie's *own nose*, not a list of known smells.
 
 The IOA rule engine (behavioral_rules.py) is a list: 32 exact command shapes,
 each a photograph of one known attack. It cannot see a threat nobody
-photographed. This module is the complementary half — the part that
+photographed. This module is the complementary half - the part that
 *generalizes*. It scores the **intrinsic wrongness** of a process the way a
 drug dog scores a scent: not "does this match sample #14," but "does this smell
 like something hiding."
 
 The idea is a weak-signal ensemble. No single signal is a verdict. A process
-running from a temp folder is not malware — installers do it. A binary with a
-high-entropy name is not malware — some legit tools ship GUIDs. But *masquerade
+running from a temp folder is not malware - installers do it. A binary with a
+high-entropy name is not malware - some legit tools ship GUIDs. But *masquerade
 + temp-exec + obfuscated command line + impossible ancestry* compounding
-together is a scent no benign program emits, and — crucially — it fires on
+together is a scent no benign program emits, and - crucially - it fires on
 malware the rule list has never seen, because it keys on the *shape of hiding*,
 not on specific strings.
 
 Design (matches the project's precision-over-aggression standard: a false
 positive breaks a user's machine, so the bar to FIRE is high):
 
-  * Every signal is INTRINSIC and GENERALIZING — a masquerading system-process
+  * Every signal is INTRINSIC and GENERALIZING - a masquerading system-process
     name, execution from a low-trust directory, measured command-line
-    obfuscation, an impossible parent→child lineage, a name that looks
+    obfuscation, an impossible parent->child lineage, a name that looks
     machine-generated or double-extensioned. None keys on a known-bad literal.
   * Each signal carries a WEIGHT tuned so that no single weak signal crosses the
     firing threshold. Only a strong intrinsic tell (a masquerading system name)
     or a COMBINATION of weak ones scores as a threat. This is what keeps the
     false-positive rate near zero while still generalizing.
-  * The scorer is PURE and deterministic given its inputs — unit-tested with a
+  * The scorer is PURE and deterministic given its inputs - unit-tested with a
     benign control for every malicious shape, exactly like the rule engine.
   * An optional per-host ancestry BASELINE lets the nose be "trained on your
-    house": a parent→child pairing never seen on this machine adds a small lift,
+    house": a parent->child pairing never seen on this machine adds a small lift,
     so genuinely novel local activity stands out. Off by default (stateless).
 
-This is detection, not prevention, and a score is not a proof — see the honest
+This is detection, not prevention, and a score is not a proof - see the honest
 boundary in docs/adr/0028. But it is the difference between a scanner that only
 recognizes catalogued malware and one that can smell a brand-new sample.
 """
@@ -48,7 +48,7 @@ from .telemetry import (SEV_CRITICAL, SEV_HIGH, SEV_INFO, SEV_LOW, SEV_MEDIUM)
 from .trust import is_trusted_os_path
 
 
-# ── Output types ────────────────────────────────────────────────────────────
+# --- Output types ---
 
 @dataclass(frozen=True)
 class Signal:
@@ -76,7 +76,7 @@ class BehaviorScore:
 # (max 0.35) stays under it; a strong intrinsic tell or a combination clears it.
 _FIRE_THRESHOLD = 0.45
 
-# score → severity. Mirrors the weak-signal accumulation: one strong tell = high,
+# score -> severity. Mirrors the weak-signal accumulation: one strong tell = high,
 # a stacked combination = critical.
 _SEV_BANDS = (
     (0.85, SEV_CRITICAL),
@@ -93,7 +93,7 @@ def _severity_for(score: float) -> str:
     return SEV_INFO
 
 
-# ── Vocabularies (small, explicit) ──────────────────────────────────────────
+# --- Vocabularies (small, explicit) ---
 
 # Windows core processes that ALWAYS live in System32 (or SysWOW64). Seeing one
 # of these names anywhere else is one of the highest-signal tells in all of EDR:
@@ -106,7 +106,7 @@ _SYSTEM_IMAGES = frozenset({
 _SYSTEM_DIRS = ("\\windows\\system32\\", "\\windows\\syswow64\\",
                 "\\windows\\winsxs\\")
 
-# Interpreters / script hosts — the payload delivery vehicles. Running one of
+# Interpreters / script hosts - the payload delivery vehicles. Running one of
 # these from a low-trust directory, or as a child of a document/browser, is the
 # generalizing core of "living off the land."
 _INTERPRETERS = frozenset({
@@ -116,8 +116,8 @@ _INTERPRETERS = frozenset({
 })
 
 # Applications that open attacker-controlled content and should essentially
-# NEVER spawn an interpreter. A parent→child edge from any of these to a shell
-# is the classic macro/exploit foothold — and this generalizes across every
+# NEVER spawn an interpreter. A parent->child edge from any of these to a shell
+# is the classic macro/exploit foothold - and this generalizes across every
 # payload, unlike a rule that names one command.
 _DOC_AND_NET_APPS = frozenset({
     # Office
@@ -130,7 +130,7 @@ _DOC_AND_NET_APPS = frozenset({
     "acrord32.exe", "acrobat.exe", "foxitreader.exe", "sumatrapdf.exe",
     # Comms (common phishing delivery)
     "teams.exe", "slack.exe", "zoom.exe", "discord.exe", "thunderbird.exe",
-    # Archive tools — a malicious .zip/.rar/.7z that, once opened, spawns a
+    # Archive tools - a malicious .zip/.rar/.7z that, once opened, spawns a
     # shell is the same foothold shape as a macro; these open untrusted content
     # and have no legitimate reason to launch an interpreter.
     "winrar.exe", "7z.exe", "7zfm.exe", "7zg.exe", "winzip.exe", "winzip64.exe",
@@ -152,7 +152,7 @@ _SHELLS = frozenset({"cmd.exe", "powershell.exe", "pwsh.exe", "wscript.exe",
 # ever launched by services.exe (the SCM); a genuine lsass/services only by
 # wininit. A different parent means the name is a masquerade or the real process
 # was hollowed/injected. Restricted to children whose expected parent PERSISTS
-# (so the parent basename is reliably reported) — csrss/winlogon/wininit are
+# (so the parent basename is reliably reported) - csrss/winlogon/wininit are
 # excluded because their launcher smss.exe exits, making the parent unreliable.
 _EXPECTED_PARENT = {
     "svchost.exe": frozenset({"services.exe"}),
@@ -164,7 +164,7 @@ _EXPECTED_PARENT = {
 # Protected processes that never legitimately spawn an interpreter/shell. lsass
 # spawning cmd is credential-theft injection; winlogon spawning cmd is the
 # accessibility-feature (sticky-keys/utilman) RCE; csrss/services likewise.
-# svchost is deliberately EXCLUDED — a hosted service can legitimately spawn a
+# svchost is deliberately EXCLUDED - a hosted service can legitimately spawn a
 # child, so that stays a compounding signal, not a standalone one.
 _NEVER_SPAWN_SHELL = frozenset({
     "lsass.exe", "lsaiso.exe", "winlogon.exe", "csrss.exe", "services.exe",
@@ -212,7 +212,7 @@ _BIDI = (
 )
 
 
-# ── Small pure helpers ──────────────────────────────────────────────────────
+# --- Small pure helpers ---
 
 def _basename(path: str) -> str:
     p = path.replace("/", "\\")
@@ -270,7 +270,7 @@ def obfuscation_strength(cmd: str) -> tuple[float, list[str]]:
     This is the generalizing crown jewel: it scores obfuscation by SHAPE
     (encoded blobs, char-code reassembly, escape-character spam, env-var
     splicing, format-operator string building) rather than by matching known
-    bad strings — so a brand-new obfuscated command still smells. Pure.
+    bad strings - so a brand-new obfuscated command still smells. Pure.
     """
     if not cmd:
         return 0.0, []
@@ -279,7 +279,7 @@ def obfuscation_strength(cmd: str) -> tuple[float, list[str]]:
     strength = 0.0
     tells: list[str] = []
 
-    # Long base64 / hex blob embedded in the command → encoded payload. 30 chars
+    # Long base64 / hex blob embedded in the command -> encoded payload. 30 chars
     # is already well past ordinary tokens/GUIDs (32 hex) and squarely in
     # payload territory; a lone blob only contributes, it does not fire.
     b64 = _B64_BLOB.search(cmd)
@@ -296,7 +296,7 @@ def obfuscation_strength(cmd: str) -> tuple[float, list[str]]:
         strength += 0.3
         tells.append("encoded-command switch")
 
-    # Char-code / bit-twiddle reassembly — building a string to dodge scanners.
+    # Char-code / bit-twiddle reassembly - building a string to dodge scanners.
     cc = sum(1 for t in _CHARCODE if t in low)
     if cc:
         strength += min(0.3, 0.15 * cc)
@@ -305,7 +305,7 @@ def obfuscation_strength(cmd: str) -> tuple[float, list[str]]:
     # Escape-character spam: caret in cmd.exe, backtick in PowerShell. Density
     # relative to length distinguishes obfuscation from the odd literal caret.
     # Heavy escaping is essentially never benign, so it is weighted to fire on
-    # its own — no legitimate command carets every character.
+    # its own - no legitimate command carets every character.
     carets = cmd.count("^")
     ticks = cmd.count("`")
     if carets >= 6 and carets / n > 0.03:
@@ -333,7 +333,7 @@ def obfuscation_strength(cmd: str) -> tuple[float, list[str]]:
     return min(1.0, strength), tells
 
 
-# ── The scoring context and signal detectors ────────────────────────────────
+# --- The scoring context and signal detectors ---
 
 @dataclass(frozen=True)
 class _Ctx:
@@ -346,7 +346,7 @@ class _Ctx:
 
 
 class AncestryBaseline:
-    """Per-host frequency of parent→child process pairings — the 'trained on
+    """Per-host frequency of parent->child process pairings - the 'trained on
     your house' memory. Pure and in-memory; the caller decides persistence.
 
     A pairing observed many times here is normal *for this machine*; one never
@@ -368,7 +368,7 @@ class AncestryBaseline:
 
     def is_rare(self, parent: str, child: str) -> bool:
         # Don't call anything rare until we've seen enough of this host to have
-        # a baseline — otherwise everything is "rare" on a cold start.
+        # a baseline - otherwise everything is "rare" on a cold start.
         if self.total < self._warmup:
             return False
         key = ((parent or "").lower(), (child or "").lower())
@@ -387,12 +387,12 @@ def _sig_masquerade(c: _Ctx) -> Optional[Signal]:
 
 
 def _sig_system_typosquat(c: _Ctx) -> Optional[Signal]:
-    # Look-alike of a system process name: svch0st, scvhost, lsas, csrsss…
+    # Look-alike of a system process name: svch0st, scvhost, lsas, csrsss...
     stem = c.image.rsplit(".", 1)[0]
     for sysname in _SYSTEM_IMAGES:
         sys_stem = sysname.rsplit(".", 1)[0]
         if stem == sys_stem:
-            return None  # exact name → handled by masquerade, not typosquat
+            return None  # exact name -> handled by masquerade, not typosquat
         if _near(stem, sys_stem):
             return Signal("system_name_lookalike", 0.5,
                           f"'{c.image}' closely resembles system process "
@@ -426,7 +426,7 @@ def _is_os_noninterpreter(c: _Ctx) -> bool:
     Windows ships many binaries with GUID-ish / high-entropy names and args that
     carry serialized IPC tokens (SmartScreen's CHXSmartScreen.exe is the one that
     false-positived on real hardware). Those are not masquerade and not attacker
-    obfuscation. INTERPRETERS are deliberately excluded — powershell/cmd/regsvr32
+    obfuscation. INTERPRETERS are deliberately excluded - powershell/cmd/regsvr32
     all live in trusted System32, and a LOLBin with an obfuscated command line is
     exactly what must still fire, so this guard never touches them."""
     return (is_trusted_os_path(c.path)
@@ -453,7 +453,7 @@ def _sig_lowtrust_exec(c: _Ctx) -> Optional[Signal]:
         if c.image in _INTERPRETERS:
             # A real interpreter lives in System32; a copy of one running from
             # Temp/Downloads is a renamed/relocated binary dodging path
-            # allowlists — strong enough to fire on its own.
+            # allowlists - strong enough to fire on its own.
             return Signal("interpreter_from_lowtrust", 0.5,
                           f"interpreter '{c.image}' is executing from a "
                           f"low-trust directory",
@@ -466,8 +466,8 @@ def _sig_lowtrust_exec(c: _Ctx) -> Optional[Signal]:
 
 
 def _sig_impossible_ancestry(c: _Ctx) -> Optional[Signal]:
-    # A core process with the WRONG parent — a fake svchost not under services,
-    # an lsass/services not under wininit — is masquerade or process hollowing.
+    # A core process with the WRONG parent - a fake svchost not under services,
+    # an lsass/services not under wininit - is masquerade or process hollowing.
     # Only fires when the parent is KNOWN (an empty/unknown parent is not
     # evidence), and the expected parents were chosen to be ones that persist.
     expected = _EXPECTED_PARENT.get(c.image)
@@ -477,20 +477,20 @@ def _sig_impossible_ancestry(c: _Ctx) -> Optional[Signal]:
                       f"{'/'.join(sorted(expected))} — masquerade or injection",
                       "T1055 — Process Injection")
     # A protected system process spawning a shell/interpreter is impossible for a
-    # real one — injected code, or a masquerade using the name (and winlogon→cmd
+    # real one - injected code, or a masquerade using the name (and winlogon->cmd
     # is specifically the accessibility-feature RCE).
     if c.parent in _NEVER_SPAWN_SHELL and c.image in (_SHELLS | _INTERPRETERS):
         return Signal("system_proc_spawned_shell", 0.65,
                       f"core system process '{c.parent}' spawned interpreter "
                       f"'{c.image}' — injection or foothold",
                       "T1059 — Command & Scripting Interpreter")
-    # Web/DB server spawning a shell → web-shell / exploited service.
+    # Web/DB server spawning a shell -> web-shell / exploited service.
     if c.parent in _SERVER_PROCS and c.image in _SHELLS:
         return Signal("server_spawned_shell", 0.6,
                       f"internet-facing service '{c.parent}' spawned a shell "
                       f"('{c.image}') — web-shell pattern",
                       "T1505.003 — Web Shell")
-    # Document/browser/comms app spawning an interpreter → macro/exploit foothold.
+    # Document/browser/comms app spawning an interpreter -> macro/exploit foothold.
     if c.parent in _DOC_AND_NET_APPS and c.image in _INTERPRETERS:
         return Signal("document_spawned_interpreter", 0.5,
                       f"'{c.parent}' (opens untrusted content) spawned "
@@ -517,7 +517,7 @@ def _sig_obfuscated_cmd(c: _Ctx) -> Optional[Signal]:
     return None
 
 
-# Script-proxy LOLBins have no legitimate reason to load remote/UNC content —
+# Script-proxy LOLBins have no legitimate reason to load remote/UNC content -
 # regsvr32/mshta/rundll32 pulling a remote scriptlet is the Squiblydoo family,
 # essentially never benign. General interpreters (powershell/cmd) DO legitimately
 # fetch URLs (developers hit internal services constantly), so those only compound.
@@ -529,7 +529,7 @@ _SCRIPT_PROXY = frozenset({
 
 def _sig_lolbin_remote(c: _Ctx) -> Optional[Signal]:
     # An interpreter/LOLBin whose command reaches out to the network (URL, raw
-    # IP, or UNC path) — the download-and-run shape, independent of the payload.
+    # IP, or UNC path) - the download-and-run shape, independent of the payload.
     if c.image in _INTERPRETERS or c.image in _SHELLS:
         has_url = bool(_URL.search(c.raw_cmd))
         has_ip = bool(_IP_LITERAL.search(c.raw_cmd))
@@ -549,7 +549,7 @@ def _sig_lolbin_remote(c: _Ctx) -> Optional[Signal]:
     return None
 
 
-# A long run of whitespace in a file name has no legitimate purpose — it exists
+# A long run of whitespace in a file name has no legitimate purpose - it exists
 # to push the real extension out of view (`invoice.pdf<many spaces>.exe`), the
 # space-padding cousin of the bidi and double-extension tricks.
 _WS_RUN = re.compile(r"\s{6,}")
@@ -570,7 +570,7 @@ def _sig_padded_extension(c: _Ctx) -> Optional[Signal]:
 
 def _sig_payload_from_lowtrust(c: _Ctx) -> Optional[Signal]:
     # A trusted interpreter (which itself lives in System32, so _sig_lowtrust_exec
-    # stays silent) pointed at a payload — script / DLL / exe — sitting in a
+    # stays silent) pointed at a payload - script / DLL / exe - sitting in a
     # user-writable directory. Weak/compounding by design: a developer does
     # occasionally run a script from Downloads, so this only tips a case that
     # already has another tell (obfuscation, odd ancestry) over the bar.
@@ -634,7 +634,7 @@ def score_process(image: str, parent: str, cmdline: str, path: str = "", *,
     """Score a process start by intrinsic wrongness. Pure given its inputs.
 
     Returns a BehaviorScore whose ``.fired()`` is True only when the accumulated
-    scent crosses the firing bar — a strong tell or a compounding combination,
+    scent crosses the firing bar - a strong tell or a compounding combination,
     never a single weak signal.
     """
     im = _basename(image or "").lower()
@@ -654,8 +654,8 @@ def score_process(image: str, parent: str, cmdline: str, path: str = "", *,
         if sig is not None:
             signals.append(sig)
 
-    # Host baseline lift: a never-before-seen parent→child pairing on this
-    # machine. Small on its own — it only tips a case already near the bar.
+    # Host baseline lift: a never-before-seen parent->child pairing on this
+    # machine. Small on its own - it only tips a case already near the bar.
     if baseline is not None and im and baseline.is_rare(par, im):
         signals.append(Signal("rare_ancestry_for_host", 0.15,
                               f"'{par}' → '{im}' has never been seen on this "
@@ -676,7 +676,7 @@ def classify_anomaly(image: str, parent: str, cmdline: str, path: str = "", *,
     """Collector-facing convenience mirroring behavioral_rules.classify_behavior.
 
     Returns {severity, labels, technique, reason, score, signals} when the nose
-    FIRES (crossed the threshold), else None — so a below-bar scent never raises
+    FIRES (crossed the threshold), else None - so a below-bar scent never raises
     a detection on its own.
     """
     result = score_process(image, parent, cmdline, path, baseline=baseline)

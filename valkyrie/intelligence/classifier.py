@@ -1,16 +1,16 @@
-"""ThreatClassifier — combines all intelligence signals into one decision.
+"""ThreatClassifier - combines all intelligence signals into one decision.
 
 Inputs per query: behavioural anomaly score (anomaly.py), infrastructure
 relatedness (threat_graph.py), and the legacy heuristics engine
 (behavioral.py: entropy / rate / age).  The strongest signal drives the
 decision:
 
-    score >= ANOMALY_BLOCK_THRESHOLD (0.7)  → block
-    score >= ANOMALY_FLAG_THRESHOLD  (0.4)  → flag
-    otherwise                               → allow
+    score >= ANOMALY_BLOCK_THRESHOLD (0.7)  -> block
+    score >= ANOMALY_FLAG_THRESHOLD  (0.4)  -> flag
+    otherwise                               -> allow
 
 Learning-period damping: while the baseline is still learning, a block
-driven purely by anomaly signals is downgraded to a flag — the machine's
+driven purely by anomaly signals is downgraded to a flag - the machine's
 "normal" is not yet known, so behaviour-only blocking would be guessing.
 Graph-driven blocks (shared infrastructure with confirmed threats) are
 never damped.
@@ -111,7 +111,7 @@ class ThreatClassifier:
         # Popular-legitimate-domain floor: behavioural/anomaly/rate heuristics
         # are too weak to sinkhole a top domain (they false-positive on exactly
         # the high-traffic legit domains Windows/apps hammer). A popular domain
-        # can still be FLAGGED for visibility, but never BLOCKED here — explicit
+        # can still be FLAGGED for visibility, but never BLOCKED here - explicit
         # user rules, threat-intel feeds and the tracker blocklist are separate
         # paths and are unaffected. This is the fix for the microsoft.com /
         # paypal.com / bing.com false positives found in live testing.
@@ -119,14 +119,14 @@ class ThreatClassifier:
             decision = "flag"
             reason = f"[popular-domain floor: not blocked on behaviour] {reason}"
 
-        # Learning-period damping — anomaly-only blocks become flags
+        # Learning-period damping - anomaly-only blocks become flags
         if (decision == "block"
                 and self._baseline.is_learning()
                 and g_score < self._block):
             decision = "flag"
             reason = f"[learning] {reason}"
 
-        # Bucket-B co-occurrence — FLAG-ONLY augmentation. Applied strictly as an
+        # Bucket-B co-occurrence - FLAG-ONLY augmentation. Applied strictly as an
         # allow->flag upgrade and never touches the block path, so this signal
         # can never cause a block on its own (HARD INVARIANT; also enforced by
         # COOC_SCORE_CAP < block threshold in the tracker). See cooccurrence.py.
@@ -154,7 +154,7 @@ class ThreatClassifier:
     def _track_clean_streak(self, domain: str, process: str,
                             decision: str, score: float) -> None:
         """Promote consistently clean domains into known-good memory."""
-        # RFC 2606 reserved/test domains are never eligible for promotion —
+        # RFC 2606 reserved/test domains are never eligible for promotion -
         # see popular_domains.is_reserved_test_domain. A red-team test lookup
         # (or a patient real C2 domain) that simply never trips another
         # signal must not be able to earn a durable whitelist entry this way.

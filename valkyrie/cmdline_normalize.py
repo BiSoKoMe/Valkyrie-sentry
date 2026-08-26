@@ -195,6 +195,38 @@ def _fold_unicode(s: str) -> str:
     return "".join(out)
 
 
+# Module types whose comma is EXPORT SYNTAX, not an argument delimiter:
+# `rundll32 evil.dll,EntryPoint`, `control foo.cpl,,2`. Note `.exe` is
+# deliberately ABSENT - `powershell.exe,-EncodedCommand` IS the comma-delimiter
+# evasion this normaliser exists to defeat, so that comma must still fold.
+_MODULE_EXTS = (".dll", ".cpl", ".ocx", ".sys", ".drv")
+
+
+def _is_module_export_comma(out: list, ch: str) -> bool:
+    """Is this comma the separator in `module.dll,ExportName`?
+
+    Folding it destroys the `.dll,` token that rundll32-lowtrust-dll keys on.
+
+    CORRECTION, recorded because the first version of this comment was wrong:
+    this was NOT a live production gap. match_process matches the raw command
+    line AND the normalised one and unions the hits, and process_telemetry hands
+    it the raw string, so the rule always fired in the engine. The apparent
+    breakage came from a test helper that normalised before calling, making
+    match_process normalise an already-normalised string.
+
+    The exemption is still correct and kept, because any consumer that sees ONLY
+    the normalised text - the import false-positive gate, fires_on_benign, and
+    anything calling Rule.matches directly - would otherwise evaluate a command
+    line whose export syntax had been dissolved. The module's "can only ADD
+    detections" promise holds for match_process; it does not hold for a caller
+    that normalises first, and this keeps that caller honest too.
+    """
+    if ch != ",":
+        return False
+    tail = "".join(out[-4:]).lower()
+    return any(tail.endswith(ext) for ext in _MODULE_EXTS)
+
+
 def _fold_delimiters(s: str) -> str:
     """cmd.exe accepts `,` and `;` as argument delimiters equivalent to a
     space, so `whoami,/priv` and `net;user` run exactly like their spaced
@@ -240,7 +272,8 @@ def _fold_delimiters(s: str) -> str:
         elif ch == ")":
             depth = max(0, depth - 1)
             out.append(ch)
-        elif ch in ",;" and depth == 0 and not in_pct:
+        elif ch in ",;" and depth == 0 and not in_pct \
+                and not _is_module_export_comma(out, ch):
             out.append(" ")
         else:
             out.append(ch)

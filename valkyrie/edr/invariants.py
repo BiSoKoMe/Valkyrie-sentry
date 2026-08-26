@@ -1,4 +1,4 @@
-"""Hard vetoes on autonomous action — things Valkyrie may never do to itself
+"""Hard vetoes on autonomous action - things Valkyrie may never do to itself
 or its host, at any confidence.
 
 WHY A VETO AND NOT A WEIGHT
@@ -6,7 +6,7 @@ WHY A VETO AND NOT A WEIGHT
 Every other gate in the decision path is a matter of degree: confidence goes
 up and down, coverage caps it, leases bound how long an action lasts. This one
 is categorical. An invariant that could be outvoted by a high-enough score is
-not an invariant, it is a strong opinion — and the failure mode being guarded
+not an invariant, it is a strong opinion - and the failure mode being guarded
 against is precisely a detector becoming very confident about something
 catastrophic. If a rule is expressible as "make this less likely", it belongs
 in scoring. Only rules of the form "never, regardless" belong here.
@@ -191,7 +191,7 @@ def check(action: str, target: str) -> Optional[Invariant]:
     """Return the invariant forbidding this action, or None if permitted.
 
     Checked LAST, after confidence, coverage, leases and budget have all had
-    their say — because it is the one gate none of them may overrule.
+    their say - because it is the one gate none of them may overrule.
     """
     for inv in all_invariants():
         if inv.matches(action, target):

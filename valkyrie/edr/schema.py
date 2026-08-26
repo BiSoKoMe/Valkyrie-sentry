@@ -1,17 +1,17 @@
-"""EDR core data model — the shapes every other EDR module speaks in.
+"""EDR core data model - the shapes every other EDR module speaks in.
 
 The EDR layer sits on top of Valkyrie's existing sensors (DNS decisions,
 firewall answer-IP screening, the behavioural/intelligence engines). Those
 sensors already produce a rich event stream; the EDR layer's job is to turn
 that stream into things a defender actually works with:
 
-    Detection  — one security-relevant observation from a sensor/plugin
-    Incident   — a correlated group of detections with a timeline + status
-    ResponseAction — an audited action taken against a threat (block/kill/isolate)
+    Detection  - one security-relevant observation from a sensor/plugin
+    Incident   - a correlated group of detections with a timeline + status
+    ResponseAction - an audited action taken against a threat (block/kill/isolate)
 
 Everything here is plain, serialisable dataclasses (stdlib only) so the same
 shape flows through the SQLite store, the web API, the live WebSocket stream,
-and — for remote response — the signed fleet command channel.
+and - for remote response - the signed fleet command channel.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from typing import Any, Optional
 
 
 # ---------------------------------------------------------------------------
-# Severity — a small ordered vocabulary shared across the whole layer
+# Severity - a small ordered vocabulary shared across the whole layer
 # ---------------------------------------------------------------------------
 
 SEVERITIES = ("info", "low", "medium", "high", "critical")
@@ -50,7 +50,7 @@ def iso_from_epoch(ts: float) -> str:
     timestamp rather than "now". Used so a Detection can carry WHEN the
     underlying observation actually happened (e.g. a polling collector's own
     ``TelemetryEvent.ts``) instead of always defaulting to the moment the
-    engine got around to processing it — the two can differ by up to a
+    engine got around to processing it - the two can differ by up to a
     collector's poll interval, and that gap is real MTTD signal (see
     valkyrie/edr/metrics.py), not noise to discard."""
     return datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat(
@@ -87,7 +87,7 @@ RESPONSE_STATES = ("dry_run", "pending", "succeeded", "failed", "skipped")
 class Detection:
     """One security-relevant observation.
 
-    A detection is cheap and plentiful — every blocked tracker can be a
+    A detection is cheap and plentiful - every blocked tracker can be a
     detection. Correlation (in engine.py) is what turns a stream of detections
     into a much smaller set of incidents a human can triage.
     """
@@ -165,7 +165,7 @@ class ResponseAction:
 
 @dataclass
 class Incident:
-    """A correlated group of detections — the unit a defender triages."""
+    """A correlated group of detections - the unit a defender triages."""
     title:        str
     severity:     str = "low"
     category:     str = ""

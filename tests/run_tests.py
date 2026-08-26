@@ -21,14 +21,14 @@ environment condition, not a code defect, and must never turn CI red.
 
 **Outcomes are four, not two.** This runner previously judged solely on exit
 code, which made a test that asserted *nothing* indistinguishable from one that
-passed — three files were silently doing that, covering the telemetry killer,
+passed - three files were silently doing that, covering the telemetry killer,
 the TLS path, and the Rust accelerator with zero assertions apiece. Now:
 
     PASS     asserted something, and it held
     FAIL     asserted something, and it did not hold
-    SKIP     declined to run here (exit 77) — reported as absent coverage,
+    SKIP     declined to run here (exit 77) - reported as absent coverage,
              never folded into "passed"
-    VOID     exited 0 without asserting anything — treated as a FAILURE,
+    VOID     exited 0 without asserting anything - treated as a FAILURE,
              because absent coverage wearing a green badge is worse than red
 
 Files built on ``tests/harness.py`` report their counts directly; legacy files
@@ -53,15 +53,15 @@ _REPO_ROOT = _TESTS_DIR.parent
 
 # Tests that require live external state and therefore cannot run in a clean,
 # offline CI environment. They are skipped by default and only run with --all.
-#   test_dns      — needs a running DNS interceptor + a positional `domain` arg
-#   test_resolver — needs a live Unbound resolver listening on port 5301
+#   test_dns      - needs a running DNS interceptor + a positional `domain` arg
+#   test_resolver - needs a live Unbound resolver listening on port 5301
 _INTEGRATION = {
     "test_dns.py",
     "test_resolver.py",
 }
 
 # Some unit tests accept a --quick flag to skip optional network downloads.
-# Passing it is harmless to tests that don't define it? No — argparse rejects
+# Passing it is harmless to tests that don't define it? No - argparse rejects
 # unknown args, so only pass it to tests known to accept it.
 _ACCEPTS_QUICK = {
     "test_firewall.py",
@@ -91,7 +91,7 @@ OUTCOME_VACUOUS = "vacuous"
 def _classify(returncode: int, out: str) -> tuple[str, str]:
     """Map a finished test to (outcome, note).
 
-    Exit code alone is not enough — that is precisely the bug this replaces.
+    Exit code alone is not enough - that is precisely the bug this replaces.
     """
     if returncode == EXIT_SKIP:
         res = parse_result_line(out)
@@ -118,7 +118,7 @@ def _run_one(path: Path, timeout: int) -> tuple[str, float, str, str]:
     if path.name in _ACCEPTS_QUICK:
         cmd.append("--quick")
     # Force UTF-8 in the child. Windows consoles default to cp1252, and these
-    # tests print arrows and box-drawing characters — without this, 7 suites die
+    # tests print arrows and box-drawing characters - without this, 7 suites die
     # with UnicodeEncodeError partway through and report a failure that has
     # nothing to do with the code under test. That was being worked around by
     # hand (`PYTHONUTF8=1 python tests/...`), which meant the documented
@@ -140,7 +140,7 @@ def _run_one(path: Path, timeout: int) -> tuple[str, float, str, str]:
         return (outcome, elapsed, note, "")
     # Full output, not just a tail: these files print one line per check, so
     # an 8-line tail routinely cut off the actual failing check whenever a
-    # test earlier in the file printed enough PASS lines to push it out —
+    # test earlier in the file printed enough PASS lines to push it out -
     # which is exactly what happened with test_endpoint_telemetry.py and
     # test_playbooks.py in CI: "10/11 passed" with no way to tell which
     # check, or why, because the one line that said so was already gone.

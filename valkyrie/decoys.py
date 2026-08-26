@@ -1,16 +1,16 @@
-"""Decoy files & credentials — honeytokens that make an intruder announce himself.
+"""Decoy files & credentials - honeytokens that make an intruder announce himself.
 
 The ransomware shield's canaries catch *encryption* (mass writes). Decoys catch
 *reconnaissance/exfiltration*: an attacker who has a foothold goes looking for
-confidential documents and credential stores. So Valkyrie plants tempting fakes —
+confidential documents and credential stores. So Valkyrie plants tempting fakes -
 ``passwords``, ``id_rsa``, ``aws_credentials``, a fake ``.kdbx`` vault, a
-"CONFIDENTIAL - case notes" document — each stamped with a unique, unguessable
+"CONFIDENTIAL - case notes" document - each stamped with a unique, unguessable
 token in its NAME and CONTENT.
 
 Detection reuses the command-line eye Valkyrie already has: legitimate work never
 runs ``type``/``copy``/``Get-Content``/``findstr``/``tar`` against these exact
-files, so any process whose command line references a decoy token is — by
-construction — an intruder browsing the box. That is a near-zero-false-positive,
+files, so any process whose command line references a decoy token is - by
+construction - an intruder browsing the box. That is a near-zero-false-positive,
 HIGH-confidence signal, which the decision policy routes straight to CONTAIN.
 
 No file-system auditing / driver needed: planting is plain file writes, and the
@@ -58,7 +58,7 @@ class DecoyManager:
     def target_dirs(self) -> list[Path]:
         if self._dirs is not None:
             return self._dirs
-        # os.path.expanduser("~") resolves to the CALLING PROCESS's own home —
+        # os.path.expanduser("~") resolves to the CALLING PROCESS's own home -
         # for Valkyrie's shipped default (a Windows service with no configured
         # logon account, so nssm runs it as LocalSystem), that is
         # C:\Windows\System32\config\systemprofile, a folder no real user or

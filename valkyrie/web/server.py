@@ -1,10 +1,10 @@
 """FastAPI web dashboard backend for Valkyrie.
 
 Endpoints:
-  GET  /           → serve dashboard.html
-  GET  /api/stats  → aggregate stats (24h) + top blocked domains
-  GET  /api/events → last 200 events
-  WS   /ws         → real-time event stream (Store subscribe)
+  GET  /           -> serve dashboard.html
+  GET  /api/stats  -> aggregate stats (24h) + top blocked domains
+  GET  /api/events -> last 200 events
+  WS   /ws         -> real-time event stream (Store subscribe)
 
 Usage (from __main__.py):
     from .web.server import state as web_state, run_server
@@ -12,7 +12,7 @@ Usage (from __main__.py):
     web_state.firewall   = firewall
     web_state.blocklist  = blocklist
     web_state.start_time = time.time()
-    run_server(host="0.0.0.0", port=8080)   # blocks — run in daemon thread
+    run_server(host="0.0.0.0", port=8080)   # blocks - run in daemon thread
 """
 
 from __future__ import annotations
@@ -33,14 +33,14 @@ from urllib.parse import urlparse
 from ..config import DATA_DIR, WEB_HOST, WEB_PORT
 from ..context import AppContext
 from .cache import (CACHE, COLD_TIMEOUT_S, TTL_COMPONENTS, TTL_COVERAGE,
-                    TTL_EVENTS, TTL_STATS)
+                    TTL_EVENTS, TTL_MAC, TTL_STATS)
 
 _WEB_DIR = Path(__file__).parent
 _PROJECT_ROOT = _WEB_DIR.parent.parent   # .../valkyrie/web -> .../valkyrie -> repo root
 
 # Module-level FastAPI imports so annotations resolve correctly.
 # (from __future__ import annotations makes ws: WebSocket a lazy string;
-#  FastAPI resolves it against module globals — a local import won't be found.)
+#  FastAPI resolves it against module globals - a local import won't be found.)
 try:
     from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
     from fastapi.responses import FileResponse, JSONResponse
@@ -60,7 +60,7 @@ except ImportError:
 # server importable and testable on its own (tests set fields on it directly).
 state = AppContext()
 
-# asyncio event loop captured inside lifespan — used to bridge sync → async
+# asyncio event loop captured inside lifespan - used to bridge sync -> async
 _loop: Optional[asyncio.AbstractEventLoop] = None
 
 
@@ -89,7 +89,7 @@ class _ConnectionManager:
             self._connections.pop(id(ws), None)
 
     def broadcast_sync(self, data: dict) -> None:
-        """Called from sync Store-writer thread — schedules puts on async queues."""
+        """Called from sync Store-writer thread - schedules puts on async queues."""
         if _loop is None or not _loop.is_running():
             return
         msg = json.dumps(data, default=str)
@@ -152,8 +152,8 @@ async def _cached(key: str, producer, ttl_s: float):
     """Serve ``producer()`` through the response cache, off the event loop.
 
     On failure with no previously good value this returns a 503 carrying the
-    real reason — never a zero-filled payload. The renderer already treats a
-    failed poll as "no data" and renders the — sentinel (30827db, 86cc36a);
+    real reason - never a zero-filled payload. The renderer already treats a
+    failed poll as "no data" and renders the - sentinel (30827db, 86cc36a);
     handing it fabricated zeros instead would put the "numbers turn to 0" bug
     back, this time with the server as the source.
     """
@@ -174,7 +174,7 @@ async def _cached(key: str, producer, ttl_s: float):
 def _build_coverage() -> dict:
     """Producer for /api/controls/coverage. ~3.3s of real host probing.
 
-    NEVER call this from a request handler directly — it is handed to the
+    NEVER call this from a request handler directly - it is handed to the
     response cache, which runs it in a worker thread and serves the result for
     TTL_COVERAGE seconds. Called inline it blocks the whole event loop, which
     is what made this endpoint take 22.4s and drag every other route with it.
@@ -205,6 +205,27 @@ def _build_coverage() -> dict:
     }
 
 
+def _subsystem_unavailable(name: str) -> JSONResponse:
+    """503 for a subsystem that is absent - saying WHICH KIND of absent.
+
+    "not yet" and "never" are different answers. The web server binds in about a
+    second and subsystems attach behind it, so `state.edr is None` is true both
+    while the engine is three seconds from existing AND when the user ran with
+    --no-edr. Twelve endpoints returned the identical payload for both, so a
+    caller - including this project's own desktop app - could not tell a warming
+    agent from a disabled feature, and the capability-delivery test read a
+    startup race as a hard failure.
+
+    Status stays 503 either way; the BODY now carries `starting`, so a client can
+    retry a warming subsystem and give up on a disabled one.
+    """
+    starting = not getattr(state, "ready", False)
+    return JSONResponse(
+        {"error": f"{name} still starting" if starting else f"{name} not enabled",
+         "starting": starting},
+        status_code=503)
+
+
 def _build_components() -> dict:
     if state.registry is None:
         return {"enabled": False, "components": []}
@@ -214,7 +235,7 @@ def _build_components() -> dict:
 
 
 # Request verdicts that count as "a tracker was stopped" for Nyx's defended
-# tally — the acted-on outcomes already produced by the addon/DNS pipeline.
+# tally - the acted-on outcomes already produced by the addon/DNS pipeline.
 _NYX_BLOCK_CATS = {
     "blocked", "tracker_pixel", "tracker_js", "fingerprint",
     "threat_intel_url", "behavioral", "rule_block", "exfil",
@@ -240,7 +261,7 @@ def _build_nyx() -> dict:
                 "host":     e.get("domain", ""),
                 "sentence": e.get("reason", ""),
             })
-        elif rc == "nyx_fake":          # Nyx ACTED — fed the tracker fake data
+        elif rc == "nyx_fake":          # Nyx ACTED - fed the tracker fake data
             faked.append({
                 "when":     e.get("timestamp", ""),
                 "host":     e.get("domain", ""),
@@ -282,6 +303,12 @@ def _build_nyx() -> dict:
         "trackers":        trackers,        # top trackers by cross-site reach
         "tracker_summary": tracker_summary,
     }
+
+
+def _build_mac_status() -> dict:
+    """Producer for /api/mac/status. Enumerates network adapters, which is the
+    slow part (see TTL_MAC in cache.py for the measurements)."""
+    return {"enabled": True, "interfaces": _get_mac_randomizer().status()}
 
 
 def _dns_active() -> bool:
@@ -339,7 +366,7 @@ def _build_stats() -> dict:
         # Ground truth for "is DNS interception actually running right now".
         # The desktop shell previously inferred protection SOLELY from the
         # presence of valkyrie_dns_adapter.txt, a marker that survives a crash,
-        # a reboot or a stopped service — so a two-week-old file made the app
+        # a reboot or a stopped service - so a two-week-old file made the app
         # report "Protected / All clear" while nothing was intercepting. The
         # registry knows whether the interceptor is wired AND healthy, so the
         # engine states it plainly rather than letting the UI guess.
@@ -353,7 +380,7 @@ def _build_stats() -> dict:
         # `elements_cleaned` counts page_clean rows, which ONLY the TLS
         # inspection addon ever writes. TLS inspection is off by default, so
         # this reported a hard 0 forever on a default install while the UI
-        # rendered it as a live counter — a number that cannot move reads as
+        # rendered it as a live counter - a number that cannot move reads as
         # "nothing is happening", not as "this layer isn't running". Report
         # None when the producing layer is absent so the UI can say so
         # honestly; the count itself is unchanged when it IS running.
@@ -372,9 +399,9 @@ def _build_stats() -> dict:
 #
 # The launcher / dashboard "Restart" and "Stop" buttons spawn PowerShell, so
 # these endpoints are locked down against the two realistic attack vectors:
-#   1. Other devices on the LAN — the server binds 0.0.0.0, so we require the
+#   1. Other devices on the LAN - the server binds 0.0.0.0, so we require the
 #      peer IP to be loopback.
-#   2. Cross-site request forgery — a malicious page you visit runs in *your*
+#   2. Cross-site request forgery - a malicious page you visit runs in *your*
 #      browser and can POST to 127.0.0.1, so a loopback check alone is not
 #      enough. We additionally require a per-process secret token that only a
 #      same-origin (or explicitly launcher-injected) caller can obtain, plus a
@@ -387,7 +414,7 @@ _CONTROL_TOKEN = secrets.token_urlsafe(24)
 _CONTROL_TOKEN_FILE = DATA_DIR / "control_token.txt"
 try:
     _CONTROL_TOKEN_FILE.write_text(_CONTROL_TOKEN, encoding="utf-8")
-    # This file IS the credential for every state-changing route — isolate the
+    # This file IS the credential for every state-changing route - isolate the
     # host, kill a process, disable telemetry protection, shut the engine down.
     # Written under DATA_DIR, which on Windows inherits a BUILTIN\Users:read ACE
     # from %ProgramData%, so without this any local account could read the token
@@ -414,7 +441,7 @@ def _origin_is_local(request) -> bool:
     Origin is a real remote website."""
     origin = request.headers.get("origin")
     if not origin or origin == "null":
-        return True   # curl / launcher.html (file://) — the token is the gate
+        return True   # curl / launcher.html (file://) - the token is the gate
     try:
         host = urlparse(origin).hostname
     except ValueError:
@@ -444,8 +471,8 @@ def _control_guard(request):
 def _edr_guard(request):
     """Gate a state-changing EDR endpoint (respond / status / investigate).
 
-    Same defence-in-depth as the system-control guard — loopback peer, local
-    Origin, and the per-process control token — but cross-platform, since EDR
+    Same defence-in-depth as the system-control guard - loopback peer, local
+    Origin, and the per-process control token - but cross-platform, since EDR
     actions (isolate host, kill process, block domain) are not Windows-only.
     """
     if not _peer_is_local(request):
@@ -461,7 +488,7 @@ def _run_detached_ps(ps_command: str) -> None:
     """Launch a detached PowerShell command that outlives this process.
 
     The restart path runs stop_all.ps1 (which kills THIS very process) and then
-    start_all.ps1, so the runner must survive its parent dying — hence
+    start_all.ps1, so the runner must survive its parent dying - hence
     DETACHED_PROCESS + a new process group and no inherited handles.
     """
     creationflags = 0
@@ -505,11 +532,38 @@ def create_app(ctx: Optional[AppContext] = None):
         global state
         state = ctx
 
+    async def _loop_stall_monitor():
+        """Diagnostic: measure the event loop's OWN responsiveness from inside
+        it. This coroutine expects to wake every 1s; if it wakes much later, the
+        loop was BLOCKED for the difference - i.e. a CPU-heavy thread saturated
+        the GIL or an async handler ran blocking work, and during that window
+        the loop could not accept connections and /api/health went deaf.
+
+        Added 2026-08-24 to pinpoint the Tier B 'engine went deaf after 2 OK'
+        failure (see valkyrie_startup_deafness). Writes to stderr with a
+        wall-clock stamp so it lands in the CI transcript next to whatever
+        subsystem log fired at the same moment, naming the GIL hog instead of
+        guessing. Cheap (one 1s sleep); safe to leave on."""
+        import sys as _sys
+        interval = 1.0
+        while True:
+            t0 = time.monotonic()
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                return
+            drift = time.monotonic() - t0 - interval
+            if drift > 1.5:
+                print(f"[loop-stall] {time.strftime('%H:%M:%S')} event loop was "
+                      f"BLOCKED for {drift:.1f}s (health would have been deaf this "
+                      f"whole time)", file=_sys.stderr, flush=True)
+
     @asynccontextmanager
     async def _lifespan(app: FastAPI):
         # Startup: capture loop, register live-event subscriber
         global _loop
         _loop = asyncio.get_running_loop()
+        _stall_task = asyncio.create_task(_loop_stall_monitor())
         if state.store is not None:
             state.store.subscribe(manager.broadcast_sync)
         # Stream EDR incidents to dashboards over the same WebSocket.
@@ -517,6 +571,7 @@ def create_app(ctx: Optional[AppContext] = None):
             state.edr.subscribe(manager.broadcast_sync)
         yield
         # Shutdown: unregister subscriber
+        _stall_task.cancel()
         if state.store is not None:
             state.store.unsubscribe(manager.broadcast_sync)
         if state.edr is not None:
@@ -524,7 +579,7 @@ def create_app(ctx: Optional[AppContext] = None):
 
     app = FastAPI(title="Valkyrie Dashboard", lifespan=_lifespan,
                   docs_url=None, redoc_url=None)
-    # No CORSMiddleware — Starlette's CORS middleware blocks WebSocket upgrades
+    # No CORSMiddleware - Starlette's CORS middleware blocks WebSocket upgrades
     # on some versions. The dashboard is served from the same origin, so CORS
     # is unnecessary and the middleware would break the /ws endpoint.
 
@@ -534,7 +589,7 @@ def create_app(ctx: Optional[AppContext] = None):
         # system status. When the server is bound off-loopback (the explicit
         # --web-host 0.0.0.0 opt-in for router/LAN viewing), every /api/* call
         # from a non-loopback peer must present the control token. Loopback
-        # callers — the local dashboard on the same machine — are unaffected, so
+        # callers - the local dashboard on the same machine - are unaffected, so
         # the default single-user experience is unchanged. State-changing
         # control/EDR POSTs keep their own stricter loopback+origin+token guards
         # layered on top of this.
@@ -548,10 +603,39 @@ def create_app(ctx: Optional[AppContext] = None):
             )
         return await call_next(request)
 
-    # ── Routes ──────────────────────────────────────────────────────────
+    # --- Routes ---
+    #
+    # THE ASYNC RULE FOR EVERY ROUTE BELOW - read before adding one.
+    #
+    # uvicorn serves this whole app from ONE asyncio event loop, and that loop
+    # is also what accepts new TCP connections. A route declared `async def`
+    # runs its body *directly on that loop*, so any blocking call inside it -
+    # a SQLite query, a registry read, subprocess/netsh/PowerShell, a socket -
+    # freezes the entire API for its duration. A call that blocks forever
+    # freezes it forever.
+    #
+    # That is not theoretical: it is the "Engine unreachable" bug. Every route
+    # here was `async def` while doing plain synchronous work, so one slow
+    # handler stalled the loop, the accept queue filled with connections the
+    # server never read (observed live: 1 LISTEN + 202 CLOSE_WAIT sockets),
+    # and once the backlog saturated the kernel refused new connects outright.
+    # The desktop app's 1s /api/health poll then failed forever and reported
+    # the engine as unreachable - while the engine was running perfectly and
+    # still writing to its database. Note that /api/health itself is trivially
+    # cheap; it went down purely as collateral, which is the whole point: on a
+    # single loop, one blocking handler takes the liveness probe with it.
+    #
+    # So:
+    #   * a handler that does blocking work is a plain `def` - Starlette then
+    #     runs it in its threadpool and it CANNOT stall the loop;
+    #   * a handler is `async def` ONLY if it genuinely awaits something, and
+    #     any blocking work inside it goes through `run_in_threadpool` (or
+    #     `_cached`, which already offloads its producer).
+    #
+    # Rule of thumb: if the body contains no `await`, it must not be `async`.
 
     @app.get("/", include_in_schema=False)
-    async def serve_dashboard():
+    def serve_dashboard():
         return FileResponse(_WEB_DIR / "dashboard.html", media_type="text/html")
 
     @app.get("/api/stats")
@@ -577,14 +661,14 @@ def create_app(ctx: Optional[AppContext] = None):
         return await _cached("nyx", _build_nyx, TTL_EVENTS)
 
     @app.get("/api/nyx/self-test")
-    async def nyx_self_test():
+    def nyx_self_test():
         """Run Nyx's data guard against synthetic leaks and return what it caught
-        and faked — the live 'watch it happen' demo, no real tracker needed."""
+        and faked - the live 'watch it happen' demo, no real tracker needed."""
         from ..nyx import self_test
         return self_test()
 
     @app.get("/api/telemetry/status")
-    async def telemetry_status():
+    def telemetry_status():
         from ..telemetry_killer import TelemetryKiller
         findings = TelemetryKiller().scan()
         if not findings:
@@ -605,7 +689,7 @@ def create_app(ctx: Optional[AppContext] = None):
         }
 
     @app.post("/api/telemetry/kill")
-    async def telemetry_kill():
+    def telemetry_kill():
         from ..telemetry_killer import TelemetryKiller
         results = TelemetryKiller().kill()
         if not results:
@@ -613,7 +697,7 @@ def create_app(ctx: Optional[AppContext] = None):
         return {"results": results}
 
     @app.post("/api/telemetry/restore")
-    async def telemetry_restore():
+    def telemetry_restore():
         from ..telemetry_killer import TelemetryKiller
         results = TelemetryKiller().restore()
         if not results:
@@ -621,7 +705,7 @@ def create_app(ctx: Optional[AppContext] = None):
         return {"results": results}
 
     @app.get("/api/intelligence")
-    async def intelligence_status():
+    def intelligence_status():
         if state.intelligence is None:
             return {"enabled": False}
         info = state.intelligence.status()
@@ -638,12 +722,12 @@ def create_app(ctx: Optional[AppContext] = None):
             info["self_heal"] = state.self_heal.status()
         return info
 
-    # /api/compliance/report removed — compliance reporting moved to
+    # /api/compliance/report removed - compliance reporting moved to
     # experimental/ (generating audit evidence for a product with no customers
     # and no certification is theatre). See experimental/README.md.
 
     @app.get("/api/edr/playbooks/status")
-    async def playbooks_status():
+    def playbooks_status():
         if state.playbooks is None:
             return {"enabled": False}
         info = state.playbooks.status()
@@ -658,8 +742,8 @@ def create_app(ctx: Optional[AppContext] = None):
         return await _cached("components", _build_components, TTL_COMPONENTS)
 
     @app.post("/api/components/{name}/restart")
-    async def component_restart(name: str, request: Request):
-        # Restarting a subsystem is state-changing — token-gated off loopback.
+    def component_restart(name: str, request: Request):
+        # Restarting a subsystem is state-changing - token-gated off loopback.
         guard = _control_guard(request)
         if guard is not None:
             return guard
@@ -671,7 +755,7 @@ def create_app(ctx: Optional[AppContext] = None):
         return result
 
     @app.get("/api/siem/status")
-    async def siem_status():
+    def siem_status():
         if state.siem is None:
             return {"enabled": False}
         info = state.siem.status()
@@ -679,7 +763,7 @@ def create_app(ctx: Optional[AppContext] = None):
         return info
 
     @app.get("/api/intel/status")
-    async def threat_intel_status():
+    def threat_intel_status():
         if state.threat_intel is None:
             return {"enabled": False}
         info = state.threat_intel.status()
@@ -687,10 +771,30 @@ def create_app(ctx: Optional[AppContext] = None):
         return info
 
     @app.get("/api/ping")
-    async def ping():
+    async def ping():                                      # noqa: RUF029
         """Pure liveness: can the ASGI app accept and answer a request.
 
-        Deliberately touches NO state — no store, no heartbeat, no registry.
+        THE ONE DELIBERATE EXCEPTION to the "no `async def` without an `await`"
+        rule documented at the top of the routes. Every other handler is a sync
+        `def` so it runs in the threadpool and cannot stall the loop; this one
+        is the reverse case, and for the same underlying reason.
+
+        A sync handler is dispatched through Starlette's threadpool, which has
+        a finite worker count (anyio's default limiter is 40). Saturate those
+        workers with slow requests and a sync /api/ping QUEUES behind them -
+        measured at 1094ms with 40 slow reads in flight, versus ~3ms idle. The
+        liveness probe would then report the server as slow-to-dead exactly
+        when it is busy, which is the same "measures LOAD, reports load as
+        death" mistake described below, just relocated from the endpoint's cost
+        to the dispatch queue.
+
+        Running on the event loop instead makes it unqueueable: the body does
+        no I/O, takes no lock and touches no state, so it cannot block the loop
+        it runs on, and it answers in microseconds no matter how many blocking
+        handlers are in flight. Keep it that way - if this handler ever needs
+        to read anything, it is no longer a liveness probe.
+
+        Deliberately touches NO state - no store, no heartbeat, no registry.
         The self-healing watchdog used to probe /api/stats, which is a
         five-query 24h aggregate; with a 3s timeout against a measured 2.5s
         (6.3s under concurrency) response, the watchdog was timing out on a
@@ -698,7 +802,7 @@ def create_app(ctx: Optional[AppContext] = None):
         30s forever.
 
         A liveness probe must measure liveness. Probing an expensive endpoint
-        measures LOAD, and then reports load as death — which is how a busy
+        measures LOAD, and then reports load as death - which is how a busy
         server gets declared dead and "recovered" while it is working fine.
         /api/health is a different question (is PROTECTION healthy) and is not
         a substitute for this one.
@@ -706,28 +810,33 @@ def create_app(ctx: Optional[AppContext] = None):
         return {"ok": True}
 
     @app.get("/api/cache/stats")
-    async def cache_stats():
+    def cache_stats():
         """Per-key age, refresh errors and hit counters for the response cache.
 
         Exposed because a cache that has silently stopped refreshing looks
-        from the outside exactly like a system where nothing is happening —
+        from the outside exactly like a system where nothing is happening -
         and those two must never be indistinguishable in a security product.
         """
         return CACHE.snapshot()
 
     @app.get("/api/stats/cleaned")
-    async def get_cleaned_stats():
+    def get_cleaned_stats():
         if state.store is None:
             return JSONResponse({"error": "store not ready"}, status_code=503)
         return {"elements_cleaned": state.store.cleaned_count()}
 
     @app.get("/api/mac/status")
     async def mac_status():
-        mac = _get_mac_randomizer()
-        return {"enabled": True, "interfaces": mac.status()}
+        # Cached, unlike its neighbours: mac.status() enumerates adapters and
+        # measured 356-1164 ms steady state (3,465 ms cold) on the rebuilt
+        # engine, against ~12 ms for the other status endpoints. The privacy
+        # view fires it every 3 s alongside six others, so it was the most
+        # expensive thing the dashboard did on repeat. Both mutating routes
+        # below invalidate the key, so a randomise still shows up instantly.
+        return await _cached("mac", _build_mac_status, TTL_MAC)
 
     @app.post("/api/mac/randomize")
-    async def mac_randomize():
+    def mac_randomize():
         mac = _get_mac_randomizer()
         new_mac = mac.randomize()
         if not new_mac:
@@ -735,10 +844,14 @@ def create_app(ctx: Optional[AppContext] = None):
                 {"error": mac.last_error or "MAC randomisation failed"},
                 status_code=500,
             )
+        # The address just changed; a stale cached status would make the UI
+        # report the OLD MAC right after the user pressed the button, which
+        # reads as "the action did nothing".
+        CACHE.invalidate("mac")
         return {"new_mac": new_mac, "status": "randomised"}
 
     @app.post("/api/mac/restore")
-    async def mac_restore():
+    def mac_restore():
         mac = _get_mac_randomizer()
         restored = mac.restore()
         if not restored:
@@ -746,19 +859,20 @@ def create_app(ctx: Optional[AppContext] = None):
                 {"error": "No backup found to restore (has a MAC ever been randomised?)"},
                 status_code=404,
             )
+        CACHE.invalidate("mac")
         return {"restored_mac": restored, "status": "restored"}
 
     @app.get("/api/fingerprint/status")
-    async def fingerprint_status():
+    def fingerprint_status():
         """TCP/IP fingerprint spoof state (TTL / TCP-timestamps normalisation)."""
         try:
             from ..fingerprint import NetworkFingerprint
             return NetworkFingerprint().status()
-        except Exception as exc:      # noqa: BLE001 — status must never 500
+        except Exception as exc:      # noqa: BLE001 - status must never 500
             return {"supported": False, "normalized": False, "error": str(exc)}
 
     @app.get("/api/profile")
-    async def profile_get():
+    def profile_get():
         """Risk profiles + which is active (drives block-vs-deceive)."""
         from ..profiles import list_profiles, get_profile
         return {"current": get_profile().value, "profiles": list_profiles()}
@@ -774,15 +888,15 @@ def create_app(ctx: Optional[AppContext] = None):
         return {"current": get_profile().value}
 
     @app.get("/api/deception/status")
-    async def deception_status():
+    def deception_status():
         """How the deception engine is doing: how many tracker/telemetry
         beacons were answered with a fabricated persona instead of hard-
-        failed (dns_interceptor's own 'deceived' decision — read here, not
+        failed (dns_interceptor's own 'deceived' decision - read here, not
         redefined, so this can never disagree with what actually happened on
         the wire), and what that persona currently looks like.
 
         Read-only. There is no endpoint that lets a caller pick, rotate, or
-        otherwise influence the persona — the whole point of persona.py is
+        otherwise influence the persona - the whole point of persona.py is
         that it does NOT change on request.
         """
         if state.store is None:
@@ -809,13 +923,13 @@ def create_app(ctx: Optional[AppContext] = None):
         }
 
     @app.get("/api/doh/status")
-    async def doh_status():
+    def doh_status():
         """DNS-over-HTTPS bypass detection: a process that resolves straight
         to a public DoH resolver's IP is routing DNS around Valkyrie's
-        interception entirely — the same "escape the blocker" story as an
+        interception entirely - the same "escape the blocker" story as an
         undeceived tracker, one layer down the stack (see deception_status
         above). Combines the LIVE detector's own health (doh_detector.py's
-        `status()` — is psutil available, is the scan loop actually running)
+        `status()` - is psutil available, is the scan loop actually running)
         with the store's counts of what it has caught, so "detector running
         but psutil missing" and "detector fine, nothing to report" read as
         the two distinct states they are, not the same silent zero.
@@ -833,10 +947,10 @@ def create_app(ctx: Optional[AppContext] = None):
         return {**live, **stats}
 
     @app.get("/api/sysmon/status")
-    async def sysmon_status():
+    def sysmon_status():
         """Sysmon presence/health, and whether detection is running degraded
         without it (ADR 0048). Reads the sensor-tamper monitor's cached last
-        poll rather than probing live — probe_sysmon() shells out to
+        poll rather than probing live - probe_sysmon() shells out to
         PowerShell several times, which is too slow for a status endpoint a
         dashboard may poll on every refresh."""
         if state.sensor_tamper is None:
@@ -846,7 +960,7 @@ def create_app(ctx: Optional[AppContext] = None):
         status = state.sensor_tamper.current_status()
         sysmon_healthy = status.get("sysmon")
         # Real prose from the last probe (present? running? which EIDs are
-        # missing?) when one has completed — see sensor_tamper.py's
+        # missing?) when one has completed - see sensor_tamper.py's
         # _sysmon_health(). Falls back to a generic line only before the
         # first poll has had a chance to run.
         live_detail = state.sensor_tamper.current_detail().get("sysmon")
@@ -863,10 +977,10 @@ def create_app(ctx: Optional[AppContext] = None):
                            "may be running in degraded mode"))}
 
     @app.get("/api/controls/taxonomy")
-    async def controls_taxonomy():
+    def controls_taxonomy():
         """Every Valkyrie control classified preventive/detective/corrective/
         deterrent/compensating/directive/recovery (IIBA §4.2.3), plus any
-        category with no primary control — an empty category is a finding,
+        category with no primary control - an empty category is a finding,
         not a bug in this endpoint. Static classification merged with the
         LIVE compensating-control activation state (sensor_tamper.py) where
         available, so 'compensating' reflects whether it is actually
@@ -891,8 +1005,8 @@ def create_app(ctx: Optional[AppContext] = None):
     @app.get("/api/controls/coverage")
     async def controls_coverage():
         """What fraction of Valkyrie's intended defenses are actually live,
-        right now, on THIS host — not a static claim. Three states per
-        control (effective/degraded/absent), not a binary installed/not —
+        right now, on THIS host - not a static claim. Three states per
+        control (effective/degraded/absent), not a binary installed/not -
         see valkyrie/coverage.py. Wires in every live singleton this
         process actually has, so e.g. Sysmon installed-but-stopped reports
         'absent', not 'effective'.
@@ -903,7 +1017,7 @@ def create_app(ctx: Optional[AppContext] = None):
         return await _cached("coverage", _build_coverage, TTL_COVERAGE)
 
     @app.get("/api/decoys/status")
-    async def decoys_status():
+    def decoys_status():
         """How many decoy honeytokens are live (0 = not deployed)."""
         from .. import decoys as _dm
         mgr = getattr(_dm, "_ACTIVE", None)
@@ -911,27 +1025,27 @@ def create_app(ctx: Optional[AppContext] = None):
                 "count": len(mgr.tokens()) if mgr else 0,
                 "paths": mgr.paths()[:20] if mgr else []}
 
-    # /api/vpn/status removed — multi-hop VPN moved to experimental/.
+    # /api/vpn/status removed - multi-hop VPN moved to experimental/.
     # Valkyrie is an endpoint security + privacy agent, not a VPN product.
 
     @app.get("/api/zero-log/status")
-    async def zero_log_status():
+    def zero_log_status():
         if state.zero_log is None:
             return {"active": False, "mode": "disk",
                     "session_events": 0, "disk_writes": "enabled",
                     "integrity": "verified", "tampered_files": []}
         return state.zero_log.status()
 
-    # ── Ransomware Shield ────────────────────────────────────────────────
+    # --- Ransomware Shield ---
     @app.get("/api/ransomware/status")
-    async def ransomware_status():
+    def ransomware_status():
         rs = getattr(state, "ransomware_shield", None)
         if rs is None:
             return {"enabled": False}
         return rs.status()
 
     @app.post("/api/ransomware/self-test")
-    async def ransomware_self_test(request: Request):
+    def ransomware_self_test(request: Request):
         # State-changing only in a throwaway temp dir; still token-gated so a
         # remote page can't trigger it. Proves the tripwire + entropy logic live.
         guard = _control_guard(request)
@@ -944,19 +1058,19 @@ def create_app(ctx: Optional[AppContext] = None):
         with tempfile.TemporaryDirectory() as td:
             return rs.simulate(Path(td))
 
-    # ── AMSI content scanning ────────────────────────────────────────────
+    # --- AMSI content scanning ---
     @app.get("/api/amsi/status")
-    async def amsi_status():
+    def amsi_status():
         sc = getattr(state, "amsi", None)
         if sc is None:
             return {"enabled": False}
         return sc.status()
 
     @app.post("/api/amsi/self-test")
-    async def amsi_self_test(request: Request):
+    def amsi_self_test(request: Request):
         # Token-gated: a working provider records a detection in its own
         # history when it convicts the marker, so this must not be triggerable
-        # by a remote page. Returns a tri-state conclusion — a non-conviction
+        # by a remote page. Returns a tri-state conclusion - a non-conviction
         # is reported as inconclusive, never as a pass or a failure.
         guard = _control_guard(request)
         if guard is not None:
@@ -967,8 +1081,8 @@ def create_app(ctx: Optional[AppContext] = None):
         return sc.self_test()
 
     @app.post("/api/edr/incidents/{incident_id}/triage")
-    async def collect_triage(incident_id: str, request: Request):
-        # Collects live host state into a local evidence bundle — state-
+    def collect_triage(incident_id: str, request: Request):
+        # Collects live host state into a local evidence bundle - state-
         # revealing, so token-gated like every response-capable route.
         guard = _control_guard(request)
         if guard is not None:
@@ -982,9 +1096,9 @@ def create_app(ctx: Optional[AppContext] = None):
             return JSONResponse({"error": "incident not found"}, status_code=404)
         return manifest
 
-    # ── Endpoint telemetry visibility ────────────────────────────────────
+    # --- Endpoint telemetry visibility ---
     @app.get("/api/telemetry/endpoint")
-    async def endpoint_telemetry_status():
+    def endpoint_telemetry_status():
         pc = getattr(state, "persistence_collector", None)
         return {
             "process_collector":    getattr(state, "process_collector", None) is not None,
@@ -994,7 +1108,7 @@ def create_app(ctx: Optional[AppContext] = None):
         }
 
     @app.get("/api/asset-inventory")
-    async def asset_inventory_status():
+    def asset_inventory_status():
         """CIS Controls #1/#2: the most recent snapshot of what's
         installed, listening, and loaded, plus counts. Reads the
         collector's CACHE (``last_snapshot()``), never a fresh probe --
@@ -1029,9 +1143,9 @@ def create_app(ctx: Optional[AppContext] = None):
             "recent_changes": ai.recent_changes(),
         }
 
-    # ── System control (launcher / dashboard buttons) ───────────────────
+    # --- System control (launcher / dashboard buttons) ---
     @app.get("/api/system/token")
-    async def system_token(request: Request):
+    def system_token(request: Request):
         # Same-origin loopback only. Lets the dashboard fetch the control
         # token it needs for restart/stop. A cross-origin page cannot read
         # this response (no CORS headers) and fails the origin check anyway.
@@ -1040,7 +1154,7 @@ def create_app(ctx: Optional[AppContext] = None):
         return {"token": _CONTROL_TOKEN, "web_port": int(state.web_port or 0)}
 
     @app.post("/api/system/restart")
-    async def system_restart(request: Request):
+    def system_restart(request: Request):
         guard = _control_guard(request)
         if guard is not None:
             return guard
@@ -1050,7 +1164,7 @@ def create_app(ctx: Optional[AppContext] = None):
         return {"status": "restarting"}
 
     @app.post("/api/system/shutdown")
-    async def system_shutdown(request: Request):
+    def system_shutdown(request: Request):
         guard = _control_guard(request)
         if guard is not None:
             return guard
@@ -1058,9 +1172,9 @@ def create_app(ctx: Optional[AppContext] = None):
         _run_detached_ps(f"& '{stop}'")
         return {"status": "stopping"}
 
-    # ── Protection heartbeat (read-only) ────────────────────────────────
+    # --- Protection heartbeat (read-only) ---
     @app.get("/api/health")
-    async def get_health():
+    def get_health():
         if state.heartbeat is None:
             return {"healthy": True, "monitored": False}
         try:
@@ -1070,14 +1184,14 @@ def create_app(ctx: Optional[AppContext] = None):
         except Exception:
             return {"healthy": True, "monitored": False}
 
-    # ── Meeting Mode (kill switch) ──────────────────────────────────────
+    # --- Meeting Mode (kill switch) ---
     @app.get("/api/meeting/status")
-    async def meeting_status():
+    def meeting_status():
         from ..meeting_mode import MeetingMode
         return MeetingMode().status()
 
     @app.post("/api/meeting/start")
-    async def meeting_start(request: Request):
+    def meeting_start(request: Request):
         guard = _control_guard(request)
         if guard is not None:
             return guard
@@ -1085,20 +1199,20 @@ def create_app(ctx: Optional[AppContext] = None):
         return MeetingMode().activate()
 
     @app.post("/api/meeting/stop")
-    async def meeting_stop(request: Request):
+    def meeting_stop(request: Request):
         guard = _control_guard(request)
         if guard is not None:
             return guard
         from ..meeting_mode import MeetingMode
         return MeetingMode().deactivate()
 
-    # ── EDR / SOC layer ─────────────────────────────────────────────────
+    # --- EDR / SOC layer ---
     @app.get("/edr", include_in_schema=False)
-    async def serve_edr_console():
+    def serve_edr_console():
         return FileResponse(_WEB_DIR / "edr.html", media_type="text/html")
 
     @app.get("/api/edr/stats")
-    async def edr_stats():
+    def edr_stats():
         if state.edr is None:
             return {"enabled": False}
         s = state.edr.stats(); s["enabled"] = True
@@ -1109,10 +1223,10 @@ def create_app(ctx: Optional[AppContext] = None):
                             severity: Optional[str] = None,
                             brief: bool = False):
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         # Off the event loop: list_incidents is a synchronous SQLite read (opens a
         # connection, ORDER BY ... LIMIT 200). Run on the loop it blocks every
-        # other request — including the self-heal /api/ping — for its whole
+        # other request - including the self-heal /api/ping - for its whole
         # duration, which under eval/dashboard polling load is exactly how the
         # server declared ITSELF "web_dashboard unhealthy" in a tight loop.
         return await run_in_threadpool(
@@ -1128,26 +1242,38 @@ def create_app(ctx: Optional[AppContext] = None):
         the eval harness (see valkyrie/edr/metrics.py for the exact
         definitions and their honest limits)."""
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         # Off the event loop: mttd_mttr fans out to get_incident for up to 200
-        # incidents (~3 queries + impact assessment each) — by far the heaviest
+        # incidents (~3 queries + impact assessment each) - by far the heaviest
         # read in the API. On the loop it stalls everything for seconds.
         return await run_in_threadpool(state.edr.mttd_mttr)
 
     @app.get("/api/sensors/status")
-    async def sensors_status():
+    def sensors_status():
         """Real-time sensor host health + metrics (observability for the
         SensorManager: per-sensor state, dedup/backpressure drops, restarts)."""
         sm = getattr(state, "sensor_manager", None)
         if sm is None:
             return {"enabled": False}
         s = sm.stats(); s["enabled"] = True
+        # POLL-BASED collectors report separately, because "running" is not the
+        # same as "able to detect". The persistence collector works by DIFFING
+        # snapshots, so before its first baseline exists it can detect nothing -
+        # and silence from a sensor that has not started looking must not read
+        # as an all-clear. A harness (or an operator) can wait on
+        # baseline_ready instead of racing it.
+        pc = getattr(state, "persistence_collector", None)
+        if pc is not None and hasattr(pc, "status"):
+            try:
+                s["persistence_collector"] = pc.status()
+            except Exception as exc:   # noqa: BLE001
+                s["persistence_collector"] = {"error": exc.__class__.__name__}
         return s
 
     @app.get("/api/edr/incidents/{incident_id}")
     async def edr_incident(incident_id: str):
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         # Off the event loop: get_incident runs ~3 synchronous SQLite queries
         # (incident + detections + responses) plus an impact assessment.
         inc = await run_in_threadpool(state.edr.get_incident, incident_id)
@@ -1156,12 +1282,12 @@ def create_app(ctx: Optional[AppContext] = None):
         return inc
 
     @app.get("/api/edr/incidents/{incident_id}/decision")
-    async def edr_incident_decision(incident_id: str):
+    def edr_incident_decision(incident_id: str):
         """The recommended graded action (allow/alert/deceive/block/contain) for
         an incident, under the current risk profile, with a plain-language reason
-        and user message. Deterministic — the explainable 'why' behind response."""
+        and user message. Deterministic - the explainable 'why' behind response."""
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         inc = state.edr.get_incident(incident_id)
         if inc is None:
             return JSONResponse({"error": "unknown incident"}, status_code=404)
@@ -1188,13 +1314,13 @@ def create_app(ctx: Optional[AppContext] = None):
         caller can tell "nothing to show" from "no process to show it for".
         """
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         inc = await run_in_threadpool(state.edr.get_incident, incident_id)
         if inc is None:
             return JSONResponse({"error": "unknown incident"}, status_code=404)
         pid = int(inc.get("process_pid") or 0)
         if pid <= 0:
-            # process_pid is live-only (not persisted — see edr/store.py), so
+            # process_pid is live-only (not persisted - see edr/store.py), so
             # fall back to the pid carried on the incident's own detections
             # before giving up on it.
             for det in (inc.get("detections") or []):
@@ -1209,16 +1335,16 @@ def create_app(ctx: Optional[AppContext] = None):
         return graph
 
     @app.get("/api/edr/causality/stats")
-    async def edr_causality_stats():
+    def edr_causality_stats():
         """Process-ancestry graph size and health (nodes, inferred, evicted)."""
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         return state.edr.causality_stats()
 
     @app.post("/api/edr/incidents/{incident_id}/status")
     async def edr_incident_status(incident_id: str, request: Request):
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         guard = _edr_guard(request)
         if guard is not None:
             return guard
@@ -1233,7 +1359,7 @@ def create_app(ctx: Optional[AppContext] = None):
     @app.post("/api/edr/incidents/{incident_id}/investigate")
     async def edr_investigate(incident_id: str, request: Request):
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         guard = _edr_guard(request)
         if guard is not None:
             return guard
@@ -1247,7 +1373,7 @@ def create_app(ctx: Optional[AppContext] = None):
     @app.post("/api/edr/respond")
     async def edr_respond(request: Request):
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         guard = _edr_guard(request)
         if guard is not None:
             return guard
@@ -1255,23 +1381,23 @@ def create_app(ctx: Optional[AppContext] = None):
         action = str(body.get("action", ""))
         if not action:
             return JSONResponse({"error": "action is required"}, status_code=400)
-        # dry_run defaults to True — a real action must be explicitly requested.
+        # dry_run defaults to True - a real action must be explicitly requested.
         dry_run = bool(body.get("dry_run", True))
         return state.edr.respond(
             action, str(body.get("target", "")), dry_run=dry_run,
             operator="dashboard", incident_id=str(body.get("incident_id", "")))
 
     @app.get("/api/edr/hunt/saved")
-    async def edr_saved_hunts():
+    def edr_saved_hunts():
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         return {"hunts": state.edr.saved_hunts(),
                 "facets": state.edr.hunt_facets(24)}
 
     @app.post("/api/edr/hunt")
     async def edr_hunt(request: Request):
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         body = await _safe_json(request)
         limit = int(body.get("limit", 200) or 200)
         if body.get("saved"):
@@ -1279,14 +1405,14 @@ def create_app(ctx: Optional[AppContext] = None):
         return state.edr.hunt(body.get("filters") or {}, limit)
 
     @app.get("/api/edr/plugins")
-    async def edr_plugins():
+    def edr_plugins():
         if state.edr is None:
-            return JSONResponse({"error": "EDR not enabled"}, status_code=503)
+            return _subsystem_unavailable("EDR")
         return state.edr.plugins()
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket):
-        # The live event stream is the single most sensitive surface — real-time
+        # The live event stream is the single most sensitive surface - real-time
         # browsing history. The HTTP middleware does not cover WebSocket scope,
         # so apply the same off-loopback rule here: a non-loopback subscriber
         # must supply ?token=<control token>. Loopback (the local dashboard) is
@@ -1299,19 +1425,28 @@ def create_app(ctx: Optional[AppContext] = None):
         manager.add(ws, q)
 
         try:
-            # ── Initial payload (isolated try — failure must NOT close the WS) ──
+            # --- Initial payload (isolated try - failure must NOT close the WS) ---
             if state.store is not None:
                 try:
-                    init = json.dumps({
-                        "type":   "init",
-                        "stats":  _build_stats(),
-                        "events": _fmt_events(state.store.recent_events(limit=50)),
-                    })
+                    # Built in the threadpool, never inline: _build_stats() is a
+                    # multi-query 24h SQLite aggregate (that is why the HTTP route
+                    # serves it through _cached) and recent_events() hits the same
+                    # DB. Awaiting them here on the event loop would stall EVERY
+                    # other connection - including /api/health and the accept loop
+                    # itself - for the whole duration, which is exactly the wedge
+                    # this endpoint's own docstring warns about elsewhere.
+                    def _init_payload() -> str:
+                        return json.dumps({
+                            "type":   "init",
+                            "stats":  _build_stats(),
+                            "events": _fmt_events(state.store.recent_events(limit=50)),
+                        })
+                    init = await run_in_threadpool(_init_payload)
                     await ws.send_text(init)
                 except Exception:
                     pass   # init failed but keep the connection alive
 
-            # ── Relay loop ───────────────────────────────────────────────────
+            # --- Relay loop ---
             while True:
                 try:
                     msg = await asyncio.wait_for(q.get(), timeout=25.0)
@@ -1349,7 +1484,7 @@ def run_server(host: str = WEB_HOST, port: int = WEB_PORT,
     The host default is LOOPBACK, not 0.0.0.0. Every real caller passes an
     explicit host (``__main__`` uses ``--web-host``, defaulting to WEB_HOST and
     warning loudly when it is off-loopback), so the old ``0.0.0.0`` default was
-    never actually reached — but it was a live footgun: this app exposes the
+    never actually reached - but it was a live footgun: this app exposes the
     control routes (isolate host, kill process, disable telemetry), and any
     future caller that omitted ``host`` would have published them to every
     interface. A dangerous default that happens to be unused is still a
@@ -1365,7 +1500,7 @@ def run_server(host: str = WEB_HOST, port: int = WEB_PORT,
 
     # uvicorn needs a WebSocket implementation (websockets or wsproto) to serve
     # the dashboard's live /ws feed. Plain `pip install uvicorn` does NOT include
-    # one, and uvicorn then answers the /ws upgrade with HTTP 404 — the dashboard
+    # one, and uvicorn then answers the /ws upgrade with HTTP 404 - the dashboard
     # loads its initial snapshot and never updates. Detect that and say so loudly
     # rather than failing silently; uvicorn auto-selects websockets when present.
     if not _websocket_impl_available():

@@ -6,7 +6,7 @@ WHY THIS EXISTS (the bug it prevents recurring)
 -----------------------------------------------
 `test_scanner_accuracy.py` classified a detection as positive with a hardcoded
 list: `dec in ("blocked", "flagged")`. The pipeline later gained a FOURTH
-verdict — "deceived" — which sinkholes a detected tracker to a decoy dead-end
+verdict - "deceived" - which sinkholes a detected tracker to a decoy dead-end
 instead of hard-blocking it, so the calling app keeps working.
 
 Nothing failed loudly. The measurement simply started counting every
@@ -45,7 +45,7 @@ def _check(label: str, ok: bool) -> None:
 # the prompt to also update every consumer listed below.
 # "behavioral" is a real FIFTH verdict, not a category: it is returned from the
 # legacy fallback path (scanner not wired) and dns_interceptor treats it as a
-# BLOCKING outcome — `decision in ("blocked", "behavioral", "deceived")` gates
+# BLOCKING outcome - `decision in ("blocked", "behavioral", "deceived")` gates
 # the sinkhole. It was found by this very test on its first run, which is the
 # point: the same latent trap as "deceived" was sitting in a second code path.
 KNOWN_VERDICTS = {"allowed", "blocked", "flagged", "deceived", "behavioral"}

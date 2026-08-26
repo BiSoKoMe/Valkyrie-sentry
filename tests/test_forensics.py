@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Forensics triage collection — offline bundle + integrity tests.
+"""Forensics triage collection - offline bundle + integrity tests.
 
   [1] Full bundle from a real EdrEngine incident (temp store)
   [2] Manifest hashes verify (chain-of-custody integrity round-trip)

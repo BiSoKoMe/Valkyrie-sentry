@@ -1,4 +1,4 @@
-"""Standalone DNS test script — stdlib only, no dnspython required.
+"""Standalone DNS test script - stdlib only, no dnspython required.
 
 Sends a raw UDP DNS A-record query to Valkyrie and prints whether the
 domain was ALLOWED (real IP) or BLOCKED (0.0.0.0).

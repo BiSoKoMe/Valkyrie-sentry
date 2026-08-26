@@ -94,6 +94,7 @@ class Authority:
 
 def authorize(sig: Signal, decision: Decision, *,
               target: str = "",
+              responder: str = "",
               sensor_state: Optional[Callable[[str], str]] = None,
               budget_permits: Optional[Callable[[], tuple]] = None,
               observed_interval_s: Optional[float] = None) -> Authority:
@@ -103,6 +104,17 @@ def authorize(sig: Signal, decision: Decision, *,
     ``budget_permits`` () -> (allowed: bool, reason: str)          (None = skip)
     ``target``         what the action would be applied to; required for the
                        invariant check to mean anything.
+    ``responder``      the concrete responder this authorisation is for. The
+                       ``Action -> responder`` map below is only a DEFAULT: it
+                       assumes one action means one responder, which stops
+                       being true the moment a caller plans several distinct
+                       remediations (kill / block / de-persist) that all
+                       descend from a single BLOCK decision. Passing the
+                       responder explicitly makes the consequence and
+                       invariant gates judge THAT responder's cost, which is
+                       the only way per-action authority can differ - e.g. an
+                       invariant vetoing one domain while permitting another.
+                       Empty (the default) preserves the map behaviour exactly.
 
     Every gate is optional and skipping one is a NO-OP rather than an implicit
     pass, so this can be adopted incrementally without any gate silently
@@ -133,7 +145,7 @@ def authorize(sig: Signal, decision: Decision, *,
     # the one shape that must never be reached by degradation alone.
     lease_ttl: Optional[float] = None
     if action in _ENFORCING:
-        act_name = _ACTION_TO_RESPONDER.get(action, "")
+        act_name = responder or _ACTION_TO_RESPONDER.get(action, "")
         rev = reversibility.get(act_name) if act_name else None
         if rev is not None and rev.leasable:
             lease_ttl = leases.ttl_for(sig.source or "",
@@ -161,7 +173,7 @@ def authorize(sig: Signal, decision: Decision, *,
     # Last, and categorical. Nothing above may overrule it.
     vetoed = False
     if action in _ENFORCING:
-        act_name = _ACTION_TO_RESPONDER.get(action, "")
+        act_name = responder or _ACTION_TO_RESPONDER.get(action, "")
         inv = invariants.check(act_name, target) if act_name else None
         if inv is None and target:
             inv = invariants.check(invariants.ANY, target)

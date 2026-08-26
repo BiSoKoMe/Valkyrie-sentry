@@ -1,15 +1,15 @@
-"""DGA (Domain Generation Algorithm) detector — corroborated, offline, precise.
+"""DGA (Domain Generation Algorithm) detector - corroborated, offline, precise.
 
 Malware families that use DGAs generate large numbers of algorithmic domains
 (`xjkqvw92hd8skwlqz3ty.com`) and try them until one resolves to the current C2.
-The domains look random because they are — which is exactly what makes them hard
+The domains look random because they are - which is exactly what makes them hard
 to catch *without* also flagging the many legitimate domains that look random
 (CDN hash hostnames, short consonant-heavy brands). A naive "high entropy = block"
 rule false-positives on `d1anzknqnc1kmb.cloudfront.net` and breaks real sites.
 
 This detector is deliberately built for **precision first** (the project rule:
 a false positive breaks a real site; precision > aggression). It fires only when
-several independent signals agree on the domain's **registrable label** — never
+several independent signals agree on the domain's **registrable label** - never
 on a subdomain, so a gibberish CDN hostname under a real parent is structurally
 ignored:
 
@@ -17,20 +17,20 @@ ignored:
   2. Shannon entropy             (repetitive/dictionary labels excluded).
   3. Bigram implausibility       (the linguistic signal: fraction of adjacent
                                   character pairs that never occur in a corpus
-                                  of real words/brands — DGA gibberish is ~all
+                                  of real words/brands - DGA gibberish is ~all
                                   rare pairs, real words are mostly common ones).
 
 Only when all three clear their thresholds is a domain called DGA, and the
 confidence blends the three so a longer, higher-entropy, more-implausible label
-scores higher. Everything here is a **pure function** — no state, no network, no
-per-call cost beyond the label — so it is deterministic and trivially testable.
+scores higher. Everything here is a **pure function** - no state, no network, no
+per-call cost beyond the label - so it is deterministic and trivially testable.
 
 HONEST BOUNDARY: this targets **long-label** DGA families (necurs, ramnit, gozi,
-murofet, qakbot — 12-24 char registrable labels), which are the majority of
+murofet, qakbot - 12-24 char registrable labels), which are the majority of
 modern families. **Short-label** DGAs (some Conficker variants, 8-11 chars) are
 out of scope: at that length the bigram/entropy signal cannot separate DGA from
 real short brands without an unacceptable false-positive rate, which needs an
-internet-scale trained model (marked "needs infra" in docs/GAP_ANALYSIS.md — we
+internet-scale trained model (marked "needs infra" in docs/GAP_ANALYSIS.md - we
 do not fake it). This is a strong local signal, not a model. It is one voice in
 the pipeline, corroborated by DNS timing, intel, and process context.
 """
@@ -44,13 +44,13 @@ from dataclasses import dataclass
 from .config import DGA_MIN_ENTROPY, DGA_MIN_LEN, DGA_MIN_RARE_BIGRAM
 
 
-# ── Bigram model ────────────────────────────────────────────────────────────
+# --- Bigram model ---
 # A deliberately simple, transparent, offline model: the set of character
 # bigrams that occur in a corpus of common English words + major brand/domain
 # tokens. Any bigram NOT in this set is "rare" (linguistically implausible).
 # Built at import from readable source words so the model is auditable and easy
-# to extend — not an opaque trained blob. Digits and hyphens are handled in the
-# scorer (a letter/digit boundary counts as rare — interior digits are unusual
+# to extend - not an opaque trained blob. Digits and hyphens are handled in the
+# scorer (a letter/digit boundary counts as rare - interior digits are unusual
 # in real registrable labels but ubiquitous in DGA output).
 _CORPUS_WORDS = (
     # high-frequency English words (give the common-bigram backbone)
@@ -147,8 +147,8 @@ def rare_bigram_fraction(label: str) -> float:
     for p in pairs:
         # Hyphens are a *negative* DGA signal (algorithmic domains don't
         # hyphenate; real brands do: `libjpeg-turbo`, `coca-cola`). Treat a
-        # hyphen as a word separator — skip the pair so it neither inflates
-        # nor deflates the score — which keeps hyphenated brands well clear.
+        # hyphen as a word separator - skip the pair so it neither inflates
+        # nor deflates the score - which keeps hyphenated brands well clear.
         if "-" in p:
             continue
         counted += 1
@@ -163,7 +163,7 @@ def rare_bigram_fraction(label: str) -> float:
 @dataclass(frozen=True)
 class DgaResult:
     is_dga: bool
-    confidence: float          # 0.0–1.0 (0 when not DGA)
+    confidence: float          # 0.0-1.0 (0 when not DGA)
     label: str                 # the registrable label evaluated
     reason: str
     entropy: float = 0.0
@@ -174,7 +174,7 @@ def classify_dga(domain: str) -> DgaResult:
     """Classify a hostname's registrable label as DGA or not. Pure.
 
     Fires only when length, entropy, and bigram-implausibility all clear their
-    thresholds (see module docstring) — a single strong signal is never enough,
+    thresholds (see module docstring) - a single strong signal is never enough,
     which is what keeps this off legitimate random-looking hostnames.
     """
     label = registrable_label(domain)
@@ -190,7 +190,7 @@ def classify_dga(domain: str) -> DgaResult:
                          "does not meet DGA corroboration threshold",
                          entropy=round(ent, 3), rare_fraction=round(rare, 3))
 
-    # All three agree → DGA. Confidence blends how far past each floor we are,
+    # All three agree -> DGA. Confidence blends how far past each floor we are,
     # weighted toward the linguistic (bigram) signal, which is the discriminator.
     rare_c = (rare - DGA_MIN_RARE_BIGRAM) / (1.0 - DGA_MIN_RARE_BIGRAM)
     ent_c = min(1.0, (ent - DGA_MIN_ENTROPY) / (4.5 - DGA_MIN_ENTROPY))

@@ -1,4 +1,4 @@
-"""SIEM export — stream Valkyrie incidents to enterprise log pipelines.
+"""SIEM export - stream Valkyrie incidents to enterprise log pipelines.
 
 Enterprises do not adopt a security product they cannot see inside their
 SOC. This module forwards EDR incidents (and, opt-in, blocked/flagged DNS
@@ -20,11 +20,11 @@ Design contract (same posture as every Valkyrie service):
   * Fault-isolated and non-blocking: emitters enqueue onto a bounded
     in-memory queue and return immediately; a background thread does I/O
     with reconnect + backoff. When the SIEM is down the queue keeps the
-    newest events and counts what it dropped — the protection pipeline
+    newest events and counts what it dropped - the protection pipeline
     never stalls or raises because logging infrastructure is broken.
   * Deterministic formatting: CEF escaping follows the spec (backslash,
     pipe in prefix, equals in extensions); severities map onto the CEF
-    0–10 scale. Pure functions, unit-tested offline.
+    0-10 scale. Pure functions, unit-tested offline.
 """
 
 from __future__ import annotations
@@ -139,7 +139,7 @@ def incident_record(payload: dict) -> Optional[dict]:
 def dns_block_record(msg: dict) -> Optional[dict]:
     """Normalize a Store bus DNS event into an export record (opt-in path).
 
-    Exports only blocked/flagged decisions — never allowed traffic — because
+    Exports only blocked/flagged decisions - never allowed traffic - because
     this is the one exporter path that carries domains off the machine.
     """
     if not isinstance(msg, dict):
@@ -179,7 +179,7 @@ class SiemExporter:
         self._scheme = u.scheme
         self._host = u.hostname or ""
         self._port = u.port or 0
-        # file:///C:/path or file:///var/log/x — urlparse leaves the path.
+        # file:///C:/path or file:///var/log/x - urlparse leaves the path.
         self._path = Path(u.path.lstrip("/")) if (
             u.scheme == "file" and ":" in u.path[:4].replace("/", "")
         ) else Path(u.path) if u.scheme == "file" else None
@@ -268,7 +268,7 @@ class SiemExporter:
                 ctx = ssl.create_default_context()
                 s = ctx.wrap_socket(s, server_hostname=self._host)
             self._sock = s
-        # file scheme opens per-write (append) — nothing to hold.
+        # file scheme opens per-write (append) - nothing to hold.
 
     def _send(self, line: str) -> None:
         data = (line + "\n").encode("utf-8", errors="replace")
@@ -283,7 +283,7 @@ class SiemExporter:
         if self._scheme == "udp":
             self._sock.sendto(data, (self._host, self._port))
         else:
-            # A peer that closed the stream doesn't fail sendall() — the data
+            # A peer that closed the stream doesn't fail sendall() - the data
             # is buffered locally and silently lost when the RST arrives. A
             # syslog server never sends us bytes, so a readable socket means
             # EOF/error: detect it and reconnect BEFORE sending.

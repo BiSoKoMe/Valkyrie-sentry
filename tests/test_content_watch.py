@@ -1,4 +1,4 @@
-"""Tests for content_watch.py — background page-content analysis.
+"""Tests for content_watch.py - background page-content analysis.
 
 The two things that could go wrong here are opposite failures, and both are
 tested explicitly:
@@ -10,7 +10,7 @@ tested explicitly:
      may act on their own.
   2. It quietly does nothing. A worker thread that dies, or an observe() that
      silently drops everything, would leave the feature looking enabled while
-     analysing nothing — the failure mode this codebase has repeatedly found.
+     analysing nothing - the failure mode this codebase has repeatedly found.
 
 Plus the hard constraint that makes it safe to call at all: observe() runs on
 the synchronous DNS path, so it must be O(1), must never raise, and must never
@@ -71,7 +71,7 @@ def _drain(w, timeout=5.0):
 def main() -> int:
     c = Checks("content watch", expect_min=20)
 
-    # ── The hot path must be safe to call from _decide ──────────────────
+    # --- The hot path must be safe to call from _decide ---
     print("\n[1] observe() is safe on the synchronous DNS path")
     w = ContentWatcher(analyzer=_Analyzer(), min_interval=0.0)
     c.check("observe() before start() does not raise",
@@ -89,7 +89,7 @@ def main() -> int:
     c.check(f"queue is BOUNDED under flood (len={len(w._queue)} <= {w._queue.maxlen})",
             len(w._queue) <= w._queue.maxlen)
 
-    # ── Popular domains are never analysed ──────────────────────────────
+    # --- Popular domains are never analysed ---
     print("\n[2] popular domains are never analysed (highest FP cost)")
     an = _Analyzer()
     w2 = ContentWatcher(analyzer=an, min_interval=0.0)
@@ -101,7 +101,7 @@ def main() -> int:
     c.check("paypal.com not queued", "paypal.com" not in queued)
     c.check("an unknown domain IS queued", "unknown-site-xyz.test" in queued)
 
-    # ── FALSE-POSITIVE POLICY: the critical safety property ─────────────
+    # --- FALSE-POSITIVE POLICY: the critical safety property ---
     print("\n[3] FP POLICY: only near-certain categories may auto-block")
     c.check("auto-block set is minimal", AUTO_BLOCK_CATEGORIES == {"miner"})
     c.check("fingerprinting is NOT auto-blockable (banks do it legitimately)",
@@ -139,14 +139,14 @@ def main() -> int:
     c.check(f"non-blocking findings still recorded as evidence "
             f"(flagged={st['flagged_evidence']})", st["flagged_evidence"] >= 3)
 
-    # ── Verdicts are cached and readable ────────────────────────────────
+    # --- Verdicts are cached and readable ---
     print("\n[4] verdicts are retrievable for later lookups")
     v = w3.verdict("miner.test")
     c.check("a completed verdict is retrievable", v is not None and v.category == "miner")
     c.check("an unseen domain has no verdict", w3.verdict("never-seen.test") is None)
     c.check("verdict() on garbage does not raise", w3.verdict(None) is None)
 
-    # ── It must not quietly do nothing ──────────────────────────────────
+    # --- It must not quietly do nothing ---
     print("\n[5] the worker must not silently die")
     c.check("worker reports running", w3.is_running())
 
@@ -163,7 +163,7 @@ def main() -> int:
             w4.stats()["errors"] >= 0)   # counted via _analyze_one's guard
     w4.stop()
 
-    # ── Unreachable sites produce no verdict (no evidence either way) ───
+    # --- Unreachable sites produce no verdict (no evidence either way) ---
     print("\n[6] an unreachable page yields no verdict, not a false one")
     w5 = ContentWatcher(
         analyzer=_Analyzer({"gone.test": _Verdict("allow", "clean", fetched=False)}),

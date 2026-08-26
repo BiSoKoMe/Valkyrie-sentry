@@ -1,4 +1,4 @@
-"""Bucket-B co-occurrence signal — behavioural test with built-in FP protection.
+"""Bucket-B co-occurrence signal - behavioural test with built-in FP protection.
 
 Drives the REAL DNSInterceptor._decide pipeline (intelligence-only) across
 several simulated page-load bursts from one browser process, then asserts:
@@ -85,14 +85,14 @@ def main() -> int:
 
     import psutil, dns.rdatatype
     A = dns.rdatatype.A
-    live = psutil.Process().name()           # live name → no false "app closed"
+    live = psutil.Process().name()           # live name -> no false "app closed"
     proc = ProcessInfo(name=live, pid=psutil.Process().pid, path="")
     itc = di.DNSInterceptor(store=store, blocklist=blocklist, behavioral=behavioral,
                             rules=rules, process_watcher=_FixedWatcher(live),
                             scanner=scanner, intelligence=intel)
 
     anchors = ["news-alpha.test", "shop-bravo.test", "forum-charlie.test", "blog-delta.test"]
-    # These MUST NOT be in the shipped blocklist seed — the whole point of this
+    # These MUST NOT be in the shipped blocklist seed - the whole point of this
     # test is the softer co-occurrence FLAG path, which only runs for domains
     # that aren't already hard-blocked. `tr.snapchat.com` used to live here but
     # was later added to the seed (Bucket-A widening), which hard-blocked it
@@ -127,7 +127,7 @@ def main() -> int:
     infra_anchor = {d: intel.cooc.anchor_count(d) for d in infra}
     intel.stop(); store.stop()
 
-    # ── RECALL: tracker flagged once ubiquity reached (>=3 distinct anchors) ──
+    # --- RECALL: tracker flagged once ubiquity reached (>=3 distinct anchors) ---
     print("[recall] tracker flagged after riding behind 3+ first parties")
     for t in trackers:
         d0 = results[(0, t)]; d2 = results[(2, t)]; d3 = results[(3, t)]
@@ -138,7 +138,7 @@ def main() -> int:
         check(f"{t}: learned {acount[t]} distinct anchors (>= {config.COOC_MIN_ANCHORS})",
               acount[t] >= config.COOC_MIN_ANCHORS, f"count={acount[t]}")
 
-    # ── HARD INVARIANT: flag-only, never blocked by co-occurrence ─────────
+    # --- HARD INVARIANT: flag-only, never blocked by co-occurrence ---
     print("\n[invariant] co-occurrence is FLAG-ONLY — tracker never blocked")
     check("tracker never blocked on any appearance", not tracker_ever_blocked)
     for t in trackers:
@@ -146,7 +146,7 @@ def main() -> int:
               all(results[(i, t)][1] < config.ANOMALY_BLOCK_THRESHOLD for i in range(4)),
               f"scores={[results[(i,t)][1] for i in range(4)]}")
 
-    # ── FP GUARD: benign infra co-loaded across all sites is NOT flagged ──
+    # --- FP GUARD: benign infra co-loaded across all sites is NOT flagged ---
     print("\n[fp-guard] benign co-loaded infra never flagged (G1 allowlist)")
     for d in infra:
         decs = [results[(i, d)][0] for i in range(4)]

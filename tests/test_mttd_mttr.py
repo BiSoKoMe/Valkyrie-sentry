@@ -3,7 +3,7 @@
 IIBA §9.1.2).
 
 Two layers:
-  [1-4] Pure metric-math unit tests against constructed incident dicts —
+  [1-4] Pure metric-math unit tests against constructed incident dicts -
         no engine, no store, no timing sensitivity.
   [5]   The real fix that makes MTTD non-trivial: ingest_telemetry() used to
         discard the collector's own event.ts and always stamp Detection.
@@ -222,7 +222,7 @@ def test_end_to_end_mttd_mttr() -> None:
     inc_id = engine.ingest_telemetry(ev)
     c.check("second fixture incident created", bool(inc_id))
 
-    # A real (non-dry-run), reversible response — safe to actually run in a
+    # A real (non-dry-run), reversible response - safe to actually run in a
     # test: block_domain only writes to the in-memory _Intel stub above, it
     # never touches this host's real DNS/firewall/registry.
     if inc_id:

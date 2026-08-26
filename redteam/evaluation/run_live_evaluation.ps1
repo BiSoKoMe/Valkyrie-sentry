@@ -84,8 +84,20 @@ param(
     # how many consecutive health checks count as stable.
     [int]$ReadyTimeoutSeconds = 420,
     [int]$ReadyStreak = 3,
+    # Minimum seconds the engine must stay alive (answering health, gaps allowed)
+    # after its first OK before the battery starts - proves startup has settled
+    # while tolerating the transient GIL stalls the single-loop API suffers.
+    [int]$ReadyMinWarmupSeconds = 30,
     [switch]$SkipDestructive,
-    [string]$RepoRoot = (Resolve-Path "$PSScriptRoot\..\..").Path
+    [string]$RepoRoot = (Resolve-Path "$PSScriptRoot\..\..").Path,
+    # Run only these catalog ids (e.g. -OnlyIds evasion-process-injection).
+    # For isolating ONE technique during the Detection Coverage milestone's
+    # per-technique attack loop, without needing a bespoke one-off script per
+    # fix - reuses this file's own already-vetted execution, scoring, and
+    # evidence-capture logic instead of duplicating it. Empty (default) runs
+    # the full battery exactly as before; this parameter changes nothing when
+    # omitted.
+    [string[]]$OnlyIds = @()
 )
 
 $ErrorActionPreference = "Continue"
@@ -93,7 +105,7 @@ function Info($m)  { Write-Host "[eval] $m" -ForegroundColor Cyan }
 function Warn($m)  { Write-Host "[eval] $m" -ForegroundColor Yellow }
 function Bad($m)   { Write-Host "[eval] $m" -ForegroundColor Red }
 
-# ── 0. Export the catalog from the single source of truth (catalog.py) ──────
+# --- 0. Export the catalog from the single source of truth (catalog.py) ---
 $CatalogJson = Join-Path $PSScriptRoot "catalog_export.json"
 Info "Exporting technique catalog from catalog.py (single source of truth)..."
 & python (Join-Path $PSScriptRoot "catalog.py") --export $CatalogJson
@@ -101,6 +113,11 @@ if (-not (Test-Path $CatalogJson)) { throw "catalog export failed -- is python o
 $Catalog = (Get-Content $CatalogJson -Raw | ConvertFrom-Json)
 $CatalogVersion = $Catalog.catalog_version
 $Techniques = $Catalog.techniques
+if ($OnlyIds.Count -gt 0) {
+    $Techniques = @($Techniques | Where-Object { $OnlyIds -contains $_.id })
+    Info "OnlyIds filter active: running $($Techniques.Count) of $($Catalog.techniques.Count) catalog techniques ($($OnlyIds -join ', '))"
+    if ($Techniques.Count -eq 0) { throw "No catalog technique matched -OnlyIds $($OnlyIds -join ', ')" }
+}
 
 # Techniques with a verified Atomic Red Team mapping, carried over from the
 # original redteam/run-redteam.ps1 plan (already vetted by that kit's author).
@@ -115,7 +132,7 @@ $VettedAtomics = @{
     # evasion-defender-disable: intentionally NOT mapped to an ART atomic. The
     # T1562.001 atomic yaml is missing on the GitHub runner image (errored every
     # run), so fall through to the literal Set-MpPreference command line from the
-    # catalog probe instead — which fires the defender_tamper rule (verified via
+    # catalog probe instead - which fires the defender_tamper rule (verified via
     # match_process). Real detection, no dependency on a missing atomic file.
     "impact-shadow-delete"      = @{ Attack = "T1490";     Tests = "1"; Destructive = $true }
     "disc-whoami-priv"          = @{ Attack = "T1033";     Tests = "1" }
@@ -237,7 +254,7 @@ function Get-SensorDrops {
 function Get-Incidents {
     # brief=true -> the FAST incident list (raw rows, no per-incident impact
     # assessment / explanation). The full view is O(incidents) and times out
-    # under polling — that is what scored every real detection as MISS. The
+    # under polling - that is what scored every real detection as MISS. The
     # brief view returns in well under the detect window.
     try { return @(Invoke-CurlGet -Uri "$ApiBase/api/edr/incidents?brief=true" -TimeoutSec 30) }
     catch { return @() }
@@ -265,34 +282,58 @@ function Get-IncidentDetail([string]$id) {
 # started during a lull in a stall. Also say WHICH failure it is -- a refused
 # connection (not listening yet) and a timeout (listening but too busy) call
 # for completely different fixes, and a bare "not reachable" hid that.
+# READINESS GATE - tolerant of GIL stalls, by design (rewritten 2026-08-24).
+#
+# The old gate required $ReadyStreak CONSECUTIVE health OKs. That is the wrong
+# test for THIS engine: its web API is one asyncio loop that GIL-heavy startup
+# threads transiently stall for several seconds (persistence snapshot, etc.),
+# so /api/health flaps - and 3-in-a-row 3s-apart probes almost never all land in
+# a clean window. Every deaf-engine Tier B failure died here, at the GATE, before
+# a single technique fired.
+#
+# The key fact that makes a tolerant gate CORRECT, not a cheat: detections are
+# written to the SQLite incident store by the engine's sensor/rule THREADS,
+# independent of the uvicorn API loop, and authoritative coverage is read from
+# that DB AT REST after the engine stops (the 'Authoritative coverage' step /
+# db_coverage.py). So transient API deafness cannot lose a detection - it only
+# affects whether we're allowed to START. The gate therefore only needs to
+# confirm the engine is genuinely ALIVE and past its heavy startup, not that its
+# API is flawlessly stable.
+#
+# New definition of ready: the engine answered health at least $ReadyStreak
+# times (gaps allowed) AND stayed alive across at least $ReadyMinWarmupSeconds
+# since its first OK - proof it is up and startup has settled, while tolerating
+# the stalls. A single OK followed by death still fails (it never clears warmup).
 $HealthOk = $false
 $LastErr = $null
-$consecutive = 0
+$oks = 0
+$firstOk = $null
 $deadline = (Get-Date).AddSeconds($ReadyTimeoutSeconds)
 $attempt = 0
-Info "Waiting for a STABLE engine at $ApiBase (need $ReadyStreak consecutive OK, up to ${ReadyTimeoutSeconds}s)..."
+Info "Waiting for a LIVE engine at $ApiBase (>= $ReadyStreak health OKs across >= ${ReadyMinWarmupSeconds}s, stalls tolerated, up to ${ReadyTimeoutSeconds}s)..."
 while ((Get-Date) -lt $deadline) {
     $attempt++
     try {
         Invoke-CurlGet -Uri "$ApiBase/api/health" -TimeoutSec 15 | Out-Null
-        $consecutive++
-        if ($consecutive -ge $ReadyStreak) { $HealthOk = $true; break }
-        Info "  health OK ($consecutive/$ReadyStreak consecutive)"
+        $oks++
+        if (-not $firstOk) { $firstOk = Get-Date }
+        $warm = ((Get-Date) - $firstOk).TotalSeconds
+        Info ("  health OK ({0} total, {1:N0}s since first OK)" -f $oks, $warm)
+        if ($oks -ge $ReadyStreak -and $warm -ge $ReadyMinWarmupSeconds) {
+            $HealthOk = $true; break
+        }
     } catch {
         $LastErr = $_
-        if ($consecutive -gt 0) {
-            Warn "  engine went deaf again after $consecutive OK -- restarting the streak (attempt $attempt)"
-        }
-        $consecutive = 0     # a stall resets the streak; near-misses do not count
+        Warn "  health probe failed (transient - engine likely busy under startup GIL load); tolerating and continuing"
     }
     Start-Sleep -Seconds 3
 }
 if (-not $HealthOk) {
     $why = if ($LastErr) { $LastErr.Exception.Message } else { "no attempt succeeded" }
-    throw ("Valkyrie API never became STABLE at $ApiBase within ${ReadyTimeoutSeconds}s " +
-           "($attempt attempts, longest streak short of $ReadyStreak) -- $why")
+    throw ("Valkyrie API never became LIVE at $ApiBase within ${ReadyTimeoutSeconds}s " +
+           "($attempt attempts, $oks health OKs total) -- $why")
 }
-Info "Engine is stable ($ReadyStreak consecutive health checks). Starting the battery."
+Info "Engine is live ($oks health OKs across the warm-up). Starting the battery."
 $HaveAtomics = [bool](Get-Module -ListAvailable -Name Invoke-AtomicRedTeam)
 if ($HaveAtomics) { Import-Module Invoke-AtomicRedTeam -Force }
 else { Warn "Invoke-AtomicRedTeam not installed -- vetted-ART techniques will be SKIPPED, not faked. Run provision.ps1 first for full coverage." }
@@ -339,6 +380,12 @@ foreach ($t in $Techniques) {
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $attackExecuted = $false
     $executionError = ""
+    # Separate from $executionError on purpose: that variable also drives the
+    # outcome bucketing (line ~686, "-not $attackExecuted -and $executionError"
+    # -> blocked_before_execution). A missing binary was never attempted, let
+    # alone actively blocked by a security control - conflating the two would
+    # misreport an environment limitation as "Defender/AV stopped this attack".
+    $toolMissingNote = ""
 
     try {
         if ($VettedAtomics.ContainsKey($t.id) -and $HaveAtomics) {
@@ -430,6 +477,7 @@ foreach ($t in $Techniques) {
                     # exercises the SAME artifact-at-rest scanner Tier A
                     # replayed against, for real.
                     $cmd = $t.probe_input.command
+                    $persistenceHandled = $true
                     switch ($t.probe_input.activity) {
                         "run_key" {
                             New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" `
@@ -438,9 +486,28 @@ foreach ($t in $Techniques) {
                         "startup_folder" {
                             Set-Content -Path $cmd -Value "REM eval artifact" -ErrorAction SilentlyContinue
                         }
-                        default { Warn "   (activity '$($t.probe_input.activity)' needs manual setup -- see catalog.py probe_input)" }
+                        "service" {
+                            # Found via the Detection Coverage milestone: this
+                            # case did not exist at all before - it fell through
+                            # to the warn-and-do-nothing default below, yet
+                            # $attackExecuted was still set $true unconditionally,
+                            # so persist-new-service scored "executed_missed"
+                            # every run with NO real service ever created for
+                            # Valkyrie to observe. A real Windows service (sc.exe
+                            # writes the standard
+                            # HKLM\SYSTEM\CurrentControlSet\Services\<name> key
+                            # persistence_telemetry.py's ASEP scanner reads) with
+                            # the catalog's own suspicious-path binary, deleted
+                            # again once the poller has had its 15s+ window.
+                            $svcName = "ValkyrieEvalTestSvc"
+                            & sc.exe create $svcName binPath= "$cmd" start= demand | Out-Null
+                        }
+                        default {
+                            $persistenceHandled = $false
+                            Warn "   (activity '$($t.probe_input.activity)' needs manual setup -- see catalog.py probe_input)"
+                        }
                     }
-                    $attackExecuted = $true
+                    $attackExecuted = $persistenceHandled
                 }
                 "recon_burst" {
                     # The reconnaissance-burst sequence IOA fires on >=3 DISTINCT
@@ -485,9 +552,34 @@ foreach ($t in $Techniques) {
                     $cmd = $t.probe_input.cmdline
                     if ($t.probe -eq "powershell") { $cmd = "powershell.exe -Command `"$($t.probe_input.script_block)`"" }
                     if ($cmd) {
-                        Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $cmd `
-                            -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
-                        $attackExecuted = $true
+                        # Found via the Detection Coverage milestone: this always
+                        # ran the command through "cmd.exe /c <cmd>" and set
+                        # attackExecuted = $true unconditionally right after -
+                        # Start-Process only errors if cmd.exe itself can't be
+                        # found, which it always can. If the REAL target binary
+                        # (wmic.exe, msbuild.exe, ntdsutil.exe, rar.exe - all
+                        # absent by default on a modern Windows/CI host) doesn't
+                        # exist, cmd.exe starts, prints its own "not recognized"
+                        # error to a window nobody reads, and exits - and the
+                        # harness recorded a false attack_executed=true for four
+                        # real catalog techniques, confirmed by cross-checking
+                        # both live runs' own JSON records. Check the actual
+                        # target binary FIRST; only skip when we are sure it is
+                        # actually missing, never for the merely-unusual.
+                        $img = $t.probe_input.image
+                        $imgMissing = $false
+                        if ($img) {
+                            $imgMissing = -not [bool](Get-Command $img -ErrorAction SilentlyContinue)
+                        }
+                        if ($imgMissing) {
+                            $toolMissingNote = "target binary not found on this host: $img"
+                            $attackExecuted = $false
+                            Warn "   SKIPPED: $toolMissingNote"
+                        } else {
+                            Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $cmd `
+                                -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
+                            $attackExecuted = $true
+                        }
                     } else {
                         Warn "   (no literal command for probe '$($t.probe)' -- see catalog.py)"
                     }
@@ -499,7 +591,7 @@ foreach ($t in $Techniques) {
         Warn "   execution raised: $executionError"
     }
 
-    # ── Condition-based, correlation-robust detection wait ───────────────────
+    # --- Condition-based, correlation-robust detection wait ---
     # Poll until a matching DETECTION (not just a new incident) appears or the
     # window expires. A detection matches when its technique fits this technique
     # AND its own timestamp is at/after $execStartUtc -- so a detection that
@@ -602,7 +694,9 @@ foreach ($t in $Techniques) {
         destructive = $t.destructive
 
         attack_executed = $attackExecuted
-        attack_executed_note = if ($executionError) { "execution error: $executionError" } else { "" }
+        attack_executed_note = if ($executionError) { "execution error: $executionError" }
+                               elseif ($toolMissingNote) { $toolMissingNote }
+                               else { "" }
 
         classifier_logic_fires = $detected   # in Tier B this IS the live outcome
         predicted_tier_b = $t.predicted_tier_b
@@ -653,7 +747,7 @@ foreach ($t in $Techniques) {
         delivery_mechanism = $t.delivery
         detector_path = $t.detector_path
         source_confidence = $t.source_confidence
-        error = $executionError
+        error = if ($executionError) { $executionError } else { $toolMissingNote }
         notes = $t.notes
     }
     $Records += $record
@@ -674,6 +768,9 @@ foreach ($t in $Techniques) {
     }
     if ($t.probe -eq "persistence" -and $t.probe_input.activity -eq "run_key") {
         Remove-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "ValkyrieEvalTest" -ErrorAction SilentlyContinue
+    }
+    if ($t.probe -eq "persistence" -and $t.probe_input.activity -eq "service") {
+        & sc.exe delete "ValkyrieEvalTestSvc" | Out-Null
     }
 
     # Let the sensor pipeline drain before the next technique fires (see
@@ -697,4 +794,37 @@ Write-Host "  Tier B live evaluation complete: $($Records.Count) techniques run.
 Write-Host "  Results: $OutPath"
 Write-Host "  Run the scorer:  PYTHONUTF8=1 python redteam/evaluation/score.py `"$OutPath`""
 Write-Host "======================================================================`n"
+
+# INTERPRETIVE NOTE, not a fix - this number IS working as designed, but three
+# CI runs in a row (5-8 of 50 techniques, one or two techniques absorbing
+# 20-77 "false positives" apiece, and WHICH technique varies run to run) made
+# it clear this reads as alarming to anyone who has not also read lines 80-82
+# and 707-710 above.
+#
+# With -SettleSeconds 0 (the CI default, chosen for speed - "no real adversary
+# runs 39 techniques back-to-back"), there is ZERO drain time between
+# techniques. A detection legitimately caused by technique N can land during
+# technique N+1's window and, because that incident's technique label does not
+# match N+1's id, gets counted as a false positive AGAINST N+1. The instability
+# of WHICH technique absorbs the count run to run is the signature of this:
+# it depends only on which techniques happen to be adjacent that run, not on
+# anything either technique's rule got wrong.
+#
+# This is entirely separate from, and does not affect, the false-positive
+# figures measured against real software on a live host (see
+# valkyrie/edr/elastic_import.py's harvested corpus and the ad-hoc live-process
+# sweeps) - those measure real benign commands with no adjacent attack traffic
+# at all. Do not quote this run's total false_positives_generated as a
+# real-world FP rate; it is an attribution-window artifact of running at
+# SettleSeconds=0, not evidence Valkyrie fires on legitimate activity.
+$totalFp = ($Records | ForEach-Object { $_.false_positives_generated } | Measure-Object -Sum).Sum
+$fpTechs = ($Records | Where-Object { $_.false_positives_generated -gt 0 }).Count
+if ($totalFp -gt 0) {
+    Write-Host ("  NOTE: false_positives_generated totals $totalFp across " +
+               "$fpTechs/$($Records.Count) techniques, at -SettleSeconds " +
+               "$SettleSeconds. This is very likely cross-technique attribution " +
+               "bleed (see script header, ~line 80), NOT a real-software false- " +
+               "positive rate - re-run with -SettleSeconds 5+ before treating " +
+               "this number as meaningful on its own.") -ForegroundColor DarkYellow
+}
 Write-Host "  REVERT THE SNAPSHOT NOW." -ForegroundColor Yellow

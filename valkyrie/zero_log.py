@@ -1,4 +1,4 @@
-"""Zero log mode — RAM-only operation for privacy-critical sessions.
+"""Zero log mode - RAM-only operation for privacy-critical sessions.
 
 When active:
   - SQLite lives entirely in RAM (file::memory:?cache=shared)
@@ -51,13 +51,13 @@ class ZeroLogMode:
         """
         self._active        = False
         self._store         = store
-        self._hashes:  dict[str, str] = {}   # path → sha256 hex
+        self._hashes:  dict[str, str] = {}   # path -> sha256 hex
         self._tampered: list[str]      = []   # paths that changed
         self._check_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._alert_callbacks: list = []
         # Integrity-checker health. status() must be able to tell "checked, and
-        # nothing was tampered with" apart from "nothing has been checked" —
+        # nothing was tampered with" apart from "nothing has been checked" -
         # reporting the second as the first is exactly the false reassurance a
         # log-integrity feature exists to prevent.
         self._last_check: float = 0.0
@@ -71,7 +71,7 @@ class ZeroLogMode:
     def enable(self) -> None:
         """Activate zero-log mode.
 
-        Call this BEFORE creating the Store — it returns a RAM-backed Store
+        Call this BEFORE creating the Store - it returns a RAM-backed Store
         that should be used in place of the disk Store.
         """
         self._active = True
@@ -151,7 +151,7 @@ class ZeroLogMode:
 
         # "verified" is a CLAIM, and it may only be made when a check actually
         # ran. Previously this returned "verified" whenever _tampered was empty
-        # — which is also true when the checker thread never started, or died,
+        # - which is also true when the checker thread never started, or died,
         # or has not completed its first pass. Reporting "no tampering found"
         # when nothing looked is the worst answer this function can give.
         checker_alive = bool(self._check_thread and self._check_thread.is_alive())
@@ -210,7 +210,7 @@ class ZeroLogMode:
         # _check_integrity() hashes files on disk, and file I/O raises for
         # ordinary reasons (a file locked, rotated or deleted between ticks).
         # Unguarded, one such raise killed this thread permanently and integrity
-        # checking simply stopped — while status() went on reporting the LAST
+        # checking simply stopped - while status() went on reporting the LAST
         # verdict, so the UI would keep showing "verified" forever with nothing
         # actually verifying. That is the frozen-heartbeat failure again, in the
         # subsystem whose entire job is proving the logs were not tampered with.
@@ -251,7 +251,7 @@ class ZeroLogMode:
         instant their last connection closes, so calling this *after* the
         Store has already been stopped means the DELETE statements below
         silently no-op against a database that no longer exists (SQLite
-        raises "no such table", which the inner try/except swallows) — the
+        raises "no such table", which the inner try/except swallows) - the
         wipe never actually touches real session data. Callers (see
         ZeroLogMode.disable()) must call this before the owning Store's
         connections are torn down. See docs/TLS_ZEROLOG_AUDIT_REPORT.md.

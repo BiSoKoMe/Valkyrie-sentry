@@ -2,8 +2,8 @@
 """Vendor-neutral AI provider layer (valkyrie/edr/ai_provider.py).
 
 Proves the real HTTP request/response handling of each provider dialect
-deterministically — by stubbing httpx.post, so no network and no vendor SDK are
-involved — plus provider selection and JSON extraction. Exit 0/non-zero.
+deterministically - by stubbing httpx.post, so no network and no vendor SDK are
+involved - plus provider selection and JSON extraction. Exit 0/non-zero.
 """
 
 from __future__ import annotations

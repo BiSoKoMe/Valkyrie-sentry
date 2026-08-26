@@ -4,20 +4,20 @@ Two modes, tried in order:
 
 1. Adopt an already-running Unbound instance. If something is already
    listening on 127.0.0.1:53 (most commonly Unbound installed as a native
-   OS service — e.g. the Windows Unbound service), we use it directly as
+   OS service - e.g. the Windows Unbound service), we use it directly as
    the upstream resolver rather than spawning a second instance, which
    would simply fail to bind the already-owned port.
 2. Spawn our own subprocess on UNBOUND_PORT (5301) with a generated config,
-   as before — used when no system-level Unbound is present.
+   as before - used when no system-level Unbound is present.
 
 Either way, dns_interceptor.py forwards allowed queries to whichever
 address upstream_addr() returns instead of to an external resolver like
-8.8.8.8 — so the overall chain is:
+8.8.8.8 - so the overall chain is:
 
     OS DNS client -> Valkyrie (sinkhole/filter, port 5300/5353)
                    -> Unbound (real recursive resolution, port 53 or 5301)
 
-This means DNS resolution is fully local — root nameservers are
+This means DNS resolution is fully local - root nameservers are
 contacted directly, and no plaintext query leaves the machine to
 a third-party resolver.
 
@@ -101,7 +101,7 @@ server:
 _ROOT_HINTS_URL = "https://www.internic.net/domain/named.root"
 
 # DoT forward-zone (Quad9, no-log + DNSSEC-validating): used only when a real
-# certificate-validation source is confirmed present on this machine — see
+# certificate-validation source is confirmed present on this machine - see
 # _resolve_tls_cert_directive(). Otherwise plaintext keeps recursion working
 # instead of risking a silent SERVFAIL storm from an unverifiable TLS handshake.
 _DOT_FORWARD_ZONE = """\
@@ -119,7 +119,7 @@ forward-zone:
     forward-addr: 149.112.112.112@53
 """
 
-# Common system CA bundle locations, checked in order — first one that
+# Common system CA bundle locations, checked in order - first one that
 # actually exists on this machine is used for tls-cert-bundle.
 _LINUX_CA_BUNDLE_CANDIDATES = [
     "/etc/ssl/certs/ca-certificates.crt",  # Debian/Ubuntu
@@ -133,12 +133,12 @@ def _resolve_tls_cert_directive() -> Optional[str]:
     this machine, or None if no usable certificate source was found.
 
     Writing a tls-cert-bundle path that doesn't exist makes Unbound fail
-    every upstream TLS handshake (a silent SERVFAIL storm) — so this only
+    every upstream TLS handshake (a silent SERVFAIL storm) - so this only
     ever returns a directive whose precondition is verified right now,
     on this machine, not assumed.
     """
     if _SYSTEM == "Windows":
-        # Built into Windows (Vista+) — always available, no file to check.
+        # Built into Windows (Vista+) - always available, no file to check.
         return "    tls-win-cert: yes"
     for path in _LINUX_CA_BUNDLE_CANDIDATES:
         if Path(path).exists():
@@ -150,7 +150,7 @@ def _resolve_tls_cert_directive() -> Optional[str]:
 # Helpers
 # ---------------------------------------------------------------------------
 
-# Unbound's Windows installer does not add itself to PATH by default —
+# Unbound's Windows installer does not add itself to PATH by default -
 # shutil.which() alone misses a real, working install at this location
 # (confirmed: this is exactly why resolver.py's spawn mode was silently
 # unable to launch Unbound on this machine). Checked only as a fallback.
@@ -187,7 +187,7 @@ def _fetch_root_hints(dest: Path) -> None:
         with urllib.request.urlopen(_ROOT_HINTS_URL, timeout=10) as r:
             dest.write_bytes(r.read())
     except Exception:
-        # Non-fatal — Unbound has built-in hints as fallback
+        # Non-fatal - Unbound has built-in hints as fallback
         pass
 
 
@@ -222,7 +222,7 @@ class UnboundManager:
         if mgr.start():
             # dns_interceptor should now forward to 127.0.0.1:5301
             pass
-        # later …
+        # later ...
         mgr.stop()
     """
 
@@ -258,7 +258,7 @@ class UnboundManager:
 
         Checks for an already-running system-level Unbound on port 53 first
         (e.g. installed as a native Windows service) and adopts it directly
-        rather than spawning a second instance — which would simply fail to
+        rather than spawning a second instance - which would simply fail to
         bind a port the OS service already owns.
         """
         if self._detect_existing_unbound():
@@ -302,7 +302,7 @@ class UnboundManager:
         return False
 
     def stop(self) -> None:
-        # Never touch an adopted system-level service — Valkyrie didn't
+        # Never touch an adopted system-level service - Valkyrie didn't
         # start it and has no business stopping it on exit.
         if self._adopted_existing:
             self._adopted_existing = False
@@ -335,7 +335,7 @@ class UnboundManager:
     def _detect_existing_unbound(self) -> bool:
         """True if something is already answering DNS on 127.0.0.1:53.
 
-        Probing the port directly is the reliable, OS-agnostic signal — it's
+        Probing the port directly is the reliable, OS-agnostic signal - it's
         true regardless of whether Unbound got there via a Windows service,
         systemd, or a manually-started process. On Windows we also check the
         Service Control Manager by name purely for clearer logging; its
@@ -414,7 +414,7 @@ class UnboundManager:
                 stdout = subprocess.DEVNULL,
                 stderr = subprocess.PIPE,
             )
-            # Quick check — if it dies immediately it's a config error
+            # Quick check - if it dies immediately it's a config error
             time.sleep(0.3)
             if proc.poll() is not None:
                 stderr = proc.stderr.read().decode(errors="replace") if proc.stderr else ""
@@ -440,7 +440,7 @@ class UnboundManager:
         import socket
         import struct
 
-        # Minimal A-record query for "." (root) — always valid
+        # Minimal A-record query for "." (root) - always valid
         txid     = 0xABCD
         query    = struct.pack("!HHHHHH", txid, 0x0100, 1, 0, 0, 0)
         query   += b"\x00\x00\x01\x00\x01"  # root ".", QTYPE A, QCLASS IN

@@ -1,4 +1,4 @@
-"""Tier 1.9 — every state-changing route is auth-gated, enumerated not listed.
+"""Tier 1.9 - every state-changing route is auth-gated, enumerated not listed.
 
 `test_web_auth.py` checks a hand-picked set of endpoints. That protects the
 endpoints someone remembered to add to it, which is the wrong shape of test for
@@ -39,13 +39,13 @@ _MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 
 # Routes legitimately reachable off-loopback without a token. Kept explicit and
 # tiny: anything added here is a deliberate, reviewable decision to expose a
-# route, not an oversight. The HTML shell carries no data — every API call it
+# route, not an oversight. The HTML shell carries no data - every API call it
 # makes is itself gated.
 _PUBLIC_PREFIXES = ("/static", "/docs", "/redoc", "/openapi.json")
 
 # HOST-AFFECTING. This file's whole point is to let requests reach real
 # handlers with a *valid* token (step [3] below) so the "gate opens" check is
-# not vacuous — and separately, a bug that removes a route's auth gate would
+# not vacuous - and separately, a bug that removes a route's auth gate would
 # make the *no-token* sweep reach the real handler too. Several handlers are
 # not simulations: mac.randomize()/restore() write the Windows NetworkAddress
 # registry value and cycle a real adapter with `netsh ... admin=disabled` (the
@@ -53,7 +53,7 @@ _PUBLIC_PREFIXES = ("/static", "/docs", "/redoc", "/openapi.json")
 # mode's activate() flips the Windows Firewall to block-all, and system
 # restart/shutdown spawn a detached PowerShell script. None of that may ever
 # fire just because this file ran. Patched to safe no-ops for the whole test,
-# regardless of which routes land in the enumerated set or the sample below —
+# regardless of which routes land in the enumerated set or the sample below -
 # this is the actual safety mechanism, not the sample filtering underneath it.
 _DANGER_PATCHES = (
     ("valkyrie.mac_randomizer.MacRandomizer.randomize",
@@ -96,7 +96,7 @@ def _concrete(path: str) -> str:
     """Fill path params with a dummy so the route is actually reachable.
 
     An unmatched `{id}` would 404 before the auth guard ever runs, which would
-    make an ungated route look protected — the exact false pass this file must
+    make an ungated route look protected - the exact false pass this file must
     not produce.
     """
     out = []
@@ -185,7 +185,7 @@ def main() -> int:
             f"({len(routes) - len(not_found)}/{len(routes)} reachable)",
             len(not_found) < len(routes))
 
-    # A wrong token must be as good as no token — a comparison that accepts any
+    # A wrong token must be as good as no token - a comparison that accepts any
     # non-empty string would pass every check above.
     print("[2] a wrong token is rejected exactly like no token")
     bad = {"X-Valkyrie-Token": "not-the-token"}
@@ -219,7 +219,7 @@ def main() -> int:
     c.check(f"the correct token is accepted somewhere ({opened}/{len(sample)} "
             "sampled routes opened)", opened > 0)
 
-    # Loopback keeps working without a token — the local UX contract.
+    # Loopback keeps working without a token - the local UX contract.
     print("\n[4] loopback retains tokenless read access")
     c.check("loopback GET /api/stats works without a token",
             local.get("/api/stats").status_code == 200)

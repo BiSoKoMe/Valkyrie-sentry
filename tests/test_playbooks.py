@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SOAR playbooks — offline evaluation, safety, and audit tests.
+"""SOAR playbooks - offline evaluation, safety, and audit tests.
 
   [1] YAML parsing: valid playbooks load; malformed ones become load
       errors without killing the engine
@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # How long to wait for an async playbook response to land on an incident.
 # The work itself completes in ~0.00s; this is purely slack for a loaded CI box.
 # It was 3s, and this file has been observed failing 8 runs in a row and then
-# passing 18 in a row on the same commit — a nondeterministic result is as
+# passing 18 in a row on the same commit - a nondeterministic result is as
 # useless as a vacuous one, so the slack is generous on purpose. If a response
 # genuinely never arrives, 10s fails just as surely as 3s did.
 _WAIT = 10.0
@@ -141,7 +141,7 @@ def main() -> int:
             title="beacon again", entity="evil.example", process_name="mal.exe"))
         # Same (playbook, block_domain:evil.example) inside cooldown: suppressed.
         # New incident correlates into the SAME incident (same entity/category),
-        # which still notifies — give the bus a moment.
+        # which still notifies - give the bus a moment.
         time.sleep(0.3)
         st5 = pbe.status()
         _check("cooldown suppressed the re-fire",
@@ -161,7 +161,7 @@ def main() -> int:
         pk = engine.report_detection(Detection(
             source="etw", severity="critical", category="process",
             title="injection", entity="C:/x.exe", process_name="mal.exe",
-            process_pid=2147480000))                   # unused high PID → no such process
+            process_pid=2147480000))                   # unused high PID -> no such process
         deadline = time.monotonic() + _WAIT
         pinc = engine.get_incident(pk)
         while time.monotonic() < deadline and not (pinc and pinc.get("responses")):
@@ -171,7 +171,7 @@ def main() -> int:
         if presp:
             # The point: the target parsed as a PID. Whatever the outcome
             # (dry_run "would terminate", or "no such process"), it must NOT be
-            # the old "invalid pid: 'mal.exe'" — that was the name-not-PID bug.
+            # the old "invalid pid: 'mal.exe'" - that was the name-not-PID bug.
             _check("target resolved as a PID, not the process name",
                    "invalid pid" not in presp[0].get("result", ""))
 
@@ -194,7 +194,7 @@ def main() -> int:
 
 def _default_playbooks_checks() -> None:
     """The shipped default (valkyrie/defaults/playbooks.default.yaml) must ship
-    enabled, safe, and parseable — it's what makes auto-response ON out of the
+    enabled, safe, and parseable - it's what makes auto-response ON out of the
     box instead of the old zero-playbook observe-only posture."""
     import yaml
     from valkyrie.config import DEFAULT_PLAYBOOKS_PATH
@@ -206,8 +206,8 @@ def _default_playbooks_checks() -> None:
     by_id = {b.id: b for b in books}
 
     _check("default set parses without error", len(books) >= 3)
-    # Domain blocks are reversible → ship enforce; process kill is destructive
-    # → the BROAD stream must ship dry_run, while narrowly-scoped, high-confidence
+    # Domain blocks are reversible -> ship enforce; process kill is destructive
+    # -> the BROAD stream must ship dry_run, while narrowly-scoped, high-confidence
     # kills (critical-only, named sequences) MAY ship enforce.
     domain_blockers = [b for b in books
                        if any(a.action == "block_domain" for a in b.actions)]
@@ -220,7 +220,7 @@ def _default_playbooks_checks() -> None:
            "tunnel" in by_id.get("block-dns-tunnel").categories
            if "block-dns-tunnel" in by_id else False)
 
-    # Persistence removal is low-risk (removes the NEW artefact) → ships enforce.
+    # Persistence removal is low-risk (removes the NEW artefact) -> ships enforce.
     _check("remove-persistence ships in ENFORCE",
            by_id.get("remove-persistence").mode == "enforce"
            if "remove-persistence" in by_id else False)
@@ -229,7 +229,7 @@ def _default_playbooks_checks() -> None:
     # scoped so the everyday LOLBin stream can never trip it. Concretely, an
     # enforce kill either fires only at CRITICAL severity (reserved for
     # malicious-by-construction tradecraft), or is limited to the high-confidence
-    # named-sequence/chain categories — never the bare 'process' stream at
+    # named-sequence/chain categories - never the bare 'process' stream at
     # medium/high.
     killers = [b for b in books
                if any(a.action == "kill_process" for a in b.actions)]

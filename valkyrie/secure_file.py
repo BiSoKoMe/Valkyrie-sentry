@@ -5,13 +5,13 @@ WHY THIS EXISTS
 Valkyrie's TLS inspection needs a certificate authority, and it stores that
 CA's **private key** on disk (`valkyrie-ca.key`, plus mitmproxy's own
 `mitmproxy-ca.pem` in its config dir). Those files live under the engine's
-data directory, which on Windows is `%ProgramData%\Valkyrie` — and
+data directory, which on Windows is `%ProgramData%\Valkyrie` - and
 `%ProgramData%` subdirectories inherit a default ACL that grants
 `BUILTIN\\Users` read access.
 
 That is not a small permissions nit. Whoever holds that private key can mint
 a valid-looking certificate for *any* domain and impersonate it to this
-machine — bank, email, anything — and the browser shows a normal padlock,
+machine - bank, email, anything - and the browser shows a normal padlock,
 because the machine has been told to trust that CA. So a world-readable CA
 key turns "any local account, or any process running as one" into "total
 TLS interception of this machine". It converts the security product into the
@@ -19,8 +19,8 @@ attack.
 
 WHAT "PROPERLY" MEANS HERE
 --------------------------
-* **Set by SID, not by name.** `BUILTIN\\Administrators` is localised —
-  `Administradores`, `Administrateurs`, … — so a name-based ACL silently
+* **Set by SID, not by name.** `BUILTIN\\Administrators` is localised -
+  `Administradores`, `Administrateurs`, ... - so a name-based ACL silently
   fails to apply on a non-English Windows and leaves the key exposed while
   appearing to succeed. Well-known SIDs are identical on every install.
 * **Break inheritance.** The dangerous grant is *inherited* from
@@ -33,7 +33,7 @@ WHAT "PROPERLY" MEANS HERE
   in place. `verify()` re-reads the ACL and enumerates the SIDs that
   actually have access, so the result is measured rather than hoped for.
 * **Fail loud.** A caller that cannot harden a secret should refuse to
-  proceed, not continue quietly — the whole failure mode this module exists
+  proceed, not continue quietly - the whole failure mode this module exists
   to prevent is a secret being exposed while everything looks fine.
 """
 
@@ -60,7 +60,7 @@ SID_CREATOR_OWNER = "S-1-3-0"
 # Windows service it is SYSTEM, but in a dev or portable run it is an ordinary
 # user account, and stripping that account's access would lock the engine out
 # of its own key. The threat being closed is *other* local accounts reading the
-# key — principally the inherited `BUILTIN\Users` grant on %ProgramData% — not
+# key - principally the inherited `BUILTIN\Users` grant on %ProgramData% - not
 # the engine's own identity.
 _BASE_ALLOWED_SIDS = frozenset({SID_ADMINISTRATORS, SID_SYSTEM, SID_CREATOR_OWNER})
 
@@ -131,7 +131,7 @@ def harden(path: Path, *, is_dir: bool = False) -> tuple[bool, str]:
             return False, f"chmod failed: {exc}"
         return verify(p)
 
-    # (OI)(CI) so newly created children inherit the restriction — this is what
+    # (OI)(CI) so newly created children inherit the restriction - this is what
     # protects a key that mitmproxy has not written yet.
     inherit = "(OI)(CI)" if (is_dir or p.is_dir()) else ""
     grants = [
@@ -148,7 +148,7 @@ def harden(path: Path, *, is_dir: bool = False) -> tuple[bool, str]:
         return False, f"icacls failed ({code}): {out.strip()[:300]}"
 
     # `/inheritance:r` drops INHERITED aces and `/grant:r` replaces the grants
-    # for the SIDs named above — but any OTHER *explicit* ACE survives both.
+    # for the SIDs named above - but any OTHER *explicit* ACE survives both.
     # That is not hypothetical: the first test of this module found exactly such
     # a surviving explicit ACE, and the initial implementation reported success
     # while the file was still exposed. So enumerate what actually remains and
@@ -191,14 +191,14 @@ def _verdict_from_sids(sids: set[str], err: str) -> tuple[bool, str]:
 
     Single source of truth so the per-file ``verify()`` and the batched
     ``audit_secrets()`` cannot drift apart. A read error or an empty ACL is
-    treated as NOT protected — the conservative direction for a secret we
+    treated as NOT protected - the conservative direction for a secret we
     cannot confirm is locked down.
     """
     if err:
         return False, err
     if not sids:
         return False, "could not read ACL"
-    # A forbidden principal is fatal regardless of anything else — these are the
+    # A forbidden principal is fatal regardless of anything else - these are the
     # ones that make a secret readable by every account on the machine.
     forbidden = sids & _FORBIDDEN_SIDS
     if forbidden:
@@ -234,16 +234,16 @@ def describe(path: Path) -> str:
 # ---------------------------------------------------------------------------
 # The secret registry.
 #
-# Four separate secrets were found unprotected on Windows in a single audit —
+# Four separate secrets were found unprotected on Windows in a single audit -
 # the TLS CA private key, the MAC install key, the API control token, and the
-# fleet enrolment token — each for the same reason: DATA_DIR inherits a
+# fleet enrolment token - each for the same reason: DATA_DIR inherits a
 # BUILTIN\Users:read ACE from %ProgramData%, so anything written there is
 # world-readable unless something actively prevents it. Two of them even
 # carried code that protected them on POSIX and explicitly skipped Windows.
 #
 # Fixing each write site is necessary but not sufficient: the next secret
 # added will have the same default. This registry plus harden_known_secrets()
-# is the systemic backstop — every launch re-asserts the invariant, so a
+# is the systemic backstop - every launch re-asserts the invariant, so a
 # missed write site is corrected rather than shipped.
 # ---------------------------------------------------------------------------
 
@@ -262,8 +262,8 @@ def known_secrets() -> list[tuple[str, Path]]:
         # longer creates these. An upgrader who ran an older build still has a
         # real fleet_agent.json (device token) and wg0.conf (WireGuard
         # PrivateKey) sitting in DATA_DIR. Dropping them from the sweep would
-        # stop protecting secrets that already exist on disk — a genuine
-        # exposure — whereas hardening a path that is absent is a harmless
+        # stop protecting secrets that already exist on disk - a genuine
+        # exposure - whereas hardening a path that is absent is a harmless
         # no-op (audit_secrets tolerates missing files by design, pinned by
         # test_secret_hygiene). Removing these was tried and correctly
         # rejected by that test.
@@ -324,7 +324,7 @@ def _access_sids_batch(paths: list[Path]) -> dict[str, tuple[set[str], str]]:
             continue
         result[cur] = (sids | {ln}, "")
     # A path the batch never echoed back (truncated/failed output) must not read
-    # as protected — keep the conservative "unread" verdict for it.
+    # as protected - keep the conservative "unread" verdict for it.
     for p in paths:
         result.setdefault(str(p), (set(), "ACL not returned by batch read"))
     return result
@@ -335,7 +335,7 @@ def audit_secrets() -> list[tuple[str, Path, bool, str]]:
 
     On Windows the ACL reads are batched into a single PowerShell call (see
     `_access_sids_batch`) so the whole audit is one subprocess rather than one
-    per file — the coverage layer runs this off the hot path, but it should not
+    per file - the coverage layer runs this off the hot path, but it should not
     cost seconds. The verdict per file is identical to `verify()`.
     """
     existing: list[tuple[str, Path]] = []

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""DECEIVE mechanism — tracker/telemetry gets a decoy dead-end (Standard profile)
+"""DECEIVE mechanism - tracker/telemetry gets a decoy dead-end (Standard profile)
 instead of a hard block, so the app keeps working while its telemetry goes
-nowhere. Stricter profiles hard-block. Malware is NEVER deceived — only blocked.
+nowhere. Stricter profiles hard-block. Malware is NEVER deceived - only blocked.
 
 Pins the profile-aware deceive-vs-block decision at the DNS layer.
 """

@@ -1,4 +1,4 @@
-"""Fingerprint farbling — per-origin, per-session randomisation of the
+"""Fingerprint farbling - per-origin, per-session randomisation of the
 browser surfaces that identify a machine.
 
 WHY THIS EXISTS (the bug it replaces)
@@ -17,7 +17,7 @@ what turns it into a liability:
 
   * A *constant* lie is itself a fingerprint. No real browser on earth
     returns ``data:image/png,v`` for a canvas readback, so that value does
-    not hide a user — it uniquely marks them as a Valkyrie user, and it is
+    not hide a user - it uniquely marks them as a Valkyrie user, and it is
     identical across every site and every session, which is the precise
     definition of a durable tracking ID.
   * An empty ``navigator.plugins`` is rare in the wild, so it *raises*
@@ -28,15 +28,15 @@ what turns it into a liability:
 The fix is the approach Brave calls *farbling*: derive every spoofed value
 from a seed that is unique per (browsing session x site), so that
 
-  * the SAME site within one session sees STABLE values — the page works,
+  * the SAME site within one session sees STABLE values - the page works,
     and re-reading a canvas twice does not return two different answers,
     which would itself be a tamper signal;
-  * DIFFERENT sites in the same session see DIFFERENT values — so two
+  * DIFFERENT sites in the same session see DIFFERENT values - so two
     trackers cannot correlate the same user across sites, which is the
     entire point;
-  * the SAME site in a LATER session sees DIFFERENT values — so nobody
+  * the SAME site in a LATER session sees DIFFERENT values - so nobody
     builds a durable long-term identifier;
-  * every value stays PLAUSIBLE — drawn from the distribution real
+  * every value stays PLAUSIBLE - drawn from the distribution real
     hardware actually reports, so the user blends into the crowd instead
     of standing out as "the one lying".
 
@@ -52,7 +52,7 @@ means HTML served through the TLS-inspection path. It cannot touch:
   * traffic that is not intercepted (TLS inspection off, or a
     certificate-pinned app that refuses the proxy),
   * fingerprinting done server-side (IP, TLS/JA3 handshake shape, HTTP
-    header order) — see fingerprint.py for the network-layer half,
+    header order) - see fingerprint.py for the network-layer half,
   * native (non-browser) applications, which do not run injected JS at all.
 It raises the cost of browser fingerprinting substantially. It does not
 make a machine unidentifiable, and nothing here should be described as if
@@ -80,7 +80,7 @@ def new_session() -> None:
 
 
 def origin_of(url: str) -> str:
-    """scheme://host — the correlation boundary we farble against.
+    """scheme://host - the correlation boundary we farble against.
 
     Deliberately excludes the path: a tracker embedded on many pages of one
     site must see one consistent identity there (otherwise the site breaks
@@ -101,7 +101,7 @@ def origin_seed(origin: str) -> int:
     """Deterministic 32-bit seed for (this session, this origin).
 
     HMAC (not a plain hash) so the session secret cannot be recovered from
-    an observed seed — a page can read the number we inject, and must not
+    an observed seed - a page can read the number we inject, and must not
     be able to work backwards from it to predict what any *other* origin
     will receive.
     """
@@ -114,7 +114,7 @@ def origin_seed(origin: str) -> int:
 # The injected script.
 #
 # Structure notes:
-#   * Everything is wrapped in try/catch and a single IIFE — a failure here
+#   * Everything is wrapped in try/catch and a single IIFE - a failure here
 #     must degrade to "no protection", never to "the page is broken".
 #   * Each surface gets its OWN sub-stream from the seed, so a page that
 #     hammers one surface cannot shift the values another surface reports.
@@ -439,7 +439,7 @@ try{
 def script_for(url_or_origin: str) -> bytes:
     """The farbling <script> tag to inject into a page from *url_or_origin*.
 
-    Accepts a full URL or a bare origin — ``origin_of`` normalises both to
+    Accepts a full URL or a bare origin - ``origin_of`` normalises both to
     scheme://host, so a page and every sub-path of it share one identity.
     """
     return _SCRIPT_TEMPLATE.replace(

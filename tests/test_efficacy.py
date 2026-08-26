@@ -2,7 +2,7 @@
 """Efficacy-harness tests (valkyrie/efficacy.py).
 
 Pins the measurement layer: detection/response/FP scoring and the sensor-health
-preflight shape. This is the "proof" the validation-pipeline plan asks for — the
+preflight shape. This is the "proof" the validation-pipeline plan asks for - the
 scorer itself must be correct, or the numbers it produces mean nothing.
 """
 

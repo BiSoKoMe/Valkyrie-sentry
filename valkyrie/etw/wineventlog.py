@@ -1,7 +1,7 @@
 """Windows Event Log reader over the native wevtapi (ctypes).
 
 The modern Windows Event Log channels (PowerShell/Operational, WMI-Activity,
-Sysmon, …) are **ETW-backed**: providers write ETW events that the Event Log
+Sysmon, ...) are **ETW-backed**: providers write ETW events that the Event Log
 service persists to a channel. Reading a channel with `EvtQuery`/`EvtNext`/
 `EvtRender` therefore gives real, ETW-sourced telemetry with:
 
@@ -10,7 +10,7 @@ service persists to a channel. Reading a channel with `EvtQuery`/`EvtNext`/
   * **incremental, near-real-time** delivery (poll by EventRecordID bookmark).
 
 This is the strongest practical alternative to a raw NT-Kernel-Logger ETW session
-(which would need a native trace consumer or a driver — see ADR 0003). The pure
+(which would need a native trace consumer or a driver - see ADR 0003). The pure
 ``parse_event_xml`` helper is separated from the ctypes reader so parsing is unit-
 testable without Windows.
 """
@@ -24,7 +24,7 @@ from typing import Optional
 
 log = logging.getLogger("valkyrie.sensors.evtlog")
 
-# ── pure XML parsing (testable anywhere) ────────────────────────────────────
+# --- pure XML parsing (testable anywhere) ---
 # Remove xmlns declarations so ElementTree yields un-namespaced tags we can
 # find() by plain name (Windows event XML uses a single default namespace).
 _XMLNS = re.compile(r"\sxmlns(:\w+)?=(['\"])[^'\"]*\2")
@@ -43,7 +43,7 @@ def _int_or(text, default: int = 0) -> int:
     are attacker-influenced: a process can write a malformed record, and a
     provider can emit a non-numeric EventID. `int()` on that text raises
     ValueError, which escaped the `except ET.ParseError` below and crashed the
-    caller — the exact shape of the CrowdStrike channel-file failure, where a
+    caller - the exact shape of the CrowdStrike channel-file failure, where a
     trusted-path parser assumed its input's shape. Found by fuzzing
     (tests/test_fuzz_parsers.py); the docstring already promised it could not
     happen.
@@ -57,7 +57,7 @@ def _int_or(text, default: int = 0) -> int:
 def parse_event_xml(xml: str) -> dict:
     """Parse a rendered Windows event XML into a flat dict:
     {event_id, record_id, time, computer, process_id, thread_id, user_sid,
-     provider, data:{Name->value}}. Never raises — returns {} on bad input."""
+     provider, data:{Name->value}}. Never raises - returns {} on bad input."""
     try:
         root = ET.fromstring(_XMLNS.sub("", xml or ""))
     except ET.ParseError:
@@ -97,7 +97,7 @@ def parse_event_xml(xml: str) -> dict:
                 unnamed.append(d.text or "")
         if unnamed:
             out["data"]["_unnamed"] = unnamed
-    # UserData: <UserData><Operation_X><Field>val</Field>…</Operation_X></UserData>
+    # UserData: <UserData><Operation_X><Field>val</Field>...</Operation_X></UserData>
     # Used by WMI-Activity (5861), Task Scheduler, and many providers. Flatten
     # the operation's children into the same data map by tag name.
     ud = root.find("UserData")
@@ -110,7 +110,7 @@ def parse_event_xml(xml: str) -> dict:
     return out
 
 
-# ── ctypes channel reader (Windows only) ────────────────────────────────────
+# --- ctypes channel reader (Windows only) ---
 _EvtQueryChannelPath        = 0x1
 _EvtQueryForwardDirection   = 0x100
 _EvtQueryReverseDirection   = 0x200
@@ -134,7 +134,7 @@ try:
                                    ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.DWORD)]
     _wevtapi.EvtClose.restype = wintypes.BOOL
     _wevtapi.EvtClose.argtypes = [wintypes.HANDLE]
-    # Canonical "does this channel exist?" check — returns NULL for an unknown
+    # Canonical "does this channel exist?" check - returns NULL for an unknown
     # channel (e.g. Sysmon not installed), unlike EvtQuery which tolerates it.
     _wevtapi.EvtOpenChannelConfig.restype = wintypes.HANDLE
     _wevtapi.EvtOpenChannelConfig.argtypes = [wintypes.HANDLE, wintypes.LPCWSTR, wintypes.DWORD]
@@ -173,7 +173,7 @@ class ChannelReader:
 
     def available(self) -> bool:
         # The channel must actually exist. EvtOpenChannelConfig returns NULL for
-        # an unknown channel (Sysmon not installed) — unlike EvtQuery, which with
+        # an unknown channel (Sysmon not installed) - unlike EvtQuery, which with
         # TolerateQueryErrors hands back a usable handle even for a missing path.
         if not _WEVT_OK:
             return False

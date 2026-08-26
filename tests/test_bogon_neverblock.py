@@ -59,10 +59,10 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         cache = Path(td) / "blocked_ips.txt"
         cache.write_text(
-            "185.220.101.0/24\n"    # a real bad range — must survive
-            "198.51.100.0/24\n"     # TEST-NET-2 bogon — must be dropped
-            "203.0.113.0/24\n"      # TEST-NET-3 bogon — must be dropped
-            "100.64.0.0/10\n",      # CGNAT — must be dropped
+            "185.220.101.0/24\n"    # a real bad range - must survive
+            "198.51.100.0/24\n"     # TEST-NET-2 bogon - must be dropped
+            "203.0.113.0/24\n"      # TEST-NET-3 bogon - must be dropped
+            "100.64.0.0/10\n",      # CGNAT - must be dropped
             encoding="utf-8",
         )
         orig = fwmod.FIREWALL_IP_PATH
