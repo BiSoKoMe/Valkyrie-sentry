@@ -456,6 +456,26 @@ jobs:
             }
           } catch { Write-Host ("EID10 query error: " + $_.Exception.Message) }
 
+          # DIAGNOSTIC: T1055 (process injection) still missed live after the
+          # 2026-08-26 provisioning fix that turned Sysmon EID8 on. This
+          # isolates the question the catalog's own notes could not answer
+          # (they predate this run): did Sysmon actually EMIT an EID8 event
+          # for the real atomic, or is the signal lost somewhere downstream
+          # (SensorManager delivery / classify_sysmon)? If EID8 count is 0,
+          # the gap is still sensor-side (config not taking effect, or the
+          # specific atomic's injection shape not covered). If count > 0,
+          # the gap moved downstream of Sysmon and needs its own trace.
+          Write-Host "==================== SYSMON EID8 (CreateRemoteThread) RAW COUNT ===================="
+          try {
+            $ev8 = Get-WinEvent -FilterHashtable @{ LogName='Microsoft-Windows-Sysmon/Operational'; Id=8 } -ErrorAction Stop
+            Write-Host ("EID8 events found: " + (@($ev8).Count))
+            $ev8 | Select-Object -First 5 | ForEach-Object {
+              $src = if ($_.Message -match 'SourceImage:\s*(\S+)') { $Matches[1] } else { '?' }
+              $tgt = if ($_.Message -match 'TargetImage:\s*(\S+)') { $Matches[1] } else { '?' }
+              Write-Host ("  EID8 SourceImage=$src TargetImage=$tgt")
+            }
+          } catch { Write-Host ("EID8 query error: " + $_.Exception.Message) }
+
       - name: Print results to the run log (artifact-independent)
         if: always()
         shell: pwsh

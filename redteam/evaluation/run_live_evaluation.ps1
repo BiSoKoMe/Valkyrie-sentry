@@ -380,6 +380,12 @@ foreach ($t in $Techniques) {
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $attackExecuted = $false
     $executionError = ""
+    # Separate from $executionError on purpose: that variable also drives the
+    # outcome bucketing (line ~686, "-not $attackExecuted -and $executionError"
+    # -> blocked_before_execution). A missing binary was never attempted, let
+    # alone actively blocked by a security control - conflating the two would
+    # misreport an environment limitation as "Defender/AV stopped this attack".
+    $toolMissingNote = ""
 
     try {
         if ($VettedAtomics.ContainsKey($t.id) -and $HaveAtomics) {
@@ -526,9 +532,34 @@ foreach ($t in $Techniques) {
                     $cmd = $t.probe_input.cmdline
                     if ($t.probe -eq "powershell") { $cmd = "powershell.exe -Command `"$($t.probe_input.script_block)`"" }
                     if ($cmd) {
-                        Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $cmd `
-                            -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
-                        $attackExecuted = $true
+                        # Found via the Detection Coverage milestone: this always
+                        # ran the command through "cmd.exe /c <cmd>" and set
+                        # attackExecuted = $true unconditionally right after -
+                        # Start-Process only errors if cmd.exe itself can't be
+                        # found, which it always can. If the REAL target binary
+                        # (wmic.exe, msbuild.exe, ntdsutil.exe, rar.exe - all
+                        # absent by default on a modern Windows/CI host) doesn't
+                        # exist, cmd.exe starts, prints its own "not recognized"
+                        # error to a window nobody reads, and exits - and the
+                        # harness recorded a false attack_executed=true for four
+                        # real catalog techniques, confirmed by cross-checking
+                        # both live runs' own JSON records. Check the actual
+                        # target binary FIRST; only skip when we are sure it is
+                        # actually missing, never for the merely-unusual.
+                        $img = $t.probe_input.image
+                        $imgMissing = $false
+                        if ($img) {
+                            $imgMissing = -not [bool](Get-Command $img -ErrorAction SilentlyContinue)
+                        }
+                        if ($imgMissing) {
+                            $toolMissingNote = "target binary not found on this host: $img"
+                            $attackExecuted = $false
+                            Warn "   SKIPPED: $toolMissingNote"
+                        } else {
+                            Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $cmd `
+                                -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
+                            $attackExecuted = $true
+                        }
                     } else {
                         Warn "   (no literal command for probe '$($t.probe)' -- see catalog.py)"
                     }
@@ -643,7 +674,9 @@ foreach ($t in $Techniques) {
         destructive = $t.destructive
 
         attack_executed = $attackExecuted
-        attack_executed_note = if ($executionError) { "execution error: $executionError" } else { "" }
+        attack_executed_note = if ($executionError) { "execution error: $executionError" }
+                               elseif ($toolMissingNote) { $toolMissingNote }
+                               else { "" }
 
         classifier_logic_fires = $detected   # in Tier B this IS the live outcome
         predicted_tier_b = $t.predicted_tier_b
@@ -694,7 +727,7 @@ foreach ($t in $Techniques) {
         delivery_mechanism = $t.delivery
         detector_path = $t.detector_path
         source_confidence = $t.source_confidence
-        error = $executionError
+        error = if ($executionError) { $executionError } else { $toolMissingNote }
         notes = $t.notes
     }
     $Records += $record
