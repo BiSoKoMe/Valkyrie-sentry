@@ -2,6 +2,16 @@
 
 **A privacy gateway for your Windows PC.**
 
+> **Proof, not a pitch.** Detection claims here are backed by a real
+> evaluation: live Atomic Red Team attack techniques executed against a
+> running instance on a disposable VM and scored against its own incident
+> log — not a synthetic test, not a rules-count. Current proven floor:
+> **38 of 52 in-scope techniques detected (73.1%)**, with every miss
+> explained and one live-found, live-fixed false-positive bug documented
+> with before/after numbers. Read the methodology and full results in
+> [`docs/LIVE_FIRE_EVALUATION.md`](docs/LIVE_FIRE_EVALUATION.md), or the
+> formal write-up in [`docs/RESEARCH_PAPER.md`](docs/RESEARCH_PAPER.md).
+
 ---
 
 ## 1. What is Valkyrie
