@@ -477,6 +477,7 @@ foreach ($t in $Techniques) {
                     # exercises the SAME artifact-at-rest scanner Tier A
                     # replayed against, for real.
                     $cmd = $t.probe_input.command
+                    $persistenceHandled = $true
                     switch ($t.probe_input.activity) {
                         "run_key" {
                             New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" `
@@ -485,9 +486,28 @@ foreach ($t in $Techniques) {
                         "startup_folder" {
                             Set-Content -Path $cmd -Value "REM eval artifact" -ErrorAction SilentlyContinue
                         }
-                        default { Warn "   (activity '$($t.probe_input.activity)' needs manual setup -- see catalog.py probe_input)" }
+                        "service" {
+                            # Found via the Detection Coverage milestone: this
+                            # case did not exist at all before - it fell through
+                            # to the warn-and-do-nothing default below, yet
+                            # $attackExecuted was still set $true unconditionally,
+                            # so persist-new-service scored "executed_missed"
+                            # every run with NO real service ever created for
+                            # Valkyrie to observe. A real Windows service (sc.exe
+                            # writes the standard
+                            # HKLM\SYSTEM\CurrentControlSet\Services\<name> key
+                            # persistence_telemetry.py's ASEP scanner reads) with
+                            # the catalog's own suspicious-path binary, deleted
+                            # again once the poller has had its 15s+ window.
+                            $svcName = "ValkyrieEvalTestSvc"
+                            & sc.exe create $svcName binPath= "$cmd" start= demand | Out-Null
+                        }
+                        default {
+                            $persistenceHandled = $false
+                            Warn "   (activity '$($t.probe_input.activity)' needs manual setup -- see catalog.py probe_input)"
+                        }
                     }
-                    $attackExecuted = $true
+                    $attackExecuted = $persistenceHandled
                 }
                 "recon_burst" {
                     # The reconnaissance-burst sequence IOA fires on >=3 DISTINCT
@@ -748,6 +768,9 @@ foreach ($t in $Techniques) {
     }
     if ($t.probe -eq "persistence" -and $t.probe_input.activity -eq "run_key") {
         Remove-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "ValkyrieEvalTest" -ErrorAction SilentlyContinue
+    }
+    if ($t.probe -eq "persistence" -and $t.probe_input.activity -eq "service") {
+        & sc.exe delete "ValkyrieEvalTestSvc" | Out-Null
     }
 
     # Let the sensor pipeline drain before the next technique fires (see
