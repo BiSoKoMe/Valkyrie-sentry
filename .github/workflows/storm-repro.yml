@@ -13,6 +13,17 @@ name: Incident Storm Investigation (isolated repro)
 
 on:
   workflow_dispatch:
+  # workflow_dispatch requires the file to exist on the default branch before
+  # the API/CLI can see it at all - not the case yet for a brand-new workflow
+  # on a feature branch. This push trigger fires directly from THIS branch's
+  # own copy of the file (GitHub evaluates push-triggered workflows from the
+  # pushed commit, unlike workflow_dispatch), same pattern redteam-tierb.yml
+  # already uses for its own feature-branch push trigger.
+  push:
+    branches: [feat/efficacy-etw-coverage]
+    paths:
+      - ".github/workflows/storm-repro.yml"
+      - "redteam/evaluation/storm_repro.py"
 
 jobs:
   storm-repro:
