@@ -86,21 +86,38 @@ if (-not $SkipSysmon) {
         # (etw/sysmon.py) is confirmed correct as written - process injection
         # (T1055) missed live in real Tier B runs purely because Sysmon never
         # emitted the event at all, a sensor/provisioning gap, not a rule gap.
-        # An empty (no TargetImage/SourceImage children) onmatch="include"
-        # CreateRemoteThread block turns EID8 ON unconditionally, matching how
-        # EID1/EID3/EID7 already log broadly with no narrowing filter here -
-        # unlike EID10, injection can legitimately target any process, so
-        # narrowing by target would defeat the point of testing the detector.
+        #
+        # FIRST ATTEMPT AT THIS FIX WAS WRONG, LEFT HERE AS A RECORD: an empty
+        # <CreateRemoteThread onmatch="include"> (no TargetImage/SourceImage
+        # children) does NOT mean "include everything" - Sysmon's onmatch
+        # semantics are the opposite of that intuition. An "include" rule with
+        # zero conditions vacuously matches NOTHING, so that patch silently
+        # captured zero EID8 events - confirmed live: a real Get-WinEvent query
+        # for EID 8 during the T1055 atomic found none, even though the patch
+        # applied without error and the atomic genuinely performed
+        # OpenProcess->VirtualAllocEx->WriteProcessMemory->CreateRemoteThread.
+        # The correct idiom for "log every event of this type" is the reverse -
+        # an EMPTY onmatch="exclude" block, which means "exclude nothing".
+        # Modifies an existing CreateRemoteThread element if the stock config
+        # already has one (rather than adding a second, competing rule group
+        # for the same event id, whose combined evaluation semantics across
+        # groups would be one more thing to get wrong), else adds a fresh one.
         try {
-            $rg8 = $sx.CreateElement("RuleGroup")
-            $rg8.SetAttribute("name", "valkyrie-process-injection")
-            $rg8.SetAttribute("groupRelation", "or")
-            $crt = $sx.CreateElement("CreateRemoteThread")
-            $crt.SetAttribute("onmatch", "include")
-            $rg8.AppendChild($crt) | Out-Null
-            $filtering.AppendChild($rg8) | Out-Null
+            $existingCrt = $filtering.SelectSingleNode("RuleGroup/CreateRemoteThread")
+            if ($existingCrt) {
+                $existingCrt.RemoveAll()
+                $existingCrt.SetAttribute("onmatch", "exclude")
+            } else {
+                $rg8 = $sx.CreateElement("RuleGroup")
+                $rg8.SetAttribute("name", "valkyrie-process-injection")
+                $rg8.SetAttribute("groupRelation", "or")
+                $crt = $sx.CreateElement("CreateRemoteThread")
+                $crt.SetAttribute("onmatch", "exclude")
+                $rg8.AppendChild($crt) | Out-Null
+                $filtering.AppendChild($rg8) | Out-Null
+            }
             $sx.Save($cfg)
-            Info "Patched Sysmon config: CreateRemoteThread (EID 8) explicitly ON."
+            Info "Patched Sysmon config: CreateRemoteThread (EID 8) explicitly ON (empty onmatch=exclude -> logs all)."
         } catch {
             Warn "Could not patch Sysmon config for EID8 (using stock): $($_.Exception.Message)"
         }
