@@ -182,6 +182,26 @@ TECHNIQUE_TACTIC: dict[str, str] = {
 # end of an intrusion. A chain that reaches one of these is escalated.
 HIGH_IMPACT_TACTICS = frozenset({"credential-access", "exfiltration", "impact"})
 
+# Per-detection severity -> an evidence-strength weight in (0, 1]. Added after
+# a real, code-verified finding: this module used to count DISTINCT TACTICS
+# with no regard for how strong the evidence behind each one was, so an
+# INFO-level discovery label (process_telemetry.py's own comment: "Severity
+# is ALWAYS SEV_INFO... never alerts alone") counted exactly the same as a
+# critical LSASS-access detection. A realistic benign developer sequence -
+# IDE terminal -> encoded PowerShell startup (SEV_LOW, explicitly a "context
+# signal, not a detection" per behavioral_rules.py) -> MSBuild build step ->
+# hostname.exe for a build log (SEV_INFO) - crossed 3 distinct tactics and
+# scored "high" (0.75) under the old formula purely from three weak,
+# individually-non-alerting signals. HIGH is intentionally worth the same as
+# CRITICAL here: this is a per-detection EVIDENCE-STRENGTH weight, not a
+# duplicate of score_chain's own high-impact-tactic bump (a different axis).
+_SEVERITY_WEIGHT: dict[str, float] = {
+    "info": 0.2, "low": 0.4, "medium": 0.7, "high": 1.0, "critical": 1.0,
+}
+_DEFAULT_SEVERITY_WEIGHT = 1.0   # unrecognized/missing severity: assume strong,
+                                 # same as an unspecified `severity` argument -
+                                 # never let a typo silently look like weak evidence.
+
 # Human labels for explanations.
 TACTIC_LABEL = {
     "initial-access": "Initial Access", "execution": "Execution",
@@ -212,18 +232,42 @@ def tactic_for(technique: str) -> Optional[str]:
     return TECHNIQUE_TACTIC.get(base)
 
 
-def score_chain(tactics: set[str]) -> tuple[float, str]:
+def score_chain(tactics: set[str], evidence_quality: float = 1.0,
+                lineage_quality: float = 1.0, temporal_quality: float = 1.0
+                ) -> tuple[float, str]:
     """Pure scoring: (confidence 0-1, severity). Explainable by construction.
 
-    0.25 per distinct tactic (2->0.50, 3->0.75, 4->1.00), +0.15 if the chain
-    reaches a high-impact tactic (cred-access / exfil / impact). Severity:
-    >=0.9 critical, >=0.7 high, else medium.
+    Structural score is unchanged: 0.25 per distinct tactic (2->0.50,
+    3->0.75, 4->1.00), +0.15 if the chain reaches a high-impact tactic
+    (cred-access / exfil / impact). That structural score is then scaled by
+    three independent, honestly-named quality factors - each defaults to 1.0
+    so a bare call with just a tactic set (as this module's own pure-mapping
+    tests use) reproduces the exact old numbers:
+
+      * evidence_quality: how strong the underlying detections actually are
+        (1.0 = at least one high/critical-severity detection anchors this
+        chain; lower = built only from low/info-tier signals). Distinct
+        tactics agreeing is meaningful ONLY when the agreement is real
+        evidence, not three informational labels.
+      * lineage_quality: how much of the chain is directly-observed PID/PPID
+        process lineage vs. a same-NAME-in-window guess (0.6 floor - a name
+        match is still real correlation, just weaker than a verified edge).
+      * temporal_quality: how tightly clustered the stages are inside the
+        correlation window (1.0 near-simultaneous, 0.5 floor near the full
+        window) - three tactics in five seconds is not the same claim as
+        three tactics loosely spread across ten minutes.
+
+    Severity bucketing is unchanged: >=0.9 critical, >=0.7 high, else medium.
     """
     n = len(tactics)
     score = 0.25 * n
     if tactics & HIGH_IMPACT_TACTICS:
         score += 0.15
     score = min(1.0, score)
+    quality = max(0.0, min(1.0, evidence_quality)) * \
+              max(0.0, min(1.0, lineage_quality)) * \
+              max(0.0, min(1.0, temporal_quality))
+    score = min(1.0, score * quality)
     severity = "critical" if score >= 0.9 else "high" if score >= 0.7 else "medium"
     return round(score, 3), severity
 
@@ -254,34 +298,87 @@ class KillChainCorrelator:
     # 10-minute window. min_tactics remains a constructor parameter so callers
     # (and this module's own unit tests) can still exercise the mechanics at any
     # threshold; only the SHIPPED default was wrong.
+    # A bare ppid edge to a parent that has NEVER itself been directly
+    # observed doing anything (its own PID was never a `primary`) links at
+    # most this many distinct children before it stops merging further ones
+    # into the same chain. Found via this module's own validation suite: a
+    # long-lived, high-fan-out, never-itself-flagged launcher (an IDE, a
+    # shell, a service supervisor) spawns many genuinely independent,
+    # unrelated short-lived sessions, each sharing that one ppid - and the
+    # union-find below, with no cap, folded all of them into one
+    # ever-growing "chain" purely because they share an inert ancestor. A
+    # REAL attacker's dropper/orchestrator spawning a handful of direct
+    # malicious children (the case this correlator exists to catch, see
+    # test_killchain.py [2c]) stays well under this cap; it only kicks in
+    # for the high-fan-out, nothing-ever-detected-on-the-parent-itself shape.
+    _PARENT_FANOUT_CAP = 3
+
+    # Two tactics inside this many seconds of each other are treated as
+    # "essentially simultaneous" - no temporal discount at all. Below this,
+    # jittering the clock by a couple of seconds (real telemetry timestamps,
+    # not synthetic test values) must not make a genuinely instantaneous,
+    # automated attack sequence score any differently. Only span BEYOND this
+    # grace period counts against temporal_quality.
+    _TEMPORAL_GRACE_SECONDS = 5.0
+
     def __init__(self, window_seconds: float = 600.0, min_tactics: int = 3) -> None:
         self._window = window_seconds
         self._min = min_tactics
-        # chain id -> deque[(ts, tactic, technique, title, actor_name)]
+        # chain id -> deque[(ts, tactic, technique, title, actor_name, severity, verified)]
         self._chains: dict[int, collections.deque] = {}
         # identity token ("pid:N" | "name:X") -> chain id (union-find, flattened)
         self._token_chain: dict[str, int] = {}
         # chain id -> frozenset of tactics last reported (emit only on growth)
         self._reported: dict[int, frozenset] = {}
+        # every token that has ever been used as a PRIMARY (i.e. that process
+        # was itself directly observed doing something) - lets the fan-out
+        # cap tell "a malicious parent spawning children" apart from "a
+        # bystander launcher that was never itself flagged".
+        self._primaries: set[str] = set()
+        # parent token -> set of distinct primary tokens linked through it,
+        # for the fan-out cap above.
+        self._parent_fanout: dict[str, set[str]] = {}
         self._next_cid = 1
         self._lock = threading.RLock()
 
     def observe(self, actor: str, technique: str, title: str, ts: float,
-                pid: int = 0, ppid: int = 0) -> Optional[dict]:
+                pid: int = 0, ppid: int = 0, severity: str = "high") -> Optional[dict]:
         """Record one detection; return a chain summary dict if it forms or
         extends a multi-stage chain, else None.
 
         ``pid``/``ppid`` (when the collector knows them) link a child process
-        to its parent's chain. ``ts`` is a caller-supplied monotonic-style
-        timestamp so scoring stays clock-free and testable.
+        to its parent's chain, and mark this step as VERIFIED lineage (vs. a
+        same-name-in-window guess when ``pid`` is 0). ``severity`` is the
+        real Detection's own severity - this is what lets the chain tell an
+        anchoring critical-severity detection apart from three purely
+        informational labels that happen to touch three different tactics.
+        ``ts`` is a caller-supplied monotonic-style timestamp so scoring
+        stays clock-free and testable. Callers that omit ``severity`` (this
+        module's own pre-existing unit tests, and code paths that predate
+        this parameter) get the same "assume strong evidence" default this
+        module always implicitly used, so old behavior is unchanged unless a
+        caller actively tells it otherwise.
         """
         tactic = tactic_for(technique)
         if not actor or tactic is None:
             return None                      # unattributable / unmapped -> no chain
+        verified = pid > 0
         primary = f"pid:{pid}" if pid > 0 else f"name:{actor}"
         parent = f"pid:{ppid}" if ppid > 0 else None
-        tokens = [primary] + ([parent] if parent else [])
         with self._lock:
+            self._primaries.add(primary)
+            # Fan-out cap: a parent token that was NEVER itself directly
+            # observed as a primary (the "parent" process never did anything
+            # detectable in this data) may only bootstrap-link a handful of
+            # distinct children before it stops counting as a connecting
+            # edge. See _PARENT_FANOUT_CAP's docstring for why.
+            if parent is not None and parent not in self._primaries:
+                fanout = self._parent_fanout.setdefault(parent, set())
+                if primary in fanout or len(fanout) < self._PARENT_FANOUT_CAP:
+                    fanout.add(primary)
+                else:
+                    parent = None            # saturated - this edge no longer merges
+            tokens = [primary] + ([parent] if parent else [])
             cid = self._chain_for(tokens, ts)
             for tok in tokens:
                 self._token_chain[tok] = cid
@@ -289,8 +386,8 @@ class KillChainCorrelator:
             while dq and ts - dq[0][0] > self._window:
                 dq.popleft()
             dq.append((ts, tactic, extract_technique_id(technique) or technique,
-                       title, actor))
-            tactics = {t for _, t, _, _, _ in dq}
+                       title, actor, severity, verified))
+            tactics = {t for _, t, _, _, _, _, _ in dq}
             if len(tactics) < self._min:
                 return None
             frozen = frozenset(tactics)
@@ -298,9 +395,31 @@ class KillChainCorrelator:
                 return None                  # no NEW tactic since last report -> quiet
             self._reported[cid] = frozen
             steps = [{"tactic": t, "technique": tech, "title": ttl, "ts": t0,
-                      "actor": act} for (t0, t, tech, ttl, act) in dq]
-            actors = list(dict.fromkeys(act for *_, act in dq))   # unique, in order
-        score, severity = score_chain(tactics)
+                      "actor": act, "severity": sev, "verified": ver}
+                     for (t0, t, tech, ttl, act, sev, ver) in dq]
+            actors = list(dict.fromkeys(act for *_, act, _, _ in dq))   # unique, in order
+
+            # Three independent quality factors (see score_chain's docstring)
+            # computed from what THIS chain's own steps actually carry, never
+            # guessed: evidence strength (does at least one real, non-trivial
+            # detection anchor this chain, or is it built entirely from
+            # low/info-tier context signals?), lineage verification (how much
+            # of the chain is an observed PID/PPID edge vs. a name guess),
+            # and temporal tightness (how much of the window the steps span).
+            evidence_quality = max(
+                (_SEVERITY_WEIGHT.get(s["severity"], _DEFAULT_SEVERITY_WEIGHT)
+                 for s in steps), default=_DEFAULT_SEVERITY_WEIGHT)
+            verified_count = sum(1 for s in steps if s["verified"])
+            lineage_quality = 0.6 + 0.4 * (verified_count / len(steps))
+            span = dq[-1][0] - dq[0][0]
+            if span <= self._TEMPORAL_GRACE_SECONDS or self._window <= self._TEMPORAL_GRACE_SECONDS:
+                temporal_quality = 1.0    # "essentially simultaneous" - no discount at all
+            else:
+                excess = span - self._TEMPORAL_GRACE_SECONDS
+                full_range = self._window - self._TEMPORAL_GRACE_SECONDS
+                temporal_quality = max(0.5, 1.0 - 0.5 * (excess / full_range))
+        score, severity_bucket = score_chain(tactics, evidence_quality,
+                                             lineage_quality, temporal_quality)
         ordered = [t for t in TACTIC_LABEL if t in tactics]
         return {
             "actor": actor,
@@ -310,10 +429,16 @@ class KillChainCorrelator:
             "techniques": sorted({s["technique"] for s in steps}),
             "distinct_tactics": len(tactics),
             "score": score,
-            "severity": severity,
+            "severity": severity_bucket,
             "reaches_objective": bool(tactics & HIGH_IMPACT_TACTICS),
             "steps": steps,
-            "explanation": self._explain(actors, ordered, score, tactics),
+            "chain_id": cid,
+            "quality": {"evidence": round(evidence_quality, 3),
+                       "lineage": round(lineage_quality, 3),
+                       "temporal": round(temporal_quality, 3)},
+            "explanation": self._explain(actors, ordered, score, tactics,
+                                         evidence_quality, lineage_quality,
+                                         temporal_quality),
         }
 
     def _chain_for(self, tokens: list[str], now: float) -> int:
@@ -344,15 +469,31 @@ class KillChainCorrelator:
 
     @staticmethod
     def _explain(actors: list[str], ordered: list[str], score: float,
-                 tactics: set[str]) -> str:
+                 tactics: set[str], evidence_quality: float = 1.0,
+                 lineage_quality: float = 1.0, temporal_quality: float = 1.0) -> str:
         who = " → ".join(actors) if len(actors) > 1 else (actors[0] if actors else "an actor")
         chain = " → ".join(TACTIC_LABEL[t] for t in ordered)
         span = f"across {len(actors)} linked processes ({who})" if len(actors) > 1 else who
         base = (f"{len(tactics)} independent ATT&CK tactics {span}: {chain}. "
-                f"Confidence {int(score * 100)}% — it rises with each distinct stage.")
+                f"Confidence {int(score * 100)}%.")
         if tactics & HIGH_IMPACT_TACTICS:
             hit = ", ".join(TACTIC_LABEL[t] for t in ordered if t in HIGH_IMPACT_TACTICS)
             base += f" Chain has reached a high-impact objective ({hit})."
+        # Honest caveats - never let the confidence number stand alone when
+        # something material pulled it down. Each names a real, checkable
+        # reason (never a vague "might be wrong").
+        caveats = []
+        if evidence_quality < 0.7:
+            caveats.append("the individual detections here are mostly low-severity "
+                           "or informational on their own")
+        if lineage_quality < 0.9:
+            caveats.append("some of these processes are linked by name only, not a "
+                           "directly observed parent-child relationship")
+        if temporal_quality < 0.8:
+            caveats.append("the stages are spread across a large part of the "
+                           "correlation window rather than tightly clustered")
+        if caveats:
+            base += " Caveat: " + "; ".join(caveats) + "."
         return base
 
     def _evict(self, now: float) -> None:

@@ -182,16 +182,25 @@ def main() -> int:
         store = Store(db_path=Path(td) / "kc.db"); store.start()
         engine = EdrEngine(store); engine.start()
 
-        # Same process, three ATT&CK tactics, in-window.
+        # Same process, three ATT&CK tactics, in-window. process_pid is the
+        # SAME real attributed PID across all three (this is genuinely one
+        # process, per the test's own docstring) - added alongside the
+        # confidence-model fix so this fixture matches what real telemetry
+        # actually provides (process_telemetry/Sysmon always carry a pid;
+        # the ADR itself says so) rather than relying on process_name string
+        # equality, which is the weaker, unverified-lineage path.
         engine.report_detection(Detection(source="etw.ps", severity="medium",
             category="process", title="encoded PowerShell", entity="C:/x",
-            process_name="powershell.exe", technique="T1059.001 — PowerShell"))
+            process_name="powershell.exe", process_pid=4242,
+            technique="T1059.001 — PowerShell"))
         engine.report_detection(Detection(source="dns.beacon", severity="high",
             category="intelligence", title="C2 beacon", entity="evil-c2.example",
-            process_name="powershell.exe", technique="T1071.004 — DNS C2"))
+            process_name="powershell.exe", process_pid=4242,
+            technique="T1071.004 — DNS C2"))
         engine.report_detection(Detection(source="etw.persist", severity="high",
             category="persistence", title="Run key", entity="HKCU\\...\\Run",
-            process_name="powershell.exe", technique="T1547.001 — Run key"))
+            process_name="powershell.exe", process_pid=4242,
+            technique="T1547.001 — Run key"))
         time.sleep(0.2)
 
         incidents = engine.list_incidents()

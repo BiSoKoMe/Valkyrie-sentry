@@ -769,7 +769,8 @@ class EdrEngine:
                 actor=det.process_name, technique=det.technique,
                 title=det.title, ts=time.monotonic(),
                 pid=det.process_pid,
-                ppid=int((det.details or {}).get("ppid") or 0))
+                ppid=int((det.details or {}).get("ppid") or 0),
+                severity=det.severity)
         except Exception:
             return
         if not chain:
@@ -782,13 +783,26 @@ class EdrEngine:
         # per child process.
         origin = (chain.get("actors") or [actor])[0]
         span = f" across {procs} linked processes" if procs > 1 else ""
+        # entity is the underlying killchain chain_id, NOT the origin's display
+        # name. Found via real-data audit: find_open_incident folds detections
+        # together when EITHER entity OR process_name matches, so giving two
+        # genuinely different chains (different chain_id - killchain's own
+        # union-find already keeps them structurally separate) the same
+        # process_name/entity (the shared origin display name, e.g. an IDE
+        # that is the first-observed actor of many unrelated terminal
+        # sessions) silently re-merged them into one ever-growing incident at
+        # the STORE layer, undoing killchain's own correlation. process_name
+        # is left blank for the same reason - a non-empty value here would
+        # re-open the identical hole through find_open_incident's OTHER
+        # match clause. The human-readable origin name is still fully
+        # available via details["chain"]["actors"] and the title text.
         chain_det = Detection(
             source="edr.killchain",
             severity=chain["severity"],
             category="attack_chain",
             title=f"Multi-stage attack on {origin}: {n} ATT&CK tactics{span}",
-            entity=origin,
-            process_name=origin,
+            entity=f"chain:{chain['chain_id']}",
+            process_name="",
             process_pid=det.process_pid,
             technique="; ".join(chain["techniques"]),
             details={"chain": chain, "reason": chain["explanation"],
