@@ -255,11 +255,32 @@ jobs:
         if: always()
         shell: pwsh
         run: |
+          # THIS STEP MUST NEVER FAIL THE JOB - same rule as the sensors/status
+          # diagnostic above, for the same reason. This is a nice-to-have
+          # cross-run rollup (see union_coverage.py's own header: point it at
+          # several downloaded artifacts for the real union), not the
+          # authoritative score - that already happened in "Authoritative
+          # coverage (read incident DB at rest)". Found via the matrix-job
+          # split: a tactic filtered down to an all-destructive subset (e.g.
+          # -OnlyIds on just Impact's 3 techniques, all skipped under
+          # -SkipDestructive) legitimately produces a tierB.json with ZERO
+          # records - a correct, intentional outcome, not a crash. union_
+          # coverage.py's own "No usable records" / exit 2 is a DELIBERATE and
+          # correct safeguard against silently reporting a genuinely broken
+          # run as 0% - it just cannot distinguish "broken" from "correctly
+          # filtered to nothing" from an empty file alone, and it should not
+          # have to: that distinction belongs here, in the caller, not in a
+          # library whose whole job is refusing to guess.
           $files = @(Get-ChildItem redteam/evaluation/results/*tierB.json,
                                    redteam/evaluation/results/*tierB.partial.jsonl `
                      -ErrorAction SilentlyContinue | Select-Object -Expand FullName)
           if (-not $files) { Write-Host "(no Tier B result files produced)"; exit 0 }
           python redteam/evaluation/union_coverage.py @files
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "(union_coverage.py exited $LASTEXITCODE - informational only, not failing the job; see 'Authoritative coverage' step above for the real score)"
+          }
+          $Error.Clear()
+          $global:LASTEXITCODE = 0
 
       - name: Upload Tier B evidence
         if: always()
