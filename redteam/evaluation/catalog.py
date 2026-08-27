@@ -2074,49 +2074,71 @@ EXPANSION_ROUND2B = [
         technique_name="System Network Connections Discovery (PowerShell)",
         tactic="Discovery",
         art_test_ref="T1049 Test #2 (Get-NetTCPConnection)",
-        destructive=False, live_vm_safe=True, delivery=DELIVERY_NONE,
-        detector_path="process_telemetry.py's powershell.exe cmdline branch "
-                       "only recognizes AD-module cmdlets (get-adcomputer/"
-                       "get-aduser/get-adgroup/...); Get-NetTCPConnection "
-                       "is not among them",
-        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
-        probe="ioa_rule", probe_input={
-            "image": "powershell.exe", "parent": "cmd.exe",
-            "cmdline": "powershell.exe Get-NetTCPConnection", "path": ""},
-        notes="Same underlying discovery intent as the covered netstat.exe "
-              "entry (T1049), but the PowerShell-cmdlet path is invisible "
-              "to the classifier - a real generalization gap: the binary "
-              "form is covered, the cmdlet form is not.",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
+        detector_path="valkyrie/process_telemetry.py classify_discovery "
+                       "(new 'get-nettcpconnection' branch, added 2026-08-27) "
+                       "-> 'reconnaissance-burst' sequence IOA (T1049 already "
+                       "in the sequence's technique tuple)",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="recon_burst", probe_input={
+            "image": "powershell.exe", "cmdline": "powershell.exe Get-NetTCPConnection",
+            "co_occurring": [("systeminfo.exe", "systeminfo.exe"),
+                             ("tasklist.exe", "tasklist.exe /v")]},
+        notes="CLOSED 2026-08-27: was a confirmed generalization gap (the "
+              "binary form, netstat.exe, was covered; the PowerShell-cmdlet "
+              "form was not). classify_discovery now recognizes "
+              "Get-NetTCPConnection unconditionally (no same-name mutating "
+              "form exists to exclude). Like disc-localgroup, this alone "
+              "raises nothing by design - probe='recon_burst' replays it "
+              "with the same proven co-occurring partners and confirms the "
+              "burst completes. Offline-verified via replay_harness.py; "
+              "live Tier B re-verification pending (this project counts "
+              "only a real run as proof).",
     ),
     Technique(
         id="disc-service-net-start", technique_id="T1007",
         technique_name="System Service Discovery (net start)",
         tactic="Discovery",
         art_test_ref="T1007 Test #2 (net.exe start)",
-        destructive=False, live_vm_safe=True, delivery=DELIVERY_NONE,
-        detector_path="process_telemetry.py's net.exe branch only "
-                       "recognizes view/group/localgroup/user; 'start' is "
-                       "not a checked verb",
-        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
-        probe="ioa_rule", probe_input={
-            "image": "net.exe", "parent": "cmd.exe",
-            "cmdline": "net.exe start", "path": ""},
-        notes="net.exe is already a recognized discovery-relevant binary "
-              "for 4 other verbs; 'start' (enumerate running services) "
-              "falls through unclassified entirely.",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
+        detector_path="valkyrie/process_telemetry.py classify_discovery "
+                       "(new net.exe bare-'start' branch, added 2026-08-27: "
+                       "'start' with nothing after it lists services, 'start "
+                       "<svc>' would start one - the same verb-then-argument "
+                       "shape net.exe itself uses to distinguish them) -> "
+                       "'reconnaissance-burst' sequence IOA (T1007 already "
+                       "in the technique tuple)",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="recon_burst", probe_input={
+            "image": "net.exe", "cmdline": "net.exe start",
+            "co_occurring": [("systeminfo.exe", "systeminfo.exe"),
+                             ("tasklist.exe", "tasklist.exe /v")]},
+        notes="CLOSED 2026-08-27: net.exe was already recognized for 4 other "
+              "verbs; bare 'start' fell through unclassified. Offline-"
+              "verified via replay_harness.py; live Tier B re-verification "
+              "pending.",
     ),
     Technique(
         id="disc-service-discovery-ps", technique_id="T1007",
         technique_name="System Service Discovery (PowerShell)",
         tactic="Discovery",
         art_test_ref="T1007 Test #4 (Get-Service)",
-        destructive=False, live_vm_safe=True, delivery=DELIVERY_NONE,
-        detector_path="no cmdlet-path branch recognizes Get-Service",
-        predicted_tier_b="MISS", source_confidence=SOURCE_PARTIAL,
-        probe="ioa_rule", probe_input={
-            "image": "powershell.exe", "parent": "cmd.exe",
-            "cmdline": "powershell.exe Get-Service", "path": ""},
-        notes="Same generalization gap class as disc-net-connections-ps.",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
+        detector_path="valkyrie/process_telemetry.py classify_discovery "
+                       "(new 'get-service' branch, added 2026-08-27) -> "
+                       "'reconnaissance-burst' sequence IOA (T1007 already "
+                       "in the technique tuple)",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="recon_burst", probe_input={
+            "image": "powershell.exe", "cmdline": "powershell.exe Get-Service",
+            "co_occurring": [("systeminfo.exe", "systeminfo.exe"),
+                             ("tasklist.exe", "tasklist.exe /v")]},
+        notes="CLOSED 2026-08-27, same generalization-gap class as "
+              "disc-net-connections-ps. Get-Service is unconditionally "
+              "read-only for this purpose (Set-Service/Start-Service/"
+              "Stop-Service are separate cmdlet names, so the substring "
+              "match cannot collide with a mutating one). Offline-verified "
+              "via replay_harness.py; live Tier B re-verification pending.",
     ),
     Technique(
         id="disc-scheduled-tasks-query", technique_id="T1007",
@@ -2124,17 +2146,24 @@ EXPANSION_ROUND2B = [
                         "enumeration)",
         tactic="Discovery",
         art_test_ref="T1007 Test #6 (schtasks /query /fo LIST /v)",
-        destructive=False, live_vm_safe=True, delivery=DELIVERY_NONE,
-        detector_path="schtasks.exe is not a recognized binary in any "
-                       "discovery branch (distinct from the covered "
-                       "T1053.005 entry, which tests task CREATION via a "
-                       "different mechanism/probe entirely)",
-        predicted_tier_b="MISS", source_confidence=SOURCE_PARTIAL,
-        probe="ioa_rule", probe_input={
-            "image": "schtasks.exe", "parent": "cmd.exe",
-            "cmdline": "schtasks.exe /query /fo LIST /v", "path": ""},
-        notes="Read-only task enumeration, not creation - a different "
-              "intent than the already-covered persistence test.",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
+        detector_path="valkyrie/process_telemetry.py classify_discovery "
+                       "(new schtasks.exe branch, added 2026-08-27, mirroring "
+                       "the existing reg.exe/sc.exe 'query verb, not a "
+                       "mutating one' pattern) -> 'reconnaissance-burst' "
+                       "sequence IOA (T1007 already in the technique tuple)",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="recon_burst", probe_input={
+            "image": "schtasks.exe", "cmdline": "schtasks.exe /query /fo LIST /v",
+            "co_occurring": [("systeminfo.exe", "systeminfo.exe"),
+                             ("tasklist.exe", "tasklist.exe /v")]},
+        notes="CLOSED 2026-08-27: schtasks.exe was not a recognized binary "
+              "in any discovery branch at all (distinct from the covered "
+              "T1053.005 entry, which tests task CREATION via a different "
+              "mechanism/probe). Read-only /query is now excluded from "
+              "create/delete/change/run/end, the same shape as reg.exe/"
+              "sc.exe's own query-vs-mutating check. Offline-verified via "
+              "replay_harness.py; live Tier B re-verification pending.",
     ),
     Technique(
         id="disc-network-shares-smb", technique_id="T1135",
@@ -2159,18 +2188,29 @@ EXPANSION_ROUND2B = [
         tactic="Discovery",
         art_test_ref="T1518.001 Test #8 (Get-CimInstance "
                       "root/securityCenter2 antivirusproduct)",
-        destructive=False, live_vm_safe=True, delivery=DELIVERY_NONE,
-        detector_path="no branch recognizes Get-CimInstance queries against "
-                       "securityCenter2 at all",
-        predicted_tier_b="MISS", source_confidence=SOURCE_PARTIAL,
-        probe="ioa_rule", probe_input={
-            "image": "powershell.exe", "parent": "cmd.exe",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
+        detector_path="valkyrie/process_telemetry.py classify_discovery "
+                       "(new 'get-ciminstance' + securitycenter2/"
+                       "antivirusproduct branch, added 2026-08-27 - "
+                       "Get-CimInstance alone is too common to match "
+                       "unconditionally) -> 'reconnaissance-burst' sequence "
+                       "IOA (T1518 added to the technique tuple 2026-08-27; "
+                       "T1518.001 matches via the tuple's own "
+                       "startswith(t+'.') prefix rule)",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="recon_burst", probe_input={
+            "image": "powershell.exe",
             "cmdline": "powershell.exe Get-CimInstance -Namespace "
                        "root/securityCenter2 -ClassName antivirusproduct",
-            "path": ""},
-        notes="Directly probes for Valkyrie's own presence via a "
-              "WMI-namespace query neither this nor the already-covered "
-              "netsh/tasklist T1518.001 entry can see.",
+            "co_occurring": [("systeminfo.exe", "systeminfo.exe"),
+                             ("tasklist.exe", "tasklist.exe /v")]},
+        notes="CLOSED 2026-08-27: this directly probes for Valkyrie's own "
+              "presence via a WMI-namespace query neither this nor the "
+              "already-covered netsh/tasklist T1518.001 entry could see "
+              "before. Scoped to the specific antivirus-fingerprinting "
+              "namespace/class, not bare Get-CimInstance (which is routine "
+              "admin scripting). Offline-verified via replay_harness.py; "
+              "live Tier B re-verification pending.",
     ),
     Technique(
         id="disc-software-installed", technique_id="T1518",
@@ -2178,36 +2218,55 @@ EXPANSION_ROUND2B = [
         tactic="Discovery",
         art_test_ref="T1518 Test #2 (enumerate installed software via the "
                       "Uninstall registry key)",
-        destructive=False, live_vm_safe=True, delivery=DELIVERY_NONE,
-        detector_path="no branch recognizes Get-ItemProperty reads of the "
-                       "Uninstall registry key; the reg.exe cmdline branch "
-                       "only recognizes literal 'reg query' invocations, "
-                       "not the PowerShell cmdlet equivalent",
-        predicted_tier_b="MISS", source_confidence=SOURCE_PARTIAL,
-        probe="ioa_rule", probe_input={
-            "image": "powershell.exe", "parent": "cmd.exe",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
+        detector_path="valkyrie/process_telemetry.py classify_discovery "
+                       "(new 'get-itemproperty'/'get-item' + 'uninstall' "
+                       "branch, added 2026-08-27) -> 'reconnaissance-burst' "
+                       "sequence IOA (T1518 added to the technique tuple "
+                       "2026-08-27)",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="recon_burst", probe_input={
+            "image": "powershell.exe",
             "cmdline": "powershell.exe Get-ItemProperty "
                        "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion"
-                       "\\Uninstall\\*", "path": ""},
-        notes="FIRST T1518 entry in the catalog (parent technique of the "
-              "already-covered T1518.001 sub-technique). Same class of "
-              "cmdlet-vs-binary generalization gap.",
+                       "\\Uninstall\\*",
+            "co_occurring": [("systeminfo.exe", "systeminfo.exe"),
+                             ("tasklist.exe", "tasklist.exe /v")]},
+        notes="CLOSED 2026-08-27: FIRST T1518 entry in the catalog (parent "
+              "technique of the already-covered T1518.001 sub-technique). "
+              "Deliberately labeled T1518 (Software Discovery), not the "
+              "generic T1012 (Query Registry) reg.exe's own branch already "
+              "covers - crediting this under T1012 would be a different "
+              "ATT&CK id than the one actually under test, the same "
+              "wrong-label trap disc-domain-groups and disc-localgroup hit "
+              "earlier. Scoped to the Uninstall key specifically, mirroring "
+              "how 'net localgroup' earns its own T1069.001 distinct from "
+              "bare 'net user's T1087.001. Offline-verified via "
+              "replay_harness.py; live Tier B re-verification pending.",
     ),
     Technique(
         id="disc-password-policy", technique_id="T1201",
         technique_name="Password Policy Discovery",
         tactic="Discovery",
         art_test_ref="T1201 Test #6 (net accounts)",
-        destructive=False, live_vm_safe=True, delivery=DELIVERY_NONE,
-        detector_path="process_telemetry.py's net.exe branch does not "
-                       "recognize the 'accounts' verb",
-        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
-        probe="ioa_rule", probe_input={
-            "image": "net.exe", "parent": "cmd.exe",
-            "cmdline": "net.exe accounts", "path": ""},
-        notes="FIRST T1201 entry in the catalog. Same net.exe binary "
-              "already recognized for 4 other verbs; 'accounts' is a 5th "
-              "gap in the same branch.",
+        destructive=False, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
+        detector_path="valkyrie/process_telemetry.py classify_discovery "
+                       "(new net.exe bare-'accounts' branch, added "
+                       "2026-08-27: same verb-then-argument shape as "
+                       "'start' above - bare 'accounts' displays policy, "
+                       "'accounts /minpwlen:N' sets it) -> "
+                       "'reconnaissance-burst' sequence IOA (T1201 added to "
+                       "the technique tuple 2026-08-27)",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="recon_burst", probe_input={
+            "image": "net.exe", "cmdline": "net.exe accounts",
+            "co_occurring": [("systeminfo.exe", "systeminfo.exe"),
+                             ("tasklist.exe", "tasklist.exe /v")]},
+        notes="CLOSED 2026-08-27: FIRST T1201 entry in the catalog. Same "
+              "net.exe binary already recognized for 4 other verbs; "
+              "'accounts' was a 5th gap in the same branch. Offline-"
+              "verified via replay_harness.py; live Tier B re-verification "
+              "pending.",
     ),
     Technique(
         id="disc-domain-groups", technique_id="T1069.002",
