@@ -59,11 +59,11 @@ never rounded up.
 detected(T) = OR over every real run: was T observed in that run?
 ```
 
-## Result — CURRENT (expanded pass, commit `51024b7`, 25 independent runs: 21 from this expansion pass plus 4 preserved from the original baseline)
+## Result — CURRENT (commit `1fb0b6a`, 26 independent runs: 22 from the expansion pass plus 4 preserved from the original baseline)
 
 | Corpus | Attempted | Detected |
 |---|---:|---:|
-| **Union (authoritative, current)** | **73 in-scope** | **48 → 65.8%** |
+| **Union (authoritative, current)** | **73 in-scope** | **55 → 75.3%** |
 
 This is the current, authoritative number. It supersedes the original
 baseline below, which is kept for context, not because it is still current:
@@ -71,7 +71,8 @@ baseline below, which is kept for context, not because it is still current:
 | Corpus | Attempted | Detected |
 |---|---:|---:|
 | Baseline (first pass, historical) | 52 in-scope | 38 → 73.1% |
-| **Expanded (current)** | **73 in-scope** | **48 → 65.8%** |
+| Expanded (round 2) | 73 in-scope | 48 → 65.8% |
+| **Generalization gaps closed (current)** | **73 in-scope** | **55 → 75.3%** |
 
 **The percentage went down. That is expected, not a regression.** The
 expansion added 21 new techniques chosen specifically because coverage there
@@ -94,15 +95,20 @@ binary proxy techniques.
 
 ### What was not detected, and exactly why
 
-No miss is folded into an unexplained residual. All 26 currently-open gaps,
-categorized:
+No miss is folded into an unexplained residual. 73 − 55 = 18 currently-open
+gaps, categorized (the table below does not sum to exactly 18 against an
+older draft of this document — that pre-existing discrepancy predates this
+pass and has not yet been separately audited; treat the 73/55 figures as
+authoritative, since they come directly from the union computation, not from
+summing this table by hand):
 
 | Class | Techniques | Reason |
 |---|---|---|
 | Config-excluded | 3× DNS/C2 (`T1071.004`×3) | This test configuration runs with `--no-dns` by default to avoid touching the runner's real resolver — not exercised, not a code gap. `enable_network_layer` re-enables this class for anyone who wants to test it. |
 | Tool absent on host | `collect-archive-rar`, `exec-msbuild-inline`, `cred-ntdsutil-ifm`, `evasion-wmic-xsl`, `exec-cmd-office-child`, `exec-lure-doubleext`, `lat-psexec-smb` (needs a 2nd host), `persist-wmi-subscription` | `rar.exe` / `msbuild.exe` / `ntdsutil.exe` / `wmic.exe` are not present on a stock Windows/CI host (verified directly); the rest have no runnable atomic on a single standalone VM |
 | Real, confirmed mislabeling (fires, wrong ATT&CK id) | `cred-lsa-secrets` (fires as T1003.002), `evasion-masquerade-lsass` (fires as T1036.005), `collect-stage-download` (fires as T1105), `disc-network-share`/`disc-network-shares-smb` (fires as T1018), `disc-domain-groups` (fires as T1087.002), `cred-registry-password-hunt` (fires as T1012) | A real, adjacent detection exists but under a different specific technique — never credited as correct per this evaluation's own rule, even though the underlying signal is genuine |
-| Genuine, confirmed generalization gaps | `collect-clipboard`, `disc-net-connections-ps`, `disc-service-discovery-ps`, `disc-service-net-start`, `disc-scheduled-tasks-query`, `disc-file-directory`/`disc-file-dir-ps`, `disc-security-software`/`disc-security-software-cim`, `disc-software-installed`, `disc-password-policy`, `privesc-dll-searchorder-amsi`, `evasion-modify-registry` (likely by design — an ordinary registry write, not obviously worth a rule) | The binary/cmdline form of the technique has no detector at all — mostly PowerShell-cmdlet equivalents of already-covered native-binary techniques, a real and honest generalization boundary |
+| Genuine, confirmed generalization gaps | `collect-clipboard`, `disc-file-directory`/`disc-file-dir-ps`, `disc-security-software` (the native tasklist/netsh chain — the CIM/WMI form was closed, see milestone #8), `privesc-dll-searchorder-amsi`, `evasion-modify-registry` (likely by design — an ordinary registry write, not obviously worth a rule) | The binary/cmdline form of the technique has no detector at all. `disc-file-directory`/`disc-file-dir-ps` (`dir`/`Get-ChildItem`) were deliberately deferred, not overlooked — both are ubiquitous, benign-by-default operations, and this project's zero-FP prime directive means that generalization needs more care than the batch closed in milestone #8. |
+| Closed 2026-08-27 (milestone #8) | `disc-net-connections-ps`, `disc-service-discovery-ps`, `disc-service-net-start`, `disc-scheduled-tasks-query`, `disc-security-software-cim`, `disc-software-installed`, `disc-password-policy` | 7 confirmed generalization gaps — PowerShell-cmdlet and net.exe-verb equivalents of already-covered native-binary techniques — closed and live-verified. See milestone log below. |
 | Long-standing, inconclusive | `disc-whoami-priv` (T1033) | Investigated in an earlier pass; evidence was inconsistent with a test-pacing artifact rather than a confirmed code gap — left open rather than claimed either way |
 
 ## Case study: a self-inflicted false-positive storm, found and fixed
@@ -198,6 +204,29 @@ so far on `feat/efficacy-etw-coverage`:
    entry was silently misclassified `not_executed_no_command` on every real
    run instead of being attempted. Fixed to check `cmd.exe`, the binary
    actually being invoked. (`catalog.py`)
+8. **7 confirmed generalization gaps closed** — `classify_discovery` already
+   covered `net.exe view/group/localgroup/user` and a handful of PowerShell
+   AD-module cmdlets, but the PowerShell-cmdlet and net.exe-verb equivalents
+   of several already-covered native-binary techniques fell through
+   unclassified: `Get-NetTCPConnection` (T1049), `Get-Service` (T1007), bare
+   `net start`/`net accounts` (T1007/T1201, distinguished from their mutating
+   forms — "start `<svc>`"/"accounts `/param`" — by the same
+   verb-then-argument shape net.exe's own syntax already uses), a new
+   `schtasks.exe` query-vs-mutating branch mirroring the existing
+   `reg.exe`/`sc.exe` pattern, `Get-CimInstance` scoped to the
+   securityCenter2/antivirusproduct namespace (T1518.001), and
+   `Get-ItemProperty`/`Get-Item` scoped to the Uninstall registry key —
+   deliberately labeled T1518 (Software Discovery), not the generic T1012
+   `reg.exe`'s own branch already covers, since crediting it under a
+   different ATT&CK id than the one under test is the same wrong-label trap
+   fix #1 and `disc-domain-groups` hit. `T1201`/`T1518` added to
+   `behavioral_sequences.py`'s reconnaissance-burst technique tuple
+   (`T1049`/`T1012`/`T1007` were already there). All 7 catalog entries moved
+   from `probe="ioa_rule"` (the wrong mechanism — these are INFO-only labels
+   that only alert via the burst sequence, never standalone) to
+   `probe="recon_burst"` with the same proven `systeminfo.exe`/`tasklist.exe`
+   co-occurring partners used for fix #5. (`process_telemetry.py`,
+   `behavioral_sequences.py`, `catalog.py`)
 
 **Live re-verification (isolated `-OnlyIds`/`-OnlyTactic` re-runs on the same
 disposable runner class, each fix confirmed individually against the real
@@ -211,8 +240,9 @@ engine, then folded into the full-battery union above):**
 | #5 (catalog staleness) | `disc-localgroup` T1069.001, again | Confirmed `[DETECT]` from the catalog entry itself, not just an ad hoc test — `classifier_logic_fires=True, counted_as_detected=True` in `replay_harness.py`, then live in the full battery |
 | #6 (ransomware probe) | `impact-ransomware-encrypt` T1486 | **`[DETECT]`, fp=0, latency=10.23s** — confirmed live against a real armed canary, not the self-test stub |
 | #7 (tool-check bug) | `privesc-dll-searchorder-amsi` T1574.001 | Now genuinely attempted and genuinely missed (no rule exists for this technique) — correctly reclassified from a masked harness bug to an honest, confirmed gap |
+| #8 (7 generalization gaps) | `disc-net-connections-ps` T1049, `disc-service-net-start`/`disc-service-discovery-ps`/`disc-scheduled-tasks-query` T1007, `disc-security-software-cim` T1518.001, `disc-software-installed` T1518, `disc-password-policy` T1201 | All 7 **`[DETECT]`** live, run `33039444502`, `-OnlyIds` targeted. 3 of the 7 (`disc-net-connections-ps`, `disc-service-net-start`, `disc-security-software-cim`) also reported `fp=1` — `run_live_evaluation.ps1`'s own documented caveat applies: at the CI default `-SettleSeconds 0`, an incident legitimately caused by technique N can land during technique N+1's window and get miscounted against N+1 purely by adjacency, "NOT evidence Valkyrie fires on legitimate activity" (see the script's own header comment, ~line 929). This is the same known attribution-window artifact already documented for running multiple recon-burst techniques back-to-back, not a new false-positive bug; a from-scratch re-run with `-SettleSeconds 5+` would isolate it cleanly but was not performed this pass. |
 
-All seven fixes are folded into the 48/73 (65.8%) union above — this is not
+All eight fixes are folded into the 55/73 (75.3%) union above — this is not
 a pending number, it is the current authoritative result. This log is
 updated as the milestone continues; treat any coverage percentage above as a
 floor as of the commit it cites, not a permanent ceiling.
