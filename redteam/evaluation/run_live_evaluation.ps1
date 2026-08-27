@@ -97,7 +97,15 @@ param(
     # evidence-capture logic instead of duplicating it. Empty (default) runs
     # the full battery exactly as before; this parameter changes nothing when
     # omitted.
-    [string[]]$OnlyIds = @()
+    [string[]]$OnlyIds = @(),
+    # Run only techniques whose catalog `tactic` field exactly matches one of
+    # these (e.g. -OnlyTactic "Discovery","Persistence"). Added for the
+    # matrix-job split once the catalog grew past what one ~90min job could
+    # comfortably run (52 -> 90+ techniques): each matrix leg filters by
+    # tactic instead of needing a hand-maintained id list per leg, so it
+    # never drifts out of sync as catalog.py grows. Composable with -OnlyIds
+    # (both filters apply; a technique must pass whichever ones are non-empty).
+    [string[]]$OnlyTactic = @()
 )
 
 $ErrorActionPreference = "Continue"
@@ -117,6 +125,11 @@ if ($OnlyIds.Count -gt 0) {
     $Techniques = @($Techniques | Where-Object { $OnlyIds -contains $_.id })
     Info "OnlyIds filter active: running $($Techniques.Count) of $($Catalog.techniques.Count) catalog techniques ($($OnlyIds -join ', '))"
     if ($Techniques.Count -eq 0) { throw "No catalog technique matched -OnlyIds $($OnlyIds -join ', ')" }
+}
+if ($OnlyTactic.Count -gt 0) {
+    $Techniques = @($Techniques | Where-Object { $OnlyTactic -contains $_.tactic })
+    Info "OnlyTactic filter active: running $($Techniques.Count) of $($Catalog.techniques.Count) catalog techniques (tactic in: $($OnlyTactic -join ', '))"
+    if ($Techniques.Count -eq 0) { throw "No catalog technique matched -OnlyTactic $($OnlyTactic -join ', ')" }
 }
 
 # Techniques with a verified Atomic Red Team mapping, carried over from the
@@ -139,6 +152,61 @@ $VettedAtomics = @{
     # evasion-process-injection intentionally NOT delegated to ART -- Test #1
     # drifted onto an Office-dependent variant (see the "sysmon_eid8" probe
     # case below). catalog.py's own probe="sysmon_eid8" now drives it.
+}
+
+# Best-effort revert for the Round 2/2B literal-command ("ioa_rule") entries
+# that write real, persistent registry keys or drop real files. Every
+# scriptblock here undoes exactly what that ONE catalog entry's probe_input
+# cmdline did - nothing more (e.g. removing a single value, never an entire
+# pre-existing key that might hold unrelated data). -ErrorAction
+# SilentlyContinue throughout: a technique that never actually executed
+# (tool missing, blocked) must not fail cleanup trying to undo something
+# that was never done.
+$IoaRuleCleanup = @{
+    "cred-lsa-secrets" = {
+        Remove-Item "C:\Users\Public\secrets" -Force -ErrorAction SilentlyContinue
+    }
+    "evasion-masquerade-lsass" = {
+        Get-Process | Where-Object { $_.Path -eq "C:\Windows\Temp\lsass.exe" } |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+        Remove-Item "C:\Windows\Temp\lsass.exe" -Force -ErrorAction SilentlyContinue
+    }
+    "evasion-modify-registry" = {
+        Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" `
+            -Name "HideFileExt" -ErrorAction SilentlyContinue
+    }
+    "persist-winlogon-shell" = {
+        Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\" `
+            -Name "Shell" -ErrorAction SilentlyContinue
+    }
+    "persist-logon-script" = {
+        Remove-ItemProperty -Path "HKCU:\Environment" -Name "UserInitMprLogonScript" -ErrorAction SilentlyContinue
+        Remove-Item "C:\Users\Public\art.bat" -Force -ErrorAction SilentlyContinue
+    }
+    "privesc-uac-eventvwr" = {
+        Remove-Item -Path "HKCU:\Software\Classes\mscfile" -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    "privesc-uac-sdclt" = {
+        # Matches ART's own T1548.002 Test #7 cleanup command exactly.
+        Remove-Item -Path "HKCU:\Software\Classes\Folder" -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    "privesc-uac-wsreset" = {
+        Remove-Item -Path "HKCU:\Software\Classes\AppX82a6gwre4fdg3bt635tn5ctqjf8msdd2" `
+            -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    "privesc-uac-progids" = {
+        Remove-Item -Path "HKCU:\Software\Classes\.pwn" -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path "HKCU:\Software\Classes\ms-settings\CurVer" -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    "privesc-dll-searchorder-amsi" = {
+        Remove-Item "$env:APPDATA\updater.exe", "$env:APPDATA\amsi.dll" -Force -ErrorAction SilentlyContinue
+    }
+    "collect-stage-download" = {
+        Remove-Item "$env:TEMP\discovery.bat" -Force -ErrorAction SilentlyContinue
+    }
+    "disc-file-directory" = {
+        Remove-Item "C:\Users\Public\t1083.txt" -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -771,6 +839,21 @@ foreach ($t in $Techniques) {
     }
     if ($t.probe -eq "persistence" -and $t.probe_input.activity -eq "service") {
         & sc.exe delete "ValkyrieEvalTestSvc" | Out-Null
+    }
+    # Round 2/2B additions (catalog.py, 2026-08-26): these write real registry
+    # keys or drop real files via the generic literal-command ("ioa_rule")
+    # path, which has no cleanup mechanism of its own - unlike the "service"/
+    # "run_key" cases above, nothing reverted them before this. Left dirty,
+    # a persistence-shaped key (Winlogon Shell, UserInitMprLogonScript) could
+    # both leave the runner in a genuinely broken logon state for the rest of
+    # the job AND get re-observed by the 15s artifact-at-rest poller on a
+    # LATER technique's detection window, misattributing a stale leftover as
+    # a fresh detection. Keyed by catalog id, mirroring $VettedAtomics' own
+    # id-keyed shape, since these are not their own probe type.
+    if ($IoaRuleCleanup.ContainsKey($t.id)) {
+        try { & $IoaRuleCleanup[$t.id] } catch {
+            Warn "   cleanup for $($t.id) raised: $($_.Exception.Message)"
+        }
     }
 
     # Let the sensor pipeline drain before the next technique fires (see

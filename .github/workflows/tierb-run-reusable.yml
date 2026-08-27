@@ -1,0 +1,278 @@
+name: Tier B run (reusable)
+
+# The actual "start Valkyrie, run real Atomic Red Team, score it" body,
+# extracted verbatim from redteam-tierb.yml's single job so it can be called
+# twice: once for the existing single-job manual/-OnlyIds debug path, and once
+# per matrix leg for the full-catalog run split by tactic. This file changes
+# NONE of the hard-won operational logic (engine-deafness retry, DNS-redirect
+# safety preflight, crash-proof JSONL streaming) - only the trigger-context
+# reads (inputs.*, github.event_name) became explicit `inputs:` on this
+# workflow, since a called reusable workflow does not inherit the caller's
+# event context.
+
+on:
+  workflow_call:
+    inputs:
+      skip_destructive:
+        type: boolean
+        default: true
+      enable_network_layer:
+        type: boolean
+        default: false
+      only_ids:
+        type: string
+        default: ""
+      only_tactic:
+        type: string
+        default: ""
+      artifact_suffix:
+        description: "Appended to the uploaded artifact name so parallel matrix legs don't collide (e.g. '-Discovery')."
+        type: string
+        default: ""
+
+jobs:
+  run:
+    name: Live evaluation (windows-latest)${{ inputs.artifact_suffix }}
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Valkyrie dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements_modular.txt
+
+      - name: Provision (Sysmon + PS logging + Invoke-AtomicRedTeam)
+        shell: pwsh
+        run: redteam\provision.ps1
+
+      - name: "Run Tier B (start Valkyrie + real Atomic Red Team, one step)"
+        shell: pwsh
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          # See redteam-tierb.yml's git history for the full rationale behind
+          # every flag/retry/preflight below - this step is copied verbatim,
+          # only the inputs.* source changed (this workflow's own inputs,
+          # not the caller's event context).
+          $netArgs = @("--no-dns", "--no-unbound", "--no-intelligence")
+          $dnsRedirected = $false
+          $origDnsServers = $null
+          $dnsIfaceIdx = $null
+          if ("${{ inputs.enable_network_layer }}" -eq "true") {
+            $upstreamOk = $false
+            try {
+              $probe = New-Object System.Net.Sockets.UdpClient
+              $probe.Client.ReceiveTimeout = 3000
+              $probe.Connect("8.8.8.8", 53)
+              $q = [byte[]](0x12,0x34,0x01,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00,
+                            0x06,0x67,0x6f,0x6f,0x67,0x6c,0x65,0x03,0x63,0x6f,0x6d,0x00,
+                            0x00,0x01,0x00,0x01)
+              $probe.Send($q, $q.Length) | Out-Null
+              $remote = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
+              $resp = $probe.Receive([ref]$remote)
+              $upstreamOk = $resp.Length -ge 12
+              $probe.Close()
+              Write-Host "[cfg] upstream 8.8.8.8:53 preflight: $(if ($upstreamOk) {'REACHABLE'} else {'answered but malformed'}) ($($resp.Length) bytes)"
+            } catch {
+              Write-Host "[cfg] upstream 8.8.8.8:53 preflight: UNREACHABLE ($($_.Exception.Message)) - skipping the redirect entirely; DNS stays untouched."
+            }
+            try {
+              if (-not $upstreamOk) { throw "upstream preflight failed" }
+              $iface = Get-DnsClientServerAddress -AddressFamily IPv4 |
+                Where-Object { $_.ServerAddresses } | Select-Object -First 1
+              if ($iface) {
+                $origDnsServers = @($iface.ServerAddresses)
+                $dnsIfaceIdx = $iface.InterfaceIndex
+                Set-DnsClientServerAddress -InterfaceIndex $dnsIfaceIdx -ServerAddresses "127.0.0.1"
+                $dnsRedirected = $true
+                Write-Host "[cfg] runner DNS -> 127.0.0.1 (was: $($origDnsServers -join ', '); interface $dnsIfaceIdx)"
+              } else {
+                Write-Host "[cfg] no IPv4 DNS interface found - cannot redirect, leaving DNS untouched"
+              }
+            } catch {
+              Write-Host "[cfg] DNS redirect failed ($($_.Exception.Message)) - leaving DNS untouched, C2/DNS techniques will miss as before"
+            }
+            $netArgs = @("--no-unbound", "--no-intelligence") + $(if ($dnsRedirected) { @("--port", "53") } else { @() })
+            Write-Host "[cfg] NETWORK LAYER ENABLED - DNS$(if ($dnsRedirected) {' (resolver REDIRECTED)'} else {' (interceptor only, NOT reachable)'}); intelligence stays OFF (not needed, and a known GIL-contention source)"
+          } else {
+            Write-Host "[cfg] network layer OFF (baseline config) - the 4 C2 techniques are NOT_TESTED, not missed"
+          }
+          function Start-Engine {
+            $proc = Start-Process -FilePath python `
+              -ArgumentList (@("-m", "valkyrie", "--web", "--web-port", "8090") + `
+                $netArgs + `
+                @("--no-firewall", "--no-tls", "--no-sysmon-setup", "--no-download-lists")) `
+              -RedirectStandardOutput "valkyrie_stdout.log" `
+              -RedirectStandardError "valkyrie_stderr.log" `
+              -PassThru -WindowStyle Hidden
+            $proc.Id | Out-File valkyrie.pid
+            $dl = (Get-Date).AddSeconds(90)
+            do {
+              Start-Sleep -Seconds 2
+              try {
+                Invoke-RestMethod -Uri "http://127.0.0.1:8090/api/health" -TimeoutSec 3 | Out-Null
+                return $proc
+              } catch {}
+            } while ((Get-Date) -lt $dl)
+            Write-Host "Engine never answered on :8090 within 90s."
+            Get-Content valkyrie_stdout.log, valkyrie_stderr.log -ErrorAction SilentlyContinue
+            try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+            return $null
+          }
+
+          $p = Start-Engine
+          if (-not $p) {
+            Write-Host "First engine start failed outright -- retrying once."
+            $p = Start-Engine
+          }
+          if (-not $p) { Write-Error "Valkyrie API never answered on :8090 (2 attempts)"; exit 1 }
+          Write-Host "Valkyrie process is up and bound (pid $($p.Id)). Handing over to the eval script, which waits for a STABLE engine..."
+
+          $skip = "${{ inputs.skip_destructive }}" -eq "true"
+          $filterArgs = @{}
+          if ("${{ inputs.only_ids }}" -ne "") {
+            $ids = @("${{ inputs.only_ids }}".Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
+            $filterArgs.OnlyIds = $ids
+            Write-Host "[cfg] OnlyIds filter: $($ids -join ', ')"
+          }
+          if ("${{ inputs.only_tactic }}" -ne "") {
+            $tactics = @("${{ inputs.only_tactic }}".Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
+            $filterArgs.OnlyTactic = $tactics
+            Write-Host "[cfg] OnlyTactic filter: $($tactics -join ', ')"
+          }
+          try {
+            $evalOk = $false
+            foreach ($attempt in 1..2) {
+              redteam\evaluation\run_live_evaluation.ps1 -SkipDestructive:$skip -ApiBase "http://127.0.0.1:8090" -DetectWindowSeconds 30 @filterArgs *>&1 |
+                Tee-Object -FilePath tierb_transcript.log -Append
+              if ($?) { $evalOk = $true; break }
+              if ($attempt -eq 2) { break }
+              Write-Host "Battery did not start (attempt $attempt). Restarting the engine and retrying once..."
+              try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {}
+              Start-Sleep -Seconds 5
+              $p = Start-Engine
+              if (-not $p) { Write-Host "Engine would not come back; giving up."; break }
+            }
+            if (-not $evalOk) { Write-Host "Tier B battery did not complete after 2 attempts." }
+            "==== /api/sensors/status (backpressure/dedup drop evidence) ====" | Tee-Object tierb_transcript.log -Append
+            try {
+              $ss = Invoke-RestMethod "http://127.0.0.1:8090/api/sensors/status" -TimeoutSec 30
+              ($ss | ConvertTo-Json -Depth 6) | Tee-Object tierb_transcript.log -Append
+            } catch { "ERR sensors/status: $($_.Exception.Message)" | Tee-Object tierb_transcript.log -Append }
+            $Error.Clear()
+            $global:LASTEXITCODE = 0
+          } finally {
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            if ($dnsRedirected) {
+              try {
+                if ($origDnsServers -and $origDnsServers.Count -gt 0) {
+                  Set-DnsClientServerAddress -InterfaceIndex $dnsIfaceIdx -ServerAddresses $origDnsServers
+                  Write-Host "[cfg] runner DNS restored to: $($origDnsServers -join ', ')"
+                } else {
+                  Set-DnsClientServerAddress -InterfaceIndex $dnsIfaceIdx -ResetServerAddresses
+                  Write-Host "[cfg] runner DNS reset to automatic (no original recorded)"
+                }
+              } catch {
+                Write-Host "[cfg] DNS restore failed ($($_.Exception.Message)) - non-fatal on a disposable runner"
+              }
+            }
+          }
+
+      - name: Stop Valkyrie
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path valkyrie.pid) {
+            Stop-Process -Id (Get-Content valkyrie.pid) -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Authoritative coverage (read incident DB at rest)
+        if: always()
+        shell: pwsh
+        run: |
+          Start-Sleep -Seconds 6   # let the stopped engine's SQLite settle
+          $db = Get-ChildItem -Path "D:\a" -Recurse -Filter valkyrie.db -EA SilentlyContinue |
+                Select-Object -First 1
+          if (-not $db) { Write-Host "NO valkyrie.db found under D:\a"; exit 0 }
+          Write-Host ("DB: " + $db.FullName)
+          Write-Host "==================== AUTHORITATIVE LIVE COVERAGE ===================="
+          python redteam\evaluation\db_coverage.py $db.FullName
+
+          Write-Host "==================== SYSMON EID10->lsass.exe RAW COUNT ===================="
+          try {
+            $ev = Get-WinEvent -FilterHashtable @{ LogName='Microsoft-Windows-Sysmon/Operational'; Id=10 } -ErrorAction Stop |
+                  Where-Object { $_.Message -match 'lsass\.exe' }
+            Write-Host ("EID10->lsass.exe events found: " + (@($ev).Count))
+            $ev | Select-Object -First 5 | ForEach-Object {
+              $ga = if ($_.Message -match 'GrantedAccess:\s*(\S+)') { $Matches[1] } else { '?' }
+              $src = if ($_.Message -match 'SourceImage:\s*(\S+)') { $Matches[1] } else { '?' }
+              Write-Host ("  EID10 SourceImage=$src GrantedAccess=$ga")
+            }
+          } catch { Write-Host ("EID10 query error: " + $_.Exception.Message) }
+
+          Write-Host "==================== SYSMON EID8 (CreateRemoteThread) RAW COUNT ===================="
+          try {
+            $ev8 = Get-WinEvent -FilterHashtable @{ LogName='Microsoft-Windows-Sysmon/Operational'; Id=8 } -ErrorAction Stop
+            Write-Host ("EID8 events found: " + (@($ev8).Count))
+            $ev8 | Select-Object -First 5 | ForEach-Object {
+              $src = if ($_.Message -match 'SourceImage:\s*(\S+)') { $Matches[1] } else { '?' }
+              $tgt = if ($_.Message -match 'TargetImage:\s*(\S+)') { $Matches[1] } else { '?' }
+              Write-Host ("  EID8 SourceImage=$src TargetImage=$tgt")
+            }
+          } catch { Write-Host ("EID8 query error: " + $_.Exception.Message) }
+
+      - name: Print results to the run log (artifact-independent)
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "==================== TIER B TRANSCRIPT (tail) ===================="
+          if (Test-Path tierb_transcript.log) { Get-Content tierb_transcript.log -Tail 160 }
+          else { Write-Host "(no transcript — run step did not produce one)" }
+          Write-Host "==================== RESULTS JSON ===================="
+          $r = Get-ChildItem redteam/evaluation/results/*.json -ErrorAction SilentlyContinue
+          if ($r) { $r | ForEach-Object { Write-Host "----- $($_.Name) -----"; Get-Content $_.FullName } }
+          else { Write-Host "(no results json)" }
+          Write-Host "==================== VALKYRIE STDOUT (sensor init) ===================="
+          if (Test-Path valkyrie_stdout.log) { Get-Content valkyrie_stdout.log }
+          else { Write-Host "(no stdout)" }
+          Write-Host "==================== VALKYRIE STDERR (tail) ===================="
+          if (Test-Path valkyrie_stderr.log) { Get-Content valkyrie_stderr.log -Tail 60 }
+          Write-Host "==================== SENSOR / INTEGRITY PROBE ===================="
+          Write-Host ("elevated=" + ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator))
+          try { $s = Get-Service Sysmon64 -ErrorAction Stop; Write-Host ("Sysmon64 service: " + $s.Status) } catch { try { $s = Get-Service Sysmon -ErrorAction Stop; Write-Host ("Sysmon service: " + $s.Status) } catch { Write-Host "Sysmon service: NOT FOUND" } }
+          try { $n = (Get-WinEvent -LogName 'Microsoft-Windows-Sysmon/Operational' -MaxEvents 1 -ErrorAction Stop); Write-Host ("Sysmon log readable: YES (latest EID " + $n.Id + ")") } catch { Write-Host ("Sysmon log readable: NO -- " + $_.Exception.Message) }
+
+      - name: Union coverage (survives a crashed battery)
+        if: always()
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem redteam/evaluation/results/*tierB.json,
+                                   redteam/evaluation/results/*tierB.partial.jsonl `
+                     -ErrorAction SilentlyContinue | Select-Object -Expand FullName)
+          if (-not $files) { Write-Host "(no Tier B result files produced)"; exit 0 }
+          python redteam/evaluation/union_coverage.py @files
+
+      - name: Upload Tier B evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: tier-b-results${{ inputs.artifact_suffix }}
+          path: |
+            tierb_transcript.log
+            valkyrie_stdout.log
+            valkyrie_stderr.log
+            redteam/evaluation/results/*.json
+            redteam/evaluation/results/*.partial.jsonl
+            redteam/evaluation/catalog_export.json
+          if-no-files-found: warn
+          retention-days: 30
