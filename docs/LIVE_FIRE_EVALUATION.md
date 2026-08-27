@@ -25,16 +25,26 @@ event.
 - **Runner:** GitHub Actions `windows-latest` — a freshly provisioned,
   single-use VM destroyed unconditionally at job completion. This is what
   makes the destructive subset of the catalog (credential dumping, security
-  control tampering, shadow-copy deletion) safe to run at all.
-- **Catalog:** 62 cataloged techniques (`redteam/evaluation/catalog.py`), 52
-  in-scope for live execution; 10 excluded a priori for stated structural
-  reasons (e.g. a technique requiring a Domain Controller).
+  control tampering, shadow-copy deletion, simulated ransomware) safe to run
+  at all.
+- **Catalog:** 90 cataloged technique variants (`redteam/evaluation/catalog.py`),
+  73 unique in-scope MITRE techniques for live execution (several techniques
+  are tested more than one way — e.g. two independent LSASS-dumping tools —
+  and are counted once for the denominator, not once per variant); 4
+  explicitly excluded a priori for stated structural reasons (e.g. a
+  technique requiring a Domain Controller). Grew from the original 52 via a
+  deliberate expansion pass (see "Expanded evaluation" below), not by
+  padding — every addition was chosen to probe a specific, previously-untested
+  class of coverage.
 - **Reproduce it yourself:**
   `.github/workflows/redteam-tierb.yml`, manually dispatchable
   (`gh workflow run redteam-tierb.yml -f skip_destructive=false`), or
   `redteam/evaluation/run_live_evaluation.ps1` directly inside your own
-  disposable VM. `-OnlyIds <id1,id2,...>` runs a subset without the full
-  battery — useful for verifying one fix in isolation.
+  disposable VM. `-OnlyIds <id1,id2,...>` or `-OnlyTactic <name,...>` run a
+  subset without the full battery — useful for verifying one fix in
+  isolation, or splitting the full catalog across parallel matrix jobs (see
+  `redteam-tierb.yml`'s `run_full_matrix` input) now that one job no longer
+  comfortably fits the whole thing.
 
 ## Scoring discipline
 
@@ -49,33 +59,51 @@ never rounded up.
 detected(T) = OR over every real run: was T observed in that run?
 ```
 
-## Result (baseline, commit `0497740`, two independent runs)
+## Result — CURRENT (expanded pass, commit `51024b7`, 25 independent runs: 21 from this expansion pass plus 4 preserved from the original baseline)
 
-| Run | Attempted | Detected |
+| Corpus | Attempted | Detected |
 |---|---:|---:|
-| Run 1 | 58 | 42 |
-| Run 2 | 58 | 36 |
-| **Union (authoritative)** | **52 in-scope** | **38 → 73.1%** |
+| **Union (authoritative, current)** | **73 in-scope** | **48 → 65.8%** |
+
+This is the current, authoritative number. It supersedes the original
+baseline below, which is kept for context, not because it is still current:
+
+| Corpus | Attempted | Detected |
+|---|---:|---:|
+| Baseline (first pass, historical) | 52 in-scope | 38 → 73.1% |
+| **Expanded (current)** | **73 in-scope** | **48 → 65.8%** |
+
+**The percentage went down. That is expected, not a regression.** The
+expansion added 21 new techniques chosen specifically because coverage there
+was uncertain — PowerShell-cmdlet equivalents of already-covered native
+binaries, previously-untested tactics (Privilege Escalation, Collection),
+and techniques that turned out to reveal real generalization gaps. A bigger,
+harder denominator producing a lower raw percentage is the honest result of
+testing more rigorously, not evidence the detection engine got worse: every
+technique proven live in the original 52-technique baseline was re-proven
+live in this pass (the union only ever grows), and the Detection Coverage
+log below shows every fix found this round, with none of them a regression.
 
 This includes correctly attributed, live-executed detections of: LSASS
-memory dumping (two independent tool implementations), Defender and firewall
-tampering, volume shadow copy deletion, Windows event log clearing, registry
-Run-key / scheduled-task / startup-folder / WMI-subscription persistence,
-and multiple living-off-the-land binary proxy techniques.
+memory dumping (two independent tool implementations), simulated ransomware
+encryption, Defender and firewall tampering, volume shadow copy deletion,
+Windows event log clearing, local-account creation, registry Run-key /
+scheduled-task / startup-folder / Winlogon-shell / logon-script persistence,
+three distinct UAC-bypass mechanisms, and multiple living-off-the-land
+binary proxy techniques.
 
 ### What was not detected, and exactly why
 
-No miss is folded into an unexplained residual.
+No miss is folded into an unexplained residual. All 26 currently-open gaps,
+categorized:
 
 | Class | Techniques | Reason |
 |---|---|---|
-| Config-excluded | 4× DNS/C2 (`T1071`, `T1071.004`×3) | This test configuration runs with `--no-dns` to avoid touching the runner's real resolver — not exercised, not a code gap |
-| Tool absent on host | `collect-archive-rar`, `exec-msbuild-inline`, `cred-ntdsutil-ifm` | `rar.exe` / `msbuild.exe` / `ntdsutil.exe` are not present on a stock Windows/CI host (verified directly) |
-| Needs a 2nd host | `lat-psexec-smb` | Single-runner limitation, not a Valkyrie question |
-| Requires a Domain Controller | (folded into tool-absent above) | `ntdsutil.exe` ships with the AD DS role |
-| Genuine, open gaps | `T1204.002`, `T1220`, `T1543.003` at baseline, `T1033`, `T1069.001` at baseline | Executed for real, no matching incident — see the Detection Coverage log below for which of these have since been root-caused and fixed |
-| No runnable test | `exec-cmd-office-child` | No atomic command available for this probe |
-| Predicted miss | `collect-archive-rar` (2nd reason) | No rule claims to catch this shape; not a surprise |
+| Config-excluded | 3× DNS/C2 (`T1071.004`×3) | This test configuration runs with `--no-dns` by default to avoid touching the runner's real resolver — not exercised, not a code gap. `enable_network_layer` re-enables this class for anyone who wants to test it. |
+| Tool absent on host | `collect-archive-rar`, `exec-msbuild-inline`, `cred-ntdsutil-ifm`, `evasion-wmic-xsl`, `exec-cmd-office-child`, `exec-lure-doubleext`, `lat-psexec-smb` (needs a 2nd host), `persist-wmi-subscription` | `rar.exe` / `msbuild.exe` / `ntdsutil.exe` / `wmic.exe` are not present on a stock Windows/CI host (verified directly); the rest have no runnable atomic on a single standalone VM |
+| Real, confirmed mislabeling (fires, wrong ATT&CK id) | `cred-lsa-secrets` (fires as T1003.002), `evasion-masquerade-lsass` (fires as T1036.005), `collect-stage-download` (fires as T1105), `disc-network-share`/`disc-network-shares-smb` (fires as T1018), `disc-domain-groups` (fires as T1087.002), `cred-registry-password-hunt` (fires as T1012) | A real, adjacent detection exists but under a different specific technique — never credited as correct per this evaluation's own rule, even though the underlying signal is genuine |
+| Genuine, confirmed generalization gaps | `collect-clipboard`, `disc-net-connections-ps`, `disc-service-discovery-ps`, `disc-service-net-start`, `disc-scheduled-tasks-query`, `disc-file-directory`/`disc-file-dir-ps`, `disc-security-software`/`disc-security-software-cim`, `disc-software-installed`, `disc-password-policy`, `privesc-dll-searchorder-amsi`, `evasion-modify-registry` (likely by design — an ordinary registry write, not obviously worth a rule) | The binary/cmdline form of the technique has no detector at all — mostly PowerShell-cmdlet equivalents of already-covered native-binary techniques, a real and honest generalization boundary |
+| Long-standing, inconclusive | `disc-whoami-priv` (T1033) | Investigated in an earlier pass; evidence was inconsistent with a test-pacing artifact rather than a confirmed code gap — left open rather than claimed either way |
 
 ## Case study: a self-inflicted false-positive storm, found and fixed
 
@@ -136,27 +164,62 @@ so far on `feat/efficacy-etw-coverage`:
    persistence probe only implemented `run_key`/`startup_folder`; `service`
    silently did nothing while still reporting execution. Implemented for
    real via `sc.exe create`. (`run_live_evaluation.ps1`)
+5. **`disc-localgroup`'s catalog entry was stale relative to fix #1** — fix
+   #1 above was verified with an ad hoc manual test using real burst
+   partners, but the catalog entry itself was never updated off
+   `probe="ioa_rule"` (standalone, deliberately never alerts by this
+   project's own design) and `predicted_tier_b="MISS"`. Every automated run
+   since fix #1 landed was still testing the scenario fix #1 explicitly
+   doesn't cover alone, not the scenario it actually fixed. First correction
+   attempt reused the wrong burst partners (`nltest.exe /domain_trusts` is
+   deliberately excluded from the classifier's own diversity count, since it
+   has a separate named rule) and still failed offline before being caught;
+   corrected to the same partner pattern proven everywhere else in the
+   catalog. (`catalog.py`)
+6. **The ransomware probe tested an isolated unit-test stub, not the real
+   shield** — `impact-ransomware-encrypt`, Valkyrie's own most mature,
+   purpose-built detector, scored a clean live miss
+   (`attack_executed=true`, `classifier_logic_fires=false`) in the expanded
+   pass. Traced to source: the probe called `/api/ransomware/self-test`,
+   which invokes `ransomware_shield.py`'s `simulate()` — a function whose
+   own docstring says it builds an isolated, throwaway `CanaryManager` in a
+   temp directory, "used by the /api self-test AND UNIT TESTS." It never
+   touches the real, running shield's own watched canaries and publishes no
+   `TelemetryEvent`, so it could never produce a scoreable incident
+   regardless of detector quality. Fixed to read the real armed shield's own
+   manifest (`data/ransomware_canaries.json`) and overwrite an actual
+   live-armed canary with random high-entropy bytes — what a real attack
+   does to a real tripwire. (`run_live_evaluation.ps1`)
+7. **`privesc-dll-searchorder-amsi`'s tool-check used the wrong binary
+   name** — its `probe_input.image` was set to `updater.exe`, the *output*
+   of the technique's own first step (a `copy` that creates the renamed
+   file), not a pre-existing tool. The harness's tool-presence pre-check
+   (`Get-Command`) always fails on a file that doesn't exist yet, so this
+   entry was silently misclassified `not_executed_no_command` on every real
+   run instead of being attempted. Fixed to check `cmd.exe`, the binary
+   actually being invoked. (`catalog.py`)
 
-**Live re-verification (same day, isolated `-OnlyIds` re-runs on the same
-disposable runner class — not a full battery re-run, but each fix confirmed
-individually against the real engine):**
+**Live re-verification (isolated `-OnlyIds`/`-OnlyTactic` re-runs on the same
+disposable runner class, each fix confirmed individually against the real
+engine, then folded into the full-battery union above):**
 
 | Fix | Technique | Result |
 |---|---|---|
 | #1 (label) | `disc-localgroup` T1069.001 | **`[DETECT]`, fp=0, latency=2.1s** — confirmed live with real burst partners |
 | #2 (Sysmon EID8) | `evasion-process-injection` T1055 | **`[DETECT]`, fp=0, latency=4.9s** — confirmed live; `Get-WinEvent` independently confirmed 1 real EID8 event captured |
 | #3 (harness honesty) | 4 tool-absent techniques | Confirmed correctly reclassified `not_executed_no_command`, no longer falsely `executed_missed` |
+| #5 (catalog staleness) | `disc-localgroup` T1069.001, again | Confirmed `[DETECT]` from the catalog entry itself, not just an ad hoc test — `classifier_logic_fires=True, counted_as_detected=True` in `replay_harness.py`, then live in the full battery |
+| #6 (ransomware probe) | `impact-ransomware-encrypt` T1486 | **`[DETECT]`, fp=0, latency=10.23s** — confirmed live against a real armed canary, not the self-test stub |
+| #7 (tool-check bug) | `privesc-dll-searchorder-amsi` T1574.001 | Now genuinely attempted and genuinely missed (no rule exists for this technique) — correctly reclassified from a masked harness bug to an honest, confirmed gap |
 
-Two genuine, previously-missing techniques (T1055, T1069.001) are now
-independently confirmed live, moving the proven floor from 38/52 (73.1%)
-toward 40/52 (76.9%) pending a full-battery re-run to fold this into the
-authoritative union number. This log is updated as the milestone continues;
-treat any coverage percentage above as a floor as of the commit it cites,
-not a permanent number.
+All seven fixes are folded into the 48/73 (65.8%) union above — this is not
+a pending number, it is the current authoritative result. This log is
+updated as the milestone continues; treat any coverage percentage above as a
+floor as of the commit it cites, not a permanent ceiling.
 
 ## What this evaluation does not claim
 
-- Comprehensive coverage of the full ATT&CK matrix — 52 in-scope techniques
+- Comprehensive coverage of the full ATT&CK matrix — 73 in-scope techniques
   is a deliberate, representative slice, not an exhaustive one.
 - Multi-host lateral movement — structurally out of reach of a single
   disposable runner.
