@@ -1299,22 +1299,48 @@ BREADTH_EXPANSION = [
               "bypass. HKCU only (reversible). Verified -> T1548.002. FIRST "
               "Privilege Escalation entry in the catalog.",
     ),
-    # ---- honest MISS entries: what the breadth test shows is NOT covered ----
     Technique(
         id="disc-localgroup", technique_id="T1069.001",
         technique_name="Permission Groups Discovery: Local Groups (net localgroup)",
         tactic="Discovery", art_test_ref="T1069.001 (documented cmdline)",
         destructive=False, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
-        detector_path="no dedicated rule; only via reconnaissance-burst if "
-                       "clustered with other discovery",
-        predicted_tier_b="MISS", source_confidence=SOURCE_CONFIRMED,
-        probe="ioa_rule", probe_input={
-            "image": "net.exe", "parent": "cmd.exe",
-            "cmdline": r"net localgroup administrators", "path": ""},
-        notes="No standalone rule fires on net localgroup (verified classify_"
-              "behavior -> None). Only caught if it lands in a discovery burst. "
-              "Honest gap: single-shot group enumeration is not detected.",
+        detector_path="valkyrie/process_telemetry.py classify_discovery "
+                       "('net localgroup' branch, non-/add) -> "
+                       "'reconnaissance-burst' sequence IOA (T1069 added to "
+                       "the sequence's technique tuple)",
+        predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
+        probe="recon_burst", probe_input={
+            "image": "net.exe", "cmdline": "net localgroup administrators",
+            "co_occurring": [("systeminfo.exe", "systeminfo.exe"),
+                             ("tasklist.exe", "tasklist.exe /v")]},
+        notes="CORRECTED 2026-08-27, TWICE. First correction: this entry was "
+              "stale relative to the code's own already-proven capability - "
+              "classify_discovery labels bare 'net localgroup' as T1069.001 "
+              "(fixed in an earlier session), T1069 was added to the "
+              "reconnaissance-burst sequence's technique tuple, and an ad hoc "
+              "live check with (disc-net-view, disc-domain-trust) as partners "
+              "showed DETECT - but this catalog entry itself was never "
+              "updated off probe='ioa_rule'/predicted MISS, so every "
+              "automated run since then scored a miss purely because the "
+              "TEST never gave it burst partners. First fix reused those "
+              "same two partners directly, INCLUDING nltest.exe "
+              "/domain_trusts - which is wrong: verified via "
+              "replay_harness.py (fires=False) that nltest WITH that flag is "
+              "explicitly EXCLUDED from classify_discovery's own diversity "
+              "count, precisely because it already has its own separate "
+              "named MEDIUM rule (behavioral_rules.py nltest-domain) - so "
+              "the burst only ever saw 2 distinct classify_discovery "
+              "techniques (T1069.001, T1018), never the 3 required to "
+              "complete. The original ad hoc verification's 'disc-domain-"
+              "trust' partner must have counted toward completion through "
+              "some other path than this specific function, not reproduced "
+              "here. Second fix: replaced with the identical "
+              "systeminfo.exe/tasklist.exe partner pair already proven "
+              "across every other recon_burst entry in this file, verified "
+              "fires=True via replay_harness.py before touching CI. " +
+              _RECON_BURST_NOTE,
     ),
+    # ---- honest MISS entries: what the breadth test shows is NOT covered ----
     Technique(
         id="exec-wscript-vbs", technique_id="T1059.005",
         technique_name="Command & Scripting Interpreter: Visual Basic (wscript)",
