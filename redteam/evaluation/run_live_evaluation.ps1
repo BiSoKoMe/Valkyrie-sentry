@@ -911,3 +911,17 @@ if ($totalFp -gt 0) {
                "this number as meaningful on its own.") -ForegroundColor DarkYellow
 }
 Write-Host "  REVERT THE SNAPSHOT NOW." -ForegroundColor Yellow
+
+# Explicit success exit. Found via the matrix-job split (2026-08-26): a tactic
+# whose ENTIRE in-scope set is destructive (Impact: all 3 techniques) runs
+# every iteration through the SKIP branch with -SkipDestructive set, producing
+# a valid, complete, zero-record run - legitimate output, not a failure. But
+# with no explicit exit code here, the calling workflow's $? read $false
+# anyway (some incidental non-terminating error/warning elsewhere in the run
+# left that residue) and reported the whole job FAILED, even though the
+# script had done exactly what it was asked and printed a clean summary. A
+# harness reporting its own correct, intentional outcome as a failure is
+# exactly the class of bug this project's evidence-librarian discipline
+# exists to prevent - so make the signal explicit rather than inferred from
+# whatever $? happens to hold by the time control reaches here.
+exit 0
