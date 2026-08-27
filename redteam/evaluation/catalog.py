@@ -983,7 +983,26 @@ IMPACT = [
         probe="ransomware", probe_input={"payload": "random_high_entropy"},
         notes="Valkyrie's most mature, purpose-built detector. Genuinely "
               "expected to be strong here -- this is the one place a "
-              "confident DETECT is warranted, not merely hoped for.",
+              "confident DETECT is warranted, not merely hoped for.\n"
+              "REAL LIVE MISS FOUND 2026-08-27, TRACED TO A HARNESS BUG, NOT "
+              "A DETECTOR GAP: the live run scored attack_executed=true, "
+              "classifier_logic_fires=false. Root cause: the probe called "
+              "/api/ransomware/self-test, which invokes ransomware_shield."
+              "py's simulate() - a function whose own docstring says it "
+              "builds an ISOLATED, throwaway CanaryManager in a temp dir, "
+              "'used by the /api self-test AND UNIT TESTS'. It is a unit "
+              "test wearing an API route: it never touches the real, "
+              "running shield's own watched canaries and publishes no "
+              "TelemetryEvent, so it could never produce a scoreable "
+              "incident regardless of how good the real detector is. Fixed "
+              "in run_live_evaluation.ps1: the probe now reads the REAL "
+              "armed shield's own manifest (data/ransomware_canaries.json, "
+              "written by CanaryManager._save_manifest() at real startup) "
+              "and overwrites an ACTUAL live-armed canary with random "
+              "high-entropy bytes, then polls for a real incident exactly "
+              "like every other technique. Not yet re-verified live at the "
+              "time of this note - see docs/LIVE_FIRE_EVALUATION.md for the "
+              "re-verification result.",
     ),
     Technique(
         id="impact-shadow-delete", technique_id="T1490",
@@ -2031,7 +2050,14 @@ EXPANSION_ROUND2B = [
                        "var), keyed on unrelated strings",
         predicted_tier_b="MISS", source_confidence=SOURCE_PARTIAL,
         probe="ioa_rule", probe_input={
-            "image": "updater.exe", "parent": "cmd.exe",
+            # image is "cmd.exe", not "updater.exe": updater.exe is the
+            # RENAMED COPY this command creates as its own first step, not a
+            # pre-existing tool - the live harness pre-checks Get-Command on
+            # this field before running, and Get-Command on a not-yet-created
+            # file always fails, which silently and wrongly scored this
+            # entry as tool-absent (not_executed_no_command) on every real
+            # run instead of actually attempting it. Found 2026-08-27.
+            "image": "cmd.exe", "parent": "cmd.exe",
             "cmdline": r"copy %windir%\System32\windowspowershell\v1.0"
                        r"\powershell.exe %APPDATA%\updater.exe & "
                        r"copy %windir%\System32\amsi.dll %APPDATA%\amsi.dll "

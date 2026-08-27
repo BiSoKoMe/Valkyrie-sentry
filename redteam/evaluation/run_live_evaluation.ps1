@@ -486,13 +486,55 @@ foreach ($t in $Techniques) {
                     $attackExecuted = $true
                 }
                 "ransomware" {
-                    # Use Valkyrie's OWN self-test endpoint rather than writing
-                    # into a real user's Documents folder -- it exercises the
-                    # canary + entropy path the way the product ships it.
+                    # REWRITTEN 2026-08-27. Found via a real live run: this
+                    # technique (Valkyrie's own most mature, purpose-built
+                    # detector, "genuinely expected to be strong" per its own
+                    # catalog notes) scored a clean miss - attack_executed=
+                    # true, classifier_logic_fires=false. Traced to source
+                    # rather than accepted as a real gap: /api/ransomware/
+                    # self-test calls ransomware_shield.py's simulate(), which
+                    # builds an ISOLATED, throwaway CanaryManager scoped to a
+                    # temp dir (see the function's own docstring: "proving the
+                    # tripwire + entropy logic... Used by the /api self-test
+                    # and unit tests"). It is a unit test wearing an API route
+                    # - by construction it never touches the REAL, running
+                    # shield's own watched canaries, publishes no
+                    # TelemetryEvent, and can never produce a real, scoreable
+                    # incident. Calling it only ever proved the CanaryManager
+                    # class works in isolation, never that a live attack
+                    # against the real watchers is detected.
+                    #
+                    # The actual test: still call self-test first (keeps that
+                    # class-level signal), then read the REAL armed shield's
+                    # own manifest (CanaryManager._save_manifest(), written at
+                    # startup) and overwrite one REAL canary with random
+                    # high-entropy bytes - exactly what a real ransomware
+                    # attack does to a real tripwire - then let the SAME
+                    # detection-window polling every other technique uses find
+                    # a real incident. Safe here specifically because this is
+                    # a disposable runner with no real user data: the canary
+                    # IS the intended attack surface, by design.
                     try {
                         Invoke-CurlPost -Uri "$ApiBase/api/ransomware/self-test" `
                             -Headers @{ "X-Valkyrie-Token" = $env:VALKYRIE_TOKEN } -TimeoutSec 15 | Out-Null
-                        $attackExecuted = $true
+                    } catch {}
+                    $manifestPath = Join-Path $RepoRoot "data\ransomware_canaries.json"
+                    try {
+                        if (-not (Test-Path $manifestPath)) {
+                            $executionError = "ransomware canary manifest not found at $manifestPath - shield may not have armed"
+                        } else {
+                            $canaries = @(Get-Content $manifestPath -Raw | ConvertFrom-Json)
+                            $target = $canaries | Select-Object -First 1
+                            if (-not $target -or -not $target.path) {
+                                $executionError = "canary manifest exists but is empty - shield armed 0 canaries"
+                            } else {
+                                $bytes = New-Object byte[] 512
+                                (New-Object Random).NextBytes($bytes)
+                                [System.IO.File]::WriteAllBytes($target.path, $bytes)
+                                Info "   overwrote a REAL, live-armed canary with random high-entropy bytes: $($target.path)"
+                                $attackExecuted = $true
+                            }
+                        }
                     } catch { $executionError = $_.Exception.Message }
                 }
                 "sysmon_eid8" {
