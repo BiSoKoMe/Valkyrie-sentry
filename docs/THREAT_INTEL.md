@@ -1,11 +1,11 @@
-# Threat Intelligence — local IOC feed engine
+# Threat Intelligence - local IOC feed engine
 
-`valkyrie/threat_intel.py` · ADR 0015 · tests: `tests/test_threat_intel.py`
+`valkyrie/threat_intel.py` . ADR 0015 . tests: `tests/test_threat_intel.py`
 
 Valkyrie pulls real, curated indicators of active threat infrastructure
 (botnet C2 IPs, live malware-distribution domains) from public abuse.ch
-feeds and matches them **entirely on-box**. A hit is incident-grade —
-distinct from an ad/tracker block — and flows into DNS blocking, resolved-
+feeds and matches them **entirely on-box**. A hit is incident-grade -
+distinct from an ad/tracker block - and flows into DNS blocking, resolved-
 answer sinkholing, and EDR incident correlation.
 
 ## What it does
@@ -43,16 +43,16 @@ deliberately not shipped.)
 | Malware beacons to C2 by domain | DNS pipeline blocks at step 2a, before resolution; learned "known good" cannot mask it |
 | Compromised legit domain (learned good, later in feed) | Intel check runs **before** the intelligence fast path |
 | Fast-flux: clean domain resolving to known C2 IP | Resolved-answer screening sinkholes the reply |
-| Hard-coded-IP C2 (no DNS at all) | Network collector flags the live connection → EDR incident (`threat_intel_ip`) |
+| Hard-coded-IP C2 (no DNS at all) | Network collector flags the live connection -> EDR incident (`threat_intel_ip`) |
 | Poisoned/corrupt feed or cache tries to block internal infra | Every line revalidated on parse AND on cache read; private/loopback/link-local/reserved IPs and localhost/dotless names can never enter the match sets |
 | Feed outage / format change | Fetch failure or 0-indicator body keeps the previous cache; stale beats empty |
-| Feed operator observes users | Only feed *downloads* touch the network (opt-in); no per-query lookups — queried domains/IPs never leave the machine |
+| Feed operator observes users | Only feed *downloads* touch the network (opt-in); no per-query lookups - queried domains/IPs never leave the machine |
 
 ## Privacy analysis
 
 - Downloads obey the global switch (`USE_EXTERNAL_LISTS` /
   `--download-lists` / `--no-download-lists`); default posture (as of
-  2026-08) is **on** — a security product with live threat intel off by
+  2026-08) is **on** - a security product with live threat intel off by
   default understated real-world detection. Opt out per-run with
   `--no-download-lists`, or permanently by setting `USE_EXTERNAL_LISTS =
   False` in `config.py`.
@@ -65,26 +65,26 @@ deliberately not shipped.)
 ## Performance (measured 2026-07-18, this machine)
 
 - Lookup: **~1.0 µs** (100,000 mixed lookups over 100k indicators,
-  985k lookups/s) — DNS hot-path budget is 50 µs.
+  985k lookups/s) - DNS hot-path budget is 50 µs.
 - Live refresh, all 3 feeds: **1.8 s**, off the hot path in a daemon
   thread every `THREAT_INTEL_REFRESH_SECONDS` (6 h).
 - Memory: 2,394 live IOCs ≈ a few hundred KB of frozensets.
 
 ## Operations
 
-- Status: `GET /api/intel/status` → total/per-feed counts + freshness.
+- Status: `GET /api/intel/status` -> total/per-feed counts + freshness.
 - Refresh cadence: `THREAT_INTEL_MAX_AGE_HOURS` (6) staleness gate,
   checked every 6 h; `valkyrie --update` also refreshes feeds.
 - Cache: `data/threat_intel/<feed>.txt` (+ `.meta.json`); delete the
   directory to reset.
 - Rollback: run with `--no-download-lists` and delete the cache dir, or
-  unwire `threat_intel` in `__main__.py` — every consumer is `Optional`.
+  unwire `threat_intel` in `__main__.py` - every consumer is `Optional`.
 
 ## Extension points (honest boundaries)
 
 - **URL-path IOCs**: URLhaus carries full URLs; matching them requires
   the TLS inspector's URL visibility. Seam exists; not yet wired.
-- **More feeds**: `THREAT_INTEL_SOURCES` is data-driven — any
+- **More feeds**: `THREAT_INTEL_SOURCES` is data-driven - any
   bare/hosts/CSV feed parses without code changes.
 - **Global intel cloud / sightings**: needs multi-endpoint
   infrastructure; per the no-fake-parity rule, not claimed.

@@ -356,6 +356,14 @@ class CausalityGraph:
                 node = self._nodes.get(key)
                 if node is None:
                     return False
+            event_id = str((data or {}).get("event_id") or "")
+            # A telemetry producer may retry after a transient hand-off error.
+            # Preserve idempotence when it supplies its own stable event id;
+            # without one, retain the historical append-only behaviour.
+            if event_id and any(
+                    str((artifact.data or {}).get("event_id") or "") == event_id
+                    for artifact in node.artifacts):
+                return True
             node.artifacts.append(Artifact(kind=str(kind or "event"),
                                            summary=str(summary or ""),
                                            ts=float(ts or 0.0),

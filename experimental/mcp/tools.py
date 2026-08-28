@@ -1,9 +1,9 @@
-"""Valkyrie MCP tool surface — the agent-facing capability registry.
+"""Valkyrie MCP tool surface - the agent-facing capability registry.
 
 Inspired by CrowdStrike's `falcon-mcp`, which exposes Falcon's platform to AI
 agents as Model Context Protocol tools so an analyst can investigate, hunt and
 triage in natural language. Valkyrie had a rich facade (incidents, hunts,
-investigation, response) reachable only from the CLI, the desktop app, or HTTP —
+investigation, response) reachable only from the CLI, the desktop app, or HTTP -
 nothing an AI agent could drive. This is that interface, for a local-first EDR:
 point an agent at YOUR machine's own security data and ask it questions.
 
@@ -11,7 +11,7 @@ Design rules, in Valkyrie's style:
 
   * **Read-only by default.** Every tool here observes. The one acting tool
     (`valkyrie_respond`) is unavailable unless the server was started with
-    ``--allow-response``, and *even then* defaults to ``dry_run=True`` — the same
+    ``--allow-response``, and *even then* defaults to ``dry_run=True`` - the same
     dry-run/enforce discipline the SOAR playbooks use. falcon-mcp makes the same
     call (its Real Time Response module is explicitly read-only triage): an agent
     with a shell on your box is a bigger risk than the threat it is chasing.
@@ -49,7 +49,7 @@ class Tool:
     handler: Callable[[ToolContext, dict], Any]
 
 
-# ── helpers ─────────────────────────────────────────────────────────────────
+# --- helpers ---
 
 def _need_engine(ctx: ToolContext):
     if ctx.engine is None:
@@ -64,7 +64,7 @@ def _clamp(v, lo, hi, default):
         return default
 
 
-# ── handlers ────────────────────────────────────────────────────────────────
+# --- handlers ---
 
 def _get_status(ctx: ToolContext, args: dict) -> dict:
     """Connectivity + posture: is the engine live, how much has it seen."""
@@ -149,7 +149,7 @@ def _run_hunt(ctx: ToolContext, args: dict) -> dict:
 
 
 def _search_events(ctx: ToolContext, args: dict) -> dict:
-    """Ad-hoc telemetry search — the free-form hunting surface."""
+    """Ad-hoc telemetry search - the free-form hunting surface."""
     eng = _need_engine(ctx)
     filters: dict = {}
     if args.get("domain"):
@@ -171,7 +171,7 @@ def _search_events(ctx: ToolContext, args: dict) -> dict:
 
 
 def _get_detection_coverage(ctx: ToolContext, args: dict) -> dict:
-    """Honest capability introspection — what Valkyrie can and cannot see.
+    """Honest capability introspection - what Valkyrie can and cannot see.
 
     Deliberately includes the BOUNDARIES so an agent asking "can Valkyrie detect
     X?" answers truthfully instead of assuming full coverage.
@@ -213,7 +213,7 @@ def _get_detection_coverage(ctx: ToolContext, args: dict) -> dict:
         }
     except Exception:
         pass
-    # The honest part — stated plainly so an agent repeats it, not hides it.
+    # The honest part - stated plainly so an agent repeats it, not hides it.
     cov["boundaries"] = [
         "Detection, not prevention: the kernel driver (prevention/self-protection) "
         "is unbuilt/unsigned source, so Valkyrie alerts but generally does not block "
@@ -231,7 +231,7 @@ def _get_detection_coverage(ctx: ToolContext, args: dict) -> dict:
 
 
 def _respond(ctx: ToolContext, args: dict) -> dict:
-    """The ONLY acting tool — gated, and dry-run unless explicitly told otherwise."""
+    """The ONLY acting tool - gated, and dry-run unless explicitly told otherwise."""
     if not ctx.allow_response:
         raise PermissionError(
             "Response actions are disabled in this session. Start the MCP server "
@@ -250,7 +250,7 @@ def _respond(ctx: ToolContext, args: dict) -> dict:
                        incident_id=str(args.get("incident_id") or ""))
 
 
-# ── the registry ────────────────────────────────────────────────────────────
+# --- the registry ---
 
 _STR = {"type": "string"}
 _INT = {"type": "integer"}

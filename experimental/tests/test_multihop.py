@@ -43,7 +43,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
 
     mh = MultiHopVPN()
 
-    # ── Test 1: Configs generate without error ─────────────────────────────
+    # --- Test 1: Configs generate without error ---
     print("\n-- Config generation ---------------------------------")
     try:
         result = mh.generate_config(hop1_ip="1.2.3.4", hop2_ip="5.6.7.8")
@@ -55,7 +55,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
     check("hop1 conf file written", _cfg.WIREGUARD_HOP1_CONF.exists())
     check("hop2 conf file written", _cfg.WIREGUARD_HOP2_CONF.exists())
 
-    # ── Test 2: Keypairs are valid WireGuard base64 ───────────────────────
+    # --- Test 2: Keypairs are valid WireGuard base64 ---
     print("\n-- Key format ----------------------------------------")
     _B64_RE = re.compile(r'^[A-Za-z0-9+/]{43}=$')
 
@@ -81,7 +81,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
     check("result contains hop1_priv key", is_wg_key(result.get("hop1_priv", "")))
     check("result contains hop2_priv key", is_wg_key(result.get("hop2_priv", "")))
 
-    # ── Test 3: Kill-switch rules syntactically correct ───────────────────
+    # --- Test 3: Kill-switch rules syntactically correct ---
     print("\n-- Kill-switch rules ---------------------------------")
     check("Kill switch PostUp contains iptables OUTPUT",
           "iptables" in _KILL_SWITCH_UP and "OUTPUT" in _KILL_SWITCH_UP,
@@ -97,13 +97,13 @@ with tempfile.TemporaryDirectory() as tmpdir:
     check("hop2 conf contains PostUp kill-switch", "PostUp" in hop2_text)
     check("hop2 conf contains PreDown kill-switch", "PreDown" in hop2_text)
 
-    # ── Test 4: Configs reference each other correctly ────────────────────
+    # --- Test 4: Configs reference each other correctly ---
     print("\n-- Cross-config consistency --------------------------")
     check("hop1 conf Endpoint is hop1_ip:51820",
           "1.2.3.4:51820" in hop1_text, hop1_text[:300])
     # hop2's Endpoint MUST be hop2's real public IP (the address the client
     # dials directly), NOT a WireGuard-internal overlay address like
-    # 10.13.14.1 — that address doesn't exist on the public internet and
+    # 10.13.14.1 - that address doesn't exist on the public internet and
     # can't be used to perform the initial handshake. This used to be
     # hardcoded to 10.13.14.1:51820 and hop2_ip was silently discarded; see
     # docs/VPN_SELFHEAL_AUDIT_REPORT.md.
@@ -121,7 +121,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
     check("hop2 conf has placeholder for hop2 pubkey",
           "REPLACE_WITH_HOP2_PUBKEY" in hop2_text)
 
-    # ── Test 4b: Invalid hop IPs are rejected, not silently written ────────
+    # --- Test 4b: Invalid hop IPs are rejected, not silently written ---
     print("\n-- Input validation -----------------------------------")
     try:
         mh.generate_config(hop1_ip="1.2.3.4; rm -rf /", hop2_ip="5.6.7.8")
@@ -141,7 +141,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
     except Exception as e:
         check("empty hop1_ip is rejected", False, f"wrong exception type: {e!r}")
 
-    # ── Test 5: Instructions print cleanly ────────────────────────────────
+    # --- Test 5: Instructions print cleanly ---
     print("\n-- Instructions --------------------------------------")
     try:
         instr = mh.instructions()
@@ -152,7 +152,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
     except Exception as e:
         check("instructions() returns without error", False, str(e))
 
-    # ── Test 6: status() ─────────────────────────────────────────────────
+    # --- Test 6: status() ---
     print("\n-- Status dict ---------------------------------------")
     st = mh.status()
     check("status() shows hop1 conf exists", st.get("hop1_conf_exists") is True)
@@ -168,7 +168,7 @@ _cfg.DATA_DIR            = _orig_data
 _cfg.WIREGUARD_HOP1_CONF = _orig_hop1
 _cfg.WIREGUARD_HOP2_CONF = _orig_hop2
 
-# ── Summary ───────────────────────────────────────────────────────────────────
+# --- Summary ---
 print(f"\n{'=' * 50}")
 print(f"  {PASS} passed  /  {FAIL} failed")
 if FAIL:

@@ -29,5 +29,46 @@ native_audit already enabled: `True`
 
 ## RUN B — healthy-Sysmon baseline
 
-_not yet run_
+Generated: 20260823T201416Z
+Capture rate: **11/12 (92%)**
+Latency: median 7270 ms, p95 33501 ms
+Detector sources: {'edr.sequence': 8, 'etw.sysmon': 3}
 
+Sysmon at run time: service_state=`Running`, collection_live=`True`, configured_eids=`[1, 3, 7, 8, 10]`
+native_audit already enabled: `True`
+
+| Technique | Executed | Captured | Latency (ms) | Detector | Incident |
+|---|---|---|---:|---|---|
+| T1033 System Owner/User Discovery (whoami /priv) | `whoami /priv` | **CAPTURED** | 34286 | edr.sequence | inc_7c906cdbeb9a49b4 |
+| T1082 System Information Discovery | `systeminfo` | **CAPTURED** | 32717 | edr.sequence | inc_7c906cdbeb9a49b4 |
+| T1057 Process Discovery | `tasklist /v` | **CAPTURED** | 10394 | etw.sysmon | inc_a98471a1b97540ed |
+| T1018 Remote System Discovery (net view) | `net view` | **CAPTURED** | 26286 | edr.sequence | inc_7c906cdbeb9a49b4 |
+| T1087.001 Account Discovery: Local Account (net user) | `net user` | **CAPTURED** | 9330 | edr.sequence | inc_7c906cdbeb9a49b4 |
+| T1482 Domain Trust Discovery (nltest) | `nltest /dclist` | **CAPTURED** | 7270 | etw.sysmon | inc_a9621f3cde3643c9 |
+| T1016 System Network Configuration Discovery (ipconfig) | `ipconfig /all` | **CAPTURED** | 6228 | edr.sequence | inc_7c906cdbeb9a49b4 |
+| T1049 System Network Connections Discovery (netstat) | `netstat -ano` | **CAPTURED** | 4684 | edr.sequence | inc_7c906cdbeb9a49b4 |
+| T1082 System Information Discovery (hostname) | `hostname` | **CAPTURED** | 3142 | edr.sequence | inc_7c906cdbeb9a49b4 |
+| T1012 Query Registry (reg query) | `reg query HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion` | **CAPTURED** | 1613 | edr.sequence | inc_7c906cdbeb9a49b4 |
+| T1007 System Service Discovery (sc query) | `sc query eventlog` | **CAPTURED** | 1613 | etw.sysmon | inc_3880b8da71624908 |
+| T1016 System Network Configuration Discovery (arp -a) | `arp -a` | missed | — | — | — |
+
+## DELTA — the measured value of the Sysmon dependency
+
+Capture rate: 11/12 (92%) -> 11/12 (92%)
+Median latency: 4869 ms -> 7270 ms
+p95 latency: 33132 ms -> 33501 ms
+
+| Technique | Poller-only | Sysmon | Changed |
+|---|---|---|---|
+| T1033 System Owner/User Discovery (whoami /priv) | CAPTURED | CAPTURED | same |
+| T1082 System Information Discovery | CAPTURED | CAPTURED | same |
+| T1057 Process Discovery | CAPTURED | CAPTURED | same |
+| T1018 Remote System Discovery (net view) | CAPTURED | CAPTURED | same |
+| T1087.001 Account Discovery: Local Account (net user) | CAPTURED | CAPTURED | same |
+| T1482 Domain Trust Discovery (nltest) | CAPTURED | CAPTURED | same |
+| T1016 System Network Configuration Discovery (ipconfig) | CAPTURED | CAPTURED | same |
+| T1049 System Network Connections Discovery (netstat) | CAPTURED | CAPTURED | same |
+| T1082 System Information Discovery (hostname) | CAPTURED | CAPTURED | same |
+| T1012 Query Registry (reg query) | CAPTURED | CAPTURED | same |
+| T1007 System Service Discovery (sc query) | CAPTURED | CAPTURED | same |
+| T1016 System Network Configuration Discovery (arp -a) | missed | missed | same |

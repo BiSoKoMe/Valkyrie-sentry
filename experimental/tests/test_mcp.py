@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Valkyrie MCP server tests (valkyrie/mcp/).
 
-Covers the JSON-RPC/MCP protocol layer AND — more importantly — the safety
+Covers the JSON-RPC/MCP protocol layer AND - more importantly - the safety
 guarantees: an AI agent driving an EDR must not be able to take an enforcement
 action that wasn't explicitly enabled, and must be told Valkyrie's real limits
 rather than assuming full coverage.

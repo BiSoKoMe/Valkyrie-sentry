@@ -9,10 +9,10 @@
         keys/certs, caches, VCS metadata, tokens, the working rules file).
       * The developer username or an absolute C:\Users\<name>\ path embedded in
         any shipped binary or text file (the frozen engine, app.asar, scripts).
-    Third-party binaries (nssm, vc_redist) are scanned too — they should be
+    Third-party binaries (nssm, vc_redist) are scanned too - they should be
     clean, and a hit means something is wrong.
 
-    app.asar is an archive, not a directory — Get-ChildItem cannot see inside
+    app.asar is an archive, not a directory - Get-ChildItem cannot see inside
     it, so its contents are additionally listed by name (via `asar list`) and
     checked against the same forbidden-name/test-file rules used for real
     directories, not just scanned as an opaque blob for embedded strings.
@@ -51,7 +51,7 @@ $forbiddenFilePatterns = @(
 )
 $forbiddenNames = @(
     'control_token.txt', 'fleet_agent.json', 'valkyrie.db', 'blocklist.txt',
-    'valkyrie_rules.yaml'   # the working rules file — only rules.default.yaml (bundled) may ship
+    'valkyrie_rules.yaml'   # the working rules file - only rules.default.yaml (bundled) may ship
 )
 $forbiddenDirs = @('data', 'logs', '__pycache__', '.git', '.venv', 'venv', 'node_modules',
                    '.pytest_cache', '.mypy_cache', 'tests', '__tests__', '.vscode', '.idea')
@@ -103,7 +103,7 @@ function Invoke-ScanForbidden {
             }
         }
     }
-    # Duplicate files (same content shipped twice) — a warning, by SHA256.
+    # Duplicate files (same content shipped twice) - a warning, by SHA256.
     $byHash = @{}
     Get-ChildItem $Dir -Recurse -File -Force | Where-Object { $_.Length -gt 0 } | ForEach-Object {
         $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash

@@ -1,11 +1,11 @@
-"""FleetAgent — device side of the control plane.
+"""FleetAgent - device side of the control plane.
 
 Enrolls this device once (persisting its issued id + token locally), then
 sends a privacy-preserving heartbeat on a timer. Uses only the standard
 library (urllib) so a protected endpoint needs no extra runtime dependency.
 
 The heartbeat payload is built from a `status_provider` callable the caller
-supplies — typically wrapping the local Store.stats(). This module extracts
+supplies - typically wrapping the local Store.stats(). This module extracts
 ONLY counts/categories/health from that dict; it never forwards domains (see
 protocol.py). If a caller's provider returns domain strings, they are dropped
 here rather than sent.
@@ -57,7 +57,7 @@ class FleetAgent:
         # the agent simply never applies policy.
         self._policy_pubkey  = policy_public_key_hex or ""
         self._policy_applier = policy_applier
-        # A verified remote command is executed by this callback — typically
+        # A verified remote command is executed by this callback - typically
         # EdrEngine.respond(action, target). With no key/runner the agent never
         # runs remote commands (the channel is simply inert).
         self._command_runner = command_runner
@@ -124,7 +124,7 @@ class FleetAgent:
 
     def fetch_and_apply_policy(self) -> bool:
         """Pull the org policy, verify its signature against the pinned key,
-        and apply it — but ONLY if it is authentic AND strictly newer than the
+        and apply it - but ONLY if it is authentic AND strictly newer than the
         version already applied (anti-rollback). Returns True if a new policy
         was applied. Any verification failure is refused, not applied."""
         if not self.is_enrolled() or not self._policy_pubkey or self._policy_applier is None:
@@ -133,7 +133,7 @@ class FleetAgent:
         try:
             raw = self._post("/api/agent/policy", payload, auth=None)
         except _HttpError:
-            return False   # 404 (no policy) / transient — nothing to apply
+            return False   # 404 (no policy) / transient - nothing to apply
         try:
             bundle = SignedPolicy.from_dict(raw)
             policy = verify_signed_policy(bundle, self._policy_pubkey)  # raises if bad
@@ -177,7 +177,7 @@ class FleetAgent:
                 status, result = self._command_runner(cmd.action, cmd.target)
             except Exception as exc:          # noqa: BLE001
                 status, result = "failed", f"runner error: {exc}"
-            # Ack regardless of outcome — the ack is what stops the command
+            # Ack regardless of outcome - the ack is what stops the command
             # being handed back to us (anti-replay) and reports status upstream.
             try:
                 self._post("/api/agent/commands/ack", {
@@ -211,7 +211,7 @@ class FleetAgent:
 
     def _loop(self) -> None:
         # All three calls below do network I/O to the fleet server, which fails
-        # routinely — server restart, DNS blip, expired token, TLS error. None
+        # routinely - server restart, DNS blip, expired token, TLS error. None
         # of it was guarded, so the FIRST such failure killed this thread and
         # the endpoint silently dropped off fleet management for the rest of the
         # run: no heartbeats, no policy updates, no commands. On the server side
@@ -235,7 +235,7 @@ class FleetAgent:
         """Extract a privacy-preserving heartbeat from the status provider.
 
         Pulls ONLY integer counts, category tallies, and component health.
-        Any domain-shaped data in the provider dict is ignored — it is never
+        Any domain-shaped data in the provider dict is ignored - it is never
         placed on the wire.
         """
         try:
@@ -267,7 +267,7 @@ class FleetAgent:
             data = json.loads(self._identity_path.read_text(encoding="utf-8"))
             self._device_id    = data.get("device_id")
             self._device_token = data.get("device_token")
-            # Persisted so anti-rollback survives a restart — a captured older
+            # Persisted so anti-rollback survives a restart - a captured older
             # signed policy can't be replayed after the agent bounces.
             self._applied_policy_version = int(data.get("applied_policy_version", -1))
         except (ValueError, OSError):
@@ -282,13 +282,13 @@ class FleetAgent:
                             "applied_policy_version": self._applied_policy_version}),
                 encoding="utf-8",
             )
-            # This file holds the device's fleet ENROLMENT TOKEN — the
+            # This file holds the device's fleet ENROLMENT TOKEN - the
             # credential that authenticates this endpoint to the fleet server
             # and lets it fetch policy and report status. Reading it is enough
             # to impersonate the endpoint to the server.
             #
             # This used to be `os.chmod(..., 0o600)` guarded by a comment
-            # saying "POSIX only; no-op on Windows" — i.e. the token was
+            # saying "POSIX only; no-op on Windows" - i.e. the token was
             # knowingly left readable by every local account on the platform
             # the product actually ships on. secure_file.harden() covers both.
             from ..secure_file import harden as _harden_secret

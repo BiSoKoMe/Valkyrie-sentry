@@ -1,21 +1,21 @@
-"""Valkyrie MCP server — Model Context Protocol over stdio (JSON-RPC 2.0).
+"""Valkyrie MCP server - Model Context Protocol over stdio (JSON-RPC 2.0).
 
 Lets an AI agent (Claude Desktop/Code, or any MCP client) drive Valkyrie's own
 EDR: search incidents, investigate them, run threat hunts, query telemetry, and
 introspect what Valkyrie can honestly detect. Modelled on CrowdStrike's
-`falcon-mcp`, but for a LOCAL-first product — the data never leaves the machine
+`falcon-mcp`, but for a LOCAL-first product - the data never leaves the machine
 and the transport is stdio, not a network socket.
 
 Why hand-rolled JSON-RPC instead of the MCP SDK: Valkyrie ships as a frozen
 single exe and holds a stdlib-first line (see valkyrie/etw/framework.py for the
-same choice). The stdio protocol is small and stable — newline-delimited
-JSON-RPC 2.0 with `initialize` / `tools/list` / `tools/call` — so implementing it
+same choice). The stdio protocol is small and stable - newline-delimited
+JSON-RPC 2.0 with `initialize` / `tools/list` / `tools/call` - so implementing it
 directly costs less than a dependency and keeps the build reproducible.
 
 Safety posture (deliberate, and stricter than the default MCP example):
   * Read-only unless started with ``--allow-response``; the acting tool is not
     even ADVERTISED in a read-only session.
-  * stdio transport only — no listening socket, nothing bound to a port, so an
+  * stdio transport only - no listening socket, nothing bound to a port, so an
     MCP session can't be reached from the network.
   * Every tool exception becomes a structured MCP tool error, never a crash that
     would leave the client hanging.
@@ -63,7 +63,7 @@ def _error(msg_id: Any, code: int, message: str) -> dict:
 
 def handle_message(ctx: ToolContext, msg: dict) -> Optional[dict]:
     """Handle one JSON-RPC message. Returns the response, or None for a
-    notification (which must NOT be answered). Pure — unit-tested without stdio.
+    notification (which must NOT be answered). Pure - unit-tested without stdio.
     """
     if not isinstance(msg, dict) or msg.get("jsonrpc") != "2.0":
         return _error(msg.get("id") if isinstance(msg, dict) else None,
@@ -108,7 +108,7 @@ def handle_message(ctx: ToolContext, msg: dict) -> Optional[dict]:
             return _result(msg_id, {"content": [{"type": "text", "text": text}],
                                     "isError": False})
         except Exception as exc:
-            # Tool failures are RESULTS with isError, not transport errors —
+            # Tool failures are RESULTS with isError, not transport errors -
             # this is what lets the agent read the reason and adapt.
             return _result(msg_id, {
                 "content": [{"type": "text",
@@ -121,7 +121,7 @@ def handle_message(ctx: ToolContext, msg: dict) -> Optional[dict]:
 def serve(ctx: ToolContext, stdin=None, stdout=None) -> int:
     """Newline-delimited JSON-RPC loop over stdio. Returns an exit code.
 
-    Never writes anything but protocol JSON to stdout — an MCP client parses
+    Never writes anything but protocol JSON to stdout - an MCP client parses
     that stream, so diagnostics go to stderr only.
     """
     stdin = stdin or sys.stdin
@@ -152,7 +152,7 @@ def run_stdio(allow_response: bool = False) -> int:
     from ..edr import EdrEngine
 
     # The shipped engine is a GUI-subsystem (windowless) binary, so when it is
-    # started WITHOUT redirected stdio — double-clicked, say — sys.stdout/stdin
+    # started WITHOUT redirected stdio - double-clicked, say - sys.stdout/stdin
     # can be None. An MCP client always pipes both, so this only catches the
     # wrong-way-to-run case; fail with a readable reason, not an AttributeError.
     if sys.stdin is None or sys.stdout is None:

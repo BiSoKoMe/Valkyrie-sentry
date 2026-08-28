@@ -667,6 +667,33 @@ def create_app(ctx: Optional[AppContext] = None):
         from ..nyx import self_test
         return self_test()
 
+    @app.get("/api/browser/context/status")
+    def browser_context_status():
+        """Local health and sanitized recent browser-context observations."""
+        if state.browser_context is None:
+            return JSONResponse({"enabled": False, "status": "starting" if not state.ready else "disabled"},
+                                status_code=503 if not state.ready else 200)
+        return state.browser_context.status()
+
+    @app.post("/api/browser/events")
+    async def browser_context_event(request: Request):
+        """Receive a native-host forwarded browser event.
+
+        This endpoint is intentionally distinct from system-control routes:
+        browser context cannot execute an action.  It is still loopback and
+        secret gated so a website cannot inject a forged local interaction.
+        """
+        if not _peer_is_local(request):
+            return JSONResponse({"error": "browser context is loopback-only"}, status_code=403)
+        collector = state.browser_context
+        if collector is None:
+            return JSONResponse({"error": "browser context bridge not ready"}, status_code=503)
+        if not collector.token_ok(request.headers.get("x-valkyrie-browser-token", "")):
+            return JSONResponse({"error": "invalid browser context token"}, status_code=403)
+        payload = await _safe_json(request)
+        result = await run_in_threadpool(collector.ingest, payload)
+        return JSONResponse(result, status_code=202 if result.get("accepted") else 422)
+
     @app.get("/api/telemetry/status")
     def telemetry_status():
         from ..telemetry_killer import TelemetryKiller

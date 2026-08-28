@@ -110,6 +110,17 @@ html, body {
    counters just get tabular figures in the UI face. */
 .card .value, .metric-chip .v, .row .rv { font-variant-numeric: tabular-nums; }
 .mono, [data-mono] { font-family: var(--font-mono); }
+/* An analyst's whole job is copying an indicator (domain, IP, hash, PID,
+   command line, incident id) into a search bar, a ticket, or a terminal.
+   html/body sets `user-select: none` app-wide for the UI chrome, which
+   silently took every one of those values with it. Re-enable selection
+   specifically on the technical/identifier surfaces - not globally, so nav
+   rows and buttons still don't smear a drag-select. */
+.mono, [data-mono], .hunt-table td, .list-row .lr-title, .list-row .lr-val,
+.rp-desc .m, .rp-ev .rp-desc {
+  user-select: text;
+  cursor: text;
+}
 
 #app {
   height: 100vh;
@@ -315,8 +326,8 @@ html, body {
 .orb:active { background: var(--s-4); }
 .orb .orb-icon svg { width: 15px; height: 15px; color: currentColor; }
 .orb .orb-label { font-size: 12px; font-weight: 600; letter-spacing: 0; text-transform: none; }
-/* Armed: state is shown by a filled button, never by a glow. */
-.orb-wrap.on ~ .hero-spacer + .orb,
+/* Armed: state is shown by a filled button, never by a glow. setProtectionUI()
+   toggles .on directly on #orb, which is what actually drives this. */
 .orb.on { background: var(--text-0); color: #000; border-color: var(--text-0); }
 .ring { display: none; }            /* legacy decorative rings — retired */
 .hero .sub { color: var(--text-2); font-size: 12px; }
@@ -563,7 +574,7 @@ html, body {
   letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-1); white-space: nowrap;
 }
 .sev::before { content: ""; width: 7px; height: 7px; border-radius: 2px; background: var(--text-2); }
-.sev.critical { color: var(--signal); } .sev.critical::before { background: var(--signal); box-shadow: 0 0 8px var(--accent-dim); }
+.sev.critical { color: var(--signal); } .sev.critical::before { background: var(--signal); box-shadow: 0 0 8px var(--signal-dim); }
 .sev.high { color: var(--text-0); } .sev.high::before { background: var(--text-0); }
 .sev.medium { color: var(--text-1); } .sev.medium::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-1); }
 .sev.low { color: var(--text-2); } .sev.low::before { background: var(--text-2); }
@@ -613,7 +624,10 @@ html, body {
   transition: all 0.18s var(--ease);
 }
 .hunt-chip:hover { background: var(--card-hover); color: var(--text-0); }
-.hunt-chip.active { background: var(--accent-grad); color: #fff; border-color: transparent; }
+/* Inverted like .btn.primary/.orb.on: white fill needs black text, not white
+   on white - the previous color:#fff here made the active chip's own label
+   invisible. */
+.hunt-chip.active { background: var(--accent-grad); color: #000; border-color: transparent; }
 .hunt-facet { margin-bottom: 14px; }
 .hunt-facet-l { font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); font-weight: 600; }
 .hunt-facet-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
@@ -654,7 +668,15 @@ html, body {
 .bar-row { display: grid; grid-template-columns: 160px 1fr 56px; align-items: center; gap: 14px; font-size: 12.5px; }
 .bar-row .bn { color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bar-track { height: 6px; border-radius: 6px; background: rgba(255,255,255,0.06); overflow: hidden; }
-.bar-fill { height: 100%; border-radius: 6px; background: var(--text-0); opacity: 0.85; transition: width 0.6s var(--ease); }
+/* transform:scaleX, not width - a fill bar's width used to animate directly,
+   which is a layout property and forces reflow on every frame. scaleX from a
+   left origin paints the identical growth-from-left visual on the compositor
+   only; JS sets --fill (0-1) instead of a width percentage. */
+.bar-fill {
+  width: 100%; height: 100%; border-radius: 6px; background: var(--text-0); opacity: 0.85;
+  transform: scaleX(var(--fill, 0)); transform-origin: left;
+  transition: transform 0.6s var(--ease);
+}
 .bar-row .bv { color: var(--text-0); text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
 
 /* Defense coverage — three states (effective/degraded/absent), encoded
@@ -673,6 +695,11 @@ html, body {
 .cov-legend .sw.degraded { background: var(--text-1); opacity: 0.5; }
 .cov-legend .sw.absent { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-2); }
 .cov-track { display: flex; height: 8px; border-radius: 6px; overflow: hidden; margin: 16px 0 6px; background: rgba(255,255,255,0.035); border: 1px solid var(--line); }
+/* Stays a width transition (unlike .bar-fill/.rp-fill above) because these
+   three segments partition the track's space between each other via flex -
+   transform:scaleX would leave a visual gap instead of letting a neighbor
+   grow into it. Coverage refreshes on data load, not on a scrubbed/animated
+   loop, so the reflow cost here is a one-off, not a per-frame one. */
 .cov-seg { height: 100%; transition: width 0.6s var(--ease); }
 .cov-seg.effective { background: #fff; opacity: 0.92; }
 .cov-seg.degraded { background: var(--text-1); opacity: 0.4; }
@@ -750,16 +777,24 @@ html, body {
 
 /* ======================================================================
    Replay Mode — step-by-step incident replay overlay
-   Premium monochrome + a single restrained blue accent for the playhead.
    ====================================================================== */
 /* Replay Mode inherits the monochrome system: its "accent" (playhead, active
-   tab, technique hits) is white, and `--border` is defined here so the many
+   tab, technique hits) is white (--rp-accent below), not the blue this
+   component shipped with pre-rebrand. `--border` is defined here so the many
    `var(--border, #23262d)` fallbacks below resolve to our hairline instead of
-   the old blue-gray literal. */
+   the old blue-gray literal - those fallback hex values themselves are dead
+   (the real tokens are always defined app-wide) but still read as if a blue-
+   gray theme could apply here; worth a follow-up pass to delete them outright
+   rather than carry stale color literals no code path can reach. */
 :root {
   --rp-accent: #ffffff;
   --rp-accent-dim: rgba(255,255,255,0.14);
   --border: rgba(255,255,255,0.10);
+  /* --surface has no other definition anywhere, so every var(--surface, #101216)
+     below was silently painting the pre-rebrand blue-black literal instead of
+     a token - the one place in Replay/CmdK that actually broke the "strictly
+     black/white/gray" rule instead of just carrying a dead fallback. */
+  --surface: var(--bg-2);
 }
 .rp-scrim {
   position: fixed; inset: 0; z-index: 200; display: flex; flex-direction: column;
@@ -870,8 +905,11 @@ html, body {
 .rp-b.play:hover { filter: brightness(1.08); }
 .rp-b svg { width: 16px; height: 16px; }
 .rp-track { flex: 1; height: 6px; border-radius: 4px; background: rgba(255,255,255,0.07); position: relative; cursor: pointer; }
-.rp-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: var(--rp-accent); width: 0%;
-  transition: width 0.28s ease; }
+/* transform:scaleX, not width - see .bar-fill's comment above; same fix,
+   same reason. JS sets --fill (0-1) instead of a width percentage. */
+.rp-fill { position: absolute; left: 0; top: 0; bottom: 0; right: 0; border-radius: 4px; background: var(--rp-accent);
+  transform: scaleX(var(--fill, 0)); transform-origin: left;
+  transition: transform 0.28s ease; }
 .rp-ticks { position: absolute; inset: 0; display: flex; align-items: center; }
 .rp-count { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; color: var(--text-2, #8a9099);
   font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -926,8 +964,8 @@ html, body {
 
 /* ======================================================================
    Command Palette (Ctrl+K) — global search + quick actions. Same overlay
-   language as Replay (.rp-scrim): centered card over a blurred scrim, one
-   restrained blue accent for the active row.
+   language as Replay (.rp-scrim): centered card over a blurred scrim, the
+   monochrome --rp-accent (white) marks the active row, not a blue accent.
    ====================================================================== */
 .cmdk-scrim {
   position: fixed; inset: 0; z-index: 300; display: flex; flex-direction: column;

@@ -32,7 +32,7 @@
 #>
 
 param(
-    # Set by the Electron app's source-checkout fallback (engine.js) — the
+    # Set by the Electron app's source-checkout fallback (engine.js) - the
     # app has its own splash/progress UI, so the engine must launch with no
     # visible window at all, unlike a developer running this script by hand
     # from a terminal (where seeing the engine's own console is a feature:
@@ -79,14 +79,14 @@ $WebPort          = 8090
 $DnsPort          = 53
 
 function Test-DnsPort {
-    <# Raw UDP DNS probe — True if something answers on 127.0.0.1:<Port>. #>
+    <# Raw UDP DNS probe - True if something answers on 127.0.0.1:<Port>. #>
     param([int]$Port)
     $client = $null
     try {
         $client = New-Object System.Net.Sockets.UdpClient
         $client.Client.ReceiveTimeout = 1500
         $client.Connect("127.0.0.1", $Port)
-        # Minimal A-record query for "." (root) — always a valid query.
+        # Minimal A-record query for "." (root) - always a valid query.
         $query = [byte[]](0xAB,0xCD,0x01,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x00,0x01)
         $client.Send($query, $query.Length) | Out-Null
         $remote = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
@@ -100,7 +100,7 @@ function Test-DnsPort {
 }
 
 # ---------------------------------------------------------------------------
-# Idempotency check — is a tracked Valkyrie instance already running?
+# Idempotency check - is a tracked Valkyrie instance already running?
 # ---------------------------------------------------------------------------
 
 $AlreadyRunning = $false
@@ -159,7 +159,7 @@ if ($AlreadyRunning) {
 
     # -----------------------------------------------------------------
     # 4. Poll until Valkyrie is ready, then verify DNS before touching
-    #    system DNS. No fixed sleep — browser opens only after the API
+    #    system DNS. No fixed sleep - browser opens only after the API
     #    confirms 200 OK, so the WebSocket connects on first load.
     # -----------------------------------------------------------------
     Write-Host "[*] Waiting for Valkyrie to start..."

@@ -1,4 +1,4 @@
-"""Nyx LIVE test — the reliable one.
+"""Nyx LIVE test - the reliable one.
 
 Not offline synthetic strings. This stands up Valkyrie's REAL mitmproxy + Nyx,
 drives a REAL headless Chromium through it, loads a page that a REAL browser

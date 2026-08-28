@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import re
 import time
+import uuid
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 from .config import (
@@ -39,6 +40,7 @@ from .config import (
 )
 from . import farble, nyx
 from .store import DnsEvent, Store
+from .telemetry import CAT_PRIVACY, SEV_LOW, TelemetryEvent
 
 # 1x1 transparent PNG - returned for suppressed tracking pixels
 _TRANSPARENT_PNG = (
@@ -316,7 +318,7 @@ class ValkyrieAddon:
             if not observations:
                 return
 
-            self._attribute_nyx_observations(flow, observations)
+            self._emit_nyx_observations(flow, observations)
 
             if NYX_ACT:
                 new_url, new_body, faked = nyx.fake_outbound(
@@ -359,18 +361,16 @@ class ValkyrieAddon:
         pid, name, _path = resolved
         return pid, name
 
-    def _attribute_nyx_observations(self, flow, observations) -> None:
-        """Feed each Nyx observation onto the same causality graph attack
-        detections already use (``EdrEngine.attribute_causality``, see ADR
-        0057), so a process's outbound leaks and its process/network behavior
-        become visible on one subgraph instead of two unconnected ones.
-        Purely additive: changes no Nyx behavior, never touches the request,
-        and a missing ``edr`` reference or an unresolved pid just means
-        nothing gets attributed - the existing log/act/observe path above is
-        entirely unaffected either way. ``getattr`` (not ``self.edr``): some
-        callers construct this addon via ``__new__`` for isolated testing,
-        bypassing ``__init__`` entirely, and a missing attribute must degrade
-        the same as an explicit None, never raise."""
+    def _emit_nyx_observations(self, flow, observations) -> None:
+        """Emit Nyx observations as normalized, metadata-only telemetry.
+
+        This is intentionally not a direct graph call.  The EDR ingest path is
+        the common normalization, attribution, correlation, and policy seam.
+        It receives only category, destination, first-party origin, confidence,
+        and a retry-safe event id -- never the request body or Nyx's masked
+        diagnostic sample.  A missing engine or unresolved local pid remains an
+        observation gap, not a fabricated process attribution.
+        """
         if getattr(self, "edr", None) is None:
             return
         try:
@@ -378,13 +378,26 @@ class ValkyrieAddon:
             if pid <= 0:
                 return
             for ob in observations:
-                self.edr.attribute_causality(
-                    pid, "nyx_leak", ob.sentence, name=name,
-                    data={"category": ob.category,
-                          "destination_host": ob.destination_host,
-                          "masked_sample": ob.masked_sample})
+                event = TelemetryEvent(
+                    category=CAT_PRIVACY, activity="outbound_observation",
+                    ts=time.time(), actor_pid=pid, actor_name=name,
+                    target={"domain": str(ob.destination_host or "")},
+                    severity=SEV_LOW, source="nyx.tls", labels=["nyx_leak"],
+                    reason="Nyx observed a privacy category crossing a boundary",
+                    fields={
+                        "artifact_kind": "nyx_leak",
+                        "event_id": f"nyx_{uuid.uuid4().hex}",
+                        "privacy_category": str(ob.category or ""),
+                        "destination_host": str(ob.destination_host or ""),
+                        "first_party_origin": str(ob.first_party_origin or ""),
+                        "attribution_confidence": "best_effort_port_mapping",
+                    })
+                self.edr.ingest_telemetry(event)
         except Exception:
             pass
+
+    # Compatibility for extensions that called the short-lived private seam.
+    _attribute_nyx_observations = _emit_nyx_observations
 
     # ------------------------------------------------------------------
     # Response processors

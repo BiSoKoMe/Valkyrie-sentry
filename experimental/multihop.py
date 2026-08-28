@@ -1,6 +1,6 @@
 """Multi-hop WireGuard VPN config generator.
 
-Generates two chained WireGuard configurations (hop1 → hop2) along with
+Generates two chained WireGuard configurations (hop1 -> hop2) along with
 server-setup shell scripts and human-readable instructions.
 
 Usage:
@@ -68,7 +68,7 @@ def _private_to_public(private: bytes) -> bytes:
     """Compute the Curve25519 public key from a private key.
 
     There is deliberately NO fallback. This used to `return os.urandom(32)`
-    when the `cryptography` package was missing — 32 random bytes that *look*
+    when the `cryptography` package was missing - 32 random bytes that *look*
     like a valid WireGuard public key but have no mathematical relationship to
     the private key. A config built from such a "key" is accepted by every
     check in this module and by WireGuard's own parser, yet no peer can ever
@@ -116,7 +116,7 @@ class MultiHopVPN:
         hop1_pub, hop2_pub, hop1_path, hop2_path, server_scripts.
 
         Raises ValueError if hop1_ip/hop2_ip are empty or contain characters
-        that cannot appear in a WireGuard Endpoint value — this generator
+        that cannot appear in a WireGuard Endpoint value - this generator
         previously accepted anything (including whitespace or shell
         metacharacters) and would silently write a config with a malformed
         Endpoint line that WireGuard would refuse to parse at connect time.
@@ -141,7 +141,7 @@ class MultiHopVPN:
         WIREGUARD_HOP2_CONF.write_text(hop2_text)
         # Each hop config carries its own `PrivateKey =`. Reading either one
         # breaks that hop's confidentiality, and reading both collapses the
-        # entire multi-hop chain back to a single observable path — which is
+        # entire multi-hop chain back to a single observable path - which is
         # the one property multi-hop exists to provide. Restrict them the
         # moment they are written (the server setup SCRIPTS below carry only
         # public keys, so they are deliberately left readable).
@@ -181,7 +181,7 @@ class MultiHopVPN:
         `kill_switch_configured` reflects only that the PostUp/PreDown
         iptables rule is present in the config files on disk. It is NOT a
         claim that a tunnel is up or that the rule has actually been applied
-        to a live interface — this class never starts wg-quick or inspects
+        to a live interface - this class never starts wg-quick or inspects
         `iptables -S`, so real enforcement cannot be verified from here.
         Callers (e.g. the dashboard) must not render this as "ACTIVE"
         unconditionally.
@@ -260,7 +260,7 @@ class MultiHopVPN:
         # NOTE: Endpoint must be hop2's real public IP/hostname (hop2_ip), not
         # the WireGuard-internal tunnel address (e.g. 10.13.14.1). The overlay
         # address doesn't exist on the public internet and can't be dialed to
-        # perform the initial handshake — using it here previously produced a
+        # perform the initial handshake - using it here previously produced a
         # config whose second hop could never connect (see
         # docs/VPN_SELFHEAL_AUDIT_REPORT.md).
         return (

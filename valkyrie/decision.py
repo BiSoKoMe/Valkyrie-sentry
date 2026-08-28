@@ -96,6 +96,7 @@ _SURVEILLANCE_LABELS = (
 )
 _COMPROMISE_CATEGORIES = ("process", "persistence", "attack_chain", "attack_sequence")
 _SURVEILLANCE_CATEGORIES = ("network", "firewall_ip", "intelligence", "dns", "anomaly")
+_METADATA_CATEGORIES = ("privacy", "privacy_consequence")
 
 
 @dataclass(frozen=True)
@@ -148,7 +149,7 @@ def classify_threat(sig: Signal) -> ThreatClass:
         return ThreatClass.DECOY_TRIGGER
     if sig._has(_COMPROMISE_LABELS) or sig.category in _COMPROMISE_CATEGORIES:
         return ThreatClass.COMPROMISE
-    if sig._has(_METADATA_LABELS):
+    if sig._has(_METADATA_LABELS) or sig.category in _METADATA_CATEGORIES:
         return ThreatClass.METADATA_LEAKAGE
     if sig._has(_SURVEILLANCE_LABELS) or sig.category in _SURVEILLANCE_CATEGORIES:
         return ThreatClass.SURVEILLANCE

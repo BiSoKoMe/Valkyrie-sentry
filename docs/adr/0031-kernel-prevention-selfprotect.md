@@ -1,6 +1,6 @@
-# ADR 0031 — Kernel prevention + self-protection (the detect→prevent leap)
+# ADR 0031 - Kernel prevention + self-protection (the detect->prevent leap)
 
-Date: 2026-07-25 · Status: accepted · Follows: ADR 0026
+Date: 2026-07-25 . Status: accepted . Follows: ADR 0026
 
 ## Context
 
@@ -17,8 +17,8 @@ real EDR driver does that ours did not:
    very hard to kill.
 
 Adding kernel capability is also where the danger lives: CrowdStrike's own July
-2024 outage — a bad kernel-driver content update that bugchecked ~8.5M machines
-— is the standing reminder that a driver's **first** duty is to not brick the
+2024 outage - a bad kernel-driver content update that bugchecked ~8.5M machines
+- is the standing reminder that a driver's **first** duty is to not brick the
 host. So the design bar here is capability *and* a safety story strong enough
 that the capability can't be turned into a self-inflicted outage.
 
@@ -29,19 +29,19 @@ each gated by an explicit safety design.
 
 - **Process-launch prevention.** In the existing create-notify callback, when a
   policy has enabled prevention and the new image's basename hash is on the
-  block list, set `CreateInfo->CreationStatus = STATUS_ACCESS_DENIED` — the
+  block list, set `CreateInfo->CreationStatus = STATUS_ACCESS_DENIED` - the
   kernel aborts the launch. Guarded three ways: prevention is **off by
   default**; an image under `\Windows\` is **never** blocked (a bad/hostile list
   cannot stop the OS); and the block list is a **fixed, bounded, validated**
   hash array, never a variable list parsed in kernel.
 - **Agent self-protection.** In the Ob pre-op callback, strip
   `PROCESS_TERMINATE`/VM-write/inject rights from non-SYSTEM handles opened to
-  the agent pid — same proven strip-not-deny pattern as the LSASS path. Off by
+  the agent pid - same proven strip-not-deny pattern as the LSASS path. Off by
   default; SYSTEM exempt.
 - **Remote-thread injection** detection (`PsSetCreateThreadNotifyRoutine`):
   cross-process thread creation = `CreateRemoteThread` (T1055). Read-only.
 - **Autostart-registry** detection (`CmRegisterCallbackEx`): writes to
-  Run/RunOnce/Services keys (T1547/T1543). **Detection-only** — always returns
+  Run/RunOnce/Services keys (T1547/T1543). **Detection-only** - always returns
   `STATUS_SUCCESS`, never alters a registry op, because a registry callback that
   gets blocking wrong hangs the machine.
 - **Policy intake** (`VLK_IOCTL_SET_POLICY`): user mode pushes a fixed-size
@@ -52,15 +52,15 @@ each gated by an explicit safety design.
   matches in the kernel byte-for-byte.
 
 The user-mode bridge parses the four new event kinds into the same
-`TelemetryEvent` stream (thread-inject → T1055; registry → T1547.001; a blocked
-launch → an `action=blocked`, `prevented` incident; a tamper attempt →
+`TelemetryEvent` stream (thread-inject -> T1055; registry -> T1547.001; a blocked
+launch -> an `action=blocked`, `prevented` incident; a tamper attempt ->
 T1562.001), and gains `build_policy()` + `push_policy()`.
 
 ## Consequences
 
 - The driver source now matches the *shape* of a real EDR kernel component:
   telemetry, injection + persistence sensors, credential-theft protection,
-  process-block **prevention**, and **self-protection** — with the safety rails
+  process-block **prevention**, and **self-protection** - with the safety rails
   that make prevention deployable rather than dangerous.
 - The fully-testable half is tested: `tests/test_kernel_bridge.py` (40+ checks)
   covers every new event's normalisation, FNV hash parity against a hand-
@@ -74,12 +74,12 @@ T1562.001), and gains `build_policy()` + `push_policy()`.
   loads, and validates it in a VM per `driver/README.md`. Nothing in the product
   claims "kernel prevention active" unless the bridge reports the device open.
 - **Prevention/self-protection are OFF until explicitly enabled** by a pushed
-  policy — chosen precisely so an unvalidated driver cannot brick a machine.
+  policy - chosen precisely so an unvalidated driver cannot brick a machine.
 - **The July-2024 lesson applies to us too.** These are the exact class of
   kernel changes that, shipped carelessly, cause outages. The safety rails
   (default-off, `\Windows\` exemption, bounded validated policy, detection-only
-  registry, fail-open everywhere) are load-bearing, not decoration — and the VM
-  validation checklist (README steps 3–6) is mandatory before trust.
+  registry, fail-open everywhere) are load-bearing, not decoration - and the VM
+  validation checklist (README steps 3-6) is mandatory before trust.
 - **Self-protection is not un-killable.** It raises the bar (strips common
   tamper rights from user-mode handles); it does not defeat a kernel-level
   attacker, a boot-time removal, or Safe Mode. No userland-or-single-driver

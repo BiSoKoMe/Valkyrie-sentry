@@ -1120,7 +1120,7 @@ function renderTopBlocked(box, top, up) {
     const name = Array.isArray(t) ? t[0] : (t.domain || t.name);
     const n = Array.isArray(t) ? t[1] : (t.count || 0);
     return `<div class="bar-row"><span class="bn">${escapeHtml(name)}</span>
-      <span class="bar-track"><span class="bar-fill" style="width:${Math.max(4, (n / max) * 100)}%"></span></span>
+      <span class="bar-track"><span class="bar-fill" style="--fill:${Math.max(0.04, n / max)}"></span></span>
       <span class="bv">${fmt(n)}</span></div>`;
   }).join('');
 }
@@ -2194,7 +2194,7 @@ const Replay = {
       t.classList.toggle('hit', on);
       const tid = t.querySelector('.rp-tid'); if (tid) tid.classList.toggle('off', !on);
     });
-    this.root.querySelector('.rp-fill').style.width = (n > 1 ? (this.idx / (n - 1)) * 100 : 100) + '%';
+    this.root.querySelector('.rp-fill').style.setProperty('--fill', n > 1 ? this.idx / (n - 1) : 1);
     this.root.querySelector('.rp-count').textContent = `${this.idx + 1} / ${n}`;
     this.root.querySelector('.rp-b.play').innerHTML = this.playing ? RP_ICON.pause : RP_ICON.play;
   },
@@ -2294,12 +2294,56 @@ const Replay = {
          <div class="rp-desc">${escapeHtml(r.ai_narrative)}</div>` : '';
     const aiErr = r.ai_error ? `<div class="rp-desc" style="opacity:.75;margin-top:8px">${escapeHtml(r.ai_error)}</div>` : '';
 
+    // The human decision layer (edr/investigate.py's _decision_layer): what
+    // happened / how / why it matters / confidence / what to do, in plain
+    // language, matching the requested hierarchy exactly. Confidence reuses
+    // the existing monochrome .badge vocabulary (ok=solid/high,
+    // warn=hollow/medium, off=dim/low or insufficient) rather than inventing
+    // new color or markup. The old technical `meaning` text is NOT deleted -
+    // it moves to its own "Technical detail" section beneath, per "keep
+    // evidence available underneath for an analyst who wants it."
+    const cz = r.causality || {};
+    const dec = r.decision || {};
+    const confBadge = { high: 'ok', medium: 'warn', low: 'off', insufficient: 'off' }[dec.confidence] || 'off';
+    // "insufficient" gets its own label rather than "Insufficient confidence" -
+    // that reads as a low score on a scale, not "there isn't enough evidence
+    // to assess this at all", which is the actual, stronger claim being made.
+    const confLabel = dec.confidence === 'insufficient' ? 'Insufficient evidence'
+      : dec.confidence ? dec.confidence.charAt(0).toUpperCase() + dec.confidence.slice(1) + ' confidence'
+      : '';
+    // ONE "How" section, not the chain shown twice in two formats (a real
+    // duplicate found in a PHASE 1 audit: the arrow-chain and a separate
+    // "Chain: a -> b" line said the same thing right on top of each other).
+    // The observed/inferred distinction lives here too, since it's a
+    // qualifier on THIS chain, not a separate fact. Honest fallback text
+    // when no ancestry exists, rather than silently omitting the section -
+    // most single/few-detection real incidents have no causality data yet
+    // (see the audit report), and a missing section reads as "skipped",
+    // not "genuinely unknown".
+    const howBody = dec.how
+      ? `<span class="mono-tag">${escapeHtml(dec.how)}</span>
+         ${cz.inferred
+           ? `<span class="mono-tag" title="Part of this chain was not directly observed">inferred</span>`
+           : `<span class="mono-tag" title="Every hop in this chain was directly observed">observed</span>`}
+         ${cz.chain_count > 1 ? ` · ${cz.chain_count} related process lineages in this incident` : ''}`
+      : `<span style="opacity:.6">Process ancestry isn't available for this event.</span>`;
+    const reasonsLine = (dec.confidence_reasons || []).length
+      ? `<div class="rp-desc" style="opacity:.6;margin-top:4px">Based on: ${escapeHtml(dec.confidence_reasons.join(' '))}</div>` : '';
+
     const statusVal = this.inc.status || 'open';
     box.innerHTML = `
       <div class="rp-sec">What happened</div>
-      <div class="rp-desc">${escapeHtml(r.summary || 'No summary available.')}</div>
+      <div class="rp-desc">${escapeHtml(r.story || r.summary || 'No summary available.')}</div>
+      <div class="rp-sec" style="margin-top:16px">How</div>
+      <div class="rp-desc">${howBody}</div>
       <div class="rp-sec" style="margin-top:16px">Why it matters</div>
-      <div class="rp-desc">${escapeHtml(r.meaning || '—')}</div>
+      <div class="rp-desc">${escapeHtml(dec.why_it_matters || r.meaning || '—')}</div>
+      <div class="rp-sec" style="margin-top:16px">Confidence${confLabel ? ` <span class="badge ${confBadge}"><span class="bdot"></span>${escapeHtml(confLabel)}</span>` : ''}</div>
+      ${reasonsLine || '<div class="rp-desc" style="opacity:.6">No supporting detail recorded.</div>'}
+      <div class="rp-sec" style="margin-top:16px">What should I do</div>
+      <div class="rp-desc">${escapeHtml(dec.recommended_action_plain || 'No guidance available for this incident yet.')}</div>
+      <div class="rp-sec" style="margin-top:16px">Technical detail</div>
+      <div class="rp-desc" style="opacity:.75">${escapeHtml(r.meaning || '—')}</div>
       <div class="rp-sec" style="margin-top:16px">Recommended response</div>
       ${actions}
       ${aiBtn}${aiBlock}${aiErr}

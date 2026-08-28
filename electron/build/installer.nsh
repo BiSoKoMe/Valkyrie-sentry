@@ -40,12 +40,28 @@
   vc_no:
 
   ; --- No-prompt arm/disarm scheduled tasks ---------------------------------
+  ; register-tasks.ps1 is Register-ScheduledTask -Force, so re-running this on
+  ; every upgrade is already idempotent - it replaces, never duplicates. What
+  ; was missing was noticing when this step itself fails: nsExec::ExecToLog's
+  ; exit code was never checked, so a machine could finish "installed
+  ; successfully" with ValkyrieArm/ValkyrieDisarm silently never registered -
+  ; found on a real machine during a DNS-lifecycle audit. Not fatal to the
+  ; whole install (the engine/dashboard still work without these tasks; only
+  ; arm/disarm-from-the-app degrades), but it must not be silent.
   DetailPrint "Registering Valkyrie protection tasks..."
   nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\resources\engine\register-tasks.ps1" -Root "$INSTDIR\resources\engine"'
+  Pop $0
+  ${If} $0 != 0
+    DetailPrint "[WARNING] Registering protection tasks failed (exit $0) - Start/Stop Protection may not work until this is repaired."
+  ${EndIf}
 
   ; --- Always-on engine as a Windows service --------------------------------
   DetailPrint "Installing Valkyrie engine service..."
   nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\resources\engine\service-install.ps1" -Root "$INSTDIR\resources\engine"'
+  Pop $0
+  ${If} $0 != 0
+    DetailPrint "[WARNING] Installing the Valkyrie service failed (exit $0)."
+  ${EndIf}
 !macroend
 
 !macro customUnInstall

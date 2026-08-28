@@ -41,7 +41,7 @@ if ($SkipEngine) {
     python -m pip install --upgrade pip | Out-Null
     python -m pip install -r requirements_modular.txt pyinstaller
     python -m pip install cryptography httpx
-    # AI investigation is vendor-neutral over httpx (installed above) — no AI SDK.
+    # AI investigation is vendor-neutral over httpx (installed above) - no AI SDK.
 
     # See build_app.ps1's identical guard for why Test-Path alone is not
     # enough: a stale exe left over from a previous build passes it even

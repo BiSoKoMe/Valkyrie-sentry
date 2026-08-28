@@ -39,7 +39,7 @@ state_path.unlink(missing_ok=True)
 
 mm = MeetingMode(state_path=state_path)
 
-# ── Inactive status ──────────────────────────────────────────────────────────
+# --- Inactive status ---
 print("\n-- inactive status -----------------------------------")
 st = mm.status()
 check("status() returns a dict", isinstance(st, dict))
@@ -47,7 +47,7 @@ check("inactive: active is False", st["active"] is False)
 check("inactive: duration_minutes is 0", st["duration_minutes"] == 0)
 check("inactive: activated_at is None", st["activated_at"] is None)
 
-# ── Duration computed from persisted state ───────────────────────────────────
+# --- Duration computed from persisted state ---
 print("\n-- duration from state -------------------------------")
 started = (datetime.now(timezone.utc) - timedelta(minutes=7)).isoformat(timespec="seconds")
 state_path.write_text(json.dumps({
@@ -57,14 +57,14 @@ st2 = mm.status()
 check("active state reads back as active", st2["active"] is True)
 check("duration_minutes ~= 7", st2["duration_minutes"] in (6, 7, 8), str(st2["duration_minutes"]))
 
-# ── Malformed state degrades gracefully ──────────────────────────────────────
+# --- Malformed state degrades gracefully ---
 print("\n-- malformed state -----------------------------------")
 state_path.write_text("{ not json", encoding="utf-8")
 st3 = mm.status()
 check("malformed state -> inactive, no crash", st3["active"] is False)
 state_path.unlink(missing_ok=True)
 
-# ── Admin gate (safe — only runs live path when it cannot touch firewall) ────
+# --- Admin gate (safe - only runs live path when it cannot touch firewall) ---
 print("\n-- admin gate ----------------------------------------")
 if not _is_windows():
     res = mm.activate()

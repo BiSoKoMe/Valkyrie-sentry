@@ -1,14 +1,14 @@
-# ADR 0015 — Threat-intelligence IOC feeds, matched locally
+# ADR 0015 - Threat-intelligence IOC feeds, matched locally
 
-Date: 2026-07-18 · Status: accepted
+Date: 2026-07-18 . Status: accepted
 
 ## Context
 
 Valkyrie's list-based defenses covered two threat classes: ad/tracker
 domains (seed + StevenBlack/OISD blocklist) and network-hygiene CIDR
 ranges (FireHOL/Spamhaus via the firewall). Neither covers *active
-threat infrastructure* — botnet C2 servers and live malware-distribution
-hosts — which rotates on an hours scale and is exactly what every
+threat infrastructure* - botnet C2 servers and live malware-distribution
+hosts - which rotates on an hours scale and is exactly what every
 commercial EDR (CrowdStrike, Defender, SentinelOne) sources from intel
 pipelines. The gap analysis ranked this the highest-value improvement
 achievable honestly on one endpoint (rank 2, after the shipped
@@ -26,11 +26,11 @@ O(1) local match queries. Feeds (all abuse.ch, no account, no API key):
 | `urlhaus` | domain | malware_distribution | URLhaus hostfile |
 | `threatfox_c2` | ip | botnet_c2 | ThreatFox recent CSV (ip:port) |
 
-SSLBL's IP blacklist was evaluated and **rejected** — abuse.ch
+SSLBL's IP blacklist was evaluated and **rejected** - abuse.ch
 deprecated it on 2025-01-03 (verified live); shipping a dead feed would
 violate the no-fake-parity rule. ThreatFox replaces it.
 
-Enforcement points (all existing seams — no parallel architecture):
+Enforcement points (all existing seams - no parallel architecture):
 
 1. **DNS decision pipeline** (`dns_interceptor._decide`, step 2a): an
    intel domain hit blocks with reason `threat_intel:<feed>:<category>`.
@@ -38,7 +38,7 @@ Enforcement points (all existing seams — no parallel architecture):
    known-good fast path, so a previously trusted domain that appears in
    a C2 feed still blocks (compromised-infrastructure case).
 2. **Resolved-answer screening** (`_answer_blocked_ip`): an allowed
-   domain resolving to an intel C2 IP is sinkholed — the fast-flux /
+   domain resolving to an intel C2 IP is sinkholed - the fast-flux /
    rotated-frontend case.
 3. **Network collector reputation** (`__main__._ip_bad`): live outbound
    connections to intel IPs are flagged SEV_HIGH and correlate into EDR
@@ -59,7 +59,7 @@ Enforcement points (all existing seams — no parallel architecture):
   touching DNS/behavioral operation.
 - **Untrusted input**: feed bodies AND on-disk caches are revalidated
   line-by-line; private/loopback/link-local/reserved IPs and
-  dotless/localhost names can never enter the match sets — a poisoned
+  dotless/localhost names can never enter the match sets - a poisoned
   feed cannot induce blocking of internal infrastructure.
 - **Performance**: ~1 µs per lookup at 100k indicators (measured), well
   inside the DNS hot-path budget; refresh of all three live feeds takes
@@ -68,7 +68,7 @@ Enforcement points (all existing seams — no parallel architecture):
 ## Rollback
 
 Remove `threat_intel` from the three wiring points in `__main__.py` (or
-run with downloads off and delete `data/threat_intel/`) — every consumer
+run with downloads off and delete `data/threat_intel/`) - every consumer
 treats the service as `Optional` and degrades to prior behavior.
 
 ## Honest boundary

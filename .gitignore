@@ -49,9 +49,23 @@ blocklists/oisd_full.txt
 *.user
 .claude/settings.local.json
 
+# Local agent, editor, and connector state. These files may contain host paths,
+# access configuration, or user-specific instructions and are never release
+# artifacts.
+.agents/
+.codex/
+.mcp.json
+AGENTS.md
+skills-lock.json
+
 # OS
 .DS_Store
 Thumbs.db
+Windows.lnk
+
+# One-off local verification output and backups.
+ci_*/
+*.bak
 
 # Electron desktop app — dependencies & build outputs (never commit)
 node_modules/
@@ -63,6 +77,7 @@ ValkyriePortable.exe
 # ...but electron/build/ holds SOURCE (icon.ico, installer.nsh) — keep it tracked
 !electron/build/
 !electron/build/**
+electron/build/*.bak
 
 # Next.js build output (desktop/ dashboard prototype)
 desktop/.next/

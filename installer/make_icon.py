@@ -1,7 +1,7 @@
 """Generate the Valkyrie app icon (electron/build/icon.ico) + a 512px PNG.
 
 Pure-Pillow render of the shield/wing mark on a matte-black rounded tile with a
-soft blue rim — the same visual language as the in-app splash logo. Run once;
+soft blue rim - the same visual language as the in-app splash logo. Run once;
 the .ico is what electron-builder embeds into Valkyrie.exe and ValkyrieSetup.exe.
 """
 from __future__ import annotations

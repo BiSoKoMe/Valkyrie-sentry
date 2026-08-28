@@ -36,7 +36,7 @@ backup_path.unlink(missing_ok=True)
 
 fp = NetworkFingerprint(backup_path=backup_path)
 
-# ── status() is read-only and well-formed ────────────────────────────────────
+# --- status() is read-only and well-formed ---
 print("\n-- status --------------------------------------------")
 st = fp.status()
 check("status() returns a dict", isinstance(st, dict))
@@ -46,7 +46,7 @@ for k in ("supported", "ttl", "ttl_normalized", "tcp_timestamps",
 check("supported matches platform", st["supported"] == _is_windows())
 check("backup_present is False initially", st["backup_present"] is False)
 
-# ── Backup persistence round-trip ────────────────────────────────────────────
+# --- Backup persistence round-trip ---
 print("\n-- backup persistence --------------------------------")
 fp._save_backup({"DefaultTTL": 128, "tcp_timestamps": True})
 loaded = fp._load_backup()
@@ -55,7 +55,7 @@ check("backup_present now True", fp.status()["backup_present"] is True)
 fp._clear_backup()
 check("backup cleared", fp._load_backup() is None)
 
-# ── restore() with no backup ─────────────────────────────────────────────────
+# --- restore() with no backup ---
 print("\n-- restore with no backup ----------------------------")
 if not _is_windows():
     ok = fp.restore()
@@ -71,7 +71,7 @@ else:
     check("admin restore() with no backup fails cleanly",
           ok is False and "no fingerprint backup" in fp.last_error, fp.last_error)
 
-# ── normalize() admin gate (safe — non-admin path only) ──────────────────────
+# --- normalize() admin gate (safe - non-admin path only) ---
 print("\n-- normalize admin gate ------------------------------")
 if not _is_windows():
     ok = fp.normalize()

@@ -1,4 +1,4 @@
-"""Fleet wire protocol — the exact shapes that cross the network, plus the
+"""Fleet wire protocol - the exact shapes that cross the network, plus the
 auth-token primitives.
 
 WHAT CROSSES THE WIRE (and what deliberately does NOT):
@@ -11,7 +11,7 @@ WHAT CROSSES THE WIRE (and what deliberately does NOT):
 
   Heartbeat   (agent -> server, every FLEET_HEARTBEAT_INTERVAL):
     counts         integer tallies only: blocked/allowed/flagged in last 24h
-    categories     tally by CATEGORY (e.g. {"tracker": 40, "malware": 3}) —
+    categories     tally by CATEGORY (e.g. {"tracker": 40, "malware": 3}) -
                    never the domains themselves
     components     health booleans (dns, firewall, resolver, ...)
     agent_version  running version (so the server can flag out-of-date agents)
@@ -24,7 +24,7 @@ WHAT CROSSES THE WIRE (and what deliberately does NOT):
 Auth model:
   - Enrollment requires a pre-shared enroll_token (constant-time compared).
   - On success the server issues a random per-device token (returned once).
-  - The server stores only sha256(token) — a DB leak never reveals a usable
+  - The server stores only sha256(token) - a DB leak never reveals a usable
     device token. Heartbeats present the raw token; the server hashes and
     constant-time compares.
 """
@@ -121,7 +121,7 @@ class Heartbeat:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Heartbeat":
-        # Coerce to safe primitive shapes — a hostile/broken agent must not be
+        # Coerce to safe primitive shapes - a hostile/broken agent must not be
         # able to smuggle nested objects or non-int counts into the registry.
         def _int_map(x) -> dict:
             out = {}

@@ -30,11 +30,11 @@ const ICON = (() => {
     min: s('<path d="M5 12h14"/>'),
     max: s('<rect x="5" y="5" width="14" height="14" rx="2"/>'),
     x: s('<path d="M6 6l12 12M18 6L6 18"/>'),
-    // Brand mark — the winged-V emblem, matched to the real Valkyrie logo.
+    // Brand mark - the winged-V emblem, matched to the real Valkyrie logo.
     // Fixed identity color (not currentColor like the rest of the set) since
     // it's the logo, not a semantic UI glyph. Same geometry as the big
     // splash/About LOGO in app.js AND electron/build/icon.* (installer +
-    // taskbar), just reused at icon size — one shape, one source of truth.
+    // taskbar), just reused at icon size - one shape, one source of truth.
     mark: '<svg viewBox="0 0 100 88" fill="none" xmlns="http://www.w3.org/2000/svg">' +
       '<path d="M40,38 L50,80 L60,38 L54,38 L50,64 L46,38 Z" fill="#f6f6f7"/>' +
       '<path d="M12,9 L46,29 L46,33.5 L14,15 Z" fill="#f6f6f7"/>' +

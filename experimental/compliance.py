@@ -1,7 +1,7 @@
-"""Compliance evidence reports — operational security posture on demand.
+"""Compliance evidence reports - operational security posture on demand.
 
 Auditors (SOC 2, ISO 27001, insurers, internal GRC) don't ask "are you
-secure" — they ask for **evidence of operating controls**: was monitoring
+secure" - they ask for **evidence of operating controls**: was monitoring
 running, were incidents detected AND resolved, how fast, is response
 audited, are updates/feeds current. This module assembles that evidence
 from data Valkyrie already records, into a JSON document plus a
@@ -11,7 +11,7 @@ Honesty rules (this is the module most tempted to lie):
 
   * It reports **evidence, not certification**. Framework references
     (SOC 2 CC7.x, ISO 27001 A.5.7/A.5.25-26/A.8.16) label which control a
-    section is evidence *toward* — the report never claims compliance.
+    section is evidence *toward* - the report never claims compliance.
   * Every number is computed from the store/EDR at generation time; there
     are no hardcoded "OK" fields. Missing subsystems are reported as
     absent, not skipped.

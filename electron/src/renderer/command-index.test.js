@@ -1,5 +1,5 @@
 'use strict';
-/* Unit tests for command-index.js — run with: node --test electron/src/renderer/*.test.js */
+/* Unit tests for command-index.js - run with: node --test electron/src/renderer/*.test.js */
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -27,7 +27,7 @@ test('filterCommands: exact label match ranks first', () => {
 });
 
 test('filterCommands: prefix match beats substring match', () => {
-  // "dev" is a prefix of "Devices" but only a substring of nothing else here —
+  // "dev" is a prefix of "Devices" but only a substring of nothing else here -
   // add a case where prefix vs substring actually compete.
   const fixture = [
     { id: 'a', group: 'X', label: 'Meeting Mode' },   // "mode" is a substring

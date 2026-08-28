@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
     Arms Valkyrie DNS interception: points the active network adapter at
-    127.0.0.1 — but ONLY after confirming the engine is answering on port 53.
+    127.0.0.1 - but ONLY after confirming the engine is answering on port 53.
 
 .DESCRIPTION
     In the packaged product the engine runs continuously as the ValkyrieShield

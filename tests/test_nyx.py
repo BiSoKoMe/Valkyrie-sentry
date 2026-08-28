@@ -366,20 +366,19 @@ def main() -> int:
     finally:
         _cfg2.NYX_ACT = _sv
 
-    # --- Causality attribution wiring (ADR 0057): a Nyx observation reaches
-    # the SAME graph attack detections use, via the process resolved for the
-    # flow's local port - additive only, and silent (not broken) when
-    # unresolved or when no engine reference was given. ---
-    print("\n[7] wired into the causality graph (ADR 0057)")
+    # --- Normalized privacy telemetry wiring (ADR 0058): a Nyx observation
+    # reaches the same EDR ingest seam as every other sensor, via the process
+    # resolved for the flow's local port. It carries metadata only and stays
+    # silent when unresolved or no engine reference was given. ---
+    print("\n[7] wired as normalized privacy telemetry (ADR 0058)")
     import valkyrie.network_telemetry as _NT
 
     class _FakeEdr:
         def __init__(self):
-            self.calls = []
+            self.events = []
 
-        def attribute_causality(self, pid, kind, summary, *, name="", data=None):
-            self.calls.append((pid, kind, summary, name, dict(data or {})))
-            return True
+        def ingest_telemetry(self, event):
+            self.events.append(event.to_dict())
 
     class _Req3:
         method = "POST"
@@ -406,13 +405,16 @@ def main() -> int:
         addon2 = ValkyrieAddon(_FakeStore(), blocklist=None, behavioral=None,
                                rules=None, threat_intel=None, edr=fake_edr)
         addon2._handle_request(_Flow3())
-        c.check("the leak was attributed to the resolved process",
-                any(call[0] == 4242 and call[1] == "nyx_leak"
-                    for call in fake_edr.calls))
-        c.check("the attributed summary is the human-readable sentence",
-                any("your device ID" in call[2] for call in fake_edr.calls))
-        c.check("the resolved process name travels with the attribution",
-                any(call[3] == "chrome.exe" for call in fake_edr.calls))
+        c.check("the leak is emitted for the resolved process",
+                any(event["actor_pid"] == 4242
+                    and event["fields"].get("artifact_kind") == "nyx_leak"
+                    for event in fake_edr.events))
+        c.check("the resolved process name travels with telemetry",
+                any(event["actor_name"] == "chrome.exe" for event in fake_edr.events))
+        c.check("telemetry excludes the sentence and masked sample",
+                all("your device ID" not in repr(event)
+                    and "550e8400-e29b-41d4-a716-446655440000" not in repr(event)
+                    for event in fake_edr.events))
 
         # No edr reference at all: must attribute nothing, and must not raise
         # or otherwise change the observe/act pipeline above it.
@@ -431,7 +433,7 @@ def main() -> int:
                                rules=None, threat_intel=None, edr=fake_edr2)
         addon4._handle_request(_Flow3())
         c.check("an unresolvable process attributes nothing (dropped, not guessed)",
-                fake_edr2.calls == [])
+                fake_edr2.events == [])
     finally:
         _NT.pid_for_local_port = real_lookup
 

@@ -46,8 +46,9 @@ CAT_MALWARE     = "malware"
 # discipline as process_telemetry.classify_discovery's Discovery-tactic
 # labels - weak on its own, real as correlation input.
 CAT_ASSET       = "asset"
+CAT_PRIVACY     = "privacy"           # metadata-only Nyx observation
 CATEGORIES  = frozenset({CAT_DNS, CAT_PROCESS, CAT_NETWORK, CAT_PERSISTENCE,
-                         CAT_MALWARE, CAT_ASSET})
+                         CAT_MALWARE, CAT_ASSET, CAT_PRIVACY})
 
 # persistence activities - which ASEP class changed. Kept as a small vocab so the
 # EDR correlator and dashboard can reason over persistence uniformly.

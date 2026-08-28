@@ -116,7 +116,7 @@ def main() -> int:
     c.check("typo'd token fails CLOSED rather than being ignored",
             not ok and "unknown precondition" in why)
 
-    # An empty requirement set is not a rejection — most techniques have none.
+    # An empty requirement set is not a rejection - most techniques have none.
     ok, why = check_requirements((), _host(present=False))
     c.check("no requirements => met, even on a bare host", ok)
 
@@ -126,7 +126,7 @@ def main() -> int:
     c.check("a multi-token requirement fails if ANY token is unmet", not ok)
 
     # ---- and the real host is described accurately -------------------------
-    # Not an assertion about what Sysmon SHOULD be — just that the probe
+    # Not an assertion about what Sysmon SHOULD be - just that the probe
     # returns a coherent answer and agrees with itself.
     real = probe_sysmon()
     c.check(f"probe_sysmon() returns a coherent snapshot "

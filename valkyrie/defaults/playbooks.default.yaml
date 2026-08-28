@@ -29,9 +29,25 @@
 # changes so existing installs pick it up with no manual step.
 # ---------------------------------------------------------------------------
 
-version: 3
+version: 4
 
 playbooks:
+  # Cross-layer privacy/security experiment. The source request has already
+  # been observed; this only simulates a future DNS block. It is gated by both
+  # the graded policy and the independent authority verdict, so changing mode
+  # to enforce cannot bypass either. Keep dry-run until live validation on a
+  # disposable VM shows acceptable latency and false-positive behavior.
+  - id: privacy-consequence-future-dns
+    min_severity: medium
+    categories: [privacy_consequence]
+    mode: dry_run
+    cooldown_seconds: 300
+    requires_policy_action: block
+    requires_authority_action: block
+    actions:
+      - action: block_domain
+        target_from: entity
+
   # Confirmed algorithmically-generated C2 rendezvous (T1568.002). The DGA
   # classifier only fires when length, entropy and bigram-implausibility all
   # agree, so a durable block here is safe.

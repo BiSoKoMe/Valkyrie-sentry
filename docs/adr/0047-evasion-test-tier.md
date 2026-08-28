@@ -1,6 +1,6 @@
-# ADR 0047 — An evasion test tier for redteam/evaluation
+# ADR 0047 - An evasion test tier for redteam/evaluation
 
-Date: 2026-08-04 · Status: accepted
+Date: 2026-08-04 . Status: accepted
 
 ## Context
 
@@ -9,26 +9,26 @@ hand-built 12-variant corpus and said plainly what it had not done: "the
 red-team catalog replays *unobfuscated* command lines... An
 obfuscated-variant evaluation tier is the honest way to score it, and does
 not exist yet." Tier A's 32/40 (later 39/40) score was therefore never
-tested against anything an actual operator would type — every probe input in
+tested against anything an actual operator would type - every probe input in
 `catalog.py` is a clean, textbook command line.
 
 ## Decision
 
 `redteam/evaluation/evasion_harness.py`. For every in-scope Tier A technique
-whose `probe_input` carries a `cmdline` (25 of 40 — the rest are DNS/network/
+whose `probe_input` carries a `cmdline` (25 of 40 - the rest are DNS/network/
 registry/entropy techniques with no command-line syntax to obfuscate), it
 generates obfuscated variants of that exact command line and re-runs the
-technique's own probe function — `replay_harness.run_technique`, unchanged —
+technique's own probe function - `replay_harness.run_technique`, unchanged -
 against each variant. A variant is scored by the identical DETECT/
 CONDITIONAL/MISS gate as unobfuscated Tier A; nothing is scored more
 leniently.
 
 Four transforms, chosen to mechanically apply to (almost) any command line:
 
-  * `caret_escape` — cmd.exe caret escaping (`n^et`)
-  * `quote_split` — token-splitting empty-around-one-char quote pairs (`u"s"er`)
-  * `powershell_concat` — PowerShell string concatenation on the leading token
-  * `unicode_fullwidth` — full-width Latin homoglyphs on the leading token
+  * `caret_escape` - cmd.exe caret escaping (`n^et`)
+  * `quote_split` - token-splitting empty-around-one-char quote pairs (`u"s"er`)
+  * `powershell_concat` - PowerShell string concatenation on the leading token
+  * `unicode_fullwidth` - full-width Latin homoglyphs on the leading token
 
 **Deliberately not attempted generically:** env-var expansion
 (`%COMSPEC:~0,1%...`) only makes sense against a literal path substring most
@@ -43,9 +43,9 @@ nothing. Both are already measured directly by
 The first `quote_split` implementation inserted an *adjacent empty pair*
 (`us""er`). Measured: 68% resistance, 7 techniques evaded. Before treating
 that as a product finding, it was checked against `cmdline_normalize.py`
-directly — `normalize_cmdline("net us\"\"er ...")` returned `changed=False`.
+directly - `normalize_cmdline("net us\"\"er ...")` returned `changed=False`.
 The real transform's regex, `(?<=\w)['"](?=\w)`, requires a *single* quote
-character with a word character on both sides — the actual cmd.exe technique
+character with a word character on both sides - the actual cmd.exe technique
 (`n"e"t`) wraps one middle character in a quote pair, it does not place two
 quotes back to back. Fixed to `u"s"er` and re-verified directly against
 `normalize_cmdline` before re-running the harness. This is the same
@@ -70,8 +70,8 @@ both through the same root cause: `disc-net-view` (`net v^iew`) and
 
 ## The real finding, and the fix
 
-`process_telemetry.classify_discovery` — the Discovery-tactic weak-labeling
-function that feeds the `reconnaissance-burst` sequence IOA (ADR 0041) — does
+`process_telemetry.classify_discovery` - the Discovery-tactic weak-labeling
+function that feeds the `reconnaissance-burst` sequence IOA (ADR 0041) - does
 exact substring checks (`"view" in cmdline`, `"net user" in cmdline`) against
 the **raw** command line only. It was never wired into `cmdline_normalize`,
 unlike `behavioral_rules.match_process`/`classify_behavior`, which match
@@ -80,7 +80,7 @@ raw AND normalized and union the hits. A caret defeats it trivially.
 Fixed the same way ADR 0042 fixed the main rule engine: `classify_discovery`
 now evaluates its keyword checks against both the raw and the de-obfuscated
 command line. Doing this correctly required more than "also check the
-normalized string" — the function has an EXCLUSION path too (`nltest
+normalized string" - the function has an EXCLUSION path too (`nltest
 /dclist:...` is deliberately *not* labeled, because `behavioral_rules.py`'s
 own `nltest-domain` rule already covers and alerts on it). An earlier draft
 checked the positive match against both forms but the exclusion only against
@@ -114,12 +114,12 @@ exclusion (proving the fix didn't just move the bug to the other direction).
 
 - Still Tier A: classifier-input replay, not a live attack. It answers "does
   the code recognise this exact obfuscated shape," not "would this survive a
-  live obfuscated Atomic Red Team run" — Tier B has still never been run.
+  live obfuscated Atomic Red Team run" - Tier B has still never been run.
 - Four transforms, not an exhaustive obfuscation space. A determined
   attacker has more tricks than caret escaping, quote splitting, PowerShell
-  concatenation, and Unicode homoglyphs — this raises the floor, it does not
+  concatenation, and Unicode homoglyphs - this raises the floor, it does not
   claim to be a ceiling.
 - The two techniques already known to miss at baseline
   (`disc-local-accounts`, `lat-psexec-smb`) cannot regress further under
-  obfuscation — they are reported as baseline misses, not evasion wins, and
+  obfuscation - they are reported as baseline misses, not evasion wins, and
   are excluded from the "evaded" count for exactly that reason.

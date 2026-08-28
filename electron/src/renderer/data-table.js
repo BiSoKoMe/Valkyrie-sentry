@@ -1,14 +1,14 @@
 'use strict';
 /* =========================================================================
-   data-table.js — pure logic for the app's one reusable data-grid: sorting
+   data-table.js - pure logic for the app's one reusable data-grid: sorting
    and export. Decoupled from the DOM (same pattern as view-state.js and
    command-index.js) so it's unit testable and any future table (Fleet
-   inventory, forensics file list, …) can reuse it instead of hand-rolling
+   inventory, forensics file list, ...) can reuse it instead of hand-rolling
    sort/export again.
    ========================================================================= */
 
 // Stable sort by one column. Nulls/undefined always sort last regardless of
-// direction — a missing value is never "smallest", it's "unknown".
+// direction - a missing value is never "smallest", it's "unknown".
 function sortRows(rows, col, dir) {
   const list = Array.isArray(rows) ? rows.slice() : [];
   if (!col) return list;
@@ -46,7 +46,7 @@ function toJSON(rows) {
   return JSON.stringify(rows || [], null, 2);
 }
 
-// One row as tab-separated text — what a spreadsheet paste expects.
+// One row as tab-separated text - what a spreadsheet paste expects.
 function rowToTSV(row, cols) {
   const columns = cols && cols.length ? cols : Object.keys(row || {});
   return columns.map((c) => (row && row[c] != null ? String(row[c]) : '')).join('\t');

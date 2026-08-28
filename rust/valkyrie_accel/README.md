@@ -1,17 +1,17 @@
-# valkyrie_accel — optional native accelerators
+# valkyrie_accel - optional native accelerators
 
 A small Rust/[PyO3](https://pyo3.rs) extension that speeds up hot paths in
 Valkyrie. **It is entirely optional.** If it is not built/installed, Valkyrie
-falls back to a pure-Python implementation with identical behavior — so a source
+falls back to a pure-Python implementation with identical behavior - so a source
 checkout or a Raspberry-Pi install with only Python still runs everything.
 
 ## What it accelerates today
 
-- **`IpSet`** — the CIDR/host membership set the DNS answer-screening path checks
+- **`IpSet`** - the CIDR/host membership set the DNS answer-screening path checks
   on every allowed reply. Drop-in for `valkyrie.firewall._PyIPSet`; the two are
   proven equivalent by a randomized differential test
-  (`tests/test_rust_accel.py`). Measured ~20× faster per lookup than the
-  (already-bucketed) Python version, and ~16,000× faster than the original
+  (`tests/test_rust_accel.py`). Measured ~20x faster per lookup than the
+  (already-bucketed) Python version, and ~16,000x faster than the original
   linear scan.
 
 ## Build & install

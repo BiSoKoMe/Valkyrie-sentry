@@ -258,6 +258,7 @@ def known_secrets() -> list[tuple[str, Path]]:
         ("mitmproxy CA directory", C.TLS_MITMPROXY_CONF_DIR),
         ("MAC install key", C.MAC_KEY_PATH),
         ("API control token", C.DATA_DIR / "control_token.txt"),
+        ("browser-context bridge token", C.DATA_DIR / "browser_context_token.txt"),
         # KEPT DELIBERATELY after the ADR 0044 freeze, even though core no
         # longer creates these. An upgrader who ran an older build still has a
         # real fleet_agent.json (device token) and wg0.conf (WireGuard

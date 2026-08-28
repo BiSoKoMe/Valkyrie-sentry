@@ -1,7 +1,6 @@
-# WireGuard Multi-Hop + SelfHealing Watchdog — Audit Report
+# WireGuard Multi-Hop + SelfHealing Watchdog - Audit Report
 
 **Date:** 2026-07-08
-**Branch:** `claude/valkyrie-repo-cleanup-wkijf9`
 **Scope:** `valkyrie/multihop.py`, `valkyrie/wireguard.py`, `valkyrie/intelligence/self_heal.py`
 (`class SelfHealing`), `tests/test_multihop.py`, the dashboard's VPN panel
 (`valkyrie/web/dashboard.html`) and `/api/vpn/status` (`valkyrie/web/server.py`).
@@ -16,19 +15,19 @@
 
 | Component | Verdict |
 |---|---|
-| Key generation (`wireguard.py`, single-hop) | ✅ **Real** — requires the actual `wg genkey`/`wg pubkey` binary; refuses to run without it. No weak fallback. |
-| Key generation (`multihop.py`, two-hop) | ✅ **Real** — pure-Python X25519 via the `cryptography` library (installed: v48.0.1), correct clamping. Fallback path exists but is inert on this machine. |
-| Multi-hop config correctness | ⛔ **Was broken — fixed.** Hop-2's `Endpoint` was hardcoded to a WireGuard-internal overlay address (`10.13.14.1:51820`) instead of hop2's real public IP. The tunnel could never establish a handshake. The `hop2_ip` parameter passed by the CLI was silently discarded. |
-| Kill switch ("ACTIVE" in dashboard) | ⛔ **Was a hardcoded label — fixed to reflect config-file state.** Real live enforcement (kernel iptables rule actually loaded) still cannot be verified from this tool and is now labeled honestly instead of overclaimed. |
-| `tests/test_multihop.py` | ⛔ **Was asserting the bug as correct behavior — fixed.** It literally checked `"10.13.14.1:51820" in hop2_text`, codifying the broken Endpoint. No input-validation tests existed. |
-| Input validation on `--hop1`/`--hop2` | ⛔ **Was absent — fixed.** Shell/INI metacharacters flowed straight into the config with no rejection. |
+| Key generation (`wireguard.py`, single-hop) | ✅ **Real** - requires the actual `wg genkey`/`wg pubkey` binary; refuses to run without it. No weak fallback. |
+| Key generation (`multihop.py`, two-hop) | ✅ **Real** - pure-Python X25519 via the `cryptography` library (installed: v48.0.1), correct clamping. Fallback path exists but is inert on this machine. |
+| Multi-hop config correctness | ⛔ **Was broken - fixed.** Hop-2's `Endpoint` was hardcoded to a WireGuard-internal overlay address (`10.13.14.1:51820`) instead of hop2's real public IP. The tunnel could never establish a handshake. The `hop2_ip` parameter passed by the CLI was silently discarded. |
+| Kill switch ("ACTIVE" in dashboard) | ⛔ **Was a hardcoded label - fixed to reflect config-file state.** Real live enforcement (kernel iptables rule actually loaded) still cannot be verified from this tool and is now labeled honestly instead of overclaimed. |
+| `tests/test_multihop.py` | ⛔ **Was asserting the bug as correct behavior - fixed.** It literally checked `"10.13.14.1:51820" in hop2_text`, codifying the broken Endpoint. No input-validation tests existed. |
+| Input validation on `--hop1`/`--hop2` | ⛔ **Was absent - fixed.** Shell/INI metacharacters flowed straight into the config with no rejection. |
 | SelfHealing check/recovery isolation | ✅ Correctly isolates ordinary `Exception`s per component; a failed check does not stop other checks; a failed recovery is logged, not raised. |
-| SelfHealing watchdog thread survivability | ⛔ **Was a real gap — fixed.** `except Exception` (not `BaseException`) in `_check_one`/`_loop` meant a `SystemExit`/`KeyboardInterrupt` raised inside any `check_fn`/`recover_fn` would silently kill the watchdog thread forever, with no external signal that self-healing had stopped. Reproduced live; none of today's registered checks currently raise this, so it was latent, not active. |
-| SelfHealing test coverage | ⛔ **Confirmed: zero.** No `tests/test_self_heal.py` exists — the exact blind-spot pattern the MAC bug came from. **Not added in this pass** (out of the constrained, minimal-fix scope); flagged as the top follow-up. |
+| SelfHealing watchdog thread survivability | ⛔ **Was a real gap - fixed.** `except Exception` (not `BaseException`) in `_check_one`/`_loop` meant a `SystemExit`/`KeyboardInterrupt` raised inside any `check_fn`/`recover_fn` would silently kill the watchdog thread forever, with no external signal that self-healing had stopped. Reproduced live; none of today's registered checks currently raise this, so it was latent, not active. |
+| SelfHealing test coverage | ⛔ **Confirmed: zero.** No `tests/test_self_heal.py` exists - the exact blind-spot pattern the MAC bug came from. **Not added in this pass** (out of the constrained, minimal-fix scope); flagged as the top follow-up. |
 
 ---
 
-## Part 1 — WireGuard key generation
+## Part 1 - WireGuard key generation
 
 ### 1a. Single-hop (`valkyrie/wireguard.py`)
 
@@ -42,14 +41,14 @@ genkey = subprocess.run([wg, "genkey"], capture_output=True, check=True)
 pubkey_proc = subprocess.run([wg, "pubkey"], input=genkey.stdout, ...)
 ```
 
-There is no fallback here at all — if `wg` isn't on PATH, `generate()` prints
+There is no fallback here at all - if `wg` isn't on PATH, `generate()` prints
 install instructions and returns `{}` (`wireguard.py:210-215`). Keys are the
 genuine output of the reference WireGuard tool. **No weak-random path exists
 in this file.**
 
 ### 1b. Multi-hop (`valkyrie/multihop.py`)
 
-This path does **not** shell out to `wg` at all — it derives keys in pure
+This path does **not** shell out to `wg` at all - it derives keys in pure
 Python:
 
 ```python
@@ -70,7 +69,7 @@ def _private_to_public(private: bytes) -> bytes:
     return os.urandom(32)   # fallback: NOT a real public key
 ```
 
-- Entropy source is `os.urandom(32)` — a real CSPRNG, correct.
+- Entropy source is `os.urandom(32)` - a real CSPRNG, correct.
 - Curve25519 clamping (`&= 248`, `&= 127`, `|= 64`) matches RFC 7748 §5 exactly.
 - Public-key derivation uses the real `cryptography` library's X25519
   implementation when available.
@@ -85,7 +84,7 @@ $ python -c "from cryptography.hazmat.primitives.asymmetric.x25519 import X25519
 So today, `_private_to_public` takes the **real** branch. The fallback
 (`return os.urandom(32)`) is real code that would silently produce a random
 32 bytes that *look* like a valid key but are **not** the actual public key
-for the generated private key — this would be a genuine "silent failure":
+for the generated private key - this would be a genuine "silent failure":
 peers would never complete a handshake, the private key having no
 relationship to the advertised public key, and the code gives no warning.
 This is currently **dormant risk, not an active bug** (confirmed
@@ -93,15 +92,15 @@ This is currently **dormant risk, not an active bug** (confirmed
 package is ever missing in a deployment, `multihop.py` degrades to
 generating **non-functional keypairs with zero error message**. This is the
 same category of risk as the MAC randomizer bug (claims success, does
-nothing) but currently inert. Not changed in this pass — see Recommendations.
+nothing) but currently inert. Not changed in this pass - see Recommendations.
 
 Key format was independently checked against the test's own validator
 (43-char base64 + trailing `=`, decodes to 32 bytes) across 10 generation
-rounds — all passed both before and after this session's edits.
+rounds - all passed both before and after this session's edits.
 
 ---
 
-## Part 2 — Config correctness
+## Part 2 - Config correctness
 
 ### 2a. Hop-2 Endpoint was structurally broken (fixed)
 
@@ -119,14 +118,14 @@ def _hop2_conf(self, private_key: str, hop2_ip: str) -> str:
 
 `hop2_ip` (the real public IP/hostname the operator passes via
 `--hop2 5.6.7.8`) was accepted as a parameter and then **never used** in the
-function body — confirmed by grep (`multihop.py:189` declared it,
+function body - confirmed by grep (`multihop.py:189` declared it,
 `multihop.py:199` [pre-fix] never referenced it). Instead, `Endpoint` was
-hardcoded to `10.13.14.1:51820` — the WireGuard **overlay** address that
+hardcoded to `10.13.14.1:51820` - the WireGuard **overlay** address that
 `server_setup_hop2.sh` assigns to hop2's *own* tunnel interface
 (`Address = 10.13.14.1/24`, derived from `MULTIHOP_SUBNET_2`). An `Endpoint`
 must be a real, routable address the client can dial to perform the initial
 UDP handshake; a WireGuard-internal overlay address is not reachable until
-after the very tunnel it's trying to bring up already exists — a
+after the very tunnel it's trying to bring up already exists - a
 chicken-and-egg failure. Live-reproduced:
 
 ```
@@ -138,7 +137,7 @@ Endpoint = 10.13.14.1:51820      # <- 5.6.7.8 (the real hop2 IP) never appears a
 
 The setup instructions (`multihop.py:151`, "On hop-1 server, add hop-2 as a
 WireGuard peer") confirm this is meant to be a real routed two-tunnel
-topology on the client, not a nested single-tunnel design — which makes the
+topology on the client, not a nested single-tunnel design - which makes the
 hardcoded overlay address unambiguously wrong under any reading of the
 intended design, not just a labeling quibble.
 
@@ -146,30 +145,30 @@ intended design, not just a labeling quibble.
 `hop2_ip` parameter, matching how `_hop1_conf` already used `hop1_ip`
 correctly. A comment documents why the overlay address is wrong.
 
-This does **not** fully solve multi-hop WireGuard — see the "what remains a
+This does **not** fully solve multi-hop WireGuard - see the "what remains a
 gap" section below; the manual peer-wiring step 5 in `instructions()` is
 still required and still not automated or validated by this tool.
 
-### 2b. `AllowedIPs` / routing chain — otherwise correct
+### 2b. `AllowedIPs` / routing chain - otherwise correct
 
-- `hop1_conf`: `AllowedIPs = 10.13.14.0/24` — correctly scopes hop1's peer
+- `hop1_conf`: `AllowedIPs = 10.13.14.0/24` - correctly scopes hop1's peer
   route to *only* hop2's subnet (not `0.0.0.0/0`), which is the standard
   "route the next hop's overlay subnet through this peer" pattern.
-- `hop2_conf`: `AllowedIPs = 0.0.0.0/0` + `PersistentKeepalive = 25` — correct
+- `hop2_conf`: `AllowedIPs = 0.0.0.0/0` + `PersistentKeepalive = 25` - correct
   for the terminal, full-tunnel hop.
 - `hop1_conf` sets `DNS = 10.13.13.1` (the hop1 gateway); `hop2_conf` sets no
   `DNS` line. This is consistent with "DNS only needs to be set on the
   interface that's actually forwarding client-originated queries" but is
-  worth an explicit code comment — not changed, since it doesn't produce
+  worth an explicit code comment - not changed, since it doesn't produce
   incorrect behavior, only an asymmetry that could confuse a maintainer.
 - Server-side `server_setup_hop{N}.sh`: correct `wg-quick`, `sysctl`,
   `iptables MASQUERADE`/`FORWARD` boilerplate; a stray `.format(hop_num=...)`
   call at the end of an f-string that already interpolated `{hop_num}` is
   dead code (verified it's a no-op on the fully-substituted string, not a
-  bug that produces wrong output) — left as-is; flagged only as minor
+  bug that produces wrong output) - left as-is; flagged only as minor
   cleanup debt, not fixed (out of scope, purely cosmetic).
 
-### 2c. Input validation — was absent (fixed)
+### 2c. Input validation - was absent (fixed)
 
 `generate_config()` took `hop1_ip`/`hop2_ip` and wrote them straight into an
 INI-style config with **no validation whatsoever**. Reproduced:
@@ -182,7 +181,7 @@ Endpoint = 1.2.3.4; rm -rf /:51820     # written to disk, "success" reported
 
 This is not directly shell-exec'd by this tool (it's written into a `.conf`
 file that WireGuard itself would later refuse to parse), so it is not an RCE
-here — but it is exactly the "looks like it worked, silently produces
+here - but it is exactly the "looks like it worked, silently produces
 garbage" pattern this audit is checking for: `generate_config()` returned
 normally, the CLI printed `✓ Configs written`, and the resulting config is
 non-functional with no diagnostic.
@@ -197,7 +196,7 @@ flow is preserved unchanged.
 
 ---
 
-## Part 3 — The kill switch: label vs. reality
+## Part 3 - The kill switch: label vs. reality
 
 ### 3a. `MultiHopVPN().status()` (before fix)
 
@@ -211,12 +210,12 @@ def status(self) -> dict:
     }
 ```
 
-`kill_switch` was **always** the literal iptables command text — present
+`kill_switch` was **always** the literal iptables command text - present
 whether or not any config file existed, whether or not WireGuard was even
 installed, and regardless of whether a tunnel was ever brought up. It is not
 a status signal at all; it's a constant.
 
-### 3b. Dashboard (before fix) — confirmed hardcoded, not even reading the API field
+### 3b. Dashboard (before fix) - confirmed hardcoded, not even reading the API field
 
 `valkyrie/web/dashboard.html`, `loadVpnStatus()`:
 
@@ -228,7 +227,7 @@ if (ks) ks.textContent = 'ACTIVE';   // <- ignores `data` entirely
 ```
 
 This line does not read `data.kill_switch` or anything else from the
-response — **"Kill switch: ACTIVE" renders unconditionally**, even when
+response - **"Kill switch: ACTIVE" renders unconditionally**, even when
 `/api/vpn/status` reports `hop1_conf_exists: false, hop2_conf_exists: false`
 (the actual live state on this machine before any config was generated,
 verified directly):
@@ -239,13 +238,13 @@ $ python -c "from valkyrie.multihop import MultiHopVPN; print(MultiHopVPN().stat
 ```
 
 At that moment the dashboard would still show "Kill switch: ACTIVE" to the
-user — no configs generated, no tunnel possible, and yet the strongest
+user - no configs generated, no tunnel possible, and yet the strongest
 possible security claim is displayed. This is a direct parallel to the DoT
 report's finding: a privacy guarantee ("kill switch blocks leaks") displayed
 as active when nothing backing it exists.
 
 **Fix applied:**
-- `MultiHopVPN.status()` now computes `kill_switch_configured: bool` — true
+- `MultiHopVPN.status()` now computes `kill_switch_configured: bool` - true
   only when **both** hop config files exist on disk **and** both actually
   contain the `PostUp`/`PreDown` iptables directive text. This is the
   strongest claim verifiable without a live tunnel: "the rule is present in
@@ -269,14 +268,14 @@ verified without live network testing**:
   `iptables`/`OUTPUT`/`-D OUTPUT`, i.e. shape, not that it executes).
 - Whether the kill switch actually blocks traffic on tunnel drop in
   practice (would require tearing down `wg0` mid-transfer on a live Linux
-  box and observing packet loss/REJECT — explicitly out of scope here).
-- Whether, after the Part 2a fix, a hop1→hop2 handshake actually completes
+  box and observing packet loss/REJECT - explicitly out of scope here).
+- Whether, after the Part 2a fix, a hop1->hop2 handshake actually completes
   end-to-end (requires two real VPS servers, the manual peer-wiring step,
-  and a live client — explicitly out of scope here).
+  and a live client - explicitly out of scope here).
 
 ---
 
-## Part 4 — `tests/test_multihop.py`: gap and fix
+## Part 4 - `tests/test_multihop.py`: gap and fix
 
 ### 4a. Before this session
 
@@ -288,10 +287,10 @@ check("hop2 conf Endpoint is 10.13.14.1:51820",
 ```
 
 This assertion is *checking that the bug is present*. A test suite that
-"passes" while asserting broken behavior gives zero warning signal — same
+"passes" while asserting broken behavior gives zero warning signal - same
 failure mode as the MAC bug, where `randomize()` returned `True` and nothing
 caught it. The suite verified key format (good), that files get written
-(good), and kill-switch **string shape** (good) — but never checked whether
+(good), and kill-switch **string shape** (good) - but never checked whether
 the generated config could plausibly work end-to-end, and had **no**
 input-validation tests at all.
 
@@ -319,9 +318,9 @@ root):
 
 ---
 
-## Part 5 — SelfHealing watchdog (`valkyrie/intelligence/self_heal.py`)
+## Part 5 - SelfHealing watchdog (`valkyrie/intelligence/self_heal.py`)
 
-### 5a. Registration and recovery wiring — reviewed, correctly isolated
+### 5a. Registration and recovery wiring - reviewed, correctly isolated
 
 `__main__.py:735-785` registers four components:
 
@@ -333,12 +332,12 @@ root):
 | `unbound` | raw DNS probe over UDP to the configured upstream, 2s timeout | `unbound.start()` |
 
 `dns_interceptor.is_listening()` (`dns_interceptor.py:166-174`) is a real
-liveness check — `self._running and self._sock is not None and
-self._thread.is_alive()` — not just a flag that could go stale, and
+liveness check - `self._running and self._sock is not None and
+self._thread.is_alive()` - not just a flag that could go stale, and
 `start()` (`dns_interceptor.py:135-152`) explicitly handles the
 "Thread objects are single-use" `RuntimeError` by rebuilding the `Thread`
 object before starting it again, specifically commented as being for the
-self-healing restart path. This is solid, deliberate engineering — unlike
+self-healing restart path. This is solid, deliberate engineering - unlike
 the MAC randomizer's silent-failure pattern, this component's health check
 and recovery were built with the restart case in mind from the start.
 
@@ -351,12 +350,12 @@ and recovery were built with the restart case in mind from the start.
   {exc}"`, and does not propagate.
 - Verified by reasoning through `dns_server.start()`'s realistic failure
   mode (e.g. `OSError: address already in use` if the OS hasn't released the
-  UDP port yet right after `.close()`) — this would be caught correctly by
+  UDP port yet right after `.close()`) - this would be caught correctly by
   the existing `except Exception` and logged, not silently swallowed.
 
 **This part of the design is sound and was not changed.**
 
-### 5b. The watchdog dying silently — confirmed real, now fixed
+### 5b. The watchdog dying silently - confirmed real, now fixed
 
 `_check_one` and `_loop` both caught `Exception`, not `BaseException`. Python
 requires `BaseException` to catch `SystemExit`/`KeyboardInterrupt` (and
@@ -390,30 +389,30 @@ False
 ```
 
 Once the daemon thread dies this way, `SelfHealing.status()` freezes at its
-last values forever — `last_check` stops advancing, but **nothing surfaces
+last values forever - `last_check` stops advancing, but **nothing surfaces
 this as an alarm**. `/api/intelligence`'s `self_heal` key
 (`web/server.py:353-354`) would keep echoing stale per-component data with
 no "watchdog is dead" signal, and the dashboard has no code path that calls
-`healer._thread.is_alive()` at all (confirmed via grep — zero references
+`healer._thread.is_alive()` at all (confirmed via grep - zero references
 outside `self_heal.py` itself). This is the same shape of bug as the MAC
 randomizer: a component can stop doing its job while everything downstream
 keeps reporting the last-known-good state as if it were current.
 
 **Currently latent, not active:** none of the four registered `check_fn`/
 `recover_fn` callables in `__main__.py` today raise `SystemExit` or
-`KeyboardInterrupt` — `is_listening()`, `is_writing()`, the `urllib`/`socket`
+`KeyboardInterrupt` - `is_listening()`, `is_writing()`, the `urllib`/`socket`
 probes, and `dns_server.start()`/`unbound.start()` all only raise ordinary
 `Exception` subclasses in their realistic failure modes. So this was not
 observed to be causing harm today, but it is exactly the kind of
 "the guarantee isn't actually active despite looking designed for it" gap
-called out for `resolver.py`/DoT — the code comments explicitly promise "the
+called out for `resolver.py`/DoT - the code comments explicitly promise "the
 watchdog itself must never die" and "one check raising... never affects the
 others," and `except Exception` alone does not deliver that promise.
 
 **Fix applied:** both catch clauses widened to `except BaseException`, with
 comments explaining why (a stray `SystemExit`/`KeyboardInterrupt` from any
 registered callback must not kill the loop thread). Re-verified after the
-fix — the thread now survives both repro cases:
+fix - the thread now survives both repro cases:
 
 ```
 $ python -c "... KeyboardInterrupt in recover_fn ..."
@@ -421,11 +420,11 @@ thread alive after KeyboardInterrupt in recover_fn (patched): True
 {'c': {'ok': False, 'failures': 5, 'recoveries': 0, 'last_error': 'recovery raised: ', 'last_check': ...}}
 ```
 
-### 5c. Test coverage — confirmed zero, not added in this pass
+### 5c. Test coverage - confirmed zero, not added in this pass
 
 `tests/` has no `test_self_heal.py`, and no other test file imports
 `SelfHealing` or `self_heal`. This is the exact blind spot pattern that let
-the MAC randomizer bug ship — a component with real failure modes and no
+the MAC randomizer bug ship - a component with real failure modes and no
 dedicated regression test. **Not fixed in this session** (writing a full
 test suite for a threading-based watchdog was judged to be beyond a
 "safe, clearly-scoped, non-destructive fix" and risks flakiness on CI without
@@ -465,7 +464,7 @@ careful design); flagged below as the top recommended follow-up.
    (c) a test that `all_ok()` reflects a failed component correctly.
 2. **`_private_to_public`'s `ImportError` fallback** (`multihop.py`) returns
    `os.urandom(32)` as a "public key" with zero relationship to the real
-   private key if the `cryptography` package is ever missing — dormant on
+   private key if the `cryptography` package is ever missing - dormant on
    this machine (package is installed) but would be a silent,
    undiagnosable handshake failure if it ever activated. Not touched this
    session since `cryptography` is a confirmed hard dependency here;
@@ -480,16 +479,16 @@ careful design); flagged below as the top recommended follow-up.
 4. **Full end-to-end multi-hop handshake is still unverified.** The Part 2a
    fix corrects a bug that would have made this structurally impossible, but
    confirming it now *works* requires two real VPS servers, the still-manual
-   "add hop-2 as a peer on hop-1" step, and a live client — out of scope
+   "add hop-2 as a peer on hop-1" step, and a live client - out of scope
    here.
 5. **`server_setup_hop{N}.sh`'s trailing `.format(hop_num=...)` call is dead
    code** (the f-string already substituted `{hop_num}` before `.format()`
-   runs) — harmless today (no-op on a string with no remaining placeholders)
+   runs) - harmless today (no-op on a string with no remaining placeholders)
    but confusing; minor cleanup, not fixed.
 
 ---
 
-## Follow-up pass (same day) — gaps #1 and #2 now closed
+## Follow-up pass (same day) - gaps #1 and #2 now closed
 
 - **#1 resolved: `tests/test_self_heal.py` added (17 checks, all passing).**
   Covers exactly the recommended cases and more: (a) a `check_fn` raising
@@ -497,12 +496,12 @@ careful design); flagged below as the top recommended follow-up.
   watchdog thread alive (regression test for the 5b `BaseException` fix),
   (b) `recover_fn` is invoked on failure and `recoveries` increments, then
   the component reports `ok` after a successful recovery, (c) `all_ok()`
-  flips correctly, and (d) fault isolation — a raising component does not
+  flips correctly, and (d) fault isolation - a raising component does not
   stop its neighbours from being checked. Run: `python tests/test_self_heal.py`.
 - **#2 resolved: `_private_to_public` now fails loud.** The `os.urandom(32)`
   fallback is gone; a missing `cryptography` package now raises
   `RuntimeError` with an explicit message instead of returning a fake public
   key. `cryptography` is already listed in `requirements.txt`, so the real
-  branch is unchanged — this only removes the silent-failure landmine.
+  branch is unchanged - this only removes the silent-failure landmine.
 - #3, #4, #5 remain open as documented (they need live network hardware or
   are cosmetic).

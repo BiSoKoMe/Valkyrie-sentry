@@ -1,6 +1,6 @@
-# ADR 0017 — Digital forensics triage collection
+# ADR 0017 - Digital forensics triage collection
 
-Date: 2026-07-19 · Status: accepted
+Date: 2026-07-19 . Status: accepted
 
 ## Context
 
@@ -12,7 +12,7 @@ analyst value, fully local, zero new architecture.
 
 ## Decision
 
-`valkyrie/forensics.py` — `TriageCollector.collect(incident_id)` builds a
+`valkyrie/forensics.py` - `TriageCollector.collect(incident_id)` builds a
 zip bundle in `DATA_DIR/forensics/`:
 
 | artifact | source |
@@ -26,7 +26,7 @@ zip bundle in `DATA_DIR/forensics/`:
 | `MANIFEST.json` | SHA256 + size per artifact, tool version, timestamps, per-artifact collection errors |
 
 `verify_bundle(path)` re-hashes artifacts against the manifest anywhere,
-stdlib-only — the integrity half of chain of custody. Tamper on any
+stdlib-only - the integrity half of chain of custody. Tamper on any
 artifact is detected (tested).
 
 API: `POST /api/edr/incidents/{id}/triage` (control-token-gated off
@@ -43,7 +43,7 @@ loopback, like all state-revealing routes).
 ## Rollback
 
 Delete `forensics.py` + the route; nothing else references them. Bundles
-are plain zips — readable without Valkyrie.
+are plain zips - readable without Valkyrie.
 
 ## Honest boundary
 

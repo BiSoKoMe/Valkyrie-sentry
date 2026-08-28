@@ -11,10 +11,10 @@
     spawns its own private Unbound on 5301 for upstream recursion).
 
     Traffic only flows through the engine once the DNS adapter is armed
-    (arm-protection.ps1 / the app's START button) — installing the service does
+    (arm-protection.ps1 / the app's START button) - installing the service does
     NOT change system DNS, so there is no internet risk at install time.
 .PARAMETER Root
-    Directory containing valkyrie.exe and nssm.exe (…\resources\engine).
+    Directory containing valkyrie.exe and nssm.exe (...\resources\engine).
 #>
 param([Parameter(Mandatory)][string]$Root)
 $ErrorActionPreference = 'Continue'

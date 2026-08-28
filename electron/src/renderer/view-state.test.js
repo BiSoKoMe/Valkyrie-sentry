@@ -1,6 +1,6 @@
 'use strict';
 /* =========================================================================
-   Unit tests for view-state.js — the pure "offline vs empty vs list" logic
+   Unit tests for view-state.js - the pure "offline vs empty vs list" logic
    that keeps every live panel honest about whether protection is running.
    Zero dependencies: Node's built-in test runner. Run with:
      node --test electron/src/renderer/view-state.test.js

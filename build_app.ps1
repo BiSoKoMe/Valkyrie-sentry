@@ -15,10 +15,10 @@
 #  no browser, no localhost, no command line for the end user.
 #
 #  THREE BUILD MODES:
-#     Development — run from source, hot reload, debug:  cd electron; npm run dev
-#     Release (default)  — .\build_app.ps1            -> ValkyrieSetup.exe (NSIS,
+#     Development - run from source, hot reload, debug:  cd electron; npm run dev
+#     Release (default)  - .\build_app.ps1            -> ValkyrieSetup.exe (NSIS,
 #                          installs the service, shortcuts, auto-launch)
-#     Portable           — .\build_app.ps1 -Portable  -> ValkyriePortable.exe
+#     Portable           - .\build_app.ps1 -Portable  -> ValkyriePortable.exe
 #                          (no install, no service, all state beside the .exe)
 #
 #  Run ON WINDOWS:  .\build_app.ps1
@@ -26,7 +26,7 @@
 #     -Portable     build the portable single-exe instead of the installer.
 #     -SkipEngine   reuse the existing dist\valkyrie.exe (fast: only re-stage +
 #                   rebuild the Electron output).
-#     -WithAI       (deprecated no-op) AI investigation now needs no vendor SDK —
+#     -WithAI       (deprecated no-op) AI investigation now needs no vendor SDK -
 #                   its providers speak plain HTTP via httpx, which is bundled.
 #     -NoVCRedist   skip the best-effort VC++ runtime download.
 # ===================================================================
