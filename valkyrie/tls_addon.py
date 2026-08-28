@@ -147,12 +147,13 @@ class ValkyrieAddon:
     """mitmproxy addon class - methods are mitmproxy event hooks."""
 
     def __init__(self, store: Store, blocklist=None, behavioral=None, rules=None,
-                 threat_intel=None) -> None:
+                 threat_intel=None, edr=None) -> None:
         self.store           = store
         self.blocklist       = blocklist
         self.behavioral      = behavioral
         self.rules           = rules
         self.threat_intel    = threat_intel
+        self.edr             = edr
         self.intercept_count = 0
         # response cache: url -> (expiry_time, cleaned_bytes | None)
         self._resp_cache: dict[str, tuple[float, bytes | None]] = {}
@@ -315,6 +316,8 @@ class ValkyrieAddon:
             if not observations:
                 return
 
+            self._attribute_nyx_observations(flow, observations)
+
             if NYX_ACT:
                 new_url, new_body, faked = nyx.fake_outbound(
                     req.method, url, headers, body)
@@ -336,6 +339,50 @@ class ValkyrieAddon:
             for ob in observations:
                 self._log(domain, url, proc, "flagged", ob.sentence,
                           category="nyx_leak")
+        except Exception:
+            pass
+
+    def _resolve_causality_pid(self, flow) -> tuple[int, str]:
+        """Best-effort local-process resolution for causality attribution
+        ONLY - deliberately separate from ``_process_name`` (used in every
+        existing log line) so this addition cannot change what any log line
+        already says. Returns (0, "") when unresolved; callers must treat
+        that as "attribute nothing," never as pid 0 being a real process."""
+        try:
+            port = flow.client_conn.peername[1]
+        except Exception:
+            return 0, ""
+        from .network_telemetry import pid_for_local_port
+        resolved = pid_for_local_port(port)
+        if resolved is None:
+            return 0, ""
+        pid, name, _path = resolved
+        return pid, name
+
+    def _attribute_nyx_observations(self, flow, observations) -> None:
+        """Feed each Nyx observation onto the same causality graph attack
+        detections already use (``EdrEngine.attribute_causality``, see ADR
+        0057), so a process's outbound leaks and its process/network behavior
+        become visible on one subgraph instead of two unconnected ones.
+        Purely additive: changes no Nyx behavior, never touches the request,
+        and a missing ``edr`` reference or an unresolved pid just means
+        nothing gets attributed - the existing log/act/observe path above is
+        entirely unaffected either way. ``getattr`` (not ``self.edr``): some
+        callers construct this addon via ``__new__`` for isolated testing,
+        bypassing ``__init__`` entirely, and a missing attribute must degrade
+        the same as an explicit None, never raise."""
+        if getattr(self, "edr", None) is None:
+            return
+        try:
+            pid, name = self._resolve_causality_pid(flow)
+            if pid <= 0:
+                return
+            for ob in observations:
+                self.edr.attribute_causality(
+                    pid, "nyx_leak", ob.sentence, name=name,
+                    data={"category": ob.category,
+                          "destination_host": ob.destination_host,
+                          "masked_sample": ob.masked_sample})
         except Exception:
             pass
 

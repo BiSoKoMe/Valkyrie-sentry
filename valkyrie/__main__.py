@@ -1957,7 +1957,8 @@ def main() -> None:
     if args.tls and not args.no_tls:
         from .tls_inspector import TLSInspector
         tls_inspector = TLSInspector(store=store, blocklist=blocklist, behavioral=behavioral,
-                                     rules=rules, threat_intel=threat_intel)
+                                     rules=rules, threat_intel=threat_intel,
+                                     edr=edr_engine)
         if tls_inspector.start():
             ca_path = tls_inspector.setup_ca()
             console.print(f"[green]✓[/green] TLS inspector on port {tls_inspector.port}")

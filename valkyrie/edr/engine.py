@@ -611,6 +611,20 @@ class EdrEngine:
         """Graph size / health, for the components + coverage surface."""
         return self._causality.stats()
 
+    def attribute_causality(self, pid: int, kind: str, summary: str, *,
+                            name: str = "", data: Optional[dict] = None) -> bool:
+        """Public entry for a sensor OUTSIDE the telemetry pipeline to attach
+        one observation to the process that caused it - e.g. Nyx's TLS
+        interception, which sees outbound request content the process/network
+        collectors never do. Same graph, same honesty rule as everything else
+        that reaches ``causality.py``: an unresolvable pid is dropped, not
+        guessed at (see ``CausalityGraph.attribute``). Never raises."""
+        try:
+            return self._causality.attribute(pid, kind, summary, name=name,
+                                             data=data)
+        except Exception:   # noqa: BLE001 - an external caller's bug here
+            return False     # must not become an engine-crashing exception
+
     def report_detection(self, det: Detection) -> Optional[str]:
         """Public entry for sensors that produce a fully-formed Detection (e.g.
         the ransomware shield) rather than raw telemetry. Flows through the same

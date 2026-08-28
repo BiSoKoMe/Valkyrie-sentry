@@ -86,6 +86,65 @@ def main() -> int:
     except Exception:
         _check("poll_once swallows emitter exceptions", False)
 
+    print("\n[7] pid_for_local_port() - Nyx causality attribution lookup (ADR 0057)")
+    import valkyrie.network_telemetry as NT
+
+    class _FakeAddr:
+        def __init__(self, ip, port):
+            self.ip = ip
+            self.port = port
+
+    class _FakeConn:
+        def __init__(self, laddr, pid, status="ESTABLISHED"):
+            self.laddr = laddr
+            self.pid = pid
+            self.status = status
+            self.raddr = None
+
+    class _FakeProcess:
+        def __init__(self, pid):
+            self._pid = pid
+
+        def name(self):
+            return "chrome.exe" if self._pid == 4242 else ""
+
+        def exe(self):
+            return r"C:\chrome.exe" if self._pid == 4242 else ""
+
+    class _FakePsutil:
+        @staticmethod
+        def net_connections(kind="inet"):
+            return [_FakeConn(_FakeAddr("127.0.0.1", 55000), 4242)]
+
+        @staticmethod
+        def Process(pid):
+            return _FakeProcess(pid)
+
+    real_flag = NT._PSUTIL
+    real_psutil = NT.psutil if real_flag else None
+    NT.psutil = _FakePsutil()
+    NT._PSUTIL = True
+    try:
+        result = NT.pid_for_local_port(55000)
+        _check("resolves (pid, name, path) for a matching local port",
+               result == (4242, "chrome.exe", r"C:\chrome.exe"))
+        _check("no match for an unrelated port returns None",
+               NT.pid_for_local_port(9999) is None)
+        _check("a falsy port is rejected without calling psutil",
+               NT.pid_for_local_port(0) is None)
+    finally:
+        NT._PSUTIL = real_flag
+        if real_psutil is not None:
+            NT.psutil = real_psutil
+
+    print("\n[8] pid_for_local_port() degrades cleanly without psutil")
+    NT._PSUTIL = False
+    try:
+        _check("no psutil available -> None, never raises",
+               NT.pid_for_local_port(55000) is None)
+    finally:
+        NT._PSUTIL = real_flag
+
     print("\n" + "=" * 48)
     if _FAILURES:
         print(f"FAILED: {len(_FAILURES)} check(s)")
