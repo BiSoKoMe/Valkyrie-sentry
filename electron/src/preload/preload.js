@@ -1,16 +1,16 @@
 'use strict';
 // ---------------------------------------------------------------------------
-// preload.js — the ONLY bridge between the sandboxed renderer and the shell.
+// preload.js - the ONLY bridge between the sandboxed renderer and the shell.
 //
 // contextIsolation is on, so the renderer sees exactly this frozen `valkyrie`
-// object and nothing else — no Node, no ipcRenderer, no require. Every capability
+// object and nothing else - no Node, no ipcRenderer, no require. Every capability
 // is an explicit, named channel.
 // ---------------------------------------------------------------------------
 
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('valkyrie', {
-  // ── Boot / engine lifecycle ──────────────────────────────────────────
+  // --- Boot / engine lifecycle ---
   boot: () => ipcRenderer.invoke('boot'),
   lifecycleInfo: () => ipcRenderer.invoke('lifecycle:info'),
   repair: () => ipcRenderer.invoke('lifecycle:repair'),
@@ -32,7 +32,7 @@ contextBridge.exposeInMainWorld('valkyrie', {
     return () => ipcRenderer.removeListener('engine:progress', h);
   },
 
-  // ── Live telemetry (pushed from main every ~1.5s) ────────────────────
+  // --- Live telemetry (pushed from main every ~1.5s) ---
   onTelemetry: (cb) => {
     const h = (_e, data) => cb(data);
     ipcRenderer.on('telemetry', h);
@@ -47,7 +47,7 @@ contextBridge.exposeInMainWorld('valkyrie', {
     post: (p, body) => ipcRenderer.invoke('api:post', { path: p, body }),
   },
 
-  // ── Window controls (custom title bar) ───────────────────────────────
+  // --- Window controls (custom title bar) ---
   minimize: () => ipcRenderer.send('window:minimize'),
   maximize: () => ipcRenderer.send('window:maximize'),
   close: () => ipcRenderer.send('window:close'),
@@ -57,7 +57,7 @@ contextBridge.exposeInMainWorld('valkyrie', {
     return () => ipcRenderer.removeListener('window:state', h);
   },
 
-  // ── Misc ─────────────────────────────────────────────────────────────
+  // --- Misc ---
   openLogs: () => ipcRenderer.invoke('open-logs'),
   appInfo: () => ipcRenderer.invoke('app:info'),
   errorDialog: (title, message) =>

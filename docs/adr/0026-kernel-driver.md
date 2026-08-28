@@ -1,12 +1,12 @@
-# ADR 0026 — Kernel driver: telemetry + LSASS protection (source component)
+# ADR 0026 - Kernel driver: telemetry + LSASS protection (source component)
 
-Date: 2026-07-24 · Status: accepted (source component; not built/shipped) · Follows: ADR 0025
+Date: 2026-07-24 . Status: accepted (source component; not built/shipped) . Follows: ADR 0025
 
 ## Context
 
 Every prior ADR that hit a wall named the same one: capabilities that need
-kernel visibility — tamper-proof process lineage, in-kernel handle
-interception, pre-execution/pre-write blocking — were **documented as out of
+kernel visibility - tamper-proof process lineage, in-kernel handle
+interception, pre-execution/pre-write blocking - were **documented as out of
 scope for a user-mode agent** rather than faked (ADRs 0001, 0023, 0025). That
 honesty is correct and stays. But "out of scope forever, undocumented" is
 weaker than "here is the real extension point, built to the edge of what this
@@ -21,26 +21,26 @@ form* an honest kernel contribution takes.
 
 ## Decision
 
-Add `driver/valkyrie_km/` — a **real, reviewable, buildable WDM driver source
-component** plus its **fully-integrated, tested user-mode bridge** — with a
+Add `driver/valkyrie_km/` - a **real, reviewable, buildable WDM driver source
+component** plus its **fully-integrated, tested user-mode bridge** - with a
 status contract that never overstates it.
 
 Kernel side (`valkyrie_km.c`, `valkyrie_shared.h`), scoped to the highest-value,
 lowest-risk primitives:
-- `PsSetCreateProcessNotifyRoutineEx` — authoritative `(pid, ppid, image)`.
+- `PsSetCreateProcessNotifyRoutineEx` - authoritative `(pid, ppid, image)`.
   This directly feeds the ADR 0025 lineage correlator with ground truth
   instead of racy user-mode process enumeration.
-- `PsSetLoadImageNotifyRoutine` — module-load facts; signature verdicts are
+- `PsSetLoadImageNotifyRoutine` - module-load facts; signature verdicts are
   deliberately left to user-mode Authenticode (the driver does not claim
   in-kernel signature checking it doesn't implement).
-- `ObRegisterCallbacks` pre-op on `PsProcessType` — **strips** memory-access
+- `ObRegisterCallbacks` pre-op on `PsProcessType` - **strips** memory-access
   rights (`PROCESS_VM_READ`/`VM_WRITE`/`VM_OPERATION`/`DUP_HANDLE`/
   `CREATE_THREAD`) from non-trusted handles to `lsass.exe`. It never denies the
-  open outright and never touches SYSTEM/kernel callers — the conservative,
+  open outright and never touches SYSTEM/kernel callers - the conservative,
   OS-safe pattern (same defence class as RunAsPPL) that blocks Mimikatz-style
   dumping without risking a deadlock.
 - A control device with a **fixed-size, spinlock-guarded ring buffer** pulled
-  by a **buffered IOCTL** (a poll, not a pending-IRP inverted call — chosen
+  by a **buffered IOCTL** (a poll, not a pending-IRP inverted call - chosen
   because polling has no IRP-cancellation race to get subtly wrong and BSOD
   on; the small efficiency cost is the right trade for a first driver).
 
@@ -49,9 +49,9 @@ and drops the event rather than blocking or touching unsafe memory.
 
 User-mode side (`valkyrie/kernel_bridge.py`): a `Sensor` (hosted by the existing
 resilient `SensorManager`) whose `available()` is False unless the device
-actually opens, so the product is **unchanged** when the driver is absent — the
+actually opens, so the product is **unchanged** when the driver is absent - the
 default state. Kernel records normalise into the SAME `TelemetryEvent` stream
-as every other sensor, so they flow through EventBus → correlation → kill-chain
+as every other sensor, so they flow through EventBus -> correlation -> kill-chain
 with zero new plumbing. An LSASS-block record becomes a real high-severity
 `T1003.001` credential-access detection that can anchor a multi-stage chain.
 
@@ -63,7 +63,7 @@ with zero new plumbing. An LSASS-block record becomes a real high-severity
 - The **user-mode half is testable now and tested**: `tests/test_kernel_bridge.py`
   (24 checks) exercises record parsing for every event kind, version/short-buffer
   rejection, FILETIME conversion, lineage plumbing (ppid), graceful absence, and
-  the end-to-end LSASS-block → credential-access detection through the unchanged
+  the end-to-end LSASS-block -> credential-access detection through the unchanged
   ingest path. The efficacy gate is unaffected (100% / 0%).
 
 ## Honest boundaries (what this is NOT)
@@ -80,6 +80,6 @@ with zero new plumbing. An LSASS-block record becomes a real high-severity
   without it the driver degrades to telemetry-only. This is a real distribution
   constraint, not a code problem.
 - **Scope is deliberately narrow.** No minifilter (pre-write ransomware
-  blocking), no WFP network callout, no registry callbacks — those are higher-
+  blocking), no WFP network callout, no registry callbacks - those are higher-
   risk and belong in later, separately-validated ADRs. This driver does the
   three things it does, correctly and conservatively, and says so.

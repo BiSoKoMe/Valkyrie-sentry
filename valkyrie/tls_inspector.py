@@ -51,12 +51,17 @@ class TLSInspector:
     """Owns the mitmproxy lifecycle and exposes start/stop/status."""
 
     def __init__(self, store, blocklist=None, behavioral=None, rules=None,
-                 threat_intel=None, port: int = TLS_PROXY_PORT) -> None:
+                 threat_intel=None, edr=None, port: int = TLS_PROXY_PORT) -> None:
         self.store      = store
         self.blocklist   = blocklist
         self.behavioral  = behavioral
         self.rules       = rules
         self.threat_intel = threat_intel
+        # Optional: valkyrie.edr.EdrEngine. When given, Nyx observations get
+        # attributed onto the same causality graph attack detections use,
+        # instead of only being logged. None (the default) is a complete,
+        # unchanged Nyx: observe/act/log exactly as before.
+        self.edr         = edr
         self.port        = port
 
         self._master = None
@@ -200,7 +205,7 @@ class TLSInspector:
                 self._addon = ValkyrieAddon(
                     store=self.store, blocklist=self.blocklist,
                     behavioral=self.behavioral, rules=self.rules,
-                    threat_intel=self.threat_intel,
+                    threat_intel=self.threat_intel, edr=self.edr,
                 )
                 master.addons.add(self._addon)
                 self._master = master

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import re
 import time
+import uuid
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 from .config import (
@@ -39,6 +40,7 @@ from .config import (
 )
 from . import farble, nyx
 from .store import DnsEvent, Store
+from .telemetry import CAT_PRIVACY, SEV_LOW, TelemetryEvent
 
 # 1x1 transparent PNG - returned for suppressed tracking pixels
 _TRANSPARENT_PNG = (
@@ -147,12 +149,13 @@ class ValkyrieAddon:
     """mitmproxy addon class - methods are mitmproxy event hooks."""
 
     def __init__(self, store: Store, blocklist=None, behavioral=None, rules=None,
-                 threat_intel=None) -> None:
+                 threat_intel=None, edr=None) -> None:
         self.store           = store
         self.blocklist       = blocklist
         self.behavioral      = behavioral
         self.rules           = rules
         self.threat_intel    = threat_intel
+        self.edr             = edr
         self.intercept_count = 0
         # response cache: url -> (expiry_time, cleaned_bytes | None)
         self._resp_cache: dict[str, tuple[float, bytes | None]] = {}
@@ -315,6 +318,8 @@ class ValkyrieAddon:
             if not observations:
                 return
 
+            self._emit_nyx_observations(flow, observations)
+
             if NYX_ACT:
                 new_url, new_body, faked = nyx.fake_outbound(
                     req.method, url, headers, body)
@@ -338,6 +343,61 @@ class ValkyrieAddon:
                           category="nyx_leak")
         except Exception:
             pass
+
+    def _resolve_causality_pid(self, flow) -> tuple[int, str]:
+        """Best-effort local-process resolution for causality attribution
+        ONLY - deliberately separate from ``_process_name`` (used in every
+        existing log line) so this addition cannot change what any log line
+        already says. Returns (0, "") when unresolved; callers must treat
+        that as "attribute nothing," never as pid 0 being a real process."""
+        try:
+            port = flow.client_conn.peername[1]
+        except Exception:
+            return 0, ""
+        from .network_telemetry import pid_for_local_port
+        resolved = pid_for_local_port(port)
+        if resolved is None:
+            return 0, ""
+        pid, name, _path = resolved
+        return pid, name
+
+    def _emit_nyx_observations(self, flow, observations) -> None:
+        """Emit Nyx observations as normalized, metadata-only telemetry.
+
+        This is intentionally not a direct graph call.  The EDR ingest path is
+        the common normalization, attribution, correlation, and policy seam.
+        It receives only category, destination, first-party origin, confidence,
+        and a retry-safe event id -- never the request body or Nyx's masked
+        diagnostic sample.  A missing engine or unresolved local pid remains an
+        observation gap, not a fabricated process attribution.
+        """
+        if getattr(self, "edr", None) is None:
+            return
+        try:
+            pid, name = self._resolve_causality_pid(flow)
+            if pid <= 0:
+                return
+            for ob in observations:
+                event = TelemetryEvent(
+                    category=CAT_PRIVACY, activity="outbound_observation",
+                    ts=time.time(), actor_pid=pid, actor_name=name,
+                    target={"domain": str(ob.destination_host or "")},
+                    severity=SEV_LOW, source="nyx.tls", labels=["nyx_leak"],
+                    reason="Nyx observed a privacy category crossing a boundary",
+                    fields={
+                        "artifact_kind": "nyx_leak",
+                        "event_id": f"nyx_{uuid.uuid4().hex}",
+                        "privacy_category": str(ob.category or ""),
+                        "destination_host": str(ob.destination_host or ""),
+                        "first_party_origin": str(ob.first_party_origin or ""),
+                        "attribution_confidence": "best_effort_port_mapping",
+                    })
+                self.edr.ingest_telemetry(event)
+        except Exception:
+            pass
+
+    # Compatibility for extensions that called the short-lived private seam.
+    _attribute_nyx_observations = _emit_nyx_observations
 
     # ------------------------------------------------------------------
     # Response processors

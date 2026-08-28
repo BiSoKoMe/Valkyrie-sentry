@@ -276,6 +276,20 @@ def _discovery_cmdline_technique(n: str, candidates: tuple) -> str:
             # Bare listing only - /add is real account creation, already
             # covered (and alerted on) by behavioral_rules.py's own rules.
             return "T1087.001 — Account Discovery: Local Account"
+        # 'net start' (bare) lists running services; 'net start <svc>' STARTS
+        # one - a real mutating action, not discovery. Same "verb, and
+        # nothing after it" shape as 'net accounts' below: net.exe's own
+        # syntax puts the argument after the verb, so "is anything following
+        # the verb" IS the discovery/mutating distinction, not a guessed
+        # keyword. Added 2026-08-27 (redteam/evaluation confirmed generalization
+        # gap: disc-service-net-start).
+        if any(re.search(r"\bstart\s*$", c) for c in candidates):
+            return "T1007 — System Service Discovery"
+        # 'net accounts' (bare) displays the current password/lockout policy;
+        # 'net accounts /minpwlen:N' (or any other switch) SETS it - mutating,
+        # not discovery. Added 2026-08-27 (confirmed gap: disc-password-policy).
+        if any(re.search(r"\baccounts\s*$", c) for c in candidates):
+            return "T1201 — Password Policy Discovery"
     elif n == "reg.exe":
         query = any(re.search(r"\bquery\b", c) for c in candidates)
         mutating = any(re.search(rf"\b{v}\b", c) for c in candidates
@@ -286,6 +300,17 @@ def _discovery_cmdline_technique(n: str, candidates: tuple) -> str:
         query = any(re.search(r"\bquery\b", c) for c in candidates)
         mutating = any(re.search(rf"\b{v}\b", c) for c in candidates
                        for v in _SC_MUTATING_VERBS)
+        if query and not mutating:
+            return "T1007 — System Service Discovery"
+    elif n == "schtasks.exe":
+        # PowerShell/schtasks equivalent of the reg.exe/sc.exe "query verb,
+        # not a mutating one" pattern above. Read-only task ENUMERATION
+        # (T1007 in this catalog's own scheme - see disc-scheduled-tasks-query,
+        # deliberately distinguished from the already-covered T1053.005 entry
+        # which tests task CREATION via a different mechanism). Added 2026-08-27.
+        query = any(re.search(r"\bquery\b", c) for c in candidates)
+        mutating = any(re.search(rf"\b{v}\b", c) for c in candidates
+                       for v in ("create", "delete", "change", "run", "end"))
         if query and not mutating:
             return "T1007 — System Service Discovery"
     elif n in ("powershell.exe", "pwsh.exe"):
@@ -301,6 +326,37 @@ def _discovery_cmdline_technique(n: str, candidates: tuple) -> str:
         if any(g in c for c in candidates
                for g in ("get-addomain", "get-adtrust", "get-adforest")):
             return "T1482 — Domain Trust Discovery"
+        # PowerShell-cmdlet equivalents of already-covered native-binary
+        # discovery techniques (confirmed generalization gaps closed
+        # 2026-08-27). Each cmdlet below is unconditionally read-only for
+        # this purpose - unlike net.exe/reg.exe there is no same-name
+        # mutating form to exclude (Set-Service/Start-Service etc. are
+        # separate cmdlet names, so a substring match on the Get- form
+        # cannot collide with a mutating one).
+        if any("get-nettcpconnection" in c for c in candidates):
+            return "T1049 — System Network Connections Discovery"
+        if any("get-service" in c for c in candidates):
+            return "T1007 — System Service Discovery"
+        # Get-CimInstance alone is far too common (routine admin/monitoring
+        # scripting) to match unconditionally - only the specific
+        # antivirus-fingerprinting namespace query counts, mirroring how
+        # 'net localgroup' (not bare 'net') earns its own specific label.
+        if any("get-ciminstance" in c for c in candidates) and any(
+                k in c for c in candidates
+                for k in ("securitycenter2", "antivirusproduct")):
+            return "T1518.001 — Security Software Discovery"
+        # Get-ItemProperty/Get-Item are the PowerShell equivalent of
+        # 'reg query', but reg.exe's own branch above is deliberately generic
+        # (any query, any key = T1012) while this specific atomic tests
+        # installed-software enumeration via the Uninstall registry key - so
+        # this is scoped to that key, labeled to match the actual technique
+        # under test (T1518) rather than the generic T1012 registry-read
+        # label, the same way 'net localgroup' earns T1069.001 distinct from
+        # bare 'net user's T1087.001.
+        if any(g in c for c in candidates for g in
+               ("get-itemproperty", "get-item ")) and any(
+                "uninstall" in c for c in candidates):
+            return "T1518 — Software Discovery"
     return ""
 
 

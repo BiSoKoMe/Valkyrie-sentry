@@ -1,4 +1,4 @@
-"""Signed remote-response commands — the operator→device control channel.
+"""Signed remote-response commands - the operator->device control channel.
 
 This is the "R" in EDR extended across the fleet. An operator issues a response
 action (block a domain, kill a process, network-isolate an endpoint) and signs
@@ -15,9 +15,9 @@ Security properties (identical in spirit to the signed-policy channel):
   - Bounded blast radius: only a fixed allow-list of actions can be encoded,
     and a command may target one device (`device_id`) or a whole org.
 
-Privacy note: this is *control* flowing server→device, not telemetry flowing
-device→server. The ack reports action status/result for a target the operator
-*already chose and sent* — it never carries the device's browsing history, so
+Privacy note: this is *control* flowing server->device, not telemetry flowing
+device->server. The ack reports action status/result for a target the operator
+*already chose and sent* - it never carries the device's browsing history, so
 the fleet privacy invariant is preserved.
 """
 
@@ -78,7 +78,7 @@ class ResponseCommand:
         if action not in ALLOWED_ACTIONS:
             raise UpdateError(f"command action not allowed: {action!r}")
         target = str(d.get("target", ""))
-        # Bare hostname / pid / empty only — no shell/URL/whitespace payloads.
+        # Bare hostname / pid / empty only - no shell/URL/whitespace payloads.
         if target and not all(c.isalnum() or c in ".-_*:" for c in target):
             raise UpdateError("command target has illegal characters")
         return cls(

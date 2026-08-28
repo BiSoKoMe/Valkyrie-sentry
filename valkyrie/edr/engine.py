@@ -30,6 +30,7 @@ from ..eventbus import EventBus
 from .builtin import register_builtin
 from .causality import CausalityGraph
 from .causal_detect import CausalBaseline, score_subgraph
+from .consequence import score_privacy_consequence
 from .investigate import Investigator
 from .hunt import ThreatHunter
 from .killchain import KillChainCorrelator
@@ -142,6 +143,8 @@ class EdrEngine:
         # enough that learning does not turn into a write amplifier.
         self._CAUSAL_SAVE_EVERY = 50
         self._causal_seen: set = set()   # subgraph keys already scored this run
+        self._consequence_seen: set = set()  # (CGO, destination), bounded below
+        self._causal_event_seen: set = set()  # retry-safe telemetry learning
         self._running = False
 
     # ------------------------------------------------------------------
@@ -399,21 +402,35 @@ class EdrEngine:
             target = {}
         subject = (target.get("domain") or target.get("ip") or target.get("path")
                    or target.get("location") or "")
+        artifact_kind = str(fields.get("artifact_kind") or category or "event")
         summary = str(d.get("reason") or subject or activity or category)
+        data = {"activity": activity, "subject": str(subject),
+                "severity": str(d.get("severity", "")), "source": source}
+        # Privacy events enter the provenance graph with a fixed, reviewable
+        # allowlist. In particular, neither a raw request body nor Nyx's masked
+        # diagnostic sample is retained in a security graph or incident.
+        if category == "privacy":
+            summary = "Nyx observed a privacy category crossing a boundary"
+            for key in ("artifact_kind", "event_id", "privacy_category",
+                        "destination_host", "first_party_origin",
+                        "attribution_confidence"):
+                value = fields.get(key)
+                if value not in (None, ""):
+                    data[key] = str(value)
         # `name` is passed so an artifact can still create its own node when the
         # process-start event was missed (short-lived process between polls);
         # attribute() drops the artifact outright when there is no name either,
         # rather than inventing an owner for it.
         self._causality.attribute(
-            pid, category or "event", summary, create_time=create_time, ts=ts,
-            data={"activity": activity, "subject": str(subject),
-                  "severity": str(d.get("severity", "")), "source": source},
+            pid, artifact_kind, summary, create_time=create_time, ts=ts,
+            data=data,
             name=name, ppid=ppid)
         # The graph is now also a DETECTOR: learn this lineage's shape, and -
         # when the event actually changed the structure (persistence, egress) -
         # score it. Never raises into the ingest path.
         try:
-            self._causal_check(pid, str(category or "").lower(), create_time)
+            self._causal_check(pid, str(artifact_kind).lower(), create_time,
+                               event_id=str(fields.get("event_id") or ""))
         except Exception:
             pass
 
@@ -427,7 +444,8 @@ class EdrEngine:
         "startup_folder", "dns", "network", "connection",
     })
 
-    def _causal_check(self, pid: int, kind: str, create_time: float = 0.0) -> None:
+    def _causal_check(self, pid: int, kind: str, create_time: float = 0.0,
+                      event_id: str = "") -> None:
         """Learn this lineage's structure, and score it for structural suspicion.
 
         Two jobs, and the learning half runs unconditionally - including on the
@@ -450,8 +468,14 @@ class EdrEngine:
 
         # 1. LEARN (always, silently)
         try:
-            self._causal_baseline.observe_subgraph(sub)
-            self._causal_unsaved += 1
+            learn_key = str(event_id or "")
+            if not learn_key or learn_key not in self._causal_event_seen:
+                if learn_key:
+                    self._causal_event_seen.add(learn_key)
+                    if len(self._causal_event_seen) > 8192:
+                        self._causal_event_seen.clear()
+                self._causal_baseline.observe_subgraph(sub)
+                self._causal_unsaved += 1
             # CHECKPOINT. Saving only at shutdown loses the whole session
             # whenever the process is killed rather than asked to stop - which
             # is the normal way a Windows service ends. A baseline that needs
@@ -462,6 +486,40 @@ class EdrEngine:
                 self.save_causal_baseline()
         except Exception:
             pass
+
+        # Narrow cross-layer experiment: Nyx attribution is evidence only until
+        # a complete, mature, rare causal consequence exists.  This runs after
+        # learning so the current egress has a non-zero count, but retains a
+        # conservative >=0.90 first-seen threshold in consequence.py.
+        try:
+            consequence = score_privacy_consequence(sub, self._causal_baseline)
+        except Exception:
+            consequence = None
+        if consequence and consequence.fires:
+            cgo = sub.get("cgo") or {}
+            key = f"{cgo.get('key', '')}|{consequence.destination}"
+            if key not in self._consequence_seen:
+                self._consequence_seen.add(key)
+                if len(self._consequence_seen) > 4096:
+                    self._consequence_seen.clear()
+                det = Detection(
+                    source="edr.consequence", severity="medium",
+                    category="privacy_consequence",
+                    title="Rare descendant egress follows a privacy boundary crossing",
+                    entity=consequence.destination,
+                    process_name=str(cgo.get("name") or ""),
+                    process_pid=int(cgo.get("pid") or 0),
+                    details={"labels": ["privacy_consequence", "metadata_leakage"],
+                             "privacy_categories": list(consequence.privacy_categories),
+                             "destination": consequence.destination,
+                             "network_destination": consequence.network_destination,
+                             "reason": consequence.reason,
+                             "enforcement_scope": "future_dns_only"},
+                )
+                self._ingest_detection(det)
+                # No direct intelligence-memory mutation here. The recorded
+                # decision and authority verdict are the only route to a later
+                # DNS response, via an explicitly configured playbook.
 
         # 2. SCORE - only on a structure-changing event, and only once per
         #    (lineage, kind) per run so a chatty process cannot spam.
@@ -611,6 +669,28 @@ class EdrEngine:
         """Graph size / health, for the components + coverage surface."""
         return self._causality.stats()
 
+    def attribute_causality(self, pid: int, kind: str, summary: str, *,
+                            name: str = "", data: Optional[dict] = None) -> bool:
+        """Public entry for a sensor OUTSIDE the telemetry pipeline to attach
+        one observation to the process that caused it - e.g. Nyx's TLS
+        interception, which sees outbound request content the process/network
+        collectors never do. Same graph, same honesty rule as everything else
+        that reaches ``causality.py``: an unresolvable pid is dropped, not
+        guessed at (see ``CausalityGraph.attribute``). Never raises."""
+        try:
+            attached = self._causality.attribute(pid, kind, summary, name=name,
+                                                 data=data)
+            # Nyx artifacts arrive through this public sensor seam rather than
+            # ingest_telemetry. Re-evaluate the existing lineage so ordering
+            # (egress before privacy observation) cannot silently disable the
+            # experiment. This is still observation-time analysis only; it has
+            # no authority to alter the request currently in flight.
+            if attached and str(kind).lower() == "nyx_leak":
+                self._causal_check(pid, "nyx_leak")
+            return attached
+        except Exception:   # noqa: BLE001 - an external caller's bug here
+            return False     # must not become an engine-crashing exception
+
     def report_detection(self, det: Detection) -> Optional[str]:
         """Public entry for sensors that produce a fully-formed Detection (e.g.
         the ransomware shield) rather than raw telemetry. Flows through the same
@@ -670,13 +750,12 @@ class EdrEngine:
                     # is now computed from live state and visible on the
                     # incident, instead of existing only in tests.
                     _au = self._authorize(_sig, _dec)
-                    if _au is not None and (_au.downgraded or _au.vetoed):
+                    if _au is not None:
                         inc.timeline.append(TimelineEntry(
                             kind="authority",
-                            summary=(f"{_dec.action.value} -> "
-                                     f"{_au.action.value}"
-                                     f" (limited by "
-                                     f"{', '.join(_au.limited_by)})"),
+                            summary=(f"{_dec.action.value} -> {_au.action.value}"
+                                     + (f" (limited by {', '.join(_au.limited_by)})"
+                                        if _au.limited_by else "")),
                             data=_au.to_dict() if hasattr(_au, "to_dict")
                             else {"action": _au.action.value,
                                   "limited_by": list(_au.limited_by),

@@ -1,0 +1,23 @@
+{
+  "elapsed_seconds": 0.17552960000466555,
+  "events": 1000,
+  "graph": {
+    "artifacts": 200,
+    "capacity": 8192,
+    "evicted": 0,
+    "inferred": 0,
+    "nodes": 2
+  },
+  "host": {
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.10"
+  },
+  "ingest_latency_ms": {
+    "mean": 0.17517790036799852,
+    "p50": 0.1740000006975606,
+    "p95": 0.2686000079847872,
+    "p99": 0.33680000342428684
+  },
+  "scope": "synthetic local ingest; not DNS hot-path or live efficacy",
+  "throughput_events_per_second": 5697.044828754923
+}

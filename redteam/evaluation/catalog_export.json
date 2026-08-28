@@ -1,5 +1,5 @@
 {
-  "catalog_version": "2026-08-24.breadth",
+  "catalog_version": "2026-08-26.round2",
   "techniques": [
     {
       "id": "exec-powershell-encoded",
@@ -919,7 +919,7 @@
         "payload": "random_high_entropy"
       },
       "requires": [],
-      "notes": "Valkyrie's most mature, purpose-built detector. Genuinely expected to be strong here -- this is the one place a confident DETECT is warranted, not merely hoped for.",
+      "notes": "Valkyrie's most mature, purpose-built detector. Genuinely expected to be strong here -- this is the one place a confident DETECT is warranted, not merely hoped for.\nREAL LIVE MISS FOUND 2026-08-27, TRACED TO A HARNESS BUG, NOT A DETECTOR GAP: the live run scored attack_executed=true, classifier_logic_fires=false. Root cause: the probe called /api/ransomware/self-test, which invokes ransomware_shield.py's simulate() - a function whose own docstring says it builds an ISOLATED, throwaway CanaryManager in a temp dir, 'used by the /api self-test AND UNIT TESTS'. It is a unit test wearing an API route: it never touches the real, running shield's own watched canaries and publishes no TelemetryEvent, so it could never produce a scoreable incident regardless of how good the real detector is. Fixed in run_live_evaluation.ps1: the probe now reads the REAL armed shield's own manifest (data/ransomware_canaries.json, written by CanaryManager._save_manifest() at real startup) and overwrites an ACTUAL live-armed canary with random high-entropy bytes, then polls for a real incident exactly like every other technique. Not yet re-verified live at the time of this note - see docs/LIVE_FIRE_EVALUATION.md for the re-verification result.",
       "known_mismatch": ""
     },
     {
@@ -1292,18 +1292,26 @@
       "live_vm_safe": true,
       "out_of_scope_reason": "",
       "delivery": "realtime_etw",
-      "detector_path": "no dedicated rule; only via reconnaissance-burst if clustered with other discovery",
-      "predicted_tier_b": "MISS",
+      "detector_path": "valkyrie/process_telemetry.py classify_discovery ('net localgroup' branch, non-/add) -> 'reconnaissance-burst' sequence IOA (T1069 added to the sequence's technique tuple)",
+      "predicted_tier_b": "DETECT",
       "source_confidence": "confirmed_by_source_trace",
-      "probe": "ioa_rule",
+      "probe": "recon_burst",
       "probe_input": {
         "image": "net.exe",
-        "parent": "cmd.exe",
         "cmdline": "net localgroup administrators",
-        "path": ""
+        "co_occurring": [
+          [
+            "systeminfo.exe",
+            "systeminfo.exe"
+          ],
+          [
+            "tasklist.exe",
+            "tasklist.exe /v"
+          ]
+        ]
       },
       "requires": [],
-      "notes": "No standalone rule fires on net localgroup (verified classify_behavior -> None). Only caught if it lands in a discovery burst. Honest gap: single-shot group enumeration is not detected.",
+      "notes": "CORRECTED 2026-08-27, TWICE. First correction: this entry was stale relative to the code's own already-proven capability - classify_discovery labels bare 'net localgroup' as T1069.001 (fixed in an earlier session), T1069 was added to the reconnaissance-burst sequence's technique tuple, and an ad hoc live check with (disc-net-view, disc-domain-trust) as partners showed DETECT - but this catalog entry itself was never updated off probe='ioa_rule'/predicted MISS, so every automated run since then scored a miss purely because the TEST never gave it burst partners. First fix reused those same two partners directly, INCLUDING nltest.exe /domain_trusts - which is wrong: verified via replay_harness.py (fires=False) that nltest WITH that flag is explicitly EXCLUDED from classify_discovery's own diversity count, precisely because it already has its own separate named MEDIUM rule (behavioral_rules.py nltest-domain) - so the burst only ever saw 2 distinct classify_discovery techniques (T1069.001, T1018), never the 3 required to complete. The original ad hoc verification's 'disc-domain-trust' partner must have counted toward completion through some other path than this specific function, not reproduced here. Second fix: replaced with the identical systeminfo.exe/tasklist.exe partner pair already proven across every other recon_burst entry in this file, verified fires=True via replay_harness.py before touching CI. SCORED AS A BURST CONTRIBUTOR, NOT A STANDALONE ALERT. Running this ONE command alone still raises nothing, deliberately: classify_discovery labels it at INFO severity and the engine's severity gate drops it. Discovery is the tactic where alerting on a single command is a guaranteed false-positive generator (these commands are indistinguishable from routine administration), so this codebase refuses that trade. What IS detected is BREADTH: >=3 DISTINCT discovery techniques from the same process lineage inside 120s completes the 'reconnaissance-burst' sequence IOA (behavioral_sequences.py, MEDIUM) -- one named incident for the sweep, not one per command. The Tier A probe replays exactly that: this technique's real command plus the co-occurring recon commands, through the real classify_discovery and the real SequenceEngine. Delivery is realtime_etw because these commands exit in milliseconds -- the 2s poller loses them, so the burst depends on Sysmon EID 1 / Security 4688, which etw/sysmon.py now feeds classify_discovery from.",
       "known_mismatch": ""
     },
     {
@@ -1400,6 +1408,886 @@
       },
       "requires": [],
       "notes": "Bulk copy of user documents to a staging dir - predicted MISS (no Collection rules). SOURCE_PARTIAL: honest, not source-traced.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "cred-lsa-secrets",
+      "technique_id": "T1003.004",
+      "technique_name": "OS Credential Dumping: LSA Secrets",
+      "tactic": "Credential Access",
+      "art_test_ref": "T1003.004 Test #1 (reg save HKLM\\security\\policy\\secrets) - simplified to drop the atomic's PsExec wrapper (PsExec is an external download, not needed for the underlying reg.exe command it just re-runs with -s)",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/behavioral_rules.py: reg-save-hive rule (cmd_all=('save',), cmd_any includes 'hklm\\security')",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "ioa_rule",
+      "probe_input": {
+        "image": "reg.exe",
+        "parent": "cmd.exe",
+        "cmdline": "reg.exe save hklm\\security C:\\Users\\Public\\secrets /y",
+        "path": ""
+      },
+      "requires": [],
+      "notes": "reg-save-hive matches ANY of hklm\\sam / hklm\\system / hklm\\security but is tagged only T1003.002 (SAM). Firing on the SECURITY hive is a real detection of credential theft, just under the wrong specific ATT&CK id - see the file-level note above.",
+      "known_mismatch": "T1003.002 \u2014 Security Account Manager"
+    },
+    {
+      "id": "collect-clipboard",
+      "technique_id": "T1115",
+      "technique_name": "Clipboard Data",
+      "tactic": "Collection",
+      "art_test_ref": "T1115 Test #1 (dir | clip; echo T1115 > file; clip < file)",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "no_code_path",
+      "detector_path": "none found - grepped behavioral_rules.py for clip/clipboard, zero matches",
+      "predicted_tier_b": "MISS",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "ioa_rule",
+      "probe_input": {
+        "image": "clip.exe",
+        "parent": "cmd.exe",
+        "cmdline": "clip.exe < C:\\Users\\Public\\T1115.txt",
+        "path": ""
+      },
+      "requires": [],
+      "notes": "Genuine, confirmed gap: no code path anywhere touches clipboard access. clip.exe ships with Windows so this is fully testable; Valkyrie simply has no detector for this tactic at all today.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "collect-stage-download",
+      "technique_id": "T1074.001",
+      "technique_name": "Data Staged: Local Data Staging",
+      "tactic": "Collection",
+      "art_test_ref": "T1074.001 Test #1 (Invoke-WebRequest a .bat file to $env:TEMP)",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/behavioral_rules.py: ps-download-cradle-exec (Invoke-WebRequest + a script/exe extension)",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "ioa_rule",
+      "probe_input": {
+        "image": "powershell.exe",
+        "parent": "cmd.exe",
+        "cmdline": "powershell.exe -NoProfile -Command \"Invoke-WebRequest 'https://raw.githubusercontent.com/redcanaryco/atomic-red-team/master/atomics/T1074.001/src/Discovery.bat' -OutFile $env:TEMP\\discovery.bat\"",
+        "path": ""
+      },
+      "requires": [],
+      "notes": "The classifier cannot distinguish 'staging a file locally' from 'transferring a tool in' - both are IWR-to-disk with a script extension. Real download, real detection, wrong specific label - see the file-level note above.",
+      "known_mismatch": "T1105 \u2014 Ingress Tool Transfer (PowerShell)"
+    },
+    {
+      "id": "disc-network-config",
+      "technique_id": "T1016",
+      "technique_name": "System Network Configuration Discovery",
+      "tactic": "Discovery",
+      "art_test_ref": "T1016 Test #1 (ipconfig /all; netsh interface show interface; arp -a; nbtstat -n; net config)",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/process_telemetry.py _DISCOVERY_SOLO_BINS['ipconfig.exe'] -> 'reconnaissance-burst' IOA",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "recon_burst",
+      "probe_input": {
+        "image": "ipconfig.exe",
+        "cmdline": "ipconfig.exe /all",
+        "co_occurring": [
+          [
+            "reg.exe",
+            "reg.exe query \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run\""
+          ],
+          [
+            "sc.exe",
+            "sc.exe query windefend"
+          ]
+        ]
+      },
+      "requires": [],
+      "notes": "SCORED AS A BURST CONTRIBUTOR, NOT A STANDALONE ALERT. Running this ONE command alone still raises nothing, deliberately: classify_discovery labels it at INFO severity and the engine's severity gate drops it. Discovery is the tactic where alerting on a single command is a guaranteed false-positive generator (these commands are indistinguishable from routine administration), so this codebase refuses that trade. What IS detected is BREADTH: >=3 DISTINCT discovery techniques from the same process lineage inside 120s completes the 'reconnaissance-burst' sequence IOA (behavioral_sequences.py, MEDIUM) -- one named incident for the sweep, not one per command. The Tier A probe replays exactly that: this technique's real command plus the co-occurring recon commands, through the real classify_discovery and the real SequenceEngine. Delivery is realtime_etw because these commands exit in milliseconds -- the 2s poller loses them, so the burst depends on Sysmon EID 1 / Security 4688, which etw/sysmon.py now feeds classify_discovery from. ipconfig.exe is an explicit solo-bin entry added specifically to close this earlier-identified gap (see the module comment in process_telemetry.py).",
+      "known_mismatch": ""
+    },
+    {
+      "id": "disc-network-connections",
+      "technique_id": "T1049",
+      "technique_name": "System Network Connections Discovery",
+      "tactic": "Discovery",
+      "art_test_ref": "T1049 Test #1 (netstat -ano; net use; net sessions)",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/process_telemetry.py _DISCOVERY_SOLO_BINS['netstat.exe'] -> 'reconnaissance-burst' IOA",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "recon_burst",
+      "probe_input": {
+        "image": "netstat.exe",
+        "cmdline": "netstat.exe -ano",
+        "co_occurring": [
+          [
+            "ipconfig.exe",
+            "ipconfig.exe /all"
+          ],
+          [
+            "whoami.exe",
+            "whoami.exe /priv"
+          ]
+        ]
+      },
+      "requires": [],
+      "notes": "SCORED AS A BURST CONTRIBUTOR, NOT A STANDALONE ALERT. Running this ONE command alone still raises nothing, deliberately: classify_discovery labels it at INFO severity and the engine's severity gate drops it. Discovery is the tactic where alerting on a single command is a guaranteed false-positive generator (these commands are indistinguishable from routine administration), so this codebase refuses that trade. What IS detected is BREADTH: >=3 DISTINCT discovery techniques from the same process lineage inside 120s completes the 'reconnaissance-burst' sequence IOA (behavioral_sequences.py, MEDIUM) -- one named incident for the sweep, not one per command. The Tier A probe replays exactly that: this technique's real command plus the co-occurring recon commands, through the real classify_discovery and the real SequenceEngine. Delivery is realtime_etw because these commands exit in milliseconds -- the 2s poller loses them, so the burst depends on Sysmon EID 1 / Security 4688, which etw/sysmon.py now feeds classify_discovery from. NOTE: only the netstat.exe portion of this compound atomic is classified; 'net use' and 'net sessions' alone are not recognized by the net.exe cmdline-shape branch (which only handles view/group/localgroup/user), so a run of just those two would not contribute.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "disc-query-registry",
+      "technique_id": "T1012",
+      "technique_name": "Query Registry",
+      "tactic": "Discovery",
+      "art_test_ref": "T1012 Test #1 (reg query chain against Run/RunOnce/Winlogon/SafeBoot keys)",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/process_telemetry.py _discovery_cmdline_technique (reg.exe + 'query', not mutating) -> 'reconnaissance-burst' IOA",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "recon_burst",
+      "probe_input": {
+        "image": "reg.exe",
+        "cmdline": "reg.exe query \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run\"",
+        "co_occurring": [
+          [
+            "ipconfig.exe",
+            "ipconfig.exe /all"
+          ],
+          [
+            "systeminfo.exe",
+            "systeminfo.exe"
+          ]
+        ]
+      },
+      "requires": [],
+      "notes": "SCORED AS A BURST CONTRIBUTOR, NOT A STANDALONE ALERT. Running this ONE command alone still raises nothing, deliberately: classify_discovery labels it at INFO severity and the engine's severity gate drops it. Discovery is the tactic where alerting on a single command is a guaranteed false-positive generator (these commands are indistinguishable from routine administration), so this codebase refuses that trade. What IS detected is BREADTH: >=3 DISTINCT discovery techniques from the same process lineage inside 120s completes the 'reconnaissance-burst' sequence IOA (behavioral_sequences.py, MEDIUM) -- one named incident for the sweep, not one per command. The Tier A probe replays exactly that: this technique's real command plus the co-occurring recon commands, through the real classify_discovery and the real SequenceEngine. Delivery is realtime_etw because these commands exit in milliseconds -- the 2s poller loses them, so the burst depends on Sysmon EID 1 / Security 4688, which etw/sysmon.py now feeds classify_discovery from.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "disc-service-discovery",
+      "technique_id": "T1007",
+      "technique_name": "System Service Discovery",
+      "tactic": "Discovery",
+      "art_test_ref": "documented cmdline (sc query) - not tied to a specific numbered ART test; sc.exe ships with Windows",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/process_telemetry.py _discovery_cmdline_technique (sc.exe + 'query', not mutating) -> 'reconnaissance-burst' IOA",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "recon_burst",
+      "probe_input": {
+        "image": "sc.exe",
+        "cmdline": "sc.exe query windefend",
+        "co_occurring": [
+          [
+            "tasklist.exe",
+            "tasklist.exe /v"
+          ],
+          [
+            "whoami.exe",
+            "whoami.exe /priv"
+          ]
+        ]
+      },
+      "requires": [],
+      "notes": "SCORED AS A BURST CONTRIBUTOR, NOT A STANDALONE ALERT. Running this ONE command alone still raises nothing, deliberately: classify_discovery labels it at INFO severity and the engine's severity gate drops it. Discovery is the tactic where alerting on a single command is a guaranteed false-positive generator (these commands are indistinguishable from routine administration), so this codebase refuses that trade. What IS detected is BREADTH: >=3 DISTINCT discovery techniques from the same process lineage inside 120s completes the 'reconnaissance-burst' sequence IOA (behavioral_sequences.py, MEDIUM) -- one named incident for the sweep, not one per command. The Tier A probe replays exactly that: this technique's real command plus the co-occurring recon commands, through the real classify_discovery and the real SequenceEngine. Delivery is realtime_etw because these commands exit in milliseconds -- the 2s poller loses them, so the burst depends on Sysmon EID 1 / Security 4688, which etw/sysmon.py now feeds classify_discovery from.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "disc-network-share",
+      "technique_id": "T1135",
+      "technique_name": "Network Share Discovery",
+      "tactic": "Discovery",
+      "art_test_ref": "T1135 Test #4 (net view \\\\localhost) - the Windows-command-prompt variant; Test #1 is macOS-only",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/process_telemetry.py _discovery_cmdline_technique (net.exe + 'view') -> 'reconnaissance-burst' IOA",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "recon_burst",
+      "probe_input": {
+        "image": "net.exe",
+        "cmdline": "net.exe view \\\\localhost",
+        "co_occurring": [
+          [
+            "systeminfo.exe",
+            "systeminfo.exe"
+          ],
+          [
+            "tasklist.exe",
+            "tasklist.exe /v"
+          ]
+        ]
+      },
+      "requires": [],
+      "notes": "SCORED AS A BURST CONTRIBUTOR, NOT A STANDALONE ALERT. Running this ONE command alone still raises nothing, deliberately: classify_discovery labels it at INFO severity and the engine's severity gate drops it. Discovery is the tactic where alerting on a single command is a guaranteed false-positive generator (these commands are indistinguishable from routine administration), so this codebase refuses that trade. What IS detected is BREADTH: >=3 DISTINCT discovery techniques from the same process lineage inside 120s completes the 'reconnaissance-burst' sequence IOA (behavioral_sequences.py, MEDIUM) -- one named incident for the sweep, not one per command. The Tier A probe replays exactly that: this technique's real command plus the co-occurring recon commands, through the real classify_discovery and the real SequenceEngine. Delivery is realtime_etw because these commands exit in milliseconds -- the 2s poller loses them, so the burst depends on Sysmon EID 1 / Security 4688, which etw/sysmon.py now feeds classify_discovery from. 'net view' is MITRE's own documented example command for BOTH T1018 and T1135; the code's net.exe branch checks 'view' before any share-specific keyword and always returns T1018 - see the file-level note above.",
+      "known_mismatch": "T1018 \u2014 Remote System Discovery"
+    },
+    {
+      "id": "disc-security-software",
+      "technique_id": "T1518.001",
+      "technique_name": "Security Software Discovery",
+      "tactic": "Discovery",
+      "art_test_ref": "T1518.001 Test #1 (netsh advfirewall/firewall chain, sc query windefend, tasklist + findstr AV-name chain)",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "no_code_path",
+      "detector_path": "no rule/classifier targets 'security software discovery' as its own intent; individual lines of this compound atomic incidentally trigger OTHER labels (tasklist.exe -> T1057 solo-bin, 'sc query windefend' -> T1007) but nothing tags the netsh firewall-enumeration lines at all",
+      "predicted_tier_b": "MISS",
+      "source_confidence": "predicted_from_partial_verification",
+      "probe": "ioa_rule",
+      "probe_input": {
+        "image": "tasklist.exe",
+        "parent": "cmd.exe",
+        "cmdline": "tasklist.exe | findstr /i defender",
+        "path": ""
+      },
+      "requires": [],
+      "notes": "Honest compound-test finding: no single technique-specific detection exists for 'is the attacker fingerprinting my security tools', even though parts of the same command chain independently light up as T1057/T1007. SOURCE_PARTIAL because the netsh-specific lines were not traced as exhaustively as the net.exe/reg.exe/sc.exe branches above.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "disc-file-directory",
+      "technique_id": "T1083",
+      "technique_name": "File and Directory Discovery",
+      "tactic": "Discovery",
+      "art_test_ref": "T1083 Test #1 (dir /s chains against C:\\, Program Files, Users, AppData\\...\\Recent, Desktop; tree /F)",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "no_code_path",
+      "detector_path": "no cmd.exe-builtin classifier branch found - 'dir' is a cmd.exe internal command, not a separate process, so this atomic never produces a distinctly-named image for any per-binary rule to key on",
+      "predicted_tier_b": "MISS",
+      "source_confidence": "predicted_from_partial_verification",
+      "probe": "ioa_rule",
+      "probe_input": {
+        "image": "cmd.exe",
+        "parent": "cmd.exe",
+        "cmdline": "cmd.exe /c dir /s C:\\Users\\Public >> C:\\Users\\Public\\t1083.txt",
+        "path": ""
+      },
+      "requires": [],
+      "notes": "SOURCE_PARTIAL: not exhaustively traced for a generic cmd.exe-cmdline discovery branch (only net.exe/reg.exe/sc.exe/nltest.exe/powershell.exe branches were confirmed to exist). Honest best-effort prediction given what was found.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "evasion-masquerade-lsass",
+      "technique_id": "T1036.003",
+      "technique_name": "Masquerading: Rename System Utilities",
+      "tactic": "Defense Evasion",
+      "art_test_ref": "T1036.003 Test #1 (copy cmd.exe to %SystemRoot%\\Temp\\lsass.exe, launch it)",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/behavioral_rules.py: masquerade-system-binary-location (images includes 'lsass.exe', path_any includes '\\temp\\')",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "ioa_rule",
+      "probe_input": {
+        "image": "lsass.exe",
+        "parent": "cmd.exe",
+        "cmdline": "copy %SystemRoot%\\System32\\cmd.exe %SystemRoot%\\Temp\\lsass.exe & %SystemRoot%\\Temp\\lsass.exe /B",
+        "path": "C:\\Windows\\Temp\\lsass.exe"
+      },
+      "requires": [],
+      "notes": "The atomic exercises BOTH the rename (.003, this test's own ATT&CK id) and wrong-location (.005) masquerade shapes at once; the only rule that fires tags .005 specifically - see the file-level note above. LIVE-RUN NOTE: needs the copied Temp\\lsass.exe cleaned up after the window closes.",
+      "known_mismatch": "T1036.005 \u2014 Masquerading: Match Legitimate Name or Location"
+    },
+    {
+      "id": "evasion-file-delete",
+      "technique_id": "T1070.004",
+      "technique_name": "Indicator Removal: File Deletion",
+      "tactic": "Defense Evasion",
+      "art_test_ref": "T1070.004 Test #4 (del /f a single file under %temp%)",
+      "destructive": true,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/behavioral_rules.py: mass-file-delete (cmd_any includes 'del /f'; cmd_any2 includes '\\appdata\\', which %temp% resolves under) - SEV_LOW",
+      "predicted_tier_b": "MISS",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "ioa_rule",
+      "probe_input": {
+        "image": "cmd.exe",
+        "parent": "cmd.exe",
+        "cmdline": "del /f C:\\Users\\Public\\AppData\\Local\\Temp\\\\deleteme_t1070004.txt",
+        "path": ""
+      },
+      "requires": [],
+      "notes": "CORRECTED after running replay_harness.py against this exact entry: the initial by-hand trace (below) only checked the keyword/path match and missed the severity gate. The label DOES attach (mass-file-delete's cmd_any/cmd_any2 both match, confirmed live: reason 'Recursive force-delete of a user-data tree', label 'destroy_files') but at SEV_LOW - and this rule's own source comment says LOW is deliberate, 'del /s /q is also ordinary cleanup, so this only feeds sequence correlation and never auto-blocks on its own'. A single standalone delete therefore does not clear the severity gate, the same pattern already established for single Discovery commands. So this is TWO findings stacked, not one: (1) the technique-label mismatch (fires under T1485, not T1070.004) and (2) even under its own fired label, LOW severity means a standalone run is an honest MISS - it would need file-deletion sequence correlation (multiple deletes in a burst) to surface as an incident, mirroring the reconnaissance-burst pattern for Discovery. Left as MISS rather than re-labeled CONDITIONAL, since no such delete-burst sequence IOA exists today to make the condition concrete.",
+      "known_mismatch": "T1485 \u2014 Data Destruction"
+    },
+    {
+      "id": "evasion-modify-registry",
+      "technique_id": "T1112",
+      "technique_name": "Modify Registry",
+      "tactic": "Defense Evasion",
+      "art_test_ref": "T1112 Test #1 (reg add HideFileExt=1 under HKCU Explorer\\Advanced)",
+      "destructive": true,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "no_code_path",
+      "detector_path": "no rule found for ordinary Explorer display-setting registry writes",
+      "predicted_tier_b": "MISS",
+      "source_confidence": "predicted_from_partial_verification",
+      "probe": "ioa_rule",
+      "probe_input": {
+        "image": "reg.exe",
+        "parent": "cmd.exe",
+        "cmdline": "reg.exe add HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced /t REG_DWORD /v HideFileExt /d 1 /f",
+        "path": ""
+      },
+      "requires": [],
+      "notes": "Likely MISS BY DESIGN rather than a gap worth closing: toggling 'show file extensions' is an extremely common, entirely ordinary user/admin preference change, and a rule here would be a false-positive generator against routine use - consistent with this project's precision-first philosophy. Kept in the catalog because T1112 is broad and other, more attacker-shaped registry-modify atomics may fire differently; this specific one is not expected to, nor obviously should.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "persist-winlogon-shell",
+      "technique_id": "T1547.004",
+      "technique_name": "Boot or Logon Autostart Execution: Winlogon Helper DLL",
+      "tactic": "Persistence",
+      "art_test_ref": "T1547.004 Test #1 (Set-ItemProperty Winlogon\\Shell)",
+      "destructive": true,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/behavioral_rules.py: persistence-winlogon-generic (cmd_all '\\winlogon', cmd_any a write verb, cmd_any2 'shell'/'userinit')",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "ioa_rule",
+      "probe_input": {
+        "image": "powershell.exe",
+        "parent": "cmd.exe",
+        "cmdline": "powershell.exe Set-ItemProperty \"HKCU:\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\\\" \"Shell\" \"explorer.exe, C:\\Windows\\System32\\cmd.exe\" -Force",
+        "path": ""
+      },
+      "requires": [],
+      "notes": "Clean DETECT, correctly labeled - all three match conditions (\\winlogon, Set-ItemProperty, 'shell') verified present in the real ART command line.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "persist-logon-script",
+      "technique_id": "T1037.001",
+      "technique_name": "Boot or Logon Initialization Scripts: Logon Script (Windows)",
+      "tactic": "Persistence",
+      "art_test_ref": "T1037.001 Test #1 (REG ADD HKCU\\Environment /v UserInitMprLogonScript)",
+      "destructive": true,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/behavioral_rules.py: persistence-logon-script (cmd_all 'userinitmprlogonscript', cmd_any a write verb or '/d ')",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "ioa_rule",
+      "probe_input": {
+        "image": "reg.exe",
+        "parent": "cmd.exe",
+        "cmdline": "reg.exe ADD HKCU\\Environment /v UserInitMprLogonScript /t REG_SZ /d C:\\Users\\Public\\art.bat /f",
+        "path": ""
+      },
+      "requires": [],
+      "notes": "Clean DETECT, correctly labeled T1037.001 exactly as tested. '/d ' (with trailing space) matches even though 'reg add' as a bare substring would not survive 'reg.exe add'.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "cred-cmdkey-list",
+      "technique_id": "T1003.005",
+      "technique_name": "OS Credential Dumping: Cached Domain Credentials",
+      "tactic": "Credential Access",
+      "art_test_ref": "T1003.005 Test #1 (cmdkey /list)",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/behavioral_rules.py: cmdkey-list (images=('cmdkey.exe',), cmd_any includes '/list') - SEV_LOW, 'feeds sequence correlation, doesn't auto-block' per its own source comment",
+      "predicted_tier_b": "MISS",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "ioa_rule",
+      "probe_input": {
+        "image": "cmdkey.exe",
+        "parent": "cmd.exe",
+        "cmdline": "cmdkey.exe /list",
+        "path": ""
+      },
+      "requires": [],
+      "notes": "Verified live against replay_harness.py (learned from the evasion-file-delete correction earlier in this batch not to guess past the severity gate): the label attaches (classifier_logic_fires) but SEV_LOW, and the rule's own labeled technique is T1555, not T1003.005 - two stacked reasons this scores MISS for the tested id, not one.",
+      "known_mismatch": "T1555 \u2014 Credentials from Password Stores (cmdkey)"
+    },
+    {
+      "id": "cred-registry-password-hunt",
+      "technique_id": "T1552.002",
+      "technique_name": "Unsecured Credentials: Credentials in Registry",
+      "tactic": "Credential Access",
+      "art_test_ref": "T1552.002 Test #1 (reg query HKLM/HKCU /f password /t REG_SZ /s)",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "no dedicated rule for registry credential-hunting; the command shape (reg.exe + 'query', non-mutating) only reaches process_telemetry.py's generic T1012 branch -> 'reconnaissance-burst' IOA",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "recon_burst",
+      "probe_input": {
+        "image": "reg.exe",
+        "cmdline": "reg.exe query HKLM /f password /t REG_SZ /s",
+        "co_occurring": [
+          [
+            "systeminfo.exe",
+            "systeminfo.exe"
+          ],
+          [
+            "tasklist.exe",
+            "tasklist.exe /v"
+          ]
+        ]
+      },
+      "requires": [],
+      "notes": "Same class of finding as disc-network-share/collect-stage-download: a generic classifier catches the SHAPE (reg query, read-only) but has no signal for the SPECIFIC intent (hunting for the literal word 'password'). A rule keying on '/f password' or similar would be a real, narrow, low-FP-risk improvement candidate for the adversarial phase. CORRECTED burst partners: the first draft paired this with cmdkey.exe and whoami /priv, neither of which feeds classify_discovery's technique-diversity count, so the burst never completed in verification - replaced with genuine discovery-tactic partners (systeminfo/tasklist) matching the working pattern used by every other recon_burst entry in this file.",
+      "known_mismatch": "T1012 \u2014 Query Registry"
+    },
+    {
+      "id": "privesc-uac-eventvwr",
+      "technique_id": "T1548.002",
+      "technique_name": "Abuse Elevation Control Mechanism: Bypass UAC (Event Viewer / mscfile hijack)",
+      "tactic": "Privilege Escalation",
+      "art_test_ref": "T1548.002 Test #1 (hijack HKCU mscfile\\shell\\open, launch eventvwr.msc)",
+      "destructive": true,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/behavioral_rules.py: uac-bypass-hijack (cmd_any includes 'mscfile\\shell')",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "ioa_rule",
+      "probe_input": {
+        "image": "reg.exe",
+        "parent": "cmd.exe",
+        "cmdline": "reg.exe add hkcu\\software\\classes\\mscfile\\shell\\open\\command /ve /d \"C:\\Windows\\System32\\cmd.exe\" /f",
+        "path": ""
+      },
+      "requires": [],
+      "notes": "Clean DETECT, correctly labeled - a DIFFERENT auto-elevate ProgId than the original catalog's fodhelper (ms-settings) entry, same generalized rule.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "privesc-uac-sdclt",
+      "technique_id": "T1548.002",
+      "technique_name": "Abuse Elevation Control Mechanism: Bypass UAC (sdclt DelegateExecute)",
+      "tactic": "Privilege Escalation",
+      "art_test_ref": "T1548.002 Test #7 (hijack HKCU Folder\\shell\\open, launch sdclt.exe)",
+      "destructive": true,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/behavioral_rules.py: uac-bypass-hijack (cmd_any includes '\\folder\\shell\\open\\command' and 'delegateexecute')",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "ioa_rule",
+      "probe_input": {
+        "image": "powershell.exe",
+        "parent": "cmd.exe",
+        "cmdline": "powershell.exe New-Item -Force -Path \"HKCU:\\Software\\Classes\\Folder\\shell\\open\\command\" -Value 'cmd.exe /c notepad.exe'; New-ItemProperty -Force -Path \"HKCU:\\Software\\Classes\\Folder\\shell\\open\\command\" -Name \"DelegateExecute\"",
+        "path": ""
+      },
+      "requires": [],
+      "notes": "Clean DETECT via the SAME generalized rule as eventvwr above - a third distinct auto-elevate ProgId (Folder, not mscfile/ms-settings) it already covers.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "privesc-uac-wsreset",
+      "technique_id": "T1548.002",
+      "technique_name": "Abuse Elevation Control Mechanism: Bypass UAC (WSReset AppX hijack)",
+      "tactic": "Privilege Escalation",
+      "art_test_ref": "T1548.002 Test #23 (hijack an AppX ProgId's DelegateExecute, launch WSReset.exe)",
+      "destructive": true,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/behavioral_rules.py: uac-bypass-hijack (cmd_any includes 'delegateexecute' - the only one of its 5 keywords this specific ProgId string matches, since the AppX class name itself is not in the list)",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "ioa_rule",
+      "probe_input": {
+        "image": "powershell.exe",
+        "parent": "cmd.exe",
+        "cmdline": "powershell.exe New-ItemProperty -Path HKCU:\\Software\\Classes\\AppX82a6gwre4fdg3bt635tn5ctqjf8msdd2\\Shell\\open\\command -Name \"DelegateExecute\" -Value \"\" -Force",
+        "path": ""
+      },
+      "requires": [],
+      "notes": "ART's own text warns this specific bypass may not functionally escalate on Server 2022 - irrelevant to this test, which only measures whether the registry-write PATTERN is observed, not whether the exploit succeeds. Caught by the generic 'delegateexecute' keyword alone, since the AppX class GUID itself is not enumerable in advance.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "privesc-uac-progids",
+      "technique_id": "T1548.002",
+      "technique_name": "Abuse Elevation Control Mechanism: Bypass UAC (ProgID/CurVer hijack)",
+      "tactic": "Privilege Escalation",
+      "art_test_ref": "T1548.002 Test #27 (register a .pwn ProgId, redirect ms-settings' CurVer to it, launch fodhelper.exe)",
+      "destructive": true,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "no_code_path",
+      "detector_path": "valkyrie/behavioral_rules.py: uac-bypass-hijack's cmd_any list (ms-settings\\shell, mscfile\\shell, exefile\\shell, \\folder\\shell\\open\\command, delegateexecute) - NONE of these appear in a CurVer redirect, which writes ms-settings\\CurVer (no '\\shell' substring) and a separate .pwn ProgId's own open command (no recognized ProgId name at all)",
+      "predicted_tier_b": "MISS",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "ioa_rule",
+      "probe_input": {
+        "image": "reg.exe",
+        "parent": "cmd.exe",
+        "cmdline": "reg add \"HKEY_CURRENT_USER\\Software\\Classes\\.pwn\\Shell\\Open\\command\" /ve /d \"C:\\Windows\\System32\\calc.exe\" /f",
+        "path": ""
+      },
+      "requires": [],
+      "notes": "GENUINE GAP, same UAC-bypass family as three DETECTs above but a real generalization miss: this ProgID/CurVer redirect class (used by real malware, e.g. ValleyRAT) writes neither of the 5 substrings the existing rule keys on. Same launcher binary (fodhelper.exe) as the original catalog's covered entry, but the REGISTRY MECHANISM differs enough to evade entirely - a concrete, narrow rule-generalization candidate for the adversarial phase (e.g. also flag any HKCU write under Software\\Classes\\*\\Shell\\Open\\command combined with a CurVer redirect, not just the 5 hardcoded ProgIds).",
+      "known_mismatch": ""
+    },
+    {
+      "id": "privesc-dll-searchorder-amsi",
+      "technique_id": "T1574.001",
+      "technique_name": "Hijack Execution Flow: DLL Search Order Hijacking (amsi.dll)",
+      "tactic": "Privilege Escalation",
+      "art_test_ref": "T1574.001 Test #1 (copy powershell.exe + amsi.dll to %APPDATA%, run the renamed copy)",
+      "destructive": true,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "no_code_path",
+      "detector_path": "no rule found for DLL search-order hijacking; the only T1574 entry is cor-profiler-hijack, a different sub-technique (.012, COR_PROFILER env var), keyed on unrelated strings",
+      "predicted_tier_b": "MISS",
+      "source_confidence": "predicted_from_partial_verification",
+      "probe": "ioa_rule",
+      "probe_input": {
+        "image": "cmd.exe",
+        "parent": "cmd.exe",
+        "cmdline": "copy %windir%\\System32\\windowspowershell\\v1.0\\powershell.exe %APPDATA%\\updater.exe & copy %windir%\\System32\\amsi.dll %APPDATA%\\amsi.dll & %APPDATA%\\updater.exe -Command exit",
+        "path": "C:\\Users\\Public\\AppData\\Roaming\\updater.exe"
+      },
+      "requires": [],
+      "notes": "Real PowerShell engine renamed + a co-located amsi.dll planted next to it is a textbook AMSI-bypass-via-hijack setup. Nothing in behavioral_rules.py targets this pattern today. SOURCE_PARTIAL: only grepped, not exhaustively traced across every classifier file.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "disc-net-connections-ps",
+      "technique_id": "T1049",
+      "technique_name": "System Network Connections Discovery (PowerShell)",
+      "tactic": "Discovery",
+      "art_test_ref": "T1049 Test #2 (Get-NetTCPConnection)",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/process_telemetry.py classify_discovery (new 'get-nettcpconnection' branch, added 2026-08-27) -> 'reconnaissance-burst' sequence IOA (T1049 already in the sequence's technique tuple)",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "recon_burst",
+      "probe_input": {
+        "image": "powershell.exe",
+        "cmdline": "powershell.exe Get-NetTCPConnection",
+        "co_occurring": [
+          [
+            "systeminfo.exe",
+            "systeminfo.exe"
+          ],
+          [
+            "tasklist.exe",
+            "tasklist.exe /v"
+          ]
+        ]
+      },
+      "requires": [],
+      "notes": "CLOSED 2026-08-27: was a confirmed generalization gap (the binary form, netstat.exe, was covered; the PowerShell-cmdlet form was not). classify_discovery now recognizes Get-NetTCPConnection unconditionally (no same-name mutating form exists to exclude). Like disc-localgroup, this alone raises nothing by design - probe='recon_burst' replays it with the same proven co-occurring partners and confirms the burst completes. Offline-verified via replay_harness.py; live Tier B re-verification pending (this project counts only a real run as proof).",
+      "known_mismatch": ""
+    },
+    {
+      "id": "disc-service-net-start",
+      "technique_id": "T1007",
+      "technique_name": "System Service Discovery (net start)",
+      "tactic": "Discovery",
+      "art_test_ref": "T1007 Test #2 (net.exe start)",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/process_telemetry.py classify_discovery (new net.exe bare-'start' branch, added 2026-08-27: 'start' with nothing after it lists services, 'start <svc>' would start one - the same verb-then-argument shape net.exe itself uses to distinguish them) -> 'reconnaissance-burst' sequence IOA (T1007 already in the technique tuple)",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "recon_burst",
+      "probe_input": {
+        "image": "net.exe",
+        "cmdline": "net.exe start",
+        "co_occurring": [
+          [
+            "systeminfo.exe",
+            "systeminfo.exe"
+          ],
+          [
+            "tasklist.exe",
+            "tasklist.exe /v"
+          ]
+        ]
+      },
+      "requires": [],
+      "notes": "CLOSED 2026-08-27: net.exe was already recognized for 4 other verbs; bare 'start' fell through unclassified. Offline-verified via replay_harness.py; live Tier B re-verification pending.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "disc-service-discovery-ps",
+      "technique_id": "T1007",
+      "technique_name": "System Service Discovery (PowerShell)",
+      "tactic": "Discovery",
+      "art_test_ref": "T1007 Test #4 (Get-Service)",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/process_telemetry.py classify_discovery (new 'get-service' branch, added 2026-08-27) -> 'reconnaissance-burst' sequence IOA (T1007 already in the technique tuple)",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "recon_burst",
+      "probe_input": {
+        "image": "powershell.exe",
+        "cmdline": "powershell.exe Get-Service",
+        "co_occurring": [
+          [
+            "systeminfo.exe",
+            "systeminfo.exe"
+          ],
+          [
+            "tasklist.exe",
+            "tasklist.exe /v"
+          ]
+        ]
+      },
+      "requires": [],
+      "notes": "CLOSED 2026-08-27, same generalization-gap class as disc-net-connections-ps. Get-Service is unconditionally read-only for this purpose (Set-Service/Start-Service/Stop-Service are separate cmdlet names, so the substring match cannot collide with a mutating one). Offline-verified via replay_harness.py; live Tier B re-verification pending.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "disc-scheduled-tasks-query",
+      "technique_id": "T1007",
+      "technique_name": "System Service Discovery (scheduled task enumeration)",
+      "tactic": "Discovery",
+      "art_test_ref": "T1007 Test #6 (schtasks /query /fo LIST /v)",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/process_telemetry.py classify_discovery (new schtasks.exe branch, added 2026-08-27, mirroring the existing reg.exe/sc.exe 'query verb, not a mutating one' pattern) -> 'reconnaissance-burst' sequence IOA (T1007 already in the technique tuple)",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "recon_burst",
+      "probe_input": {
+        "image": "schtasks.exe",
+        "cmdline": "schtasks.exe /query /fo LIST /v",
+        "co_occurring": [
+          [
+            "systeminfo.exe",
+            "systeminfo.exe"
+          ],
+          [
+            "tasklist.exe",
+            "tasklist.exe /v"
+          ]
+        ]
+      },
+      "requires": [],
+      "notes": "CLOSED 2026-08-27: schtasks.exe was not a recognized binary in any discovery branch at all (distinct from the covered T1053.005 entry, which tests task CREATION via a different mechanism/probe). Read-only /query is now excluded from create/delete/change/run/end, the same shape as reg.exe/sc.exe's own query-vs-mutating check. Offline-verified via replay_harness.py; live Tier B re-verification pending.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "disc-network-shares-smb",
+      "technique_id": "T1135",
+      "technique_name": "Network Share Discovery (Get-SmbShare)",
+      "tactic": "Discovery",
+      "art_test_ref": "T1135 Test #5 (Get-SmbShare)",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "no_code_path",
+      "detector_path": "no cmdlet-path branch recognizes Get-SmbShare (distinct from the covered net.exe 'view' entry, which known_mismatches to T1018 anyway)",
+      "predicted_tier_b": "MISS",
+      "source_confidence": "predicted_from_partial_verification",
+      "probe": "ioa_rule",
+      "probe_input": {
+        "image": "powershell.exe",
+        "parent": "cmd.exe",
+        "cmdline": "powershell.exe Get-SmbShare",
+        "path": ""
+      },
+      "requires": [],
+      "notes": "Same generalization gap class - the cmdlet form of an already-tested binary technique is invisible.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "disc-security-software-cim",
+      "technique_id": "T1518.001",
+      "technique_name": "Security Software Discovery (CIM/WMI antivirus query)",
+      "tactic": "Discovery",
+      "art_test_ref": "T1518.001 Test #8 (Get-CimInstance root/securityCenter2 antivirusproduct)",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/process_telemetry.py classify_discovery (new 'get-ciminstance' + securitycenter2/antivirusproduct branch, added 2026-08-27 - Get-CimInstance alone is too common to match unconditionally) -> 'reconnaissance-burst' sequence IOA (T1518 added to the technique tuple 2026-08-27; T1518.001 matches via the tuple's own startswith(t+'.') prefix rule)",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "recon_burst",
+      "probe_input": {
+        "image": "powershell.exe",
+        "cmdline": "powershell.exe Get-CimInstance -Namespace root/securityCenter2 -ClassName antivirusproduct",
+        "co_occurring": [
+          [
+            "systeminfo.exe",
+            "systeminfo.exe"
+          ],
+          [
+            "tasklist.exe",
+            "tasklist.exe /v"
+          ]
+        ]
+      },
+      "requires": [],
+      "notes": "CLOSED 2026-08-27: this directly probes for Valkyrie's own presence via a WMI-namespace query neither this nor the already-covered netsh/tasklist T1518.001 entry could see before. Scoped to the specific antivirus-fingerprinting namespace/class, not bare Get-CimInstance (which is routine admin scripting). Offline-verified via replay_harness.py; live Tier B re-verification pending.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "disc-software-installed",
+      "technique_id": "T1518",
+      "technique_name": "Software Discovery",
+      "tactic": "Discovery",
+      "art_test_ref": "T1518 Test #2 (enumerate installed software via the Uninstall registry key)",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/process_telemetry.py classify_discovery (new 'get-itemproperty'/'get-item' + 'uninstall' branch, added 2026-08-27) -> 'reconnaissance-burst' sequence IOA (T1518 added to the technique tuple 2026-08-27)",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "recon_burst",
+      "probe_input": {
+        "image": "powershell.exe",
+        "cmdline": "powershell.exe Get-ItemProperty HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*",
+        "co_occurring": [
+          [
+            "systeminfo.exe",
+            "systeminfo.exe"
+          ],
+          [
+            "tasklist.exe",
+            "tasklist.exe /v"
+          ]
+        ]
+      },
+      "requires": [],
+      "notes": "CLOSED 2026-08-27: FIRST T1518 entry in the catalog (parent technique of the already-covered T1518.001 sub-technique). Deliberately labeled T1518 (Software Discovery), not the generic T1012 (Query Registry) reg.exe's own branch already covers - crediting this under T1012 would be a different ATT&CK id than the one actually under test, the same wrong-label trap disc-domain-groups and disc-localgroup hit earlier. Scoped to the Uninstall key specifically, mirroring how 'net localgroup' earns its own T1069.001 distinct from bare 'net user's T1087.001. Offline-verified via replay_harness.py; live Tier B re-verification pending.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "disc-password-policy",
+      "technique_id": "T1201",
+      "technique_name": "Password Policy Discovery",
+      "tactic": "Discovery",
+      "art_test_ref": "T1201 Test #6 (net accounts)",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "valkyrie/process_telemetry.py classify_discovery (new net.exe bare-'accounts' branch, added 2026-08-27: same verb-then-argument shape as 'start' above - bare 'accounts' displays policy, 'accounts /minpwlen:N' sets it) -> 'reconnaissance-burst' sequence IOA (T1201 added to the technique tuple 2026-08-27)",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "recon_burst",
+      "probe_input": {
+        "image": "net.exe",
+        "cmdline": "net.exe accounts",
+        "co_occurring": [
+          [
+            "systeminfo.exe",
+            "systeminfo.exe"
+          ],
+          [
+            "tasklist.exe",
+            "tasklist.exe /v"
+          ]
+        ]
+      },
+      "requires": [],
+      "notes": "CLOSED 2026-08-27: FIRST T1201 entry in the catalog. Same net.exe binary already recognized for 4 other verbs; 'accounts' was a 5th gap in the same branch. Offline-verified via replay_harness.py; live Tier B re-verification pending.",
+      "known_mismatch": ""
+    },
+    {
+      "id": "disc-domain-groups",
+      "technique_id": "T1069.002",
+      "technique_name": "Permission Groups Discovery: Domain Groups",
+      "tactic": "Discovery",
+      "art_test_ref": "T1069.002 Test #1 (net group \"domain admins\" /domain)",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "realtime_etw",
+      "detector_path": "process_telemetry.py's net.exe branch: 'net group' (without /add) returns T1087.002, not a T1069.002 label - there is no dedicated domain-GROUPS discovery label anywhere, only domain-ACCOUNTS",
+      "predicted_tier_b": "DETECT",
+      "source_confidence": "confirmed_by_source_trace",
+      "probe": "recon_burst",
+      "probe_input": {
+        "image": "net.exe",
+        "cmdline": "net group \"domain admins\" /domain",
+        "co_occurring": [
+          [
+            "systeminfo.exe",
+            "systeminfo.exe"
+          ],
+          [
+            "tasklist.exe",
+            "tasklist.exe /v"
+          ]
+        ]
+      },
+      "requires": [],
+      "notes": "'net group' is MITRE's own documented example for T1069.002 (domain GROUP membership, e.g. 'Domain Admins'), but the code's net.exe branch returns T1087.002 (domain ACCOUNT discovery) for any non-/add 'net group' invocation, with no way to distinguish a group-name argument (groups) from no argument (would enumerate all groups) from this branch's logic. A precise fix would need to also recognize a group argument shape to route to a real T1069.002 label - deferred to the adversarial phase. CORRECTED cmdline: the check is a literal two-word substring match on 'net group' (unlike the single-word 'view' check that covers the T1018 branch), so 'net.exe group ...' (the form this entry originally used) does not match at all - only the bare 'net group ...' form does, which is also the exact form ART's own atomic uses. Confirmed live via replay_harness.py after the first draft surfaced a real MISMATCH between predicted and actual. Whether Valkyrie's classifier should be robust to a 'net.exe' vs 'net' prefix difference at all is a separate, real robustness question worth raising in the adversarial phase - a trivial .exe suffix should not be an evasion knob.",
+      "known_mismatch": "T1087.002 \u2014 Account Discovery: Domain Account"
+    },
+    {
+      "id": "disc-file-dir-ps",
+      "technique_id": "T1083",
+      "technique_name": "File and Directory Discovery (PowerShell)",
+      "tactic": "Discovery",
+      "art_test_ref": "T1083 Test #2 (Get-ChildItem -Recurse, scoped to $env:USERPROFILE rather than ART's default full-drive form)",
+      "destructive": false,
+      "live_vm_safe": true,
+      "out_of_scope_reason": "",
+      "delivery": "no_code_path",
+      "detector_path": "no cmdlet-path branch recognizes Get-ChildItem (distinct from the covered cmd.exe 'dir' entry, which is also an honest MISS for the same reason: no cmd.exe-builtin branch exists either)",
+      "predicted_tier_b": "MISS",
+      "source_confidence": "predicted_from_partial_verification",
+      "probe": "ioa_rule",
+      "probe_input": {
+        "image": "powershell.exe",
+        "parent": "cmd.exe",
+        "cmdline": "powershell.exe Get-ChildItem -Path $env:USERPROFILE -Recurse -ErrorAction SilentlyContinue",
+        "path": ""
+      },
+      "requires": [],
+      "notes": "Bounded to the user profile rather than ART's full C:\\ recursive scan, which would be needlessly slow/IO-heavy on a CI runner for no additional detection signal.",
       "known_mismatch": ""
     }
   ],

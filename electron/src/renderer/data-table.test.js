@@ -1,5 +1,5 @@
 'use strict';
-/* Unit tests for data-table.js — run with: node --test electron/src/renderer/*.test.js */
+/* Unit tests for data-table.js - run with: node --test electron/src/renderer/*.test.js */
 
 const test = require('node:test');
 const assert = require('node:assert/strict');

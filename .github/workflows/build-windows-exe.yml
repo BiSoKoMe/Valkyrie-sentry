@@ -12,7 +12,7 @@ on:
   workflow_dispatch:          # run on demand from the Actions tab
   push:
     branches:
-      - claude/valkyrie-endpoint-agent-5m6bf7
+      - master
     paths:                    # only rebuild when packaging-relevant files change
       - "valkyrie/**"
       - "run_valkyrie.py"

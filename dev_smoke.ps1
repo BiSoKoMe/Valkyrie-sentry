@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Developer smoke test — runs EVERYTHING locally, no admin, no build.
+    Developer smoke test - runs EVERYTHING locally, no admin, no build.
 
 .DESCRIPTION
     1. Unit test suite            (tests/run_tests.py)
@@ -25,15 +25,15 @@ $base = "http://127.0.0.1:$port"
 
 function Section($t) { Write-Host "`n========== $t ==========" -ForegroundColor Cyan }
 
-# ── 1. Unit tests ──────────────────────────────────────────────────────────
+# --- 1. Unit tests ---
 Section "1/3  Unit test suite"
 python tests\run_tests.py
 
-# ── 2. Efficacy scorecard ──────────────────────────────────────────────────
+# --- 2. Efficacy scorecard ---
 Section "2/3  Detection-efficacy scorecard"
 python tests\efficacy\harness.py
 
-# ── 3. Live engine + new endpoints ─────────────────────────────────────────
+# --- 3. Live engine + new endpoints ---
 Section "3/3  Engine (dev) + new API surfaces"
 Write-Host "Starting engine: python -m valkyrie --web --endpoint --web-port $port" -ForegroundColor DarkCyan
 $engine = Start-Process -FilePath "python" `

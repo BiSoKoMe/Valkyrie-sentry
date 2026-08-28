@@ -366,6 +366,77 @@ def main() -> int:
     finally:
         _cfg2.NYX_ACT = _sv
 
+    # --- Normalized privacy telemetry wiring (ADR 0058): a Nyx observation
+    # reaches the same EDR ingest seam as every other sensor, via the process
+    # resolved for the flow's local port. It carries metadata only and stays
+    # silent when unresolved or no engine reference was given. ---
+    print("\n[7] wired as normalized privacy telemetry (ADR 0058)")
+    import valkyrie.network_telemetry as _NT
+
+    class _FakeEdr:
+        def __init__(self):
+            self.events = []
+
+        def ingest_telemetry(self, event):
+            self.events.append(event.to_dict())
+
+    class _Req3:
+        method = "POST"
+        pretty_host = "collector.tracker.example"
+        path = "/api/submit"
+        pretty_url = submit_url
+        headers = {"Referer": FP, "Content-Type": "application/x-www-form-urlencoded"}
+        raw_content = b"adid=550e8400-e29b-41d4-a716-446655440000&n=1"
+
+    class _Conn3:
+        peername = ("127.0.0.1", 55000)
+
+    class _Flow3:
+        def __init__(self):
+            self.request = _Req3()
+            self.response = None
+            self.client_conn = _Conn3()
+
+    real_lookup = _NT.pid_for_local_port
+    _NT.pid_for_local_port = lambda port: (4242, "chrome.exe", r"C:\chrome.exe") \
+        if port == 55000 else None
+    try:
+        fake_edr = _FakeEdr()
+        addon2 = ValkyrieAddon(_FakeStore(), blocklist=None, behavioral=None,
+                               rules=None, threat_intel=None, edr=fake_edr)
+        addon2._handle_request(_Flow3())
+        c.check("the leak is emitted for the resolved process",
+                any(event["actor_pid"] == 4242
+                    and event["fields"].get("artifact_kind") == "nyx_leak"
+                    for event in fake_edr.events))
+        c.check("the resolved process name travels with telemetry",
+                any(event["actor_name"] == "chrome.exe" for event in fake_edr.events))
+        c.check("telemetry excludes the sentence and masked sample",
+                all("your device ID" not in repr(event)
+                    and "550e8400-e29b-41d4-a716-446655440000" not in repr(event)
+                    for event in fake_edr.events))
+
+        # No edr reference at all: must attribute nothing, and must not raise
+        # or otherwise change the observe/act pipeline above it.
+        addon3 = ValkyrieAddon(_FakeStore(), blocklist=None, behavioral=None,
+                               rules=None, threat_intel=None)   # edr=None default
+        addon3._handle_request(_Flow3())
+        c.check("addon works unchanged with no edr reference (default None)",
+                any(getattr(e, "raw_category", "") == "nyx_leak"
+                    for e in addon3.store.events))
+
+        # Unresolvable process (e.g. the port lookup raced or found nothing):
+        # dropped, not guessed - same rule causality.attribute() itself keeps.
+        _NT.pid_for_local_port = lambda port: None
+        fake_edr2 = _FakeEdr()
+        addon4 = ValkyrieAddon(_FakeStore(), blocklist=None, behavioral=None,
+                               rules=None, threat_intel=None, edr=fake_edr2)
+        addon4._handle_request(_Flow3())
+        c.check("an unresolvable process attributes nothing (dropped, not guessed)",
+                fake_edr2.events == [])
+    finally:
+        _NT.pid_for_local_port = real_lookup
+
     return c.finish()
 
 

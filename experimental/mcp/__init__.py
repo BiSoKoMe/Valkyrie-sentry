@@ -1,4 +1,4 @@
-"""Valkyrie MCP (Model Context Protocol) server — AI-agent interface to the EDR.
+"""Valkyrie MCP (Model Context Protocol) server - AI-agent interface to the EDR.
 
 See server.py for the protocol layer and tools.py for the capability surface.
 Read-only by default; response actions are opt-in and dry-run by default.

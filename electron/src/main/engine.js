@@ -1,6 +1,6 @@
 'use strict';
 // ---------------------------------------------------------------------------
-// engine.js — lifecycle + telemetry bridge for the Python security engine.
+// engine.js - lifecycle + telemetry bridge for the Python security engine.
 //
 // The Electron shell NEVER contains security logic. This module only:
 //   * asks the already-shipped engine to start / stop (via the no-prompt
@@ -8,7 +8,7 @@
 //     falling back to start_all.ps1 / stop_all.ps1 in a source checkout), and
 //   * reads the engine's local HTTP API (loopback) so the UI can render.
 //
-// All HTTP happens here in the Node main process, not the renderer — that way
+// All HTTP happens here in the Node main process, not the renderer - that way
 // there is no cross-origin/localhost page anywhere in the product; the renderer
 // only ever receives already-parsed JSON over IPC.
 // ---------------------------------------------------------------------------
@@ -42,7 +42,7 @@ function scriptPath(name) {
   return path.join(engineRoot(), name);
 }
 
-// Writable state location — single source of truth in lifecycle.js (mirrors
+// Writable state location - single source of truth in lifecycle.js (mirrors
 // valkyrie/config.py: %ProgramData%\Valkyrie installed, beside-exe portable,
 // repo data/ in dev).
 function dataDir() { return lifecycle.engineDataDir(); }
@@ -52,7 +52,7 @@ function bundledEngineExe() {
   return path.join(process.resourcesPath || '', 'engine', 'valkyrie.exe');
 }
 
-// Portable build: no service, no admin, no DNS takeover — just run the engine
+// Portable build: no service, no admin, no DNS takeover - just run the engine
 // as a child so the dashboard works with all state kept beside the exe.
 let _portableChild = null;
 function ensurePortableEngine() {
@@ -74,11 +74,11 @@ function stopPortableEngine() {
 }
 
 // ---------------------------------------------------------------------------
-// Low-level HTTP against the loopback API — built on Electron's `net` module
+// Low-level HTTP against the loopback API - built on Electron's `net` module
 // (Chromium's network stack), NOT Node's built-in `http`. This is load-bearing:
 // on a machine running the Valkyrie engine's own traffic filtering, raw
 // Winsock connections (Node's http/net, curl, anything using plain sockets)
-// to 127.0.0.1:WEB_PORT get silently black-holed — TCP connects instantly,
+// to 127.0.0.1:WEB_PORT get silently black-holed - TCP connects instantly,
 // the request is sent, and then nothing ever comes back, forever, until the
 // caller's own timeout fires. WinHTTP-based clients (PowerShell, .NET) are
 // unaffected and answer in well under a second. Electron's `net` module goes
@@ -152,7 +152,7 @@ function apiRequest(method, pathname, { token, body, timeoutMs = 4000 } = {}) {
       headers['Content-Length'] = Buffer.byteLength(data);
     }
     if (token) headers['x-valkyrie-token'] = token;
-    // net.request, not http.request — see the block comment above netGet().
+    // net.request, not http.request - see the block comment above netGet().
     const req = net.request({ method, protocol: 'http:', hostname: HOST, port: WEB_PORT, path: pathname });
     for (const [k, v] of Object.entries(headers)) req.setHeader(k, v);
     let settled = false;
@@ -176,7 +176,7 @@ function apiRequest(method, pathname, { token, body, timeoutMs = 4000 } = {}) {
         try { parsed = b ? JSON.parse(b) : null; } catch {}
         if (ok) { finish(resolve, parsed); return; }
         // .status is set explicitly (not left to string-matching the
-        // message) so callers — apiPost's retry below in particular —
+        // message) so callers - apiPost's retry below in particular -
         // can tell "the token is stale" apart from every other failure
         // mode without depending on the exact wording the backend chose
         // for that error, which is exactly the kind of fragile parsing
@@ -194,10 +194,10 @@ function apiRequest(method, pathname, { token, body, timeoutMs = 4000 } = {}) {
 }
 
 // Cached per Electron-process-lifetime, but the Python engine mints a FRESH
-// token on every launch (secrets.token_urlsafe(24) at module load — see
+// token on every launch (secrets.token_urlsafe(24) at module load - see
 // valkyrie/web/server.py). The engine can restart underneath a still-running
-// Electron shell — e.g. POST /api/system/restart, a component restart, or the
-// self-healing watchdog recovering a crash — at which point every cached
+// Electron shell - e.g. POST /api/system/restart, a component restart, or the
+// self-healing watchdog recovering a crash - at which point every cached
 // token silently stops matching. Found during an architecture audit: the
 // restart control itself would have been the one action that broke every
 // OTHER control afterward, with no visible error beyond an opaque 403 on the
@@ -224,8 +224,27 @@ async function apiPost(pathname, body) {
 }
 
 // True when the engine's web API answers on loopback.
+//
+// Probes /api/ping, NOT /api/health - they answer different questions, and the
+// engine says so itself: server.py's ping() docstring reads "Pure liveness ...
+// touches NO state", and closes with "/api/health is a different question (is
+// PROTECTION healthy) and is not a substitute for this one." The engine's own
+// self-healing watchdog already learned that the hard way by probing an
+// expensive endpoint: it measured LOAD, reported load as death, and declared a
+// perfectly healthy server dead every 30s. This shell was making exactly the
+// same substitution, one process further out.
+//
+// The budget is 4000ms, not 1000ms. The latencies measured on this machine and
+// recorded above apiGet() - 1970ms to 2758ms - are ALL above the old 1s
+// budget, which is why apiGet's own default was raised to 6000ms. isUp() was
+// left behind at 1000ms, so it could never succeed against a healthy engine no
+// matter how many times it retried, and the window sat on "Engine unreachable"
+// forever. A liveness probe whose budget is below the service's real response
+// time does not measure liveness - it always reports dead.
 async function isUp() {
-  try { await apiGet('/api/health', 1000); return true; }
+  try { await apiGet('/api/ping', 4000); return true; }
+  catch { /* an engine older than /api/ping falls through to the legacy probe */ }
+  try { await apiGet('/api/health', 4000); return true; }
   catch { return false; }
 }
 
@@ -244,10 +263,28 @@ function runTask(name) {
   });
 }
 
+// Only meaningful for an "installed" build: register-tasks.ps1 is supposed to
+// have registered both no-UAC tasks at install time (electron/build/
+// installer.nsh's customInstall). Found empty in the wild once already (a
+// machine whose service was healthy but whose tasks were simply never
+// registered) - surfaced here so the app can say "this install is
+// incomplete" instead of quietly falling through start()'s dev-checkout
+// script fallback against an installed layout it was never designed for.
+async function installationGaps() {
+  if (lifecycle.mode() !== 'installed') return [];
+  const [hasArm, hasDisarm] = await Promise.all([
+    taskExists('ValkyrieArm'), taskExists('ValkyrieDisarm'),
+  ]);
+  const gaps = [];
+  if (!hasArm) gaps.push('ValkyrieArm');
+  if (!hasDisarm) gaps.push('ValkyrieDisarm');
+  return gaps;
+}
+
 // Spawn a PowerShell script detached (used as the source-checkout fallback,
 // where the scheduled tasks are not registered). start_all.ps1 self-elevates.
 // `windowsHide: true` makes PowerShell itself invisible (Node sets
-// CREATE_NO_WINDOW, applied before the process is even created — unlike
+// CREATE_NO_WINDOW, applied before the process is even created - unlike
 // `-WindowStyle Hidden`, which hides the console after Windows has already
 // shown it, hence the extraArgs below rather than relying on that alone).
 function runScriptDetached(name, extraArgs = []) {
@@ -278,7 +315,7 @@ function isProtected() {
 // engine and arms DNS.
 async function start() {
   if (lifecycle.mode() === 'portable') {
-    // Portable can't change system DNS (needs admin/service) — just ensure the
+    // Portable can't change system DNS (needs admin/service) - just ensure the
     // engine is running so the dashboard works, state kept beside the exe.
     ensurePortableEngine();
     return { started: true, via: 'portable', armed: false };
@@ -292,7 +329,7 @@ async function start() {
     return { started: true, via: 'task' };
   }
   // -Silent: the app has its own splash/progress UI, so the engine must
-  // launch with no visible window — unlike a developer running this script
+  // launch with no visible window - unlike a developer running this script
   // by hand from a terminal, where the console is deliberately kept.
   await runScriptDetached('start_all.ps1', ['-Silent']);
   return { started: true, via: 'script' };
@@ -335,7 +372,7 @@ async function telemetry() {
   catch (err) { console.error('[engine.telemetry] GET /api/events failed:', err && err.stack || err); }
 
   // The adapter marker alone is NOT proof of protection: it is a file that
-  // outlives a crash, a reboot or a stopped service. Seen live — a marker from
+  // outlives a crash, a reboot or a stopped service. Seen live - a marker from
   // two weeks earlier made the dashboard read "Protected / All clear" while
   // ValkyrieShield was STOPPED. So when the engine is reachable and states
   // whether DNS interception is actually running, that answer wins.
@@ -354,6 +391,7 @@ module.exports = {
   stop,
   waitUntilReady,
   telemetry,
+  installationGaps,
   apiGet,
   apiGetText,
   apiPost,

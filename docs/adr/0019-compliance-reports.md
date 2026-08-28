@@ -1,6 +1,6 @@
-# ADR 0019 — Compliance evidence reports
+# ADR 0019 - Compliance evidence reports
 
-Date: 2026-07-19 · Status: accepted
+Date: 2026-07-19 . Status: accepted
 
 ## Context
 
@@ -11,7 +11,7 @@ records all of that but had no way to hand it to an auditor.
 
 ## Decision
 
-`valkyrie/compliance.py` — `ComplianceReporter(ctx).generate(hours)`
+`valkyrie/compliance.py` - `ComplianceReporter(ctx).generate(hours)`
 computes, at request time, from live services (no cached/hardcoded
 values): monitoring coverage (wired components + heartbeat), incident
 counts by severity/status, open high/critical, MTTR mean/median from
@@ -27,7 +27,7 @@ off loopback by the global guard).
 - Every report opens with a disclaimer: **evidence toward controls, not a
   certification**. Framework refs label sections; no "compliant: true"
   field exists anywhere.
-- Absent subsystems are reported `available: false` — never invented.
+- Absent subsystems are reported `available: false` - never invented.
 - Reports are generated and stay local.
 
 ## Rollback

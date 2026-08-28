@@ -12,7 +12,7 @@ round-trip:
 The whole payload is embedded inside this exe (see valkyrie_setup.spec), so the
 single file is the update: rebuild it locally with build_setup.ps1 and hand it
 to any machine. Re-running it over an existing install is a safe in-place
-update — the engine is stopped first, files are refreshed, user data is kept.
+update - the engine is stopped first, files are refreshed, user data is kept.
 
 Only the Python standard library is used, so it freezes to a tiny stub.
 """

@@ -84,7 +84,7 @@ def _confidence_for(sev: str) -> float:
     return _SEV_CONFIDENCE.get(sev, 0.0)
 
 
-# ── Shared context (built once) ─────────────────────────────────────────────
+# --- Shared context (built once) ---
 
 def _build_ctx() -> dict:
     from valkyrie.threat_intel import IntelFeed, ThreatIntelManager
@@ -108,7 +108,7 @@ def _build_ctx() -> dict:
             "sysmon_env": probe_sysmon()}
 
 
-# ── Probe functions. One per catalog `probe` key. ───────────────────────────
+# --- Probe functions. One per catalog `probe` key. ---
 # Each returns (logic_fires: bool, severity: str, confidence: float,
 #               technique_tag: str, reason: str, evidence: dict)
 
@@ -278,7 +278,7 @@ def _probe_recon_burst(inp: dict, ctx: dict):
 
     A lone discovery command deliberately raises NOTHING (process_telemetry.
     classify_discovery returns INFO severity, and the engine's severity gate
-    drops it) — firing on a single `whoami` would be a guaranteed
+    drops it) - firing on a single `whoami` would be a guaranteed
     false-positive generator, which is the trade this codebase explicitly
     refuses. So this probe replays what a real recon sweep produces: THIS
     technique's command plus the co-occurring commands named in
@@ -331,7 +331,7 @@ def _probe_recon_burst(inp: dict, ctx: dict):
 
 
 def _probe_cred_store_watch(inp: dict, ctx: dict):
-    """Browser credential-store access — drives the REAL CredentialStoreWatch
+    """Browser credential-store access - drives the REAL CredentialStoreWatch
     emit path with a synthetic open-handle observation (a non-browser process
     holding a known credential-store file open), which is exactly what its
     poll would see during a live T1555.003 execution."""

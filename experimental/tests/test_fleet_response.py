@@ -1,6 +1,6 @@
 """Tests for the fleet remote-response command channel (valkyrie/fleet/command.py).
 
-Locks in the security-critical properties of operator→device remote response:
+Locks in the security-critical properties of operator->device remote response:
   - a command runs only if Ed25519-verified against the pinned key (fail-closed);
   - a wrong-key or tampered command is refused, not run;
   - only allow-listed actions can be encoded;
@@ -54,7 +54,7 @@ ENROLL = "enroll-secret"
 _stores = []
 with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 
-    # ── Signing primitives ────────────────────────────────────────────
+    # --- Signing primitives ---
     print("\n-- Command signing -----------------------------------")
     cmd = ResponseCommand(action="block_domain", target="evil.example")
     signed = sign_command(cmd, priv)
@@ -79,7 +79,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     except UpdateError:
         check("shell-payload target refused", True)
 
-    # ── Controller queue / fetch / ack ────────────────────────────────
+    # --- Controller queue / fetch / ack ---
     print("\n-- Controller command flow ---------------------------")
     store = FleetStore(Path(tmp) / "fleet.db"); _stores.append(store)
     ctl = FleetController(store, enroll_token=ENROLL, policy_public_key_hex=pub_hex)
@@ -114,7 +114,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     fetched = verify_signed_command(SignedCommand.from_dict(pending[0]), pub_hex)
     check("fetched command verifies device-side", fetched.action == "isolate_host")
 
-    # Ack it → anti-replay: not handed out again.
+    # Ack it -> anti-replay: not handed out again.
     ctl.ack_command(dev.device_id, dev.device_token, fetched.id, "succeeded", "isolated")
     again = ctl.get_commands_for_device(dev.device_id, dev.device_token)
     check("acked command is not re-delivered (anti-replay)", len(again) == 0)
@@ -134,7 +134,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     except AuthError:
         check("wrong token cannot ack", True)
 
-    # ── Device targeting ──────────────────────────────────────────────
+    # --- Device targeting ---
     print("\n-- Device targeting ----------------------------------")
     dev2 = ctl.enroll(EnrollmentRequest(enroll_token=ENROLL, label="pc2"))
     ctl.heartbeat(dev2.device_id, dev2.device_token, Heartbeat(counts={"blocked": 0}))
@@ -148,16 +148,16 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     check("targeted command reaches the target device", targeted.id in _ids(dev2))
     check("targeted command hidden from other devices", targeted.id not in _ids(dev))
 
-    # ── Privacy: ack channel carries no browsing data ─────────────────
+    # --- Privacy: ack channel carries no browsing data ---
     print("\n-- Privacy invariant ---------------------------------")
     # The ack echoes a target the OPERATOR issued (block only-pc2.example), plus
-    # a status — never a domain the device chose to visit. The heartbeat status
+    # a status - never a domain the device chose to visit. The heartbeat status
     # (which does flow device->server) still holds only counts/categories/health.
     stored = store.get_device(dev.device_id)["status"]
     check("device heartbeat status stays counts/categories/components only",
           set(stored.keys()) <= {"counts", "categories", "components"})
 
-    # ── HTTP layer (optional) ─────────────────────────────────────────
+    # --- HTTP layer (optional) ---
     print("\n-- HTTP layer (optional) -----------------------------")
     try:
         from fastapi.testclient import TestClient

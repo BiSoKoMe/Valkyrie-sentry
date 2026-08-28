@@ -1,6 +1,6 @@
 'use strict';
 // ---------------------------------------------------------------------------
-// main.js — Electron main process. The desktop shell only.
+// main.js - Electron main process. The desktop shell only.
 //
 //   * Creates ONE frameless, dark, glass window (no browser chrome ever).
 //   * Owns the Python engine lifecycle (start on launch, stop on request).
@@ -9,12 +9,12 @@
 //     window is ever shown).
 // ---------------------------------------------------------------------------
 
-// Valkyrie is a windowless GUI app (ADR 0001) — there is no console attached,
+// Valkyrie is a windowless GUI app (ADR 0001) - there is no console attached,
 // so process.stdout/stderr are frequently a broken/absent pipe. Node's
 // console.log/error normally swallow that, but on Windows a write to a
 // closed pipe can throw EPIPE synchronously; uncaught inside a timer
 // callback (e.g. the telemetry poll below), that took down the ENTIRE main
-// process — reproduced live: "Error: EPIPE: broken pipe, write" at
+// process - reproduced live: "Error: EPIPE: broken pipe, write" at
 // engine.js telemetry() -> console.error(), thrown from main.js's poll
 // Timeout.tick. Must be registered before anything else can log.
 for (const stream of [process.stdout, process.stderr]) {
@@ -25,6 +25,7 @@ const { app, BrowserWindow, ipcMain, shell, dialog, Tray, Menu, nativeImage } = 
 const path = require('path');
 const engine = require('./engine');
 const lifecycle = require('./lifecycle');
+const { decideBootAction, PROTECTION_INTENT, BOOT_ACTION } = require('./protection_state');
 
 const isDev = process.argv.includes('--dev');
 let win = null;
@@ -80,7 +81,7 @@ function createWindow() {
     minWidth: 960,
     minHeight: 640,
     show: false,
-    frame: false,                 // custom title bar — no OS chrome
+    frame: false,                 // custom title bar - no OS chrome
     titleBarStyle: 'hidden',
     backgroundColor: '#0a0a0d',    // matte black; avoids white flash on load
     backgroundMaterial: 'acrylic', // Win11 blur behind the window
@@ -96,7 +97,7 @@ function createWindow() {
 
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 
-  // Reveal only once painted → no flash, smooth fade handled in CSS.
+  // Reveal only once painted -> no flash, smooth fade handled in CSS.
   win.once('ready-to-show', () => {
     win.show();
     // Verification launches bring the window to the front so a screen capture
@@ -132,8 +133,8 @@ function createWindow() {
 
   // Closing hides Valkyrie to the tray instead of quitting: it keeps running
   // (protection + privacy stay on) and reopening from the tray shows THIS same
-  // window — so the "hi, I am Valkyrie" splash never replays. A real quit
-  // (tray → Quit) sets isQuitting and lets the close through.
+  // window - so the "hi, I am Valkyrie" splash never replays. A real quit
+  // (tray -> Quit) sets isQuitting and lets the close through.
   win.on('close', (e) => {
     if (!isQuitting) { e.preventDefault(); win.hide(); }
   });
@@ -149,7 +150,7 @@ function startPolling() {
   if (pollTimer) return;
   const tick = async () => {
     if (!win) return;
-    // A background poller must never be able to take the whole app down —
+    // A background poller must never be able to take the whole app down -
     // one bad tick (network hiccup, a logging call that itself throws) just
     // gets skipped; the next tick 1.5s later tries again.
     try {
@@ -174,6 +175,12 @@ function registerIpc() {
   ipcMain.handle('engine:status', async () => ({ up: await engine.isUp() }));
 
   ipcMain.handle('engine:start', async () => {
+    // Record INTENT the moment the user asks, independent of whether the arm
+    // attempt below actually succeeds this instant - boot()'s recovery logic
+    // needs to know the user wants protection on even through a later
+    // transient failure, exactly like host_safety.py's watchdog keeps trying
+    // to restore connectivity rather than treating one failed tick as final.
+    lifecycle.setProtectionIntent(PROTECTION_INTENT.ENABLED);
     const r = await engine.start();
     const ready = await engine.waitUntilReady((up, i) => {
       if (win) win.webContents.send('engine:progress', { up, attempt: i });
@@ -183,6 +190,7 @@ function registerIpc() {
   });
 
   ipcMain.handle('engine:stop', async () => {
+    lifecycle.setProtectionIntent(PROTECTION_INTENT.DISABLED);
     const r = await engine.stop();
     return r;
   });
@@ -228,10 +236,20 @@ function registerIpc() {
       step('preserve', 'Preserving your configuration', 'done'); await pace(200);
     }
 
-    // 2. Ensure the protection engine is running.
+    // 2. Ensure the protection engine is running. "Is the engine up?" and "is
+    //    protection actually active?" are separate questions - ValkyrieShield
+    //    is a persistent service that is essentially always up once
+    //    installed, so isUp() alone can never notice DNS having gone quietly
+    //    disarmed. protection_state.decideBootAction() is the pure decision;
+    //    the intent behind it never arms on behalf of a user who hasn't asked.
     step('engine', 'Starting protection engine', 'run');
     const already = await engine.isUp();
-    if (!already && !noAutostart) { try { await engine.start(); } catch {} }
+    const intent = lifecycle.protectionIntent();
+    const preAction = decideBootAction({
+      engineUp: already, intent, mode: lifecycle.mode(),
+      protected: null, noAutostart,
+    });
+    if (preAction === BOOT_ACTION.ENSURE_ENGINE) { try { await engine.start(); } catch {} }
     startPolling();
     let ready = already;
     if (!(noAutostart && !already)) {
@@ -240,6 +258,43 @@ function registerIpc() {
     }
     await pace(400);
     step('engine', 'Starting protection engine', ready ? 'done' : 'warn'); await pace(200);
+
+    // 2b. Reconcile protection intent against the LIVE armed state. This is
+    // the actual fix: only runs once the engine is confirmed reachable, only
+    // acts when the user has explicitly enabled protection before, and only
+    // ever calls the same engine.start() the user's own toggle uses - no
+    // second DNS-modification path. Skipped outright on an installed build
+    // missing its scheduled tasks: falling through to start()'s source-
+    // checkout script fallback against an installed layout would be worse
+    // than doing nothing, so an incomplete install is surfaced instead of
+    // silently mis-handled.
+    let installationGaps = [];
+    let protectionRecovery = 'not-attempted';
+    if (ready) {
+      installationGaps = await engine.installationGaps();
+      const tel = await engine.telemetry();
+      const postAction = decideBootAction({
+        engineUp: true, intent, mode: lifecycle.mode(),
+        protected: tel.protected, noAutostart,
+      });
+      if (postAction === BOOT_ACTION.RECONCILE_ARM) {
+        if (lifecycle.mode() === 'installed' && installationGaps.length > 0) {
+          protectionRecovery = 'skipped-incomplete-install';
+          console.error('[main.boot] protection intent is enabled and DNS is ' +
+            'not active, but this install is missing scheduled task(s): ' +
+            installationGaps.join(', ') + ' - not attempting auto-recovery ' +
+            'to avoid falling back to a dev-checkout script against an ' +
+            'installed layout.');
+        } else {
+          try {
+            await engine.start();
+            protectionRecovery = (await engine.telemetry()).protected ? 'recovered' : 'failed';
+          } catch { protectionRecovery = 'failed'; }
+        }
+      } else if (intent === PROTECTION_INTENT.ENABLED) {
+        protectionRecovery = tel.protected ? 'already-protected' : 'not-attempted';
+      }
+    }
 
     // 3. Integrity + health (setup scenarios only).
     if (setup) {
@@ -250,12 +305,15 @@ function registerIpc() {
       step('health', 'Running health check', ready ? 'done' : 'warn'); await pace(300);
     }
 
-    // 4. Finalize — record initialization so first-boot never repeats. Only
+    // 4. Finalize - record initialization so first-boot never repeats. Only
     //    mark done once the engine is actually healthy, so a failed first run
     //    is retried (as a repair) next launch instead of being marked complete.
     if (ready && setup) lifecycle.writeState({ lastScenario: scenario });
 
-    return { ready, already, scenario, mode: lifecycle.mode() };
+    return {
+      ready, already, scenario, mode: lifecycle.mode(),
+      protectionIntent: intent, protectionRecovery, installationGaps,
+    };
   });
 
   // Manual self-heal (the "Repair" button in the professional error dialog).
@@ -314,8 +372,8 @@ function registerIpc() {
     startPage: process.env.VALKYRIE_START_PAGE || null,
   }));
 
-  // Native, in-app error affordance — never a browser, never a traceback.
-  // Buttons map to: 0 Retry · 1 Repair · 2 View Logs · 3 Continue Offline.
+  // Native, in-app error affordance - never a browser, never a traceback.
+  // Buttons map to: 0 Retry . 1 Repair . 2 View Logs . 3 Continue Offline.
   ipcMain.handle('dialog:error', async (_e, { title, message }) => {
     if (!win) return { response: 0 };
     const r = await dialog.showMessageBox(win, {
@@ -339,7 +397,7 @@ app.whenReady().then(() => {
   app.on('activate', () => { showApp(); });
 });
 
-// Real quit path (tray → Quit, or OS shutdown): let windows actually close.
+// Real quit path (tray -> Quit, or OS shutdown): let windows actually close.
 app.on('before-quit', () => { isQuitting = true; });
 
 app.on('window-all-closed', () => {

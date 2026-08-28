@@ -83,7 +83,7 @@ def main():
                      reason="tracker SLD", raw_category="tracker"))
     print("  Fed 20 events (C2 beacon x5, learned beacon x6, DoH bypass, DGA, tracker x3)")
     print("  Waiting for the live correlation pipeline to process them...")
-    time.sleep(1.2)   # let the async writer flush → engine correlates
+    time.sleep(1.2)   # let the async writer flush -> engine correlates
 
     # 1. STATS ---------------------------------------------------------------
     hr("1. OVERVIEW  (GET /api/edr/stats)")

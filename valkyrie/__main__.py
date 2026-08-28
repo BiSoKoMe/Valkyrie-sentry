@@ -1741,6 +1741,12 @@ def main() -> None:
         web_state.zero_log              = zero_log
         web_state.intelligence          = intelligence
         web_state.edr                   = edr_engine
+        # Browser context is a user-mode extension/native-messaging bridge.
+        # It carries only sanitized interaction metadata, never page content;
+        # keeping it separate from TLS inspection makes that privacy boundary
+        # explicit and testable.
+        from .browser_context import BrowserContextCollector
+        web_state.browser_context       = BrowserContextCollector(edr_engine)
         web_state.process_collector     = process_collector
         web_state.network_collector     = network_collector
         web_state.persistence_collector = persistence_collector
@@ -1957,7 +1963,8 @@ def main() -> None:
     if args.tls and not args.no_tls:
         from .tls_inspector import TLSInspector
         tls_inspector = TLSInspector(store=store, blocklist=blocklist, behavioral=behavioral,
-                                     rules=rules, threat_intel=threat_intel)
+                                     rules=rules, threat_intel=threat_intel,
+                                     edr=edr_engine)
         if tls_inspector.start():
             ca_path = tls_inspector.setup_ca()
             console.print(f"[green]✓[/green] TLS inspector on port {tls_inspector.port}")

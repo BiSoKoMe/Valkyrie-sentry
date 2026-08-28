@@ -17,6 +17,19 @@ name: Red Team Tier B (live evaluation)
 # Scoped to loopback: Valkyrie starts with --no-dns --no-firewall --no-unbound
 # --no-tls so this never touches the runner's real DNS, firewall, or TLS
 # config — only the EDR/detection layer answering on 127.0.0.1:8090 is live.
+#
+# TWO JOBS, ONE REUSABLE WORKFLOW (added 2026-08-26, catalog 52 -> 90+):
+# the actual "start Valkyrie, run the battery, score it" body lives in
+# tierb-run-reusable.yml now, called once per job below, so the hard-won
+# operational logic (engine-deafness retry, DNS-redirect safety preflight)
+# exists in exactly one place regardless of which path runs.
+#   - tier-b-single: the ORIGINAL, UNCHANGED behavior - one job, full catalog
+#     by default, or -OnlyIds for isolating a single fix. Runs on push, and
+#     on manual dispatch unless run_full_matrix is set.
+#   - tier-b-matrix: NEW, opt-in - one parallel job per MITRE tactic
+#     (-OnlyTactic), so the now-90-technique catalog doesn't need to fit in
+#     one ~90min job. Only runs on manual dispatch with run_full_matrix=true
+#     and only_ids empty.
 
 on:
   workflow_dispatch:
@@ -30,9 +43,13 @@ on:
         type: boolean
         default: false
       only_ids:
-        description: "Comma-separated catalog ids to run in isolation (e.g. evasion-process-injection) - for verifying one Detection Coverage fix without running the full battery. Empty runs everything, unchanged."
+        description: "Comma-separated catalog ids to run in isolation (e.g. evasion-process-injection) - for verifying one Detection Coverage fix without running the full battery. Empty runs everything, unchanged. Ignored when run_full_matrix is true."
         type: string
         default: ""
+      run_full_matrix:
+        description: "Run the FULL catalog split across one parallel job per MITRE tactic instead of one long job. Added when the catalog grew past 52 -> 90+ techniques (see catalog.py's 2026-08-26 expansion) - a single job at the old ~90min pace no longer comfortably fits one run. Ignored (single-job path runs instead) if only_ids is also set."
+        type: boolean
+        default: false
   # Auto-run when this evaluation setup itself changes on the working branch, so
   # a live Tier B pass fires without needing the manual button (which GitHub only
   # exposes once the workflow reaches the default branch). The push-triggered run
@@ -59,471 +76,43 @@ on:
       - "valkyrie/**"
 
 jobs:
-  tier-b:
-    name: Live evaluation (windows-latest)
-    runs-on: windows-latest
-    timeout-minutes: 90
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+  tier-b-single:
+    # Original path, unchanged behavior: push triggers always land here (full
+    # catalog, destructive skipped); manual dispatch lands here unless
+    # run_full_matrix is requested.
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.run_full_matrix != true)
+    uses: ./.github/workflows/tierb-run-reusable.yml
+    with:
+      skip_destructive: ${{ github.event_name != 'workflow_dispatch' && true || inputs.skip_destructive }}
+      enable_network_layer: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_network_layer || false }}
+      only_ids: ${{ github.event_name == 'workflow_dispatch' && inputs.only_ids || '' }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install Valkyrie dependencies
-        shell: pwsh
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements_modular.txt
-
-      - name: Provision (Sysmon + PS logging + Invoke-AtomicRedTeam)
-        shell: pwsh
-        run: redteam\provision.ps1
-
-      - name: "Run Tier B (start Valkyrie + real Atomic Red Team, one step)"
-        shell: pwsh
-        env:
-          PYTHONUNBUFFERED: "1"
-        run: |
-          # --no-download-lists: Tier B measures EDR/behavioural ATT&CK detection,
-          # NOT DNS blocklist matching (DNS is already off via --no-dns). Fetching
-          # and parsing ~360k blocklist domains at startup is therefore pure
-          # overhead here -- and it is not harmless: that work blocks the event
-          # loop, which is why the engine goes deaf during startup. Run
-          # 32445499669 died on exactly that: the readiness gate got 2 consecutive
-          # health checks, the engine went deaf again, and after 25 attempts over
-          # 420s it never managed 3 in a row, so the battery never ran at all.
-          #
-          # Start Valkyrie AND run the eval in the SAME step. A background process
-          # started in a separate step does not reliably survive into the next one
-          # on the runner, so the eval script's own health check (line ~203) found
-          # a dead API even though the prior step confirmed it up. One step keeps
-          # the agent alive for the whole battery.
-          # A hung engine is RECOVERABLE, so stop forfeiting the whole job to it.
-          # Three of six Tier B runs this session were lost before a single
-          # technique ran: the process came up and answered the probe below, then
-          # stopped answering entirely and the readiness gate timed out (run
-          # 32447515475: 24 attempts, ZERO health checks, empty stderr -- no
-          # crash, just deaf). The run that passed used the SAME commit and the
-          # same flags, so this is runner variance, not a code path.
-          # Restarting the engine costs ~1 minute; losing the run costs ~40.
-          #
-          # --no-intelligence added 2026-08-24 to cure the "deaf after 2 OK"
-          # readiness failure. The web dashboard binds LAST in startup and is
-          # single-threaded; the intelligence self-learning layer runs
-          # CPU-heavy background threads (baseline loop, threat-graph, memory)
-          # that starve the web thread of GIL time on a 2-vCPU runner, so
-          # /api/health answers a couple of probes then goes deaf. The offline
-          # live_safe harness runs with --no-intelligence and NEVER goes deaf,
-          # which is the evidence this is the cause, not a guess. Intelligence is
-          # the ADAPTIVE/self-learning layer; every ATT&CK technique in the
-          # catalog is detected by behavioral_rules / behavioral_sequences /
-          # IOAs, NOT by intelligence, so turning it off costs zero catalog
-          # coverage while removing the background load that caused the strand.
-          # THE DENOMINATOR PROBLEM.
-          #
-          # Four catalog techniques (c2-dga-domain, c2-dns-tracker-domain,
-          # c2-dns-tunneling, c2-hardcoded-ip) are scored MISSED on every run,
-          # and none of them is a detection gap. Three of the four (the DNS
-          # ones) route through dga.py, dns_tunnel.py and the DNS interceptor
-          # pipeline - all dead under --no-dns. The fourth, c2-hardcoded-ip,
-          # routes through network_telemetry's IP reputation check
-          # (threat_intel.match_ip) - CORRECTED 2026-08-25: this is NOT gated by
-          # --no-intelligence, that flag only controls the separate adaptive
-          # self-learning layer. threat_intel loads unconditionally in
-          # __main__.py, so this one was never actually blocked by either flag -
-          # it needs a real network path to the target IP, which --no-firewall
-          # already provides. The harness has been marking Valkyrie down for
-          # failing to catch things it was never allowed to look at.
-          #
-          # Kept OFF by default so the known-good baseline stays reproducible and
-          # comparable to every previous run. Turned on deliberately, as a
-          # labelled variant, so the effect is measured rather than assumed.
-          # Safe here specifically because a GitHub runner is destroyed after the
-          # job: pointing its resolver at loopback cannot strand anyone's network
-          # the way it once stranded the developer's own.
-          $netArgs = @("--no-dns", "--no-unbound", "--no-intelligence")
-          $dnsRedirected = $false
-          $origDnsServers = $null
-          $dnsIfaceIdx = $null
-          if ("${{ inputs.enable_network_layer }}" -eq "true") {
-            # STARTING the interceptor is not enough - it binds 127.0.0.1:5300
-            # by default (valkyrie/config.py DNS_LISTEN_PORT), and Windows'
-            # DNS client always queries port 53 with no way to tell it
-            # otherwise. An earlier variant run (32818642609) proved this the
-            # hard way: DNS on, 0/4 C2 techniques gained, 14 OTHER techniques
-            # lost to the extra background load, net -14. The interceptor was
-            # never seeing a single query.
-            #
-            # This is the real fix, not a bigger guess: bind Valkyrie on the
-            # actual system port (--port 53, needs the admin rights a
-            # GitHub-hosted windows-latest runner already has) AND point this
-            # runner's adapter at 127.0.0.1 so the OS resolver's queries
-            # actually reach it. This is exactly the OS shim
-            # valkyrie/host_safety.py (ADR 0055) was built for and
-            # deliberately left unwired until it could be "proven on a
-            # disposable host first" - a destroyed-after-the-job CI runner is
-            # precisely that host, unlike the developer's own machine, which
-            # is what this redirect would risk stranding if done there.
-            #
-            # Every step degrades to "leave DNS alone" rather than crash the
-            # job: a failed redirect just means this run does not get to test
-            # its hypothesis, which is what already happened before this fix
-            # existed at all.
-            # STATUS as of 2026-08-25, run 32866512713: the strand danger below
-            # is FIXED and PROVEN (preflight REACHABLE, redirect proceeded, run
-            # completed in 24min - back near the ~17-20min baseline, nothing
-            # like the 62min run that went dark). The four C2 techniques STILL
-            # missed anyway. Ruled out, in order: interceptor not binding
-            # (bind succeeds, self-test PASSES right after start every time);
-            # OS resolver not reaching it (proven reachable via the redirect,
-            # confirmed by the very self-test passing); intelligence-layer GIL
-            # contention (removed, made no difference); upstream unreachable
-            # (this preflight proves it IS reachable). The heartbeat still
-            # failed once mid-run despite all of that checking out at boot.
-            # The remaining question is narrower and harder: something about
-            # the interceptor's OWN serve loop under REAL concurrent battery
-            # load (not at idle, where self-test always passes) makes it
-            # intermittently stop answering. That needs its own instrumented
-            # investigation - profiling the serve loop under load, not another
-            # CI flag - and is not being guessed at further tonight after five
-            # dispatched runs on this one question. Left as an honest,
-            # specifically-scoped gap rather than either claimed-fixed or
-            # vaguely-broken.
-            #
-            # VERIFY BEFORE COMMIT. Run 32858476983 redirected the runner's DNS
-            # blind, Valkyrie's upstream (8.8.8.8:53, the hardcoded default -
-            # see __main__.py's dns_upstream_host) turned out to be unreachable
-            # from this network, and the runner went COMPLETELY DARK: every
-            # step showed no conclusion at all, no logs, no artifacts - not a
-            # failed job, a lost one. That is not a bigger version of the same
-            # problem; it is the exact failure class host_safety.py (ADR 0055)
-            # exists to prevent, reproduced for real: a redirect to a resolver
-            # whose own upstream cannot be reached takes the whole host offline,
-            # including - this time - the GitHub Actions runner agent's own
-            # ability to report back.
-            #
-            # This is that module's core principle (verify the resolver is
-            # actually alive BEFORE trusting a redirect), sized for a one-shot
-            # CI experiment rather than the full continuously-ticking
-            # DnsWatchdog: a raw UDP query to the SAME upstream Valkyrie itself
-            # will use, sent BEFORE the adapter is touched at all. If it does
-            # not answer, the redirect is skipped entirely and DNS is never
-            # touched - the failure mode above becomes structurally impossible,
-            # not just less likely.
-            $upstreamOk = $false
-            try {
-              $probe = New-Object System.Net.Sockets.UdpClient
-              $probe.Client.ReceiveTimeout = 3000
-              $probe.Connect("8.8.8.8", 53)
-              # Minimal well-formed DNS query for "google.com" A record - the
-              # exact shape self_test.py's _probe_dns sends, so this tests the
-              # real protocol path, not just a TCP handshake.
-              $q = [byte[]](0x12,0x34,0x01,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00,
-                            0x06,0x67,0x6f,0x6f,0x67,0x6c,0x65,0x03,0x63,0x6f,0x6d,0x00,
-                            0x00,0x01,0x00,0x01)
-              $probe.Send($q, $q.Length) | Out-Null
-              $remote = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
-              $resp = $probe.Receive([ref]$remote)
-              $upstreamOk = $resp.Length -ge 12
-              $probe.Close()
-              Write-Host "[cfg] upstream 8.8.8.8:53 preflight: $(if ($upstreamOk) {'REACHABLE'} else {'answered but malformed'}) ($($resp.Length) bytes)"
-            } catch {
-              Write-Host "[cfg] upstream 8.8.8.8:53 preflight: UNREACHABLE ($($_.Exception.Message)) - this is very likely why the last redirect attempt stranded the runner. Skipping the redirect entirely; DNS stays untouched."
-            }
-            try {
-              if (-not $upstreamOk) { throw "upstream preflight failed" }
-              $iface = Get-DnsClientServerAddress -AddressFamily IPv4 |
-                Where-Object { $_.ServerAddresses } | Select-Object -First 1
-              if ($iface) {
-                $origDnsServers = @($iface.ServerAddresses)
-                $dnsIfaceIdx = $iface.InterfaceIndex
-                Set-DnsClientServerAddress -InterfaceIndex $dnsIfaceIdx -ServerAddresses "127.0.0.1"
-                $dnsRedirected = $true
-                Write-Host "[cfg] runner DNS -> 127.0.0.1 (was: $($origDnsServers -join ', '); interface $dnsIfaceIdx)"
-              } else {
-                Write-Host "[cfg] no IPv4 DNS interface found - cannot redirect, leaving DNS untouched"
-              }
-            } catch {
-              Write-Host "[cfg] DNS redirect failed ($($_.Exception.Message)) - leaving DNS untouched, C2/DNS techniques will miss as before"
-            }
-            # --no-intelligence STAYS ON, deliberately. Run 32856176466 proved
-            # the DNS interceptor works (self-test PASS right after start()) and
-            # then FLAPPED - heartbeat FAILED/recovered/FAILED/recovered
-            # repeatedly under load. Checked before guessing again: the c2-
-            # hardcoded-ip detector's IP reputation check
-            # (__main__.py's _ip_bad -> threat_intel.match_ip) reads
-            # ThreatIntelManager, which is constructed and loaded UNCONDITIONALLY
-            # in __main__.py - it has never been gated by --no-intelligence at
-            # all. That flag only controls the SEPARATE adaptive self-learning
-            # layer, which this exact workflow's own comments already document
-            # as a known GIL-starvation cause on a 2-vCPU runner ("intelligence
-            # ... runs CPU-heavy background threads ... starve the web thread of
-            # GIL time"). This variant turned that on for zero benefit - none of
-            # the four C2 techniques need it - and very plausibly caused the
-            # flapping. Removed; threat-intel IP matching is unaffected.
-            $netArgs = @("--no-unbound", "--no-intelligence") + $(if ($dnsRedirected) { @("--port", "53") } else { @() })
-            Write-Host "[cfg] NETWORK LAYER ENABLED - DNS$(if ($dnsRedirected) {' (resolver REDIRECTED)'} else {' (interceptor only, NOT reachable)'}); intelligence stays OFF (not needed, and a known GIL-contention source)"
-          } else {
-            Write-Host "[cfg] network layer OFF (baseline config) - the 4 C2 techniques are NOT_TESTED, not missed"
-          }
-          function Start-Engine {
-            $proc = Start-Process -FilePath python `
-              -ArgumentList (@("-m", "valkyrie", "--web", "--web-port", "8090") + `
-                $netArgs + `
-                @("--no-firewall", "--no-tls", "--no-sysmon-setup", "--no-download-lists")) `
-              -RedirectStandardOutput "valkyrie_stdout.log" `
-              -RedirectStandardError "valkyrie_stderr.log" `
-              -PassThru -WindowStyle Hidden
-            $proc.Id | Out-File valkyrie.pid
-            $dl = (Get-Date).AddSeconds(90)
-            do {
-              Start-Sleep -Seconds 2
-              try {
-                Invoke-RestMethod -Uri "http://127.0.0.1:8090/api/health" -TimeoutSec 3 | Out-Null
-                return $proc
-              } catch {}
-            } while ((Get-Date) -lt $dl)
-            Write-Host "Engine never answered on :8090 within 90s."
-            Get-Content valkyrie_stdout.log, valkyrie_stderr.log -ErrorAction SilentlyContinue
-            try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
-            return $null
-          }
-
-          $p = Start-Engine
-          if (-not $p) {
-            Write-Host "First engine start failed outright -- retrying once."
-            $p = Start-Engine
-          }
-          if (-not $p) { Write-Error "Valkyrie API never answered on :8090 (2 attempts)"; exit 1 }
-          # NOTE: this only proves the process came up and bound the port. It is
-          # NOT a readiness signal -- the engine still has heavy startup work to
-          # do (parsing a ~360k-domain blocklist, threat intel, intelligence
-          # warm-up) during which it stops answering. A run was lost to exactly
-          # that: this probe said "answering", then the eval script's gate timed
-          # out five times 56s later. run_live_evaluation.ps1 owns real
-          # readiness now (-ReadyStreak consecutive OK within -ReadyTimeoutSeconds).
-          Write-Host "Valkyrie process is up and bound (pid $($p.Id)). Handing over to the eval script, which waits for a STABLE engine..."
-
-          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
-            $skip = "${{ inputs.skip_destructive }}" -eq "true"
-          } else {
-            # Push-triggered runs SKIP the destructive atomics on purpose.
-            # MEASURED 2026-08-20: the destructive set (service-stop/RPC,
-            # Defender-disable, event-log clear) CRASHES the runner mid-battery,
-            # so it ran only a subset before dying and the coverage number came
-            # out an unreliable UNDERCOUNT (~8-23). The non-destructive subset
-            # completes cleanly and reports the TRUE number (~27/39 in-scope).
-            # Test the destructive techniques on demand with
-            #   gh workflow run redteam-tierb.yml -f skip_destructive=false
-            # (their detection is proven separately and unioned with this for the
-            # honest ~34/39). Reliable-by-default beats aggressive-but-crashing.
-            $skip = $true
-          }
-          $onlyIdsArgs = @{}
-          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.only_ids }}" -ne "") {
-            $ids = @("${{ inputs.only_ids }}".Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
-            $onlyIdsArgs = @{ OnlyIds = $ids }
-            Write-Host "[cfg] OnlyIds filter: $($ids -join ', ')"
-          }
-          try {
-            # Root cause fixed: the scorer polled the FULL incidents endpoint
-            # (per-incident impact assessment, O(incidents)) with a 10s timeout,
-            # so under load every poll returned empty and every real detection
-            # scored MISS. The engine now serves a brief=true fast path and the
-            # scorer polls it. Run the real battery and read the true number.
-            # If the eval throws at its readiness gate, the engine went deaf
-            # AFTER answering the probe above -- a hung engine, not a bad
-            # detector. Restart it and run the battery once more rather than
-            # forfeiting the job; a lost run tells us nothing at all.
-            $evalOk = $false
-            foreach ($attempt in 1..2) {
-              # -DetectWindowSeconds 30, NOT 12. The persistence collector polls
-              # every 15s (persistence_telemetry.py interval=15.0), so a 12s
-              # window structurally CANNOT observe any artifact-at-rest detection
-              # (run-key, scheduled-task, startup-folder, WMI-subscription,
-              # hidden-file) - the rule fires but the incident lands after the
-              # window closes and scores a false MISS. Measured on run
-              # 32681983369: T1197/T1552.001/T1564.001 all fire offline via real
-              # rules yet scored MISS live. 30s clears 15s + poll jitter + ingest,
-              # exactly as this script's own -DetectWindowSeconds doc states. 12
-              # was set to speed up flaky runs and silently under-counted.
-              redteam\evaluation\run_live_evaluation.ps1 -SkipDestructive:$skip -ApiBase "http://127.0.0.1:8090" -DetectWindowSeconds 30 @onlyIdsArgs *>&1 |
-                Tee-Object -FilePath tierb_transcript.log -Append
-              if ($?) { $evalOk = $true; break }
-              if ($attempt -eq 2) { break }
-              Write-Host "Battery did not start (attempt $attempt). Restarting the engine and retrying once..."
-              try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {}
-              Start-Sleep -Seconds 5
-              $p = Start-Engine
-              if (-not $p) { Write-Host "Engine would not come back; giving up."; break }
-            }
-            if (-not $evalOk) { Write-Host "Tier B battery did not complete after 2 attempts." }
-            # Coverage varies 5-18 techs across identical battery runs. Hypothesis:
-            # SensorManager's bounded-backpressure queue (etw/framework.py, deque
-            # maxlen, deliberately drops the OLDEST event under overload rather than
-            # growing unbounded) is dropping real events during the burst of near-
-            # simultaneous destructive atomics. The drop counters already exist and
-            # are already exposed at /api/sensors/status — just read them, once,
-            # before stopping, for direct evidence instead of inferring from variance.
-            # THIS BLOCK MUST NEVER FAIL THE JOB. Run 32826492527 proved that the
-            # try/catch alone was not enough: the Invoke-RestMethod timeout was
-            # caught and logged exactly as designed, and the job still exited 1
-            # right after it. Scoring already does not depend on this endpoint -
-            # coverage is read from the SQLite incident store below, and this
-            # comment block said so BEFORE that run ever happened. A diagnostic
-            # the code's own authors documented as expected-to-timeout under
-            # battery load must not be able to fail a gate whose entire purpose
-            # is "did detection work", especially now that pushes to valkyrie/**
-            # trigger this automatically - an unattended run failing on a
-            # non-essential probe is worse than one that only ever ran on a
-            # manual click, because there is nobody watching to say "oh, that
-            # part doesn't matter."
-            #
-            # $Error.Clear() + explicit $LASTEXITCODE reset make this
-            # unambiguous rather than relying on try/catch semantics that were
-            # just demonstrated not to be sufficient on their own.
-            "==== /api/sensors/status (backpressure/dedup drop evidence) ====" | Tee-Object tierb_transcript.log -Append
-            try {
-              $ss = Invoke-RestMethod "http://127.0.0.1:8090/api/sensors/status" -TimeoutSec 30
-              ($ss | ConvertTo-Json -Depth 6) | Tee-Object tierb_transcript.log -Append
-            } catch { "ERR sensors/status: $($_.Exception.Message)" | Tee-Object tierb_transcript.log -Append }
-            $Error.Clear()
-            $global:LASTEXITCODE = 0
-            # Coverage is read AFTER Valkyrie stops, straight from the SQLite
-            # incident store (the 'Authoritative coverage' step below). The live
-            # API is unreliable under battery load — even the brief read times
-            # out while the engine drains its ingestion backlog — so we do not
-            # ask the API at all; we read ground truth from the DB at rest.
-          } finally {
-            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-            # UNCONDITIONAL, and runs even if everything above threw. A
-            # disposable runner cannot stay stranded past this job either way,
-            # but restoring cleanly means the NEXT step (Authoritative
-            # coverage, log upload) still has working network access, and it
-            # costs nothing to do properly rather than rely on the runner's
-            # destruction to paper over it.
-            if ($dnsRedirected) {
-              try {
-                if ($origDnsServers -and $origDnsServers.Count -gt 0) {
-                  Set-DnsClientServerAddress -InterfaceIndex $dnsIfaceIdx -ServerAddresses $origDnsServers
-                  Write-Host "[cfg] runner DNS restored to: $($origDnsServers -join ', ')"
-                } else {
-                  Set-DnsClientServerAddress -InterfaceIndex $dnsIfaceIdx -ResetServerAddresses
-                  Write-Host "[cfg] runner DNS reset to automatic (no original recorded)"
-                }
-              } catch {
-                Write-Host "[cfg] DNS restore failed ($($_.Exception.Message)) - non-fatal on a disposable runner"
-              }
-            }
-          }
-
-      - name: Stop Valkyrie
-        if: always()
-        shell: pwsh
-        run: |
-          if (Test-Path valkyrie.pid) {
-            Stop-Process -Id (Get-Content valkyrie.pid) -Force -ErrorAction SilentlyContinue
-          }
-
-      - name: Authoritative coverage (read incident DB at rest)
-        if: always()
-        shell: pwsh
-        run: |
-          Start-Sleep -Seconds 6   # let the stopped engine's SQLite settle
-          $db = Get-ChildItem -Path "D:\a" -Recurse -Filter valkyrie.db -EA SilentlyContinue |
-                Select-Object -First 1
-          if (-not $db) { Write-Host "NO valkyrie.db found under D:\a"; exit 0 }
-          Write-Host ("DB: " + $db.FullName)
-          Write-Host "==================== AUTHORITATIVE LIVE COVERAGE ===================="
-          python redteam\evaluation\db_coverage.py $db.FullName
-
-          # DIAGNOSTIC (temporary): T1003.001 missed 2/2 destructive runs. Prove
-          # whether Sysmon EID10 (ProcessAccess->lsass.exe) fired at all for the
-          # Dumpert atomic (direct-syscall LSASS read, T1003.001-3) — Sysmon
-          # service outlives Valkyrie so this is readable after stop.
-          Write-Host "==================== SYSMON EID10->lsass.exe RAW COUNT ===================="
-          try {
-            $ev = Get-WinEvent -FilterHashtable @{ LogName='Microsoft-Windows-Sysmon/Operational'; Id=10 } -ErrorAction Stop |
-                  Where-Object { $_.Message -match 'lsass\.exe' }
-            Write-Host ("EID10->lsass.exe events found: " + (@($ev).Count))
-            $ev | Select-Object -First 5 | ForEach-Object {
-              $ga = if ($_.Message -match 'GrantedAccess:\s*(\S+)') { $Matches[1] } else { '?' }
-              $src = if ($_.Message -match 'SourceImage:\s*(\S+)') { $Matches[1] } else { '?' }
-              Write-Host ("  EID10 SourceImage=$src GrantedAccess=$ga")
-            }
-          } catch { Write-Host ("EID10 query error: " + $_.Exception.Message) }
-
-          # DIAGNOSTIC: T1055 (process injection) still missed live after the
-          # 2026-08-26 provisioning fix that turned Sysmon EID8 on. This
-          # isolates the question the catalog's own notes could not answer
-          # (they predate this run): did Sysmon actually EMIT an EID8 event
-          # for the real atomic, or is the signal lost somewhere downstream
-          # (SensorManager delivery / classify_sysmon)? If EID8 count is 0,
-          # the gap is still sensor-side (config not taking effect, or the
-          # specific atomic's injection shape not covered). If count > 0,
-          # the gap moved downstream of Sysmon and needs its own trace.
-          Write-Host "==================== SYSMON EID8 (CreateRemoteThread) RAW COUNT ===================="
-          try {
-            $ev8 = Get-WinEvent -FilterHashtable @{ LogName='Microsoft-Windows-Sysmon/Operational'; Id=8 } -ErrorAction Stop
-            Write-Host ("EID8 events found: " + (@($ev8).Count))
-            $ev8 | Select-Object -First 5 | ForEach-Object {
-              $src = if ($_.Message -match 'SourceImage:\s*(\S+)') { $Matches[1] } else { '?' }
-              $tgt = if ($_.Message -match 'TargetImage:\s*(\S+)') { $Matches[1] } else { '?' }
-              Write-Host ("  EID8 SourceImage=$src TargetImage=$tgt")
-            }
-          } catch { Write-Host ("EID8 query error: " + $_.Exception.Message) }
-
-      - name: Print results to the run log (artifact-independent)
-        if: always()
-        shell: pwsh
-        run: |
-          Write-Host "==================== TIER B TRANSCRIPT (tail) ===================="
-          if (Test-Path tierb_transcript.log) { Get-Content tierb_transcript.log -Tail 160 }
-          else { Write-Host "(no transcript — run step did not produce one)" }
-          Write-Host "==================== RESULTS JSON ===================="
-          $r = Get-ChildItem redteam/evaluation/results/*.json -ErrorAction SilentlyContinue
-          if ($r) { $r | ForEach-Object { Write-Host "----- $($_.Name) -----"; Get-Content $_.FullName } }
-          else { Write-Host "(no results json)" }
-          Write-Host "==================== VALKYRIE STDOUT (sensor init) ===================="
-          if (Test-Path valkyrie_stdout.log) { Get-Content valkyrie_stdout.log }
-          else { Write-Host "(no stdout)" }
-          Write-Host "==================== VALKYRIE STDERR (tail) ===================="
-          if (Test-Path valkyrie_stderr.log) { Get-Content valkyrie_stderr.log -Tail 60 }
-          Write-Host "==================== SENSOR / INTEGRITY PROBE ===================="
-          Write-Host ("elevated=" + ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator))
-          try { $s = Get-Service Sysmon64 -ErrorAction Stop; Write-Host ("Sysmon64 service: " + $s.Status) } catch { try { $s = Get-Service Sysmon -ErrorAction Stop; Write-Host ("Sysmon service: " + $s.Status) } catch { Write-Host "Sysmon service: NOT FOUND" } }
-          try { $n = (Get-WinEvent -LogName 'Microsoft-Windows-Sysmon/Operational' -MaxEvents 1 -ErrorAction Stop); Write-Host ("Sysmon log readable: YES (latest EID " + $n.Id + ")") } catch { Write-Host ("Sysmon log readable: NO -- " + $_.Exception.Message) }
-
-      - name: Union coverage (survives a crashed battery)
-        if: always()
-        shell: pwsh
-        run: |
-          # The battery streams each technique's record to a .partial.jsonl the
-          # instant it is known, so a run that died mid-way still has data even
-          # though the aggregate JSON was never written. Read whatever exists.
-          # Within one CI run this is a single run's floor; download several
-          # runs' artifacts and point this at all of them for the real union.
-          $files = @(Get-ChildItem redteam/evaluation/results/*tierB.json,
-                                   redteam/evaluation/results/*tierB.partial.jsonl `
-                     -ErrorAction SilentlyContinue | Select-Object -Expand FullName)
-          if (-not $files) { Write-Host "(no Tier B result files produced)"; exit 0 }
-          python redteam/evaluation/union_coverage.py @files
-
-      - name: Upload Tier B evidence
-        if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: tier-b-results
-          path: |
-            tierb_transcript.log
-            valkyrie_stdout.log
-            valkyrie_stderr.log
-            redteam/evaluation/results/*.json
-            redteam/evaluation/results/*.partial.jsonl
-            redteam/evaluation/catalog_export.json
-          if-no-files-found: warn
-          retention-days: 30
+  tier-b-matrix:
+    # New, opt-in path: the full 90+-technique catalog split one job per real
+    # MITRE tactic (Technique.tactic, not the batch/grouping keys catalog.py
+    # prints under - those are commit-history labels like "Breadth expansion
+    # round 2", not tactics). Update this list if catalog.py ever introduces
+    # an 11th tactic; `python redteam/evaluation/catalog.py` prints per-batch
+    # counts, or run:
+    #   python -c "from redteam.evaluation.catalog import all_in_scope; print(sorted(set(t.tactic for t in all_in_scope())))"
+    if: github.event_name == 'workflow_dispatch' && inputs.run_full_matrix == true && inputs.only_ids == ''
+    strategy:
+      fail-fast: false
+      matrix:
+        tactic:
+          - "Discovery"
+          - "Defense Evasion"
+          - "Execution"
+          - "Persistence"
+          - "Credential Access"
+          - "Command and Control"
+          - "Privilege Escalation"
+          - "Collection"
+          - "Lateral Movement"
+          - "Impact"
+    uses: ./.github/workflows/tierb-run-reusable.yml
+    with:
+      skip_destructive: ${{ inputs.skip_destructive }}
+      enable_network_layer: ${{ inputs.enable_network_layer }}
+      only_tactic: ${{ matrix.tactic }}
+      artifact_suffix: "-${{ matrix.tactic }}"

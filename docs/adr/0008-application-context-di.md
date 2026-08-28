@@ -1,4 +1,4 @@
-# ADR 0008 — Application context + dependency injection
+# ADR 0008 - Application context + dependency injection
 
 - **Status:** Accepted
 - **Phase:** 1 (core architecture)
@@ -15,14 +15,14 @@ class _AppState:
 state = _AppState()
 ```
 
-`__main__` reached into that global (`web_state.store = store; …`) and the FastAPI
+`__main__` reached into that global (`web_state.store = store; ...`) and the FastAPI
 routes read it back. This is the classic global-singleton coupling: services are
 wired by side effect on a shared bag, the dependency graph is implicit, and a
 test can only exercise the server by mutating the same process global. It is also
 the thing standing between Valkyrie and clean module boundaries.
 
 A full DI *framework* (autowiring container) would be more machinery than this
-codebase warrants — and the redesign brief explicitly says to avoid unnecessary
+codebase warrants - and the redesign brief explicitly says to avoid unnecessary
 complexity. The Pythonic middle ground is an explicit **application context**
 passed by parameter.
 
@@ -41,17 +41,17 @@ to keep this root module free of import cycles; comments name the concrete types
   context. When provided it is adopted as the global the routes read; when
   omitted (tests, the `__main__` docstring example) the existing global is used.
 - **`__main__` becomes the composition root:** it constructs the `AppContext`,
-  wires the services in at build time, and injects it into `run_server(ctx=…)`
+  wires the services in at build time, and injects it into `run_server(ctx=...)`
   instead of mutating a global by side effect.
 
 ## Change report
 
-- **What changed:** new `valkyrie/context.py`; `web/server.py` (`_AppState` →
+- **What changed:** new `valkyrie/context.py`; `web/server.py` (`_AppState` ->
   injected `AppContext`, `create_app`/`run_server` take `ctx`); `__main__.py`
   builds and injects the context.
 - **Why:** replace global-singleton coupling with an explicit, typed, testable
-  service container — the seam for clean module boundaries and future services
-  (endpoint sensor, NDR) that Phases 2–3 add.
+  service container - the seam for clean module boundaries and future services
+  (endpoint sensor, NDR) that Phases 2-3 add.
 - **Security impact:** neutral. Indirect positive: explicit wiring makes it
   auditable exactly which services a given deployment has running
   (`components()`), useful for the fleet health surface later.
@@ -61,11 +61,11 @@ to keep this root module free of import cycles; comments name the concrete types
   existing web tests are untouched. Verified the injected context reaches the
   routes end-to-end (a store-less context yields `/api/events 503`; a wired one
   yields `200`).
-- **Risks:** low. `create_app(ctx)` reassigns the module global `state` — a
+- **Risks:** low. `create_app(ctx)` reassigns the module global `state` - a
   deliberate, documented choice so routes need no edits; concurrent creation of
   two apps in one process would share the last-injected global, which never
   happens in production (one server per process) and is covered/ordered in tests.
-- **Tests added:** `tests/test_context.py` — defaults, `components()`
+- **Tests added:** `tests/test_context.py` - defaults, `components()`
   introspection, `repr`, and end-to-end DI (injected context with/without a store
   drives the route's 200/503). Also validated `__main__`'s exact kwargs and a
   clean `__main__` import. Full suite: 25 passed, 0 failed, 2 skipped.

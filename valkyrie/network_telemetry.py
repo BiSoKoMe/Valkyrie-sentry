@@ -102,6 +102,53 @@ class ConnInfo:
         )
 
 
+def pid_for_local_port(port: int) -> Optional[tuple[int, str, str]]:
+    """Resolve the process bound to a given LOCAL TCP port, via the same
+    userland psutil connection table ``NetworkCollector`` already polls (there
+    keyed on remote address for reputation; here keyed on local port to
+    identify the process that opened a connection *out*, e.g. to a local
+    interception proxy).
+
+    Best-effort and racy by construction: the local port may already have been
+    reused by a different process between the connection opening and this
+    lookup running, and a non-elevated poller cannot always read another
+    process's name/path. Returns None rather than guessing when no
+    established match exists - the same "drop, don't guess" discipline
+    ``edr/causality.py``'s ``attribute()`` already enforces on its side.
+    """
+    if not _PSUTIL or not port:
+        return None
+    try:
+        conns = psutil.net_connections(kind="inet")
+    except Exception:
+        return None
+    for c in conns:
+        try:
+            if not c.laddr or int(c.laddr.port) != int(port):
+                continue
+            if getattr(c, "status", "") not in ("ESTABLISHED", "SYN_SENT", "NONE", ""):
+                continue
+            if c.pid is None:
+                continue
+            pid = int(c.pid)
+            name = ""
+            proc = None
+            try:
+                proc = psutil.Process(pid)
+                name = proc.name()
+            except Exception:
+                pass
+            path = ""
+            try:
+                path = proc.exe() if proc is not None else ""
+            except Exception:
+                pass
+            return pid, name, path
+        except Exception:
+            continue
+    return None
+
+
 def diff_snapshots(old: dict, new: dict) -> list[ConnInfo]:
     return [c for k, c in new.items() if k not in old]
 

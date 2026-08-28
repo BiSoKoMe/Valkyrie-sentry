@@ -55,6 +55,7 @@ from .schema import severity_rank
 log = logging.getLogger("valkyrie.playbooks")
 
 _DEFAULT_COOLDOWN = 300.0
+_POLICY_ACTIONS = frozenset({"allow", "alert", "deceive", "block", "contain"})
 
 
 @dataclass
@@ -71,12 +72,19 @@ class Playbook:
     categories: tuple = ()          # empty = any category
     mode: str = "dry_run"           # dry_run | enforce
     cooldown_seconds: float = _DEFAULT_COOLDOWN
+    requires_policy_action: str = ""     # optional decision.action gate
+    requires_authority_action: str = ""  # optional authority.action gate
     actions: list = field(default_factory=list)
 
-    def matches(self, incident: dict) -> bool:
+    def matches(self, incident: dict, *, policy_action: str = "",
+                authority_action: str = "") -> bool:
         if severity_rank(incident.get("severity", "info")) < severity_rank(self.min_severity):
             return False
         if self.categories and incident.get("category") not in self.categories:
+            return False
+        if self.requires_policy_action and self.requires_policy_action != policy_action:
+            return False
+        if self.requires_authority_action and self.requires_authority_action != authority_action:
             return False
         return True
 
@@ -89,6 +97,12 @@ def _parse_playbook(raw: dict) -> Playbook:
     mode = str(raw.get("mode", "dry_run")).lower()
     if mode not in ("dry_run", "enforce"):
         raise ValueError(f"{pb_id}: mode must be dry_run|enforce")
+    policy_action = str(raw.get("requires_policy_action", "")).lower()
+    authority_action = str(raw.get("requires_authority_action", "")).lower()
+    if policy_action and policy_action not in _POLICY_ACTIONS:
+        raise ValueError(f"{pb_id}: bad requires_policy_action {policy_action!r}")
+    if authority_action and authority_action not in _POLICY_ACTIONS:
+        raise ValueError(f"{pb_id}: bad requires_authority_action {authority_action!r}")
     actions = []
     for a in raw.get("actions") or []:
         act = str(a.get("action") or "").strip()
@@ -107,6 +121,8 @@ def _parse_playbook(raw: dict) -> Playbook:
         categories=tuple(raw.get("categories") or ()),
         mode=mode,
         cooldown_seconds=float(raw.get("cooldown_seconds", _DEFAULT_COOLDOWN)),
+        requires_policy_action=policy_action,
+        requires_authority_action=authority_action,
         actions=actions,
     )
 
@@ -181,6 +197,8 @@ class PlaybookEngine:
                 "playbooks": [{"id": p.id, "mode": p.mode,
                                "min_severity": p.min_severity,
                                "categories": list(p.categories),
+                               "requires_policy_action": p.requires_policy_action,
+                               "requires_authority_action": p.requires_authority_action,
                                "actions": [a.action for a in p.actions]}
                               for p in self._playbooks],
                 "load_errors": list(self._load_errors),
@@ -197,10 +215,13 @@ class PlaybookEngine:
             if payload.get("type") != "incident":
                 return
             incident = payload.get("incident") or {}
+            detail = self._edr.get_incident(str(incident.get("id") or "")) or {}
+            policy_action, authority_action = _policy_authority(detail)
             with self._lock:
                 books = list(self._playbooks)
             for pb in books:
-                if pb.matches(incident):
+                if pb.matches(incident, policy_action=policy_action,
+                              authority_action=authority_action):
                     self._run_playbook(pb, incident)
         except Exception:
             # A playbook bug must never break incident correlation - but it
@@ -238,3 +259,23 @@ class PlaybookEngine:
                 incident_id=incident.get("id", ""),
                 severity=incident.get("severity", ""),
             )
+
+
+def _policy_authority(incident: dict) -> tuple[str, str]:
+    """Read the engine-recorded decision gates from the full incident.
+
+    Missing or malformed evidence never grants a playbook permission: a gate
+    that was explicitly requested by a playbook simply fails to match.
+    """
+    policy_action = authority_action = ""
+    for entry in incident.get("timeline") or []:
+        if not isinstance(entry, dict):
+            continue
+        data = entry.get("data") or {}
+        if not isinstance(data, dict):
+            continue
+        if entry.get("kind") == "decision":
+            policy_action = str(data.get("action") or "").lower()
+        elif entry.get("kind") == "authority":
+            authority_action = str(data.get("action") or "").lower()
+    return policy_action, authority_action

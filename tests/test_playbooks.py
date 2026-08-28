@@ -212,8 +212,15 @@ def _default_playbooks_checks() -> None:
     domain_blockers = [b for b in books
                        if any(a.action == "block_domain" for a in b.actions)]
     _check("domain-block playbooks present", len(domain_blockers) >= 1)
-    _check("every domain-block ships in ENFORCE",
-           all(b.mode == "enforce" for b in domain_blockers))
+    _check("every ungated domain-block ships in ENFORCE",
+           all(b.mode == "enforce" or
+               (b.requires_policy_action and b.requires_authority_action)
+               for b in domain_blockers))
+    privacy = by_id.get("privacy-consequence-future-dns")
+    _check("privacy consequence block is dry-run and decision/authority gated",
+           privacy is not None and privacy.mode == "dry_run"
+           and privacy.requires_policy_action == "block"
+           and privacy.requires_authority_action == "block")
     _check("dga C2 is auto-blocked", "dga" in by_id.get("block-dga-c2").categories
            if "block-dga-c2" in by_id else False)
     _check("dns tunnelling is auto-blocked",

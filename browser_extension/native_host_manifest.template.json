@@ -1,0 +1,7 @@
+{
+  "name": "com.valkyrie.browser_context",
+  "description": "Valkyrie local browser-context relay",
+  "path": "__HOST_LAUNCHER_PATH__",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://__EXTENSION_ID__/"]
+}

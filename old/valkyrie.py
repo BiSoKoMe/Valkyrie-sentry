@@ -78,20 +78,20 @@ try:
     HAS_DNSLIB = True
 except ImportError:
     HAS_DNSLIB = False
-    BaseResolver = object  # stub — allows module load without dnslib
+    BaseResolver = object  # stub - allows module load without dnslib
     DNSServer = DNSRecord = QTYPE = RR = A = None
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 BLOCKLIST_DIR = SCRIPT_DIR / "blocklists"
 EVENT_DB_PATH = SCRIPT_DIR / "valkyrie_events.db"
 DEFAULT_DNS_PORT = 5353
-DEFAULT_DNS_UPSTREAM = "194.242.2.2"      # Mullvad — no-logs, ad-blocking
+DEFAULT_DNS_UPSTREAM = "194.242.2.2"      # Mullvad - no-logs, ad-blocking
 _DOT_UPSTREAM_HOSTNAME = "dns.mullvad.net" # TLS SNI for encrypted upstream queries
 WATCH_INTERVAL = 2.5
 SHIELD_SCAN_INTERVAL = 5    # seconds between connection sweeps in Shield mode
 ALERT_COOLDOWN_SEC = 15
 
-# ── Feature: Active Firewall Mitigation ──────────────────────────────────────
+# --- Feature: Active Firewall Mitigation ---
 # Prefix for every firewall rule Valkyrie creates.  All rules are named
 # "Valkyrie_Block_<ProcessName>_<IP>_<Port>" so they can be enumerated and
 # bulk-deleted on clean shutdown without touching any pre-existing rules.
@@ -107,7 +107,7 @@ _DOH_PROVIDERS = [
     "45.90.28.0", "45.90.30.0",        # NextDNS
     "94.140.14.14", "94.140.15.15",    # AdGuard
     "96.113.151.145",                  # Comcast DoH
-    # Mullvad (194.242.2.2/3) intentionally excluded — it is Valkyrie's own
+    # Mullvad (194.242.2.2/3) intentionally excluded - it is Valkyrie's own
     # encrypted upstream. Blocking its port 853 would break our DoT queries.
 ]
 
@@ -132,20 +132,20 @@ _CDN_WHITELIST = frozenset({
     "fastly.net", "fastlylb.net",
 })
 
-# ── Feature: Automated DNS Switcher ──────────────────────────────────────────
-DNS_SWITCH_INTERFACE_WIN   = "Wi-Fi"   # Windows adapter name — fallback if enum fails
-DNS_SWITCH_INTERFACE_MAC   = "Wi-Fi"   # macOS service name — edit if yours differs
+# --- Feature: Automated DNS Switcher ---
+DNS_SWITCH_INTERFACE_WIN   = "Wi-Fi"   # Windows adapter name - fallback if enum fails
+DNS_SWITCH_INTERFACE_MAC   = "Wi-Fi"   # macOS service name - edit if yours differs
 
-# ── Hosts file constants ──────────────────────────────────────────────────────
+# --- Hosts file constants ---
 HOSTS_FILE_WIN     = Path(r"C:\Windows\System32\drivers\etc\hosts")
 HOSTS_MARKER_START = "# Valkyrie-start"
 HOSTS_MARKER_END   = "# Valkyrie-end"
 
-# ── Feature: REST API log server ─────────────────────────────────────────────
+# --- Feature: REST API log server ---
 API_SERVER_HOST = "127.0.0.1"
 API_SERVER_PORT = 8080
 
-# ── Feature: Tracking parameter proxy ────────────────────────────────────────
+# --- Feature: Tracking parameter proxy ---
 PROXY_SERVER_PORT = 8889
 
 _TRACKING_PARAMS = frozenset({
@@ -168,26 +168,26 @@ _TRACKING_PARAMS = frozenset({
     "si", "feature",
 })
 
-# ── Feature: Router/ARP mode — LAN device identification ─────────────────────
+# --- Feature: Router/ARP mode - LAN device identification ---
 ARP_SCAN_INTERVAL = 30   # seconds between ARP table refreshes between refreshes
 
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 # NEW FEATURE: ACTIVE FIREWALL MITIGATION
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 # When watch mode detects a new ESTABLISHED connection to a blocklisted host,
 # FirewallMitigator injects a temporary outbound block rule via the Windows
 # Advanced Firewall (netsh advfirewall).  Each rule is named with the
 # FW_RULE_PREFIX constant so all Valkyrie rules can be identified and bulk-
 # removed on clean shutdown.
 #
-# On non-Windows platforms the class is a safe no-op — all public methods
-# succeed silently — so the rest of the codebase requires no OS guards.
+# On non-Windows platforms the class is a safe no-op - all public methods
+# succeed silently - so the rest of the codebase requires no OS guards.
 #
 # Threading model: mitigate_threat() is always called from a daemon thread
 # (threading.Thread) so the OS subprocess call never blocks the scan loop.
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 
 class FirewallMitigator:
     """
@@ -208,7 +208,7 @@ class FirewallMitigator:
         self._lock = threading.Lock()
         self._is_windows = sys.platform == "win32"
 
-    # ── Internal helpers ──────────────────────────────────────────────────────
+    # --- Internal helpers ---
 
     @staticmethod
     def _sanitize(value: str) -> str:
@@ -238,7 +238,7 @@ class FirewallMitigator:
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
             return False, str(exc)
 
-    # ── Public API ────────────────────────────────────────────────────────────
+    # --- Public API ---
 
     def mitigate_threat(self, process_name: str, remote_ip: str,
                         remote_port: int,
@@ -296,7 +296,7 @@ class FirewallMitigator:
                     )
 
         if not first_new:
-            # At least one new rule was injected — log it
+            # At least one new rule was injected - log it
             self._event_log.log(
                 action="firewall_block",
                 domain=remote_ip,
@@ -371,7 +371,7 @@ class FirewallMitigator:
         created = 0
         for ip in _DOH_PROVIDERS:
             if ":" in ip:
-                continue  # skip any IPv6 provider IPs — not relevant for DoH/DoT blocking
+                continue  # skip any IPv6 provider IPs - not relevant for DoH/DoT blocking
             for port, label in ((443, "DoH"), (853, "DoT")):
                 rule_name = f"Valkyrie_Block_{label}_{self._sanitize(ip)}_{port}"
                 with self._lock:
@@ -397,7 +397,7 @@ class FirewallMitigator:
     def block_ipv6_outbound(self) -> bool:
         """
         Disable the IPv6 network stack on all adapters for the Shield session.
-        More effective than a firewall rule — removes IPv6 entirely so apps
+        More effective than a firewall rule - removes IPv6 entirely so apps
         cannot use it to reach tracker servers.
         Call restore_ipv6() on Shield exit to re-enable.
         """
@@ -457,7 +457,7 @@ class FirewallMitigator:
     def preload_blocklist_ips(self, domains: list, max_workers: int = 20) -> int:
         """
         Resolve curated tracker domains in parallel and pre-inject firewall rules
-        before the first scan tick — closes the window where connections complete
+        before the first scan tick - closes the window where connections complete
         before the reactive scanner sees them.
         Also injects subnet rules for known stable tracker IP ranges.
         Designed to run in a background daemon thread.
@@ -518,16 +518,16 @@ class FirewallMitigator:
         return injected
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 # NEW FEATURE 1: AUTOMATED OS DNS SWITCHER
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 # When Valkyrie starts dns or monitor mode it automatically points the OS DNS
 # to 127.0.0.1 so every DNS query on the machine flows through the sinkhole.
 # On clean exit (or Ctrl+C) it restores the original DNS servers automatically.
 #
 # Supports: Windows (netsh), macOS (networksetup), Linux (resolvectl / nmcli)
 # Requires: Administrator / sudo to write DNS settings on Windows & Mac.
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 
 class DNSSwitcher:
     """
@@ -536,7 +536,7 @@ class DNSSwitcher:
 
     Usage:
         switcher = DNSSwitcher()
-        switcher.activate()    # point OS DNS → 127.0.0.1
+        switcher.activate()    # point OS DNS -> 127.0.0.1
         ...
         switcher.restore()     # put original DNS back
 
@@ -551,11 +551,11 @@ class DNSSwitcher:
         self._win_iface_fallback = win_interface  # used if enum fails
         self._mac_iface = mac_interface
         self._original_dns: list[str] = []        # kept for non-Windows compat
-        self._interface_dns_map: dict = {}         # iface → original DNS list
+        self._interface_dns_map: dict = {}         # iface -> original DNS list
         self._active = False
         self._os = platform.system()
 
-    # ── Internal helpers ──────────────────────────────────────────────────────
+    # --- Internal helpers ---
 
     @staticmethod
     def _run(cmd: list[str], timeout: int = 6) -> tuple[bool, str]:
@@ -637,7 +637,7 @@ class DNSSwitcher:
         except OSError:
             return ["auto"]
 
-    # ── Public API ────────────────────────────────────────────────────────────
+    # --- Public API ---
 
     def activate(self) -> bool:
         """
@@ -710,7 +710,7 @@ class DNSSwitcher:
     def restore(self) -> bool:
         """
         Restore DNS to what it was before activate() was called.
-        Safe to call multiple times — only acts if _active is True.
+        Safe to call multiple times - only acts if _active is True.
         """
         if not self._active:
             return True
@@ -790,7 +790,7 @@ class HostsFileManager:
     DNS query on every platform.
 
     Writes a clearly-marked block between HOSTS_MARKER_START / HOSTS_MARKER_END.
-    restore() removes only that block — the rest of the file is untouched.
+    restore() removes only that block - the rest of the file is untouched.
     """
 
     def __init__(self):
@@ -806,7 +806,7 @@ class HostsFileManager:
         Calls restore() first to avoid duplicate entries.
         Returns the number of domains written.
         """
-        self.restore()  # idempotent — remove any leftover block first
+        self.restore()  # idempotent - remove any leftover block first
 
         lines = [HOSTS_MARKER_START + "\n"]
         for domain in domains:
@@ -869,20 +869,20 @@ class HostsFileManager:
             return False
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 # NEW FEATURE 2: REST API LOG SERVER
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 # Starts a lightweight HTTP server on localhost:8080 in a background thread.
 # Exposes SQLite event data as JSON so a web dashboard or mobile app can
 # consume it without reading the database file directly.
 #
 # Endpoints:
-#   GET /alerts              → last 24h tracking alerts as JSON array
-#   GET /alerts?hours=N      → last N hours
-#   GET /alerts?limit=N      → cap at N records
-#   GET /stats               → summary counts
-#   GET /health              → {"status": "ok"}
-# ─────────────────────────────────────────────────────────────────────────────
+#   GET /alerts              -> last 24h tracking alerts as JSON array
+#   GET /alerts?hours=N      -> last N hours
+#   GET /alerts?limit=N      -> cap at N records
+#   GET /stats               -> summary counts
+#   GET /health              -> {"status": "ok"}
+# ---
 
 class _AlertAPIHandler(BaseHTTPRequestHandler):
     """
@@ -995,7 +995,7 @@ class _AlertAPIHandler(BaseHTTPRequestHandler):
             self._send_json({"count": len(events), "events": events})
 
         elif path == "/stream":
-            # Server-Sent Events — push each new log event to connected dashboards
+            # Server-Sent Events - push each new log event to connected dashboards
             log: EventLog = self.server.event_log  # type: ignore[attr-defined]
             q = log.sse_subscribe()
             try:
@@ -1075,17 +1075,17 @@ class AlertAPIServer:
             self._server.shutdown()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 # FEATURE: TRACKING PARAMETER PROXY
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 # Local HTTP proxy on port 8889.
-# - Strips known tracking query parameters (utm_*, fbclid, gclid, …) from URLs
+# - Strips known tracking query parameters (utm_*, fbclid, gclid, ...) from URLs
 # - Injects DNT: 1 and Sec-GPC: 1 privacy headers on every outbound request
-# - HTTPS (CONNECT): tunnelled transparently — TLS cannot be decrypted without
+# - HTTPS (CONNECT): tunnelled transparently - TLS cannot be decrypted without
 #   a MITM certificate, so params inside HTTPS URLs pass through unchanged
 # Configured as the Windows system HTTP proxy via netsh winhttp on Shield start;
 # restored to direct access on Shield exit.
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 
 import http.client as _http_client
 
@@ -1096,7 +1096,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass  # suppress access log noise
 
-    # ── HTTPS pass-through ────────────────────────────────────────────────────
+    # --- HTTPS pass-through ---
 
     def do_CONNECT(self):
         """Tunnel HTTPS connections transparently (no MITM)."""
@@ -1125,7 +1125,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
-    # ── HTTP request cleaning ─────────────────────────────────────────────────
+    # --- HTTP request cleaning ---
 
     def _clean_url(self, url: str) -> str:
         """Remove tracking query parameters from url, preserve the rest."""
@@ -1147,7 +1147,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             if parsed.query:
                 path += "?" + parsed.query
 
-            # Build outbound headers — inject privacy signals, drop hop-by-hop
+            # Build outbound headers - inject privacy signals, drop hop-by-hop
             skip = {"proxy-connection", "keep-alive", "te", "trailers",
                     "transfer-encoding", "upgrade"}
             headers = {k: v for k, v in self.headers.items()
@@ -1244,20 +1244,20 @@ class TrackingParamProxy:
             pass
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 # NEW FEATURE 3: LAN DEVICE IDENTIFIER (ARP + DHCP LEASE READER)
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 # Upgrades the scanner from a single-machine view to a full-network view.
 # Instead of only seeing connections on the machine running the script,
 # this module reads the OS ARP table and common DHCP lease files to build
-# a map of every device on the LAN: IP → {hostname, MAC, vendor}.
+# a map of every device on the LAN: IP -> {hostname, MAC, vendor}.
 #
 # When a blocklist hit is detected via DNS, the sinkhole can use this map
 # to say "it was the Samsung TV (192.168.1.42)" not just an IP address.
 #
 # In production (on real hardware): replace ARP table with pcap/dnslib
 # DNS query source IP parsing so the hardware box sees true per-device traffic.
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 
 @dataclass
 class LANDevice:
@@ -1265,7 +1265,7 @@ class LANDevice:
     ip: str
     mac: str
     hostname: str = "unknown"
-    vendor: str   = "unknown"   # OUI lookup — populated if oui.txt is available
+    vendor: str   = "unknown"   # OUI lookup - populated if oui.txt is available
     last_seen: str = ""
 
 
@@ -1274,7 +1274,7 @@ class LANMapper:
     Builds and maintains a map of LAN devices using:
       1. OS ARP table    (arp -a / ip neigh)
       2. DHCP lease files (/var/lib/dhcp/dhcpd.leases, dnsmasq leases, etc.)
-      3. OUI vendor lookup (optional — reads oui.txt if present next to script)
+      3. OUI vendor lookup (optional - reads oui.txt if present next to script)
 
     This gives the DNS sinkhole the ability to log WHICH device made a
     blocked DNS query, not just that something on the network did.
@@ -1290,9 +1290,9 @@ class LANMapper:
     ]
 
     def __init__(self):
-        self._devices: dict[str, LANDevice] = {}   # IP → LANDevice
+        self._devices: dict[str, LANDevice] = {}   # IP -> LANDevice
         self._lock = threading.Lock()
-        self._oui: dict[str, str] = {}             # first 6 hex chars → vendor name
+        self._oui: dict[str, str] = {}             # first 6 hex chars -> vendor name
         self._load_oui()
 
     def _load_oui(self):
@@ -1320,7 +1320,7 @@ class LANMapper:
         prefix = mac.replace(":", "").replace("-", "").lower()[:6]
         return self._oui.get(prefix, "unknown")
 
-    # ── ARP table parsing ─────────────────────────────────────────────────────
+    # --- ARP table parsing ---
 
     def _parse_arp_windows(self) -> list[LANDevice]:
         try:
@@ -1399,7 +1399,7 @@ class LANMapper:
 
         return devices
 
-    # ── DHCP lease parsing ────────────────────────────────────────────────────
+    # --- DHCP lease parsing ---
 
     def _parse_dhcp_leases(self) -> list[LANDevice]:
         """
@@ -1454,12 +1454,12 @@ class LANMapper:
 
         return devices
 
-    # ── Public API ────────────────────────────────────────────────────────────
+    # --- Public API ---
 
     def refresh(self):
         """
         Re-scan the ARP table and DHCP leases, update the internal device map.
-        Thread-safe — can be called from a background thread.
+        Thread-safe - can be called from a background thread.
         """
         fresh: dict[str, LANDevice] = {}
 
@@ -1522,9 +1522,9 @@ def _format_lan_device(dev: Optional[LANDevice]) -> str:
     return "  ".join(parts)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 # SECTION 1: ANSI COLORS
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 
 class Color:
     RED     = "\033[91m"
@@ -1537,9 +1537,9 @@ class Color:
     RESET   = "\033[0m"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 # SECTION 2: BLOCKLIST DATABASE
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 
 class ThreatCategory(Enum):
     TELEMETRY      = "TELEMETRY"
@@ -1555,7 +1555,7 @@ class BlocklistEntry:
     domain: str
     category: ThreatCategory
     description: str
-    severity: int  # 1–5
+    severity: int  # 1-5
     source: str = "curated"
 
 
@@ -1595,7 +1595,7 @@ class BlocklistDB:
         BlocklistEntry("analytics.yahoo.com",             ThreatCategory.CORPORATE_SPY,  "Yahoo Analytics tracking",                 3),
         BlocklistEntry("update.mykings.pw",               ThreatCategory.MALWARE_C2,     "MyKings botnet C2",                        5),
         BlocklistEntry("dl.installcdn-pub.com",           ThreatCategory.MALWARE_C2,     "Malicious installer CDN",                  5),
-        # ── Additional telemetry (apps) ──────────────────────────────────────
+        # --- Additional telemetry (apps) ---
         BlocklistEntry("spclient.wg.spotify.com",         ThreatCategory.TELEMETRY,      "Spotify client telemetry pipeline",        4),
         BlocklistEntry("audio2.spotify.com",              ThreatCategory.TELEMETRY,      "Spotify metrics and analytics",            3),
         BlocklistEntry("telemetry.steam.a.akamaihd.net",  ThreatCategory.TELEMETRY,      "Steam hardware survey telemetry",          4),
@@ -1608,7 +1608,7 @@ class BlocklistDB:
         BlocklistEntry("diagnostics.apple.com",           ThreatCategory.TELEMETRY,      "Apple device diagnostics reporting",       4),
         BlocklistEntry("telemetry.razer.com",             ThreatCategory.TELEMETRY,      "Razer Synapse telemetry",                  3),
         BlocklistEntry("discordapp.com",                  ThreatCategory.TELEMETRY,      "Discord legacy analytics/tracking SDK",    3),
-        # ── Additional ad trackers ────────────────────────────────────────────
+        # --- Additional ad trackers ---
         BlocklistEntry("pixel.facebook.com",              ThreatCategory.AD_TRACKER,     "Meta pixel conversion tracker",            5),
         BlocklistEntry("an.facebook.com",                 ThreatCategory.AD_TRACKER,     "Facebook Audience Network",                4),
         BlocklistEntry("graph.facebook.com",              ThreatCategory.AD_TRACKER,     "Meta Graph API ad tracking",              4),
@@ -1623,22 +1623,22 @@ class BlocklistDB:
         BlocklistEntry("px.ads.linkedin.com",             ThreatCategory.AD_TRACKER,     "LinkedIn pixel tracker",                   4),
         BlocklistEntry("sc-static.net",                   ThreatCategory.AD_TRACKER,     "Snapchat static ad assets tracker",        3),
         BlocklistEntry("tr.snapchat.com",                 ThreatCategory.AD_TRACKER,     "Snapchat tracking pixel",                  4),
-        # ── Additional corporate spy / session analytics ───────────────────────
+        # --- Additional corporate spy / session analytics ---
         BlocklistEntry("api.segment.io",                  ThreatCategory.CORPORATE_SPY,  "Segment.io event analytics (100s of apps)",5),
         BlocklistEntry("cdn.segment.com",                 ThreatCategory.CORPORATE_SPY,  "Segment.io analytics CDN",                 4),
         BlocklistEntry("logx.optimizely.com",             ThreatCategory.CORPORATE_SPY,  "Optimizely A/B testing tracker",           3),
         BlocklistEntry("datadome.co",                     ThreatCategory.CORPORATE_SPY,  "DataDome behavior profiling",              3),
         BlocklistEntry("bat.bing.com",                    ThreatCategory.CORPORATE_SPY,  "Microsoft Bing Ads conversion tracker",    4),
-        # ── Additional fingerprinting ─────────────────────────────────────────
+        # --- Additional fingerprinting ---
         BlocklistEntry("tags.tiqcdn.com",                 ThreatCategory.FINGERPRINTING, "Tealium tag management fingerprinting",    4),
         BlocklistEntry("tiqcdn.com",                      ThreatCategory.FINGERPRINTING, "Tealium Universal Tag",                    4),
         BlocklistEntry("collector.github.com",            ThreatCategory.FINGERPRINTING, "GitHub analytics collector",               3),
-        # ── Additional data brokers ───────────────────────────────────────────
+        # --- Additional data brokers ---
         BlocklistEntry("hb.yahoo.com",                    ThreatCategory.DATA_BROKER,    "Yahoo header bidding data profile builder",4),
         BlocklistEntry("prebid.a9.com",                   ThreatCategory.DATA_BROKER,    "Amazon A9 header bidding profiler",        4),
         BlocklistEntry("aax.amazon-adsystem.com",         ThreatCategory.DATA_BROKER,    "Amazon DSP data collection",               4),
         BlocklistEntry("s.amazon-adsystem.com",           ThreatCategory.DATA_BROKER,    "Amazon ad system tracker",                 3),
-        # ── Fingerprinting services ───────────────────────────────────────────
+        # --- Fingerprinting services ---
         BlocklistEntry("fpjs.io",                         ThreatCategory.FINGERPRINTING, "FingerprintJS Pro CDN",                    5),
         BlocklistEntry("fingerprint.com",                 ThreatCategory.FINGERPRINTING, "FingerprintJS SaaS platform",              5),
         BlocklistEntry("deviceatlas.com",                 ThreatCategory.FINGERPRINTING, "DeviceAtlas device ID fingerprinting",     5),
@@ -1648,7 +1648,7 @@ class BlocklistDB:
         BlocklistEntry("appsflyer.com",                   ThreatCategory.FINGERPRINTING, "AppsFlyer attribution SDK",                5),
         BlocklistEntry("adjust.com",                      ThreatCategory.FINGERPRINTING, "Adjust mobile attribution SDK",            5),
         BlocklistEntry("branch.io",                       ThreatCategory.FINGERPRINTING, "Branch deep-link tracking",                5),
-        # ── Session recording / heatmaps ──────────────────────────────────────
+        # --- Session recording / heatmaps ---
         BlocklistEntry("sessioncam.com",                  ThreatCategory.FINGERPRINTING, "SessionCam session recording",             5),
         BlocklistEntry("smartlook.com",                   ThreatCategory.FINGERPRINTING, "Smartlook session recording",              5),
         BlocklistEntry("inspectlet.com",                  ThreatCategory.FINGERPRINTING, "Inspectlet session recording",             5),
@@ -1656,7 +1656,7 @@ class BlocklistDB:
         BlocklistEntry("crazyegg.com",                    ThreatCategory.FINGERPRINTING, "Crazy Egg heatmap + session replay",       5),
         BlocklistEntry("mouseflow.com",                   ThreatCategory.FINGERPRINTING, "Mouseflow session recording",              5),
         BlocklistEntry("luckyorange.com",                 ThreatCategory.FINGERPRINTING, "Lucky Orange session recording",           5),
-        # ── Data brokers / audience profiling ─────────────────────────────────
+        # --- Data brokers / audience profiling ---
         BlocklistEntry("liveramp.com",                    ThreatCategory.DATA_BROKER,    "LiveRamp identity graph",                  5),
         BlocklistEntry("liveramp.net",                    ThreatCategory.DATA_BROKER,    "LiveRamp CDN",                             5),
         BlocklistEntry("rlcdn.com",                       ThreatCategory.DATA_BROKER,    "LiveRamp tracking pixel CDN",              5),
@@ -1667,7 +1667,7 @@ class BlocklistDB:
         BlocklistEntry("bluekai.com",                     ThreatCategory.DATA_BROKER,    "Oracle BlueKai DMP",                       5),
         BlocklistEntry("krxd.net",                        ThreatCategory.DATA_BROKER,    "Salesforce Krux DMP",                      5),
         BlocklistEntry("demdex.net",                      ThreatCategory.DATA_BROKER,    "Adobe Audience Manager DMP",               5),
-        # ── Ad exchanges / SSPs ───────────────────────────────────────────────
+        # --- Ad exchanges / SSPs ---
         BlocklistEntry("adnxs.com",                       ThreatCategory.AD_TRACKER,     "AppNexus/Xandr ad exchange",               5),
         BlocklistEntry("openx.net",                       ThreatCategory.AD_TRACKER,     "OpenX ad exchange",                        5),
         BlocklistEntry("rubiconproject.com",              ThreatCategory.AD_TRACKER,     "Rubicon/Magnite SSP",                      5),
@@ -1675,7 +1675,7 @@ class BlocklistDB:
         BlocklistEntry("casalemedia.com",                 ThreatCategory.AD_TRACKER,     "Index Exchange SSP",                       5),
         BlocklistEntry("33across.com",                    ThreatCategory.AD_TRACKER,     "33Across ad exchange",                     4),
         BlocklistEntry("tribalfusion.com",                ThreatCategory.AD_TRACKER,     "Exponential/Tribal Fusion ad network",     4),
-        # ── Affiliate / attribution tracking ──────────────────────────────────
+        # --- Affiliate / attribution tracking ---
         BlocklistEntry("everestjs.net",                   ThreatCategory.AD_TRACKER,     "Commission Junction pixel",                4),
         BlocklistEntry("tradedoubler.com",                ThreatCategory.AD_TRACKER,     "TradeDoubler affiliate tracking",          4),
         BlocklistEntry("awin1.com",                       ThreatCategory.AD_TRACKER,     "Awin affiliate tracking",                  4),
@@ -1765,12 +1765,12 @@ class BlocklistDB:
         return self._imported_count
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 # SECTION 2b: ALERTS (tracking / data-collection notifications)
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 
 class AlertState:
-    """Dedupe alerts — same domain won't spam within cooldown window."""
+    """Dedupe alerts - same domain won't spam within cooldown window."""
 
     def __init__(self, cooldown_sec: float = ALERT_COOLDOWN_SEC):
         self._cooldown = cooldown_sec
@@ -1828,9 +1828,9 @@ class Notifier:
             except (OSError, subprocess.TimeoutExpired):
                 pass
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 # SECTION 3: EVENT LOG (SQLite)
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 
 class EventLog:
     """Local SQLite log for detected and blocked events."""
@@ -1964,11 +1964,11 @@ class EventLog:
         return [dict(r) for r in rows]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 # SECTION 4: DNS SINKHOLE
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 
-_DOT_FALLBACK_UPSTREAM = "8.8.8.8"  # plain UDP fallback — always accepts queries, firewall only blocks TCP:443/853
+_DOT_FALLBACK_UPSTREAM = "8.8.8.8"  # plain UDP fallback - always accepts queries, firewall only blocks TCP:443/853
 
 
 def _is_cdn_whitelisted(qname: str) -> bool:
@@ -1983,7 +1983,7 @@ class _DoTSession:
     """
     Persistent DNS-over-TLS connection (RFC 7858).
 
-    Establishes one TLS connection and reuses it across queries — eliminates
+    Establishes one TLS connection and reuses it across queries - eliminates
     the per-query TLS handshake overhead (~300ms) that caused browsers to timeout.
     Reconnects automatically if the connection drops.
     Thread-safe via a per-instance lock.
@@ -2049,7 +2049,7 @@ class _DoTSession:
 
 
 class ValkyrieDNSResolver(BaseResolver):
-    """dnslib resolver: blocklist hit → 0.0.0.0/::, else forward upstream via DoT."""
+    """dnslib resolver: blocklist hit -> 0.0.0.0/::, else forward upstream via DoT."""
 
     def __init__(self, blocklist: BlocklistDB, upstream: str, event_log: EventLog):
         self._blocklist = blocklist
@@ -2064,7 +2064,7 @@ class ValkyrieDNSResolver(BaseResolver):
         qname = str(request.q.qname).rstrip(".")
         hit = self._blocklist.lookup(qname)
         if hit and _is_cdn_whitelisted(qname):
-            hit = None  # CDN/media domain — always allow even if in blocklist
+            hit = None  # CDN/media domain - always allow even if in blocklist
 
         if hit:
             self.blocked_total += 1
@@ -2095,7 +2095,7 @@ class ValkyrieDNSResolver(BaseResolver):
             raw = self._dot.query(request)
             return DNSRecord.parse(raw)
         except (OSError, ssl.SSLError):
-            # DoT failed — fall back to plain UDP on a reliable public resolver
+            # DoT failed - fall back to plain UDP on a reliable public resolver
             try:
                 upstream_reply = request.send(_DOT_FALLBACK_UPSTREAM, 53, timeout=3)
                 return DNSRecord.parse(upstream_reply)
@@ -2218,9 +2218,9 @@ class DNSMonitor:
         return self._resolver.alert_total, self._resolver.query_total
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 # SECTION 5: LIVE CONNECTION SCANNER
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 
 @dataclass
 class LiveConnection:
@@ -2329,9 +2329,9 @@ def group_by_app(connections: list[LiveConnection]) -> list[AppReport]:
     return reports
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 # SECTION 6: WI-FI SIGNAL CHECKER
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 
 @dataclass
 class WiFiInfo:
@@ -2491,7 +2491,7 @@ class WiFiGuard:
 
     Note: when Shield mode is active, OS DNS already points to Valkyrie's
     sinkhole (127.0.0.1), which forwards to 8.8.8.8. The canary check then
-    tests whether upstream (8.8.8.8) returns the right answer — a rogue AP
+    tests whether upstream (8.8.8.8) returns the right answer - a rogue AP
     intercepting DNS before it reaches Valkyrie would still be detected if
     the sinkhole is unreachable, but once Shield is running the sinkhole
     itself neutralises local DNS hijacking.
@@ -2522,7 +2522,7 @@ class WiFiGuard:
             try:
                 actual = socket.gethostbyname(domain)
             except (socket.gaierror, OSError):
-                continue  # transient — don't alarm on single failure
+                continue  # transient - don't alarm on single failure
             if expected_ip is not None:
                 if actual != expected_ip:
                     failures.append(
@@ -2597,9 +2597,9 @@ class WiFiGuard:
             return self._last_status
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 # SECTION 7: CONSOLE OUTPUT
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 
 class Console:
 
@@ -2768,9 +2768,9 @@ class Console:
         print()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 # SECTION 8: COMMANDS
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
 
 def flush_dns_cache() -> bool:
     """
@@ -2873,7 +2873,7 @@ def run_update(blocklist_dir: Path = BLOCKLIST_DIR):
             print(f"  {Color.RED}✗ Failed{Color.RESET} {url}\n     {Color.DIM}{exc}{Color.RESET}\n")
             failed.append((url, str(exc)))
 
-    # EasyPrivacy — Adblock Plus format, needs domain extraction
+    # EasyPrivacy - Adblock Plus format, needs domain extraction
     print(f"  {Color.CYAN}Downloading{Color.RESET} {EASYPRIVACY_URL}")
     try:
         req = urllib.request.Request(EASYPRIVACY_URL, headers={"User-Agent": "valkyrie-blocklist-updater/1.0"})
@@ -2942,7 +2942,7 @@ def run_scan(blocklist: BlocklistDB, event_log: EventLog, api_bind: str = "127.0
         print(f"  {Color.YELLOW}[API] Dashboard accessible on http://{api_bind}:8080 (no auth){Color.RESET}")
     api.start()
 
-    # ── Feature 3: Discover LAN devices via ARP + DHCP leases ───────────────
+    # --- Feature 3: Discover LAN devices via ARP + DHCP leases ---
     lan = LANMapper()
     lan.refresh()
     lan_devices = lan.all_devices()
@@ -2999,7 +2999,7 @@ def run_watch(blocklist: BlocklistDB, event_log: EventLog,
         sinkhole.start_background()
         console.print_dns_setup("127.0.0.1", dns_port)
 
-    # ── Active Mitigation: inject firewall rules for detected tracker IPs ────
+    # --- Active Mitigation: inject firewall rules for detected tracker IPs ---
     mitigator = FirewallMitigator(event_log)
     if sys.platform == "win32":
         print(
@@ -3013,7 +3013,7 @@ def run_watch(blocklist: BlocklistDB, event_log: EventLog,
         )
 
     # Set of connection keys that have already had a firewall rule requested
-    # this session — prevents spawning duplicate mitigation threads for the
+    # this session - prevents spawning duplicate mitigation threads for the
     # same (ip, port, pid) tuple on every poll tick.
     mitigated: set[tuple] = set()
 
@@ -3044,7 +3044,7 @@ def run_watch(blocklist: BlocklistDB, event_log: EventLog,
             for conn in connections:
                 key = conn.key()  # (remote_ip, remote_port, pid)
 
-                # ── First-seen: log to SQLite + console ─────────────────────
+                # --- First-seen: log to SQLite + console ---
                 if key not in seen:
                     seen.add(key)
                     if conn.blocklist_hit:
@@ -3059,7 +3059,7 @@ def run_watch(blocklist: BlocklistDB, event_log: EventLog,
                         )
                         console.alert_new_tracker(conn)
 
-                # ── Active mitigation: fire a background thread for every
+                # --- Active mitigation: fire a background thread for every
                 #    ESTABLISHED blocklist-hit not yet mitigated this session.
                 #    Threading is mandatory so the subprocess call does not
                 #    stall the scan loop waiting for netsh to return.
@@ -3101,7 +3101,7 @@ def run_watch(blocklist: BlocklistDB, event_log: EventLog,
         running = False
 
     finally:
-        # ── Graceful cleanup: remove all dynamic firewall rules ──────────────
+        # --- Graceful cleanup: remove all dynamic firewall rules ---
         print(f"\n  {Color.CYAN}[WATCH] Shutting down — cleaning up firewall rules...{Color.RESET}")
         mitigator.cleanup_all_rules()
 
@@ -3122,20 +3122,20 @@ def run_dns(blocklist: BlocklistDB, event_log: EventLog, port: int = DEFAULT_DNS
     console.banner()
     console.print_blocklist_info(blocklist)
 
-    # ── Flush stale OS DNS cache before sinkhole starts ──────────────────────
+    # --- Flush stale OS DNS cache before sinkhole starts ---
     flush_dns_cache()
 
-    # ── Feature 1: Auto-switch OS DNS to 127.0.0.1 on ALL interfaces ────────
+    # --- Feature 1: Auto-switch OS DNS to 127.0.0.1 on ALL interfaces ---
     dns_switcher = DNSSwitcher()
     dns_switcher.activate()
 
-    # ── Feature 2: Start REST API so dashboards can read blocked DNS events ──
+    # --- Feature 2: Start REST API so dashboards can read blocked DNS events ---
     api = AlertAPIServer(event_log, host=api_bind)
     if api_bind != "127.0.0.1":
         print(f"  {Color.YELLOW}[API] Dashboard accessible on http://{api_bind}:8080 (no auth){Color.RESET}")
     api.start()
 
-    # ── Feature 3: Start background LAN mapper ───────────────────────────────
+    # --- Feature 3: Start background LAN mapper ---
     lan = LANMapper()
     lan.start_background_refresh()
 
@@ -3166,20 +3166,20 @@ def run_monitor(blocklist: BlocklistDB, event_log: EventLog,
     console.print_blocklist_info(blocklist)
     print(f"  {Color.DIM}Mode: notify on trackers/data collection — does NOT block{Color.RESET}")
 
-    # ── Flush stale OS DNS cache before sinkhole starts ──────────────────────
+    # --- Flush stale OS DNS cache before sinkhole starts ---
     flush_dns_cache()
 
-    # ── Feature 1: Auto-switch OS DNS to 127.0.0.1 on ALL interfaces ────────
+    # --- Feature 1: Auto-switch OS DNS to 127.0.0.1 on ALL interfaces ---
     dns_switcher = DNSSwitcher()
     dns_switcher.activate()
 
-    # ── Feature 2: REST API so a dashboard can poll /alerts in real time ─────
+    # --- Feature 2: REST API so a dashboard can poll /alerts in real time ---
     api = AlertAPIServer(event_log, host=api_bind)
     if api_bind != "127.0.0.1":
         print(f"  {Color.YELLOW}[API] Dashboard accessible on http://{api_bind}:8080 (no auth){Color.RESET}")
     api.start()
 
-    # ── Feature 3: LAN mapper — identify which device triggered each alert ───
+    # --- Feature 3: LAN mapper - identify which device triggered each alert ---
     lan = LANMapper()
     lan.start_background_refresh()
 
@@ -3250,14 +3250,14 @@ def run_shield(blocklist: BlocklistDB, event_log: EventLog,
     console.print_blocklist_info(blocklist)
     print(f"  {Color.CYAN}Mode: SHIELD — DNS sinkhole + firewall injection + WiFi guard{Color.RESET}\n")
 
-    # ── Flush stale OS DNS cache before sinkhole takes over ──────────────────
+    # --- Flush stale OS DNS cache before sinkhole takes over ---
     flush_dns_cache()
 
-    # ── Layer 1: Switch OS DNS → local sinkhole on ALL interfaces ───────────
+    # --- Layer 1: Switch OS DNS -> local sinkhole on ALL interfaces ---
     dns_switcher = DNSSwitcher()
     dns_switcher.activate()
 
-    # ── Layer 1.5: Hosts file — secondary DNS bypass barrier ────────────────
+    # --- Layer 1.5: Hosts file - secondary DNS bypass barrier ---
     hosts_mgr = HostsFileManager()
     high_value_domains = [
         d for d, e in blocklist._index.items()
@@ -3265,17 +3265,17 @@ def run_shield(blocklist: BlocklistDB, event_log: EventLog,
     ]
     hosts_mgr.inject(high_value_domains)
 
-    # ── Layer 2: Start DNS sinkhole in background (auto-restart on failure) ──
+    # --- Layer 2: Start DNS sinkhole in background (auto-restart on failure) ---
     alert_state = AlertState()
     dns_sinkhole = DNSSinkhole(blocklist, event_log, port=dns_port)
     dns_sinkhole.start_background()
     console.print_dns_setup("127.0.0.1", dns_port)
 
-    # ── Layer 3: Firewall — DoH block + proactive IP preload ────────────────
+    # --- Layer 3: Firewall - DoH block + proactive IP preload ---
     firewall = FirewallMitigator(event_log)
     if sys.platform == "win32":
         firewall.block_doh_providers()
-        # Resolve curated domains and pre-inject rules (background — non-blocking)
+        # Resolve curated domains and pre-inject rules (background - non-blocking)
         curated_domains = [
             d for d, e in blocklist._index.items()
             if getattr(e, "source", "") == "curated"
@@ -3287,15 +3287,15 @@ def run_shield(blocklist: BlocklistDB, event_log: EventLog,
             name="valkyrie-preload",
         ).start()
 
-    # ── Layer 4: Connection scanner ──────────────────────────────────────────
+    # --- Layer 4: Connection scanner ---
     scanner = LiveScanner(blocklist)
     wifi_guard = WiFiGuard(event_log)
 
-    # ── Layer 5: Alert API so the UI can poll /alerts ────────────────────────
+    # --- Layer 5: Alert API so the UI can poll /alerts ---
     api = AlertAPIServer(event_log, host=api_bind)
     api.start()
 
-    # ── Layer 6: Tracking parameter proxy ────────────────────────────────────
+    # --- Layer 6: Tracking parameter proxy ---
     proxy = TrackingParamProxy()
     proxy.start()
     if sys.platform == "win32":
@@ -3365,9 +3365,9 @@ def run_shield(blocklist: BlocklistDB, event_log: EventLog,
                     conn.process_name,
                 )
 
-            # WiFi guard every 5 minutes (10 × 30s ticks)
+            # WiFi guard every 5 minutes (10 x 30s ticks)
             wifi_tick += 1
-            if wifi_tick % 60 == 0:  # every 60 × 5s = 5 minutes
+            if wifi_tick % 60 == 0:  # every 60 x 5s = 5 minutes
                 try:
                     wifi_status = wifi_guard.check()
                     if wifi_status.warnings:
@@ -3396,7 +3396,7 @@ def run_shield(blocklist: BlocklistDB, event_log: EventLog,
 
 
 def run_wifi_check(event_log: EventLog):
-    """One-shot WiFi security check — prints JSON to stdout."""
+    """One-shot WiFi security check - prints JSON to stdout."""
     guard = WiFiGuard(event_log)
     status = guard.check()
     import json

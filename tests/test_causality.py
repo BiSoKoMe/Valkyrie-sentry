@@ -24,6 +24,10 @@ other layers already raised.
   [9] Cycle guards: corrupt ppid data terminates both walks
  [10] Engine end-to-end: benign ancestry is recorded below the alert gate, and
       a detection is stamped with its causality owner
+ [11] attribute_causality(): the public entry a sensor outside the telemetry
+      pipeline (Nyx's TLS interception, ADR 0057) uses to attach an
+      observation to the process that caused it - and the honest drop when
+      the process is unresolvable
 """
 
 from __future__ import annotations
@@ -351,6 +355,28 @@ def main() -> int:
                == "winword.exe -> cmd.exe -> powershell.exe")
         _check("the stamp records whether ancestry was guessed",
                stamped is not None and stamped.get("inferred") is False)
+
+        # ------------------------------------------------------------------
+        print("\n[11] attribute_causality() - the Nyx entry point (ADR 0057)")
+        # cmd.exe (pid 30) is already a live node from section [10] above.
+        ok = engine.attribute_causality(
+            30, "nyx_leak", "example.test sent your device identifier to "
+                            "an unrelated server (tracker.example)",
+            data={"category": "identifier",
+                  "destination_host": "tracker.example"})
+        _check("a resolvable pid attributes successfully", ok is True)
+        sg2 = engine.causality_subgraph(30)
+        _check("the Nyx observation appears as an artifact on that process",
+               any(a["kind"] == "nyx_leak" and "tracker.example" in a["summary"]
+                   for a in sg2["artifacts"]))
+        _check("attaching a Nyx leak raised no incident of its own",
+               len(engine.list_incidents()) == len(incs))
+
+        # The honest-drop case: a pid the graph has never seen, and no name
+        # supplied to create a node from - same rule section [6] already
+        # proved for the process/network telemetry path.
+        not_ok = engine.attribute_causality(999999, "nyx_leak", "unattached")
+        _check("an unresolvable pid is dropped, not guessed", not_ok is False)
 
         engine.stop()
         store.stop()

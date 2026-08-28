@@ -1,13 +1,13 @@
 'use strict';
 /* =========================================================================
-   command-index.js — pure ranking/grouping logic for the command palette
+   command-index.js - pure ranking/grouping logic for the command palette
    (Ctrl+K). Decoupled from the DOM so scoring behavior is unit testable,
    same pattern as view-state.js. Loaded as a classic <script> before app.js
    (no bundler, CSP is script-src 'self') and dual-exported for Node tests.
 
    A "command" here is a plain object the caller controls:
      { id, group, label, hint, keywords: [...] , ...anything else (e.g. run) }
-   This module never invokes anything — it only decides what matches and in
+   This module never invokes anything - it only decides what matches and in
    what order, so it has no opinion on what a command *does*.
    ========================================================================= */
 

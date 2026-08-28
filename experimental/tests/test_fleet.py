@@ -1,7 +1,7 @@
 """Tests for the fleet control plane (valkyrie/fleet/).
 
 Covers the security-critical logic directly on FleetController (no HTTP), then
-— if fastapi's TestClient is importable — the same paths through the real app.
+- if fastapi's TestClient is importable - the same paths through the real app.
 
 Locks in:
   - enrollment requires the pre-shared enroll token (fail closed);
@@ -59,7 +59,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     store, ctl = _fresh_controller(tmp)
     _open_stores.append(store)
 
-    # ── Token primitives ──────────────────────────────────────────────────
+    # --- Token primitives ---
     print("\n-- Token primitives ----------------------------------")
     t = new_device_token()
     check("token has real entropy (>=32 chars)", len(t) >= 32)
@@ -68,7 +68,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     check("tokens_equal true for match", tokens_equal("abc", "abc"))
     check("tokens_equal false for mismatch", not tokens_equal("abc", "abd"))
 
-    # ── Enrollment auth ───────────────────────────────────────────────────
+    # --- Enrollment auth ---
     print("\n-- Enrollment ----------------------------------------")
     try:
         ctl.enroll(EnrollmentRequest(enroll_token="wrong", label="pc1"))
@@ -89,7 +89,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     check("device public view never exposes token_hash",
           "token_hash" not in dev_public and "device_token" not in dev_public)
 
-    # ── Enrollment disabled when server has no token (fail closed) ─────────
+    # --- Enrollment disabled when server has no token (fail closed) ---
     store2 = FleetStore(Path(tmp) / "fleet2.db")
     _open_stores.append(store2)
     ctl_notoken = FleetController(store2, enroll_token="")
@@ -99,7 +99,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     except AuthError:
         check("enrollment fails closed when server has no token", True)
 
-    # ── Heartbeat auth ────────────────────────────────────────────────────
+    # --- Heartbeat auth ---
     print("\n-- Heartbeat auth ------------------------------------")
     hb = Heartbeat(counts={"blocked": 12, "allowed": 300, "flagged": 4},
                    categories={"tracker": 10, "malware": 2},
@@ -120,7 +120,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     reply = ctl.heartbeat(res.device_id, res.device_token, hb)
     check("valid heartbeat accepted", reply.get("ok") is True)
 
-    # ── Privacy invariant: domains never survive into stored status ───────
+    # --- Privacy invariant: domains never survive into stored status ---
     print("\n-- Privacy invariant ---------------------------------")
     leaky = Heartbeat.from_dict({
         "counts": {"blocked": 5},
@@ -138,7 +138,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     check("stored status keeps only counts/categories/components",
           set(stored.keys()) <= {"counts", "categories", "components"})
 
-    # ── Fleet views ───────────────────────────────────────────────────────
+    # --- Fleet views ---
     print("\n-- Fleet views ---------------------------------------")
     res2 = ctl.enroll(EnrollmentRequest(enroll_token=ENROLL, label="pc2"))
     devices = ctl.list_devices()
@@ -152,7 +152,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     check("summary online count is 1", summary["devices_online"] == 1)
     check("summary aggregates blocked from last heartbeat", summary["blocked_24h"] == 5)
 
-    # ── HTTP round-trip (optional — needs fastapi TestClient) ─────────────
+    # --- HTTP round-trip (optional - needs fastapi TestClient) ---
     print("\n-- HTTP layer (optional) -----------------------------")
     try:
         from fastapi.testclient import TestClient

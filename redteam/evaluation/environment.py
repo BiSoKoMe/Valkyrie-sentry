@@ -2,13 +2,13 @@
 
 This used to be its own probe implementation. It moved to
 `valkyrie/sysmon_manager.py` (2026-08-05, ADR 0048) because Sysmon presence
-is no longer only an evaluation-time concern — the shipped product now
+is no longer only an evaluation-time concern - the shipped product now
 depends on the same fact at startup (to decide whether it is running
 degraded) and at runtime (to detect the sensor tampering this exact probe
 was extended to catch). Re-exporting here means the red-team evaluation
 scores Tier A against the SAME probe the product uses to make real
 decisions, instead of a second implementation that could silently drift
-from it — precisely the kind of measurement/product divergence ADR 0045 and
+from it - precisely the kind of measurement/product divergence ADR 0045 and
 ADR 0046 both found the hard way.
 
 See `valkyrie/sysmon_manager.py` for the implementation and full history:

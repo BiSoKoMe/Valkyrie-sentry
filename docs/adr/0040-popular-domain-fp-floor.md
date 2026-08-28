@@ -1,21 +1,21 @@
-# ADR 0040 — Popular-domain false-positive floor
+# ADR 0040 - Popular-domain false-positive floor
 
-Date: 2026-07-28 · Status: accepted
+Date: 2026-07-28 . Status: accepted
 
 ## Context
 
 A live DNS test on a real machine (Valkyrie installed, system DNS pointed at its
 sinkhole) found it **blocking legitimate high-traffic domains**: microsoft.com,
 bing.com, live.com, linkedin.com and paypal.com all resolved to `0.0.0.0`, while
-trackers (doubleclick, google-analytics, criteo — 8/8) were correctly blocked.
+trackers (doubleclick, google-analytics, criteo - 8/8) were correctly blocked.
 
 Root cause, confirmed from the live `intel_memory` table: an older build's weak
-**behavioural** heuristics — a per-process "query burst (N queries in 10s)" and
-"domain never seen from this process" (fired by `WmiPrvSE.exe` and the like) —
+**behavioural** heuristics - a per-process "query burst (N queries in 10s)" and
+"domain never seen from this process" (fired by `WmiPrvSE.exe` and the like) -
 scored these domains as suspicious. Because those signals reached the block
 path, the domains were **persisted as `verdict='bad'`** in intelligence memory.
 Memory is an O(1) fast path checked before the scanner/blocklist and *never
-downgrades a bad verdict*, so every subsequent lookup was sinkholed — forever.
+downgrades a bad verdict*, so every subsequent lookup was sinkholed - forever.
 The `scan_cache` in the same DB correctly labelled all of them `legitimate`; the
 learned-bad memory simply overrode it.
 
@@ -37,7 +37,7 @@ The floor is applied narrowly, at three points, and only to the *weak* paths:
   in depth if an old verdict lingers).
 - **`IntelligenceMemory.start`** SELF-HEALS: it purges any pre-existing popular
   'bad' rows from the DB on launch, so the fix takes effect the moment this build
-  runs — the user's machine repairs itself on first start, no manual cleanup.
+  runs - the user's machine repairs itself on first start, no manual cleanup.
 - **`ThreatClassifier`** downgrades a behavioural/anomaly BLOCK on a popular
   domain to a FLAG (still visible, never sinkholed).
 
@@ -60,13 +60,13 @@ does not; trackers like doubleclick.net are deliberately absent from the floor.
 
 - **It is a curated list, not a top-million.** A legit domain not on the list is
   still exposed to the same behavioural FP; the list grows as they surface. It is
-  intentionally conservative — every entry must be one nobody could call
+  intentionally conservative - every entry must be one nobody could call
   malicious.
 - **It masks, not fixes, the underlying weak signal.** The per-process
   "query burst" heuristic is a poor beacon detector (it counts a browser's
   page-load fan-out the same as C2 beaconing). The floor stops it from doing
   damage on known domains; a future change should make that signal count
   repeats of ONE domain (true beaconing) rather than per-process volume.
-- **Running service must restart/reinstall to load the fix** — the guard lives in
+- **Running service must restart/reinstall to load the fix** - the guard lives in
   the engine; the currently-running older build keeps its cached verdicts until
   then.

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Union Tier B coverage across runs — the only number that is actually honest.
+"""Union Tier B coverage across runs - the only number that is actually honest.
 
 WHY THIS EXISTS
 ---------------
 No single live run on a GitHub-hosted runner is trustworthy. Measured on the
 same config: one run reported 4/39, another 27/39. The variance is not the
-detector changing its mind — it is the *rig*:
+detector changing its mind - it is the *rig*:
 
   * the genuinely destructive atomics (service stop/RPC, Defender disable,
     event-log clear) can crash the runner mid-battery,
@@ -16,8 +16,8 @@ detector changing its mind — it is the *rig*:
 
 Every one of those failure modes UNDERCOUNTS and none of them can overcount:
 a technique is only ever recorded as detected when a matching incident was
-actually observed. So the union across runs is a *floor*, not an average —
-"we have proven Valkyrie detects at least these techniques live" — and it is
+actually observed. So the union across runs is a *floor*, not an average -
+"we have proven Valkyrie detects at least these techniques live" - and it is
 the number to quote.
 
 It reads both the final aggregate JSONs and the crash-proof `.partial.jsonl`
@@ -175,7 +175,7 @@ def collect(paths: list[str]) -> tuple[dict, dict, list[str], dict]:
                 slot["max_backpressure_drops"] = bp
             if outcome:
                 slot["outcomes"].add(outcome)
-            # First proof wins and is never downgraded — a later run that
+            # First proof wins and is never downgraded - a later run that
             # dropped the event does not un-prove an earlier real detection.
             if detected and not slot["detected"]:
                 slot["detected"] = True

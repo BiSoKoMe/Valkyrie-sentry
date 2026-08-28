@@ -1,11 +1,11 @@
-"""PHASE 1 — categorize held-out EasyPrivacy trackers into Bucket A / Bucket B.
+"""PHASE 1 - categorize held-out EasyPrivacy trackers into Bucket A / Bucket B.
 
 Bucket A: the registrable parent (eTLD+1) is a DEDICATED tracker/ad/analytics
-          domain — safe to ship in seed_blocklist.py. Fixable by widening the
+          domain - safe to ship in seed_blocklist.py. Fixable by widening the
           shipped list; no new architecture.
 Bucket B: the tracker is a subdomain of a MIXED-USE legitimate parent
-          (snapchat.com, reddit.com, …). Listing the parent would break the
-          real site — genuinely needs a context signal.
+          (snapchat.com, reddit.com, ...). Listing the parent would break the
+          real site - genuinely needs a context signal.
 
 Ground truth: every domain is confirmed by EasyPrivacy and absent from seed
 (verified here). Each is then run through the REAL pipeline in isolation
@@ -28,7 +28,10 @@ from valkyrie.site_scanner import SiteScanner
 from valkyrie.store import Store
 from test_scanner_accuracy import _FixedWatcher
 
-# (domain, rationale) — Bucket A: dedicated tracker parent
+# where the easyprivacy_*.txt inputs are read from and the rows are written
+OUT_DIR = Path(__file__).resolve().parent / "diag_out"
+
+# (domain, rationale) - Bucket A: dedicated tracker parent
 BUCKET_A = [
     ("taboolasyndication.com", "Taboola dedicated ad-syndication domain"),
     ("segmentapis.com", "Segment/Twilio CDP API ingest domain"),
@@ -77,9 +80,8 @@ BUCKET_B = [
 
 
 def load_ep():
-    scratch = '/tmp/claude-0/-home-user-Valkyrie/6c733103-2c92-531d-9622-a8c9045146af/scratchpad/'
     ep = set(); rx = re.compile(r'^\|\|([a-z0-9][a-z0-9.-]*\.[a-z]{2,})[\^/]')
-    for fn in glob.glob(scratch + 'easyprivacy_*.txt'):
+    for fn in glob.glob(str(OUT_DIR / 'easyprivacy_*.txt')):
         for line in open(fn, encoding='utf-8', errors='ignore'):
             line = line.strip()
             if line.startswith('||'):
@@ -89,7 +91,7 @@ def load_ep():
 
 
 def decide_isolated(domain):
-    """Fresh pipeline per domain — no cross-domain threat-graph contamination."""
+    """Fresh pipeline per domain - no cross-domain threat-graph contamination."""
     import psutil, dns.rdatatype
     tmp = Path(tempfile.mkdtemp())
     store = Store(db_path=tmp / "t.db"); store.start()
@@ -143,7 +145,8 @@ def main():
         print("%-36s %-2s %-8s %-6s %s" % (r["domain"], r["bucket"], r["decision"],
                                             r["score"], "Y" if r["caught"] else "MISS"))
 
-    out = Path('/tmp/claude-0/-home-user-Valkyrie/6c733103-2c92-531d-9622-a8c9045146af/scratchpad/bucket_rows.json')
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    out = OUT_DIR / 'bucket_rows.json'
     json.dump(rows, open(out, "w"), indent=2)
     print("\nsaved:", out)
 

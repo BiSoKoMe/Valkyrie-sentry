@@ -1,4 +1,4 @@
-"""FleetController — the enroll/heartbeat/list logic with no HTTP dependency.
+"""FleetController - the enroll/heartbeat/list logic with no HTTP dependency.
 
 All authentication and state transitions live here so they can be unit-tested
 directly (see tests/test_fleet.py). server.py is a thin FastAPI shell that
@@ -39,7 +39,7 @@ class FleetController:
         """enroll_token accepts either:
           - a single string (single-tenant; all devices land in org "")
           - a dict {token: org} for multi-tenant use, where the org a device
-            belongs to is decided SERVER-SIDE by which token it presented —
+            belongs to is decided SERVER-SIDE by which token it presented -
             a device can never self-select its org.
         An empty/None enroll_token disables enrollment (fail closed).
 
@@ -101,7 +101,7 @@ class FleetController:
         if stored_hash is None:
             raise AuthError("unknown device")
         # Constant-time compare of the presented token's hash against the
-        # stored hash — never compares raw tokens, never leaks timing.
+        # stored hash - never compares raw tokens, never leaks timing.
         if not tokens_equal(hash_token(device_token or ""), stored_hash):
             raise AuthError("invalid device token")
 
@@ -146,7 +146,7 @@ class FleetController:
         return d
 
     def fleet_summary(self, org: Optional[str] = None) -> dict:
-        """Aggregate rollup — the top-line the console shows. Scoped by org
+        """Aggregate rollup - the top-line the console shows. Scoped by org
         when given."""
         devices = self.list_devices(org=org)
         online = sum(1 for d in devices if d["online"])
@@ -184,7 +184,7 @@ class FleetController:
     def get_policy_for_device(self, device_id: str, device_token: str) -> Optional[dict]:
         """Agent-side: authenticate the device, then return the signed policy
         bundle for that device's org (or None if none set). The agent verifies
-        the signature again locally before applying — defence in depth."""
+        the signature again locally before applying - defence in depth."""
         self._authenticate(device_id, device_token)
         org = self._store.org_for(device_id) or ""
         raw = self._store.get_policy(org)

@@ -54,7 +54,7 @@ def _raise_404():
     raise _HttpError("404")
 
 
-# Policy signing keys — real vs attacker.
+# Policy signing keys - real vs attacker.
 priv = Ed25519PrivateKey.generate()
 pub_hex = priv.public_key().public_bytes_raw().hex()
 attacker = Ed25519PrivateKey.generate()
@@ -70,7 +70,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         policy_public_key_hex=pub_hex,
     )
 
-    # ── Multi-tenant enrollment + isolation ───────────────────────────────
+    # --- Multi-tenant enrollment + isolation ---
     print("\n-- Multi-tenant isolation ----------------------------")
     a = ctl.enroll(EnrollmentRequest(enroll_token="tok-acme", label="acme-pc"))
     g = ctl.enroll(EnrollmentRequest(enroll_token="tok-globex", label="globex-pc"))
@@ -89,7 +89,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     check("acme summary counts only acme devices",
           ctl.fleet_summary(org="acme")["devices_total"] == 1)
 
-    # ── Policy signing / verification ─────────────────────────────────────
+    # --- Policy signing / verification ---
     print("\n-- Policy signing / verification ---------------------")
     pol = Policy(version=2, block_domains=["ads.example", "track.example"],
                  allow_domains=["intranet.acme"], notes="acme baseline")
@@ -117,7 +117,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     except UpdateError:
         check("wrong-key policy rejected", True)
 
-    # ── set_policy on the controller enforces verification ────────────────
+    # --- set_policy on the controller enforces verification ---
     print("\n-- Controller set_policy gate ------------------------")
     res = ctl.set_policy("acme", signed.to_dict())
     check("valid signed policy accepted + stored", res.get("version") == 2)
@@ -134,7 +134,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     except UpdateError:
         check("no policy key -> set_policy fails closed", True)
 
-    # ── get_policy_for_device is authenticated + org-scoped ───────────────
+    # --- get_policy_for_device is authenticated + org-scoped ---
     print("\n-- Policy delivery to device -------------------------")
     try:
         ctl.get_policy_for_device(a.device_id, "wrong-token")
@@ -148,7 +148,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     check("globex device (no policy set) receives none",
           ctl.get_policy_for_device(g.device_id, g.device_token) is None)
 
-    # ── Agent apply + anti-rollback (no HTTP; drive fetch_and_apply) ───────
+    # --- Agent apply + anti-rollback (no HTTP; drive fetch_and_apply) ---
     print("\n-- Agent apply + anti-rollback -----------------------")
     applied = []
     agent = FleetAgent(
@@ -168,20 +168,20 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     check("re-fetching same v2 is a no-op (not re-applied)",
           agent.fetch_and_apply_policy() is False and applied == [2])
 
-    # Push an OLDER but validly-signed policy — must be refused (rollback).
+    # Push an OLDER but validly-signed policy - must be refused (rollback).
     old = sign_policy(Policy(version=1, block_domains=["old.example"]), priv)
     ctl.set_policy("acme", old.to_dict())
     check("older signed policy is NOT applied (anti-rollback)",
           agent.fetch_and_apply_policy() is False and applied == [2])
 
-    # Push a NEWER policy — applied.
+    # Push a NEWER policy - applied.
     newer = sign_policy(Policy(version=3, block_domains=["new.example"]), priv)
     ctl.set_policy("acme", newer.to_dict())
     check("newer signed policy IS applied", agent.fetch_and_apply_policy() is True)
     check("applier received version 3", applied == [2, 3])
 
     # A tampered bundle from the server is refused by the agent even though the
-    # server would never store it — defence in depth at the apply site.
+    # server would never store it - defence in depth at the apply site.
     agent._post = lambda path, body, auth=None: {
         "policy": {**newer.policy.to_dict(), "version": 4,
                    "block_domains": ["evil.example"]},

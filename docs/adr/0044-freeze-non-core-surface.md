@@ -1,6 +1,6 @@
-# ADR 0044 — Freeze the non-core surface (Priority 0)
+# ADR 0044 - Freeze the non-core surface (Priority 0)
 
-Date: 2026-08-04 · Status: accepted
+Date: 2026-08-04 . Status: accepted
 
 ## Context
 
@@ -11,7 +11,7 @@ still had no kernel visibility, no tamper resistance, and no validation against
 a real attack.**
 
 Stated bluntly: Valkyrie shipped a multi-device fleet control plane, a SOC 2
-evidence report generator, an AI-agent MCP server, and a two-hop VPN — and the
+evidence report generator, an AI-agent MCP server, and a two-hop VPN - and the
 agent itself could be stopped with `taskkill /f /im valkyrie.exe`.
 
 `docs/GAP_ANALYSIS.md` and the `valkyrie_competitive_position` notes had already
@@ -20,7 +20,7 @@ went. A written diagnosis that does not alter the build is not a decision.
 
 ## Decision
 
-Move — **not delete** — the non-core surface to `experimental/`:
+Move - **not delete** - the non-core surface to `experimental/`:
 
 | Moved | Why |
 |---|---|
@@ -33,7 +33,7 @@ Move — **not delete** — the non-core surface to `experimental/`:
 `git mv` was used throughout so history follows the code.
 
 **Frozen in place (not moved):** `siem.py` (well built, off by default, costs
-nothing wired — but do not extend), `edr/playbooks.py` (actively used by the
+nothing wired - but do not extend), `edr/playbooks.py` (actively used by the
 response path; all playbooks stay `dry_run` until field FP data justifies
 arming any), `edr/ai_provider.py` (off by default, explain-only, correct as
 built).
@@ -55,7 +55,7 @@ A freeze that relies on discipline decays one convenience import at a time.
 1. no module under `valkyrie/` imports from `experimental/` (all 96 core
    modules scanned);
 2. each frozen module is absent from `valkyrie/` **and** present in
-   `experimental/` — deleted-by-accident fails the same as never-moved;
+   `experimental/` - deleted-by-accident fails the same as never-moved;
 3. core still imports and exposes its entrypoint with `experimental/` absent;
 4. no CLI flag (`--fleet-*`, `--mcp`, `--setup-wireguard`, `--setup-multihop`,
    `--multihop-status`) or API route (`/api/compliance/report`,
@@ -68,7 +68,7 @@ The dependency arrow points one way. Core must remain shippable with
 
 `tests/test_edr.py` failed after the move: it imported `valkyrie.fleet.agent`
 for a privacy invariant asserting the fleet heartbeat never carries EDR
-incident domains. That coupling was itself a symptom — a core test depending on
+incident domains. That coupling was itself a symptom - a core test depending on
 the enterprise surface.
 
 Split rather than deleted: the core-relevant half (**the EDR engine has no
@@ -77,7 +77,7 @@ explicitly wired, opt-in SIEM exporter) is now asserted directly against
 `edr/engine.py`. The fleet-heartbeat half retired with the fleet code.
 
 **Correction to this ADR's first draft:** `experimental/README.md` initially
-claimed the moved tests "still exist and still pass." Verified — they do not.
+claimed the moved tests "still exist and still pass." Verified - they do not.
 All four fail at import because they still reference `valkyrie.fleet`,
 `valkyrie.mcp`, etc. The README now states that plainly, and fixing those
 imports is documented as part of the cost of unfreezing. Claiming a green
@@ -90,10 +90,10 @@ no-silent-success standard exists to prevent.
   maintained surface.
 - 26 core test modules verified green after the move, including
   `test_startup_smoke`, `test_web_route_auth`, `test_components`, and
-  `test_context` — the ones that would catch broken wiring.
+  `test_context` - the ones that would catch broken wiring.
 - `test_telemetry` remains an environmental SKIP (needs Administrator for
   registry edits); unrelated to this change and correctly reported as
-  "SKIPPED — NOT a pass."
+  "SKIPPED - NOT a pass."
 - Roughly a third of the maintenance burden removed, and none of the protection
   value: no detection, response, or privacy capability was touched.
 

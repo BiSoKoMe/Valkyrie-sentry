@@ -15,7 +15,7 @@ Run:
   run_fleet_server(port=8091, enroll_token="...")            # loopback only
 
 A fleet server genuinely does need to be reachable by the endpoints it manages,
-so binding off-loopback is a legitimate deployment choice — but it must be an
+so binding off-loopback is a legitimate deployment choice - but it must be an
 explicit one. The default is 127.0.0.1 so that publishing the enrolment and
 policy API to every interface is something an operator opts into deliberately,
 rather than the thing that happens when the host argument is forgotten.
@@ -52,7 +52,7 @@ def create_fleet_app(controller: FleetController, admin_token: str = ""):
     """Build the FastAPI app around an existing controller (used by tests too).
 
     admin_token gates the operator-only policy-set endpoint. If empty, that
-    endpoint is disabled (fail closed) — you cannot push policy without one.
+    endpoint is disabled (fail closed) - you cannot push policy without one.
     """
     if not _FASTAPI_OK:
         raise ImportError("fastapi is required for the fleet server. "

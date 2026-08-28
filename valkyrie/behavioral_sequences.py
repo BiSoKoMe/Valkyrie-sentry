@@ -215,8 +215,13 @@ SEQUENCES: tuple = (
               # net-localgroup relabeling fix (Detection Coverage milestone) -
               # same "silently never counted otherwise" trap this comment
               # already warns about.
+              # T1201/T1518 added 2026-08-27 closing confirmed generalization
+              # gaps (PowerShell/net.exe-verb equivalents of already-covered
+              # native-binary techniques) - same trap again: T1518.001 is
+              # covered too via Step.matches' startswith(t + ".") prefix rule.
               techniques=("T1082", "T1057", "T1018", "T1087", "T1033", "T1482",
-                         "T1016", "T1049", "T1012", "T1007", "T1069"),
+                         "T1016", "T1049", "T1012", "T1007", "T1069",
+                         "T1201", "T1518"),
               min_distinct=3),),
         "Several DIFFERENT discovery techniques (system/process/account/network "
         "enumeration) were observed from the same actor within a short window. "

@@ -1,4 +1,4 @@
-"""Central protection policy — signed, versioned, pushed to the fleet.
+"""Central protection policy - signed, versioned, pushed to the fleet.
 
 This is the "protect clients" half of the control plane: an operator defines a
 policy (extra domains to block, domains to always allow, a monotonic version)
@@ -14,7 +14,7 @@ Security properties:
     equal or lower version, so a captured older (signed) bundle can't be
     replayed to downgrade protection.
   - No code execution: a policy is data (domain lists), never scripts. Applying
-    it only changes block/allow sets — it cannot run commands on the device.
+    it only changes block/allow sets - it cannot run commands on the device.
 
 The private policy key never ships; only the public key is pinned on agents.
 """
@@ -71,7 +71,7 @@ class Policy:
             out = []
             for item in x:
                 s = str(item).strip().lower()
-                # Reject anything that isn't a bare hostname — a policy must not
+                # Reject anything that isn't a bare hostname - a policy must not
                 # be able to carry shell/URL/whitespace payloads into local
                 # block/allow sets.
                 if s and all(c.isalnum() or c in ".-_" for c in s):

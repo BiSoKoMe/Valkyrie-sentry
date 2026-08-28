@@ -1,6 +1,6 @@
-# Bucket-B signal design — categorization + proposal (Phase 1)
+# Bucket-B signal design - categorization + proposal (Phase 1)
 
-**Date:** 2026-07-07 · **Status: STOP — awaiting design approval before any
+**Date:** 2026-07-07 . **Status: STOP - awaiting design approval before any
 Bucket-B detection code is written.**
 **Harness:** `diag_bucket_categorize.py` (each domain confirmed in EasyPrivacy,
 absent from seed, then run through the real `_decide` pipeline in isolation).
@@ -11,13 +11,13 @@ absent from seed, then run through the real `_decide` pipeline in isolation).
 violations), including all 7 original accuracy-test misses. Split by the
 decision rule:
 
-> **Bucket A** — the registrable parent (eTLD+1) exists *only* to serve
+> **Bucket A** - the registrable parent (eTLD+1) exists *only* to serve
 > tracking/ads/analytics/telemetry. Safe to ship in the seed list.
-> **Bucket B** — the tracker is a subdomain of a **mixed-use** parent people
-> intentionally visit (snapchat.com, reddit.com…). Listing the parent SLD would
+> **Bucket B** - the tracker is a subdomain of a **mixed-use** parent people
+> intentionally visit (snapchat.com, reddit.com...). Listing the parent SLD would
 > break the real site.
 
-15 Bucket A · 25 Bucket B.
+15 Bucket A . 25 Bucket B.
 
 ## Result on the current pipeline (post Phase 0)
 
@@ -32,32 +32,32 @@ prefix (`analytics.yahoo.com`, `analytics.pointdrive.linkedin.com`,
 `analytics.m7g.twitch.tv`, `beacon.dropbox.com`). Every Bucket A domain is
 missed; 21/25 Bucket B are missed.
 
-## Q1 — How many misses are Bucket A vs Bucket B?
+## Q1 - How many misses are Bucket A vs Bucket B?
 
 **Of 36 misses: 15 Bucket A (42%) and 21 Bucket B (58%).**
 
-**A wider *shipped* seed list closes the entire Bucket A column — 15/15 — with
+**A wider *shipped* seed list closes the entire Bucket A column - 15/15 - with
 no new architecture and zero FP risk** (these are dedicated tracker domains;
 adding `media.net`, `sharethis.com`, `taboolasyndication.com`,
 `segmentapis.com`, `browser-intake-datadoghq.com`, `posthog.com`,
-`fingerprint.com`, … is exactly what the seed already does for `mixpanel.com` /
+`fingerprint.com`, ... is exactly what the seed already does for `mixpanel.com` /
 `segment.com` / `hotjar.com`). This is the higher-ROI move and should come
 first.
 
 Concretely on the **15-tracker accuracy test**, 5 of its 7 misses are Bucket A
 (`cs.media.net`, `l.sharethis.com`, `browser-intake-datadoghq.com`,
 `segmentapis.com`, `taboolasyndication.com`). Adding them to the seed lifts
-that test from **recall 8/15 → 13/15 (0.53 → 0.87), FP still 0** — before any
+that test from **recall 8/15 -> 13/15 (0.53 -> 0.87), FP still 0** - before any
 Bucket-B work. The remaining 2 (`tr.snapchat.com`, `events.reddit.com`) are
 Bucket B and are what actually needs a new signal.
 
 > Note: Bucket B is *partially* list-addressable by shipping exact FQDNs
 > (`tr.snapchat.com`), since seed matching blocks a host + its subdomains, not
 > its parent. But exact-host lists don't generalize to rotating/novel subdomains
-> — which is the whole point of behavioural detection — so Bucket B is where a
+> - which is the whole point of behavioural detection - so Bucket B is where a
 > context signal earns its keep.
 
-## Q2 — What context does Valkyrie actually have at DNS decision time?
+## Q2 - What context does Valkyrie actually have at DNS decision time?
 
 **It sees (DNS layer, `_decide` inputs):**
 - the **hostname** (`qname`),
@@ -68,7 +68,7 @@ Bucket B and are what actually needs a new signal.
 
 **It does NOT see, at the DNS layer:** the referring page, the URL path, HTTP
 headers, or whether a request is first- vs third-party. That distinction is an
-HTTP/browser-layer fact — and it is exactly how EasyPrivacy itself classifies
+HTTP/browser-layer fact - and it is exactly how EasyPrivacy itself classifies
 (`$third-party` option). DNS sees a bare name with no page context.
 
 **Could the TLS inspector supply real first/third-party context?** In principle
@@ -87,7 +87,7 @@ So for the **DNS layer specifically, the only honest proxy for "third-party
 tracker loaded by a page" is temporal co-occurrence**: tracker domains resolve
 in a burst, from the same process, right after a main site is loaded.
 
-## Q3 — Proposed Bucket-B signal (DNS-layer, given the real constraints)
+## Q3 - Proposed Bucket-B signal (DNS-layer, given the real constraints)
 
 **Signal: third-party co-occurrence + cross-anchor ubiquity (learned).**
 
@@ -96,45 +96,45 @@ in a burst, from the same process, right after a main site is loaded.
    is "sitting on"), treat it as the current first-party **anchor** for that
    process.
 2. **Co-occurrence window.** Domains resolved by the **same process** within a
-   short window (~1–3 s) after the anchor, whose **eTLD+1 differs** from the
+   short window (~1-3 s) after the anchor, whose **eTLD+1 differs** from the
    anchor's eTLD+1, are third-party candidates. (Same-eTLD+1 subdomains like
-   `cdn.example.com` behind `example.com` are excluded — not third-party.)
+   `cdn.example.com` behind `example.com` are excluded - not third-party.)
 3. **Cross-anchor ubiquity (the real discriminator).** The baseline learns, per
    candidate domain, the **set of distinct anchors** it has appeared behind.
    A domain that rides behind **many unrelated first-parties**, is never
-   navigated to directly, and isn't infrastructure is behaving like a tracker —
+   navigated to directly, and isn't infrastructure is behaving like a tracker -
    which is precisely the manual signal EasyList authors use.
 
 ### The FP problem, stated plainly, and the guards
 
 A naive co-occurrence signal **would wrongly flag legit CDNs** (Fastly,
-Cloudflare, jsDelivr, `fonts.gstatic.com`, Akamai) — they also load in a burst
+Cloudflare, jsDelivr, `fonts.gstatic.com`, Akamai) - they also load in a burst
 behind every page and behind many anchors. The zero-FP result is preserved by
 **all** of the following, not any one alone:
 
-- **G1 — shipped infrastructure/CDN allowlist.** A static, offline set of
+- **G1 - shipped infrastructure/CDN allowlist.** A static, offline set of
   CDN/first-party-infra suffixes is exempt: co-occurrence never scores an
   allowlisted domain. (Mirrors the existing `MS_TRUSTED_ROOTS` pattern.)
-- **G2 — reuse the existing known-good promotion.** Domains promoted to
+- **G2 - reuse the existing known-good promotion.** Domains promoted to
   known-good after `INTEL_GOOD_AFTER_ALLOWS` clean allows are exempt, so common
   benign infra self-clears.
-- **G3 — never block on co-occurrence alone; flag-band only.** Co-occurrence
+- **G3 - never block on co-occurrence alone; flag-band only.** Co-occurrence
   contributes a partial score capped **below the block threshold**. It can reach
   *block* only in combination with a second independent positive signal (tracker-
   y label, small fixed-size beacon payload). Alone it is at most a flag.
-- **G4 — ubiquity gate.** No contribution until a candidate has been seen behind
-  **≥ N distinct anchors** (proposed N≈3). One co-occurrence is nothing; riding
+- **G4 - ubiquity gate.** No contribution until a candidate has been seen behind
+  **>= N distinct anchors** (proposed N≈3). One co-occurrence is nothing; riding
   behind 3+ unrelated sites is the tracker signature. This also means the signal
-  is **temporal/learned, not first-contact** — stated honestly below.
+  is **temporal/learned, not first-contact** - stated honestly below.
 
-### Expected recall gain — and an honesty caveat about measuring it
+### Expected recall gain - and an honesty caveat about measuring it
 
 - **Bucket A (seed widening):** measurable now. 15-tracker accuracy test
-  **0.53 → 0.87, FP 0**. This is separate from the Bucket-B signal and worth
+  **0.53 -> 0.87, FP 0**. This is separate from the Bucket-B signal and worth
   landing first.
 - **Bucket B (co-occurrence signal):** targets the 21 Bucket-B misses (incl.
   `tr.snapchat.com`, `events.reddit.com`). But because it is **temporal**, it
-  **cannot register on the current single-shot `test_scanner_accuracy.py`** —
+  **cannot register on the current single-shot `test_scanner_accuracy.py`** -
   that harness resolves each domain once, with no page-load burst, so a
   co-occurrence signal correctly contributes 0 there. Reporting "before/after"
   for Bucket B therefore requires **extending the test** with a co-occurrence
@@ -150,15 +150,15 @@ behind every page and behind many anchors. The zero-FP result is preserved by
   (by design of G4). This is a latency/coverage tradeoff taken to protect FP.
 - Anchor detection at the DNS layer is heuristic (no real navigation event); a
   process that legitimately talks to many unrelated APIs could resemble anchors.
-  G1–G4 are what keep that from producing false positives.
+  G1-G4 are what keep that from producing false positives.
 
 ## Recommendation
 
-1. **Land Bucket A first** — widen the shipped seed with the 15 dedicated
-   trackers here (+ a periodic curated top-up). Re-run 15+15: expect 0.53→0.87,
+1. **Land Bucket A first** - widen the shipped seed with the 15 dedicated
+   trackers here (+ a periodic curated top-up). Re-run 15+15: expect 0.53->0.87,
    FP 0. Highest ROI, no architecture.
 2. **Then** build the co-occurrence + ubiquity signal for Bucket B with guards
-   G1–G4, plus a new co-occurrence test alongside the preserved single-shot FP
+   G1-G4, plus a new co-occurrence test alongside the preserved single-shot FP
    test.
 
 **Stopping here for approval of the Bucket-B design before implementation.**
@@ -170,22 +170,22 @@ behind every page and behind many anchors. The zero-FP result is preserved by
 Landed in two commits, both additive inside the intelligence layer;
 `dns_interceptor.py` untouched.
 
-### Part 1 — Bucket-A seed widening
+### Part 1 - Bucket-A seed widening
 Added 10 dedicated-tracker registrable domains to `seed_blocklist.py`
 (`media.net`, `sharethis.com`, `taboolasyndication.com`, `segmentapis.com`,
 `browser-intake-datadoghq.com`, `posthog.com`, `plausible.io`,
 `fingerprint.com`, `brandmetrics.com`, `adalytics.io`). `ceros.com` held back
-(serves user-facing embedded content — eTLD+1 block would risk real pages).
+(serves user-facing embedded content - eTLD+1 block would risk real pages).
 
-### Part 2 — Bucket-B co-occurrence signal
-`valkyrie/intelligence/cooccurrence.py` — learns, per host, the set of distinct
+### Part 2 - Bucket-B co-occurrence signal
+`valkyrie/intelligence/cooccurrence.py` - learns, per host, the set of distinct
 first-party anchors it is resolved behind; scores third-party ubiquity. Guards
 G1 (infra/functional allowlist, `config.INFRA_ALLOWLIST`), G2 (known-good
-exemption), G3 (**flag-only**, `COOC_SCORE_CAP = 0.60 < 0.70` block threshold —
-applied by the classifier only as an allow→flag upgrade), G4 (ubiquity gate,
+exemption), G3 (**flag-only**, `COOC_SCORE_CAP = 0.60 < 0.70` block threshold -
+applied by the classifier only as an allow->flag upgrade), G4 (ubiquity gate,
 `COOC_MIN_ANCHORS = 3`). Startup signal-health audit lists it as FLAG-ONLY.
 
-### Before / after — mandated 15-tracker + 15-benign single-shot test
+### Before / after - mandated 15-tracker + 15-benign single-shot test
 
 | stage | recall | FP |
 |---|---|---|
@@ -194,16 +194,16 @@ applied by the classifier only as an allow→flag upgrade), G4 (ubiquity gate,
 | + Bucket-B co-occurrence | 13/15 = **0.87** | **0/15** |
 
 Co-occurrence is temporal, so it correctly contributes **0** in the single-shot
-harness (one burst → every domain has a single anchor, below the ubiquity gate)
-— which is why the single-shot recall is unchanged by Part 2 and FP stays 0.
+harness (one burst -> every domain has a single anchor, below the ubiquity gate)
+- which is why the single-shot recall is unchanged by Part 2 and FP stays 0.
 Its effect is proven in the dedicated burst test.
 
-### Bucket-B recall + FP protection — `test_cooccurrence.py` (24/24)
+### Bucket-B recall + FP protection - `test_cooccurrence.py` (24/24)
 Drives the real `_decide` pipeline over multiple page-load bursts:
 - **Recall:** `tr.snapchat.com` and `events.reddit.com` are **flagged** once seen
-  behind ≥3 distinct first parties; the deciding reason is the co-occurrence
+  behind >=3 distinct first parties; the deciding reason is the co-occurrence
   signal (anomaly contributes nothing).
-- **Invariant:** neither is ever **blocked** by co-occurrence — score stays
+- **Invariant:** neither is ever **blocked** by co-occurrence - score stays
   < 0.70 on every appearance.
 - **FP protection built into the test:** a CDN (`d1.cloudfront.net`), a fonts
   host (`fonts.gstatic.com`), a payment SDK (`js.stripe.com`), and an
@@ -218,5 +218,5 @@ Drives the real `_decide` pipeline over multiple page-load bursts:
 - `eTLD+1` is approximated as the last two labels (imprecise for multi-label
   public suffixes like `co.uk`).
 - Functional third parties are protected by a **shipped allowlist**; a genuinely
-  novel benign third party not yet on it could be flagged (never blocked) — the
+  novel benign third party not yet on it could be flagged (never blocked) - the
   flag-only invariant is what bounds the cost of that case.

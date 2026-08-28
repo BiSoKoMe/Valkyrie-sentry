@@ -34,7 +34,7 @@ if (Test-Path $AdapterStateFile) {
     }
     Remove-Item $AdapterStateFile -ErrorAction SilentlyContinue
 } else {
-    # No tracked change — best-effort reset of common adapters so a stale arm
+    # No tracked change - best-effort reset of common adapters so a stale arm
     # can never strand DNS at 127.0.0.1.
     foreach ($name in @('Wi-Fi', 'Ethernet')) {
         if (Get-NetAdapter -Name $name -ErrorAction SilentlyContinue) {

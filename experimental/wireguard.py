@@ -1,6 +1,6 @@
 """WireGuard config generator.
 
-WireGuard is a kernel module — Valkyrie cannot install it.
+WireGuard is a kernel module - Valkyrie cannot install it.
 This module generates ready-to-use server and client config files,
 prints setup instructions, and optionally renders a QR code for
 mobile import.
@@ -8,8 +8,8 @@ mobile import.
 Run via:  python -m valkyrie --setup-wireguard --server-ip <PUBLIC_IP>
 
 Generated files (in data/):
-  wg0.conf         — server config
-  wg_client.conf   — first client config template
+  wg0.conf         - server config
+  wg_client.conf   - first client config template
 
 Keys are generated fresh each time and never stored in source code.
 """
@@ -180,7 +180,7 @@ def _print_qr(client_conf_text: str, console=None) -> None:
 class WireGuardConfig:
     """Generates WireGuard server and client configuration files.
 
-    Does not start WireGuard — that is left to the user via wg-quick.
+    Does not start WireGuard - that is left to the user via wg-quick.
     """
 
     def __init__(self, console=None) -> None:
@@ -239,7 +239,7 @@ class WireGuardConfig:
 
         WIREGUARD_CONF_PATH.write_text(server_text,  encoding="utf-8")
         WIREGUARD_CLIENT_PATH.write_text(client_text, encoding="utf-8")
-        # Both files contain a `PrivateKey =` line — the VPN identity itself.
+        # Both files contain a `PrivateKey =` line - the VPN identity itself.
         # Anyone who reads one can impersonate this peer and decrypt its
         # traffic, so they get the same treatment as the TLS CA key. DATA_DIR
         # inherits a BUILTIN\Users:read ACE from %ProgramData% on Windows, so

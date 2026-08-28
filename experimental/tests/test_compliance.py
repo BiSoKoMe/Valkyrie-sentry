@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compliance evidence reports — offline generation + honesty tests.
+"""Compliance evidence reports - offline generation + honesty tests.
 
   [1] Full report from live services (EDR incidents, MTTR, audit trail)
   [2] Honesty: absent subsystems reported as unavailable, never invented

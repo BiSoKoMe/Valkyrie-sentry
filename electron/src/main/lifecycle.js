@@ -1,6 +1,6 @@
 'use strict';
 // ---------------------------------------------------------------------------
-// lifecycle.js — production install lifecycle for the Valkyrie desktop app.
+// lifecycle.js - production install lifecycle for the Valkyrie desktop app.
 //
 // Owns everything that makes install / first-boot / upgrade / repair feel like
 // a commercial product:
@@ -18,15 +18,16 @@
 const { app } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { PROTECTION_INTENT } = require('./protection_state');
 
 const STATE_VERSION = 1;
 const MARKER = 'install-state.json';
 
 // Runtime folders created up-front so the product has a stable, professional
-// layout from first boot (logs, caches, quarantine, threat intel, keys, …).
+// layout from first boot (logs, caches, quarantine, threat intel, keys, ...).
 const RUNTIME_DIRS = ['logs', 'cache', 'quarantine', 'threat-intel', 'keys', 'updates', 'config'];
 
-// ── Build mode ────────────────────────────────────────────────────────────
+// --- Build mode ---
 function isDev() { return !app.isPackaged; }
 // electron-builder's portable target runs from a temp dir and sets
 // PORTABLE_EXECUTABLE_DIR to the real location of the .exe.
@@ -38,7 +39,7 @@ function portableDir() {
   return process.env.PORTABLE_EXECUTABLE_DIR || path.dirname(process.execPath);
 }
 
-// ── Canonical paths (MUST mirror valkyrie/config.py resolution) ────────────
+// --- Canonical paths (MUST mirror valkyrie/config.py resolution) ---
 function engineDataDir() {
   switch (mode()) {
     case 'development': return path.join(repoRoot(), 'data');
@@ -61,7 +62,7 @@ function engineEnv() {
   return env;
 }
 
-// ── Install-state marker ───────────────────────────────────────────────────
+// --- Install-state marker ---
 function markerPath() { return path.join(appStateDir(), MARKER); }
 
 function readState() {
@@ -69,12 +70,19 @@ function readState() {
   catch { return null; }
 }
 
+// Merges onto whatever is already on disk rather than replacing it wholesale -
+// this file now carries more than the original install marker (see
+// protectionIntent() below), and a second caller's write must not silently
+// erase a first caller's field. initializedAt in particular must survive
+// every later write: it is first-boot's timestamp, not "last write's".
 function writeState(extra) {
+  const prev = readState() || {};
   const state = {
+    ...prev,
     stateVersion: STATE_VERSION,
     version: app.getVersion(),
     mode: mode(),
-    initializedAt: new Date().toISOString(),
+    initializedAt: prev.initializedAt || new Date().toISOString(),
     ...extra,
   };
   try {
@@ -84,11 +92,29 @@ function writeState(extra) {
   return state;
 }
 
-// ── Scenario detection ─────────────────────────────────────────────────────
-//   fresh   — never initialized on this machine/user
-//   upgrade — initialized by a DIFFERENT app version
-//   repair  — same version but the runtime layout is broken/missing
-//   normal  — initialized, same version, layout intact
+// --- Protection intent -----------------------------------------------------
+// Whether the USER has explicitly asked for DNS protection, independent of
+// whether it is currently armed. Persisted in the same install-state.json
+// this module already owns (no new file) so it survives restarts, reboots,
+// and the engine being an always-on service that boot() can no longer use as
+// a proxy for "is protection wanted". Only ever written from the explicit
+// Start/Stop Protection action (main.js's engine:start/engine:stop IPC
+// handlers) - never from an automatic recovery attempt, so a background
+// re-arm can never look like a second explicit user decision.
+function protectionIntent() {
+  const s = readState();
+  return (s && s.protectionIntent) || PROTECTION_INTENT.UNSET;
+}
+
+function setProtectionIntent(value) {
+  return writeState({ protectionIntent: value });
+}
+
+// --- Scenario detection ---
+//   fresh   - never initialized on this machine/user
+//   upgrade - initialized by a DIFFERENT app version
+//   repair  - same version but the runtime layout is broken/missing
+//   normal  - initialized, same version, layout intact
 function detectScenario() {
   const state = readState();
   if (!state || !state.initializedAt) return { scenario: 'fresh', previous: null };
@@ -97,7 +123,7 @@ function detectScenario() {
   return { scenario: 'normal', previous: state.version };
 }
 
-// ── Layout + integrity + self-heal ─────────────────────────────────────────
+// --- Layout + integrity + self-heal ---
 function ensureLayout() {
   const base = engineDataDir();
   const created = [];
@@ -146,4 +172,5 @@ module.exports = {
   readState, writeState, detectScenario,
   ensureLayout, integrityIssues, selfHeal,
   RUNTIME_DIRS,
+  protectionIntent, setProtectionIntent,
 };

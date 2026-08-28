@@ -1,13 +1,13 @@
-# Live-Fire Validation — Run Plan (resume after host reboot)
+# Live-Fire Validation - Run Plan (resume after host reboot)
 
-Written 2026-08-12, before the first real live validation of the Sysmon EID1 → IOA wiring.
+Written 2026-08-12, before the first real live validation of the Sysmon EID1 -> IOA wiring.
 Branch `feat/efficacy-etw-coverage`. This plan exists because the host had to be rebooted
 for RAM headroom mid-setup.
 
 ## Ground truth going in
 
 - Live detection is **UNPROVEN**. Only real live run on record: **1/40 (2%)**.
-- All 90–98% figures were offline Tier A replay, not live. Do not cite them.
+- All 90-98% figures were offline Tier A replay, not live. Do not cite them.
 - The claim "2.9% was a measurement bug / 6/6 live" is **unsupported**. Do not repeat it.
 
 ## Pre-boot gate (hard stop)
@@ -18,7 +18,7 @@ Measure with the perf counter, not `FreePhysicalMemory`:
 (Get-Counter '\Memory\Available MBytes').CounterSamples[0].CookedValue
 ```
 
-Require **>= 11000 MB** for the 8 GB VM. Below that, stop and report — do not boot.
+Require **>= 11000 MB** for the 8 GB VM. Below that, stop and report - do not boot.
 Booting short causes guest timeouts and dropped events that masquerade as detection
 misses and corrupt the run.
 
@@ -46,8 +46,8 @@ misses and corrupt the run.
 
 ## Known issue to fix first: eval polling degrades the API
 
-`run_live_evaluation.ps1` currently polls per technique — `while ((Get-Date) -lt $deadline)`
-around line 331 — issuing a full `GET /api/edr/incidents` every `$PollIntervalSeconds`
+`run_live_evaluation.ps1` currently polls per technique - `while ((Get-Date) -lt $deadline)`
+around line 331 - issuing a full `GET /api/edr/incidents` every `$PollIntervalSeconds`
 for up to `$DetectWindowSeconds` (30s) **per technique**, plus a detail GET per touched
 incident. Cost grows with the incident store, which is the known degradation symptom.
 
@@ -65,7 +65,7 @@ Design:
    ~15s; use ~45s) so artifact-at-rest detections land.
 3. Do **one** sweep: list incidents once, pull detail once per incident.
 4. Attribute each detection to a technique by **technique ID match first**, using the
-   `[execStartUtc, execEndUtc]` window only as a staleness filter and tiebreaker —
+   `[execStartUtc, execEndUtc]` window only as a staleness filter and tiebreaker -
    techniques run sequentially so their windows are disjoint. This preserves correct
    attribution for late-arriving detections that the current time-window-only approach
    would misassign to the following technique.

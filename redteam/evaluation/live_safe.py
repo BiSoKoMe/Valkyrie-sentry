@@ -1,4 +1,4 @@
-r"""Part 2 of ADR 0048 — the live-execution tier: real commands, on the real
+r"""Part 2 of ADR 0048 - the live-execution tier: real commands, on the real
 host, scored against the REAL running EDR incident store. Tier A
 (replay_harness.py) executes classifier functions directly on synthetic
 probe_input; Tier B (run_live_evaluation.ps1) is a throwaway-VM exercise for
@@ -101,7 +101,7 @@ HISTORY_PATH = Path(__file__).resolve().parent / "LIVE_SAFE_HISTORY.md"
 RUN_LABELS = ("poller_only", "sysmon")
 
 BOOT_TIMEOUT_S = 60
-COMMAND_TIMEOUT_S = 15          # bounded — a hung native tool cannot hang the runner
+COMMAND_TIMEOUT_S = 15          # bounded - a hung native tool cannot hang the runner
 BURST_SETTLE_S = 45             # polling window after the last burst-cluster command
 SOLO_SETTLE_S = 20              # polling window after each isolated no-path probe
 POLL_INTERVAL_S = 1.0
@@ -109,10 +109,10 @@ BURST_COMMAND_GAP_S = 1.5       # spacing between burst-cluster commands
 
 
 # =============================================================================
-# The technique catalog — fixed argv only, drawn from the HARD SAFETY RULES
+# The technique catalog - fixed argv only, drawn from the HARD SAFETY RULES
 # allowlist (whoami, systeminfo, tasklist, ipconfig, netstat, reg QUERY,
 # sc QUERY, net view, net user, nltest /dclist, arp -a, hostname). No string
-# building, no shell=True — subprocess always receives this literal tuple.
+# building, no shell=True - subprocess always receives this literal tuple.
 # =============================================================================
 
 @dataclass(frozen=True)
@@ -273,14 +273,14 @@ ALL_TECHNIQUES = BURST_TECHNIQUES + NO_PATH_TECHNIQUES
 
 
 # =============================================================================
-# Command execution — every argv logged before it runs (HARD SAFETY RULE 6),
+# Command execution - every argv logged before it runs (HARD SAFETY RULE 6),
 # shell=False always, bounded timeout always.
 # =============================================================================
 
 @dataclass
 class ExecResult:
     argv: tuple
-    ts_start: float              # time.time() — comparable to incident created_at
+    ts_start: float              # time.time() - comparable to incident created_at
     ts_end: float
     returncode: int
     timed_out: bool = False
@@ -303,7 +303,7 @@ def run_command(argv: tuple) -> ExecResult:
 
 def run_readonly(argv: tuple, timeout: int = 15) -> tuple[int, str]:
     """Same discipline as run_command, for the environment-verification
-    commands (sc query) — argv logged, bounded, never raises."""
+    commands (sc query) - argv logged, bounded, never raises."""
     print(f"  [VERIFY] {' '.join(argv)}")
     try:
         p = subprocess.run(list(argv), capture_output=True, text=True,
@@ -315,15 +315,15 @@ def run_readonly(argv: tuple, timeout: int = 15) -> tuple[int, str]:
 
 
 # =============================================================================
-# Engine lifecycle — a fresh, isolated Valkyrie instance this file owns
+# Engine lifecycle - a fresh, isolated Valkyrie instance this file owns
 # start-to-finish. Fixed flag set; nothing here is user-configurable, so the
 # safety envelope cannot be narrowed by a bad CLI argument.
 # =============================================================================
 
 _ENGINE_FLAGS = (
     "--no-dns", "--no-firewall", "--no-unbound", "--no-ui",   # HARD SAFETY RULE 2/5
-    "--no-sysmon-setup",     # HARD SAFETY RULE 1 — install_or_verify() can download+install
-    "--no-download-lists",   # HARD SAFETY RULE 1 — external feeds are download-on-startup by default
+    "--no-sysmon-setup",     # HARD SAFETY RULE 1 - install_or_verify() can download+install
+    "--no-download-lists",   # HARD SAFETY RULE 1 - external feeds are download-on-startup by default
     "--no-amsi",             # not needed for these techniques; minimizes surface touched
     "--no-ransomware-shield",
     "--no-intelligence",
@@ -381,10 +381,10 @@ def stop_engine(proc: subprocess.Popen) -> str:
 
 
 # =============================================================================
-# Environment verification — "verify, do not assume". Uses only commands on
+# Environment verification - "verify, do not assume". Uses only commands on
 # the HARD SAFETY RULE 1 allowlist (sc QUERY) plus valkyrie.sysmon_manager's
 # own already-vetted, read-only, fully-tested probe (never installs, never
-# writes — see tests/test_sysmon_manager.py, 34/34 mocked-branch checks).
+# writes - see tests/test_sysmon_manager.py, 34/34 mocked-branch checks).
 # =============================================================================
 
 def verify_environment(run_label: str) -> dict:
@@ -396,7 +396,7 @@ def verify_environment(run_label: str) -> dict:
         env["commands"].append({"argv": list(argv), "returncode": rc, "output": out.strip()})
         env[f"sc_query_{name}"] = out.strip()
 
-    # native_audit precheck — this file must never be the reason a write
+    # native_audit precheck - this file must never be the reason a write
     # happens. If this is already enabled (as ADR 0048 found it to be on
     # this host), enable_process_auditing() inside `main()`'s EDR startup
     # takes its "already enabled" fast path and performs no write at all;
@@ -414,7 +414,7 @@ def verify_environment(run_label: str) -> dict:
             "HARD SAFETY RULE 1 ('nothing that writes'). Refusing to start. "
             "(Read-only check only was performed; nothing was changed.)")
 
-    # The authoritative Sysmon fact — read-only PowerShell queries inside
+    # The authoritative Sysmon fact - read-only PowerShell queries inside
     # probe_sysmon(), the same function the running product uses to decide
     # its own degraded status (ADR 0048 commit 1e re-export shim).
     from valkyrie.sysmon_manager import probe_sysmon
@@ -448,7 +448,7 @@ def verify_environment(run_label: str) -> dict:
 
 
 # =============================================================================
-# Incident polling — bounded, never hangs.
+# Incident polling - bounded, never hangs.
 # =============================================================================
 
 def _parse_ts(ts: str) -> float:
@@ -726,7 +726,7 @@ def _table(results: list[dict]) -> str:
 
 
 def render_report() -> None:
-    """Regenerates LIVE_SAFE_REPORT.md from whatever run(s) exist on disk —
+    """Regenerates LIVE_SAFE_REPORT.md from whatever run(s) exist on disk -
     one baseline if only one label has run, both plus a DELTA section once
     poller_only and sysmon both exist."""
     poller = _latest_by_label("poller_only")

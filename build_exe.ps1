@@ -7,7 +7,7 @@
 #  Requires Python 3.10+ on PATH. Result: dist\valkyrie.exe
 #
 #  Flags:
-#      -WithAI   (deprecated no-op) AI investigation needs no vendor SDK — its
+#      -WithAI   (deprecated no-op) AI investigation needs no vendor SDK - its
 #                providers speak plain HTTP via httpx, bundled by default.
 # ===================================================================
 param([switch]$WithAI)
@@ -19,7 +19,7 @@ Write-Host "`n [1/3] Installing build + runtime dependencies..." -ForegroundColo
 python -m pip install --upgrade pip | Out-Null
 python -m pip install -r requirements_modular.txt pyinstaller
 # cryptography enables signed remote-response; httpx backs the vendor-neutral AI
-# investigation providers and the fleet client. Both small — bundle by default.
+# investigation providers and the fleet client. Both small - bundle by default.
 python -m pip install cryptography httpx
 
 Write-Host "`n [2/3] Building valkyrie.exe with PyInstaller..." -ForegroundColor Cyan

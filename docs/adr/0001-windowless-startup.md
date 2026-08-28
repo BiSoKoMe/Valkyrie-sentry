@@ -1,4 +1,4 @@
-# ADR 0001 — Windowless engine & service-managed startup (zero console windows)
+# ADR 0001 - Windowless engine & service-managed startup (zero console windows)
 
 - **Status:** Accepted (2026-07-18)
 - **Deciders:** Valkyrie desktop team
@@ -11,14 +11,14 @@ before the UI appeared. That makes a security product feel like a developer
 tool. Investigation found **two** root causes:
 
 1. **The frozen engine was a console-subsystem binary.** `valkyrie.spec` built
-   `valkyrie.exe` with `console=True` → PE subsystem `WINDOWS_CUI` (3). Windows
+   `valkyrie.exe` with `console=True` -> PE subsystem `WINDOWS_CUI` (3). Windows
    allocates a console for such a process on *any* interactive launch (portable
    child, `start_all` fallback, service-recovery edge cases). No amount of
    `-WindowStyle Hidden` on a *launcher* can suppress a window that belongs to
    the engine exe itself.
 2. **Stale console-subsystem shortcuts.** An earlier PyInstaller-stub installer
    left Start-Menu shortcuts targeting `schtasks.exe` / `powershell.exe`
-   ("Start Valkyrie Protection", …). Those targets are console-subsystem, so
+   ("Start Valkyrie Protection", ...). Those targets are console-subsystem, so
    double-clicking them flashes a console.
 
 ## Decision
@@ -27,24 +27,24 @@ Treat the engine as a proper **background daemon** and let the OS service
 manager own its lifecycle. Specifically:
 
 1. **Windowless engine.** Build `valkyrie.exe` as a GUI-subsystem app
-   (`console=False` → subsystem `WINDOWS_GUI` (2)). It runs `--no-ui` and logs
+   (`console=False` -> subsystem `WINDOWS_GUI` (2)). It runs `--no-ui` and logs
    to files, so it needs no console. `run_valkyrie.py::_ensure_std_streams()`
    points `sys.stdout/stderr` at `os.devnull` when launched without a console,
    so a stray `print()`/Rich write can never crash the daemon.
 2. **SCM-owned lifecycle.** The engine runs as the auto-start Windows service
-   **ValkyrieShield** (via NSSM) in session 0 — invisible, with restart-on-
+   **ValkyrieShield** (via NSSM) in session 0 - invisible, with restart-on-
    failure recovery. This is the single source of "the engine is running".
 3. **Electron is the only user-facing process.** `Valkyrie.exe` (GUI subsystem)
    is the sole window. It talks to the engine over loopback HTTP/IPC and never
    opens a console, browser, or localhost page.
 4. **Silent privilege escalation.** Protection arm/disarm run through
    pre-registered *highest-privilege* Scheduled Tasks (`ValkyrieArm` /
-   `ValkyrieDisarm`) whose action is `powershell.exe -WindowStyle Hidden …`.
+   `ValkyrieDisarm`) whose action is `powershell.exe -WindowStyle Hidden ...`.
    Triggering a pre-registered task never re-prompts UAC and shows no window.
 5. **Every spawn is windowless.** All `child_process` / `execFile` calls in the
    shell pass `windowsHide: true`; PowerShell self-elevation uses
    `-WindowStyle Hidden` and drops `-NoExit`.
-6. **No console-subsystem shortcuts.** Only `Valkyrie.lnk → Valkyrie.exe`
+6. **No console-subsystem shortcuts.** Only `Valkyrie.lnk -> Valkyrie.exe`
    ships. The stale `schtasks`/`powershell` shortcuts are removed.
 
 ## Startup flow (after this decision)
@@ -91,7 +91,7 @@ pre-authorized task.
   the window still flickers before the hide call wins; it is a hack, not an
   architecture, and races on slow machines.
 - **Suppress the console only at spawn time (`CREATE_NO_WINDOW`).** Necessary
-  but insufficient — it does not cover every launch path (portable, shortcuts,
+  but insufficient - it does not cover every launch path (portable, shortcuts,
   recovery). The subsystem must be GUI at the binary level.
 - **Run the engine as `pythonw`.** N/A for a frozen single-exe product; the
   subsystem flag is the frozen-build equivalent and is what we set.

@@ -1,6 +1,6 @@
-# ADR 0046 — Protection must never wait on the network
+# ADR 0046 - Protection must never wait on the network
 
-Date: 2026-08-04 · Status: accepted
+Date: 2026-08-04 . Status: accepted
 
 ## Context
 
@@ -10,7 +10,7 @@ plus two stale-assertion bugs of a class this codebase has now hit three times.
 
 ## The regression I introduced
 
-ADR 0044's cycle flipped `USE_EXTERNAL_LISTS` from `False` to `True` — correct
+ADR 0044's cycle flipped `USE_EXTERNAL_LISTS` from `False` to `True` - correct
 intent: threat feeds that never run protect nobody, and shipping them off by
 default understated real detection.
 
@@ -21,8 +21,8 @@ began blocking on a ~500,000-domain download before protecting anything.
 
 Consequences, in order of severity:
 
-1. **Offline and air-gapped machines stall.** Three feeds × a 30-second urllib
-   timeout is up to 90 seconds of dead startup — in an environment this product
+1. **Offline and air-gapped machines stall.** Three feeds x a 30-second urllib
+   timeout is up to 90 seconds of dead startup - in an environment this product
    *specifically targets* (ADR 0044's positioning).
 2. **On a slow link it is indistinguishable from a hang** for a security agent
    the user is trusting to come up.
@@ -35,7 +35,7 @@ Consequences, in order of severity:
 **Startup loads seed + cache only. Every network refresh runs on a background
 thread and hot-swaps under the lock the DNS path already reads through.**
 
-- New `BlocklistManager.start_background_refresh()` — daemon thread, skips
+- New `BlocklistManager.start_background_refresh()` - daemon thread, skips
   entirely when the cache is fresh, reloads via `_read_from_disk()` (atomic swap
   under `self._lock`), and swallows its own errors so a failed refresh can never
   affect a running engine.
@@ -45,7 +45,7 @@ thread and hot-swaps under the lock the DNS path already reads through.**
   been offline for weeks with stale IOCs for six more hours. Short first pass,
   then the normal cadence.
 - `__main__` passes `allow_download=True if args.update else False` to both.
-  `--update` stays synchronous — there the user explicitly asked to refresh and
+  `--update` stays synchronous - there the user explicitly asked to refresh and
   exit.
 
 Net effect: feeds remain **on by default** (the detection value ADR 0044
@@ -69,7 +69,7 @@ There are two surfaces and they differ *by design*:
 
 `is_blocked_ip()` exempts public resolvers via `trust.is_public_resolver_ip`,
 added in the FP-cleanup pass (5418a61), because Valkyrie's own upstream DNS goes
-to exactly those addresses — without the exemption the network collector flags
+to exactly those addresses - without the exemption the network collector flags
 the engine's own resolver traffic as C2. The test asserted the reputation
 surface and read a deliberate safety guard as a failure. Corrected to assert
 enforcement, **and** to pin the exemption itself so removing it fails loudly.
@@ -87,19 +87,19 @@ create implies coverage that does not exist. `test_secret_hygiene` failed, and
 it was right: **an upgrader who ran an older build still has a real
 `fleet_agent.json` device token and a `wg0.conf` containing a WireGuard
 PrivateKey on disk.** Dropping them from the hardening sweep would stop
-protecting secrets that already exist — a genuine exposure — whereas hardening
+protecting secrets that already exist - a genuine exposure - whereas hardening
 an absent path is a harmless no-op the module already tolerates by design.
 Reverted, with the reasoning recorded inline so it is not re-attempted.
 
 ## Confirmed NOT bugs
 
-- `test_dns` / `test_resolver` — integration tests needing live external state;
+- `test_dns` / `test_resolver` - integration tests needing live external state;
   `run_tests.py` already excludes them via `_INTEGRATION`. They only failed in a
   raw glob sweep.
-- `test_rust_accel` / `test_telemetry` / `test_tls` — honest environmental skips
+- `test_rust_accel` / `test_telemetry` / `test_tls` - honest environmental skips
   (no Rust toolchain, needs Administrator, mitmproxy absent). Each reports
-  "SKIPPED — this is NOT a pass", which is the correct behaviour.
-- `test_firewall` — deliberately not run. Its §9 installs live `netsh` rules and
+  "SKIPPED - this is NOT a pass", which is the correct behaviour.
+- `test_firewall` - deliberately not run. Its §9 installs live `netsh` rules and
   previously took the developer's WiFi down; the `VALKYRIE_TEST_LIVE_FIREWALL=1`
   gate was verified still present.
 
@@ -120,7 +120,7 @@ measurement**:
 
 1. stale `delivery` labels under-reported the red-team score (ADR 0043);
 2. a stale verdict list under-reported DNS recall by 60 points (ADR 0045);
-3. `"behavioral"` — a second instance of (2), found by the regression test
+3. `"behavioral"` - a second instance of (2), found by the regression test
    written for it;
 4. `test_ip_leak` asserting a reputation API and reading a safety guard as a
    failure.

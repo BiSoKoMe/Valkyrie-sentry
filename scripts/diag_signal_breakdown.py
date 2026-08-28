@@ -1,7 +1,7 @@
 """Signal-level diagnosis for the 7 missed trackers (DIAGNOSIS ONLY).
 
 Drives the real DNSInterceptor._decide pipeline (intelligence-only,
-USE_EXTERNAL_LISTS=False, live process name — identical setup to
+USE_EXTERNAL_LISTS=False, live process name - identical setup to
 test_scanner_accuracy.py) over the same 30-domain ordered set, but this
 time decomposes EVERY sub-signal that feeds a decision, per domain.
 
@@ -32,6 +32,9 @@ from valkyrie.site_scanner import (SiteScanner, _sld, _first_label,
                                    _root_domain, _label_count)
 from valkyrie.store import Store
 from test_scanner_accuracy import TRACKERS, CLEAN, _FixedWatcher
+
+# where the diagnosis rows get written
+OUT_DIR = Path(__file__).resolve().parent / "diag_out"
 
 MISSED = ["tr.snapchat.com", "cs.media.net", "l.sharethis.com",
           "events.reddit.com", "browser-intake-datadoghq.com",
@@ -82,7 +85,7 @@ def main() -> int:
         if parts >= 3:
             e, _ = entropy_score(d); sc_ent_partial = e
         s3 = 0.3 if (parts >= 3 and sc_ent_partial > 0) else 0.0
-        # rate (scanner has its own RateLimiter) — read live
+        # rate (scanner has its own RateLimiter) - read live
         r_sc, _ = scanner._rate.record_and_score(ln)
         s4 = 0.2 if r_sc > 0 else 0.0
         s5 = 0.2 if (s2_fired and ln in cfg.SYSTEM_PROCESSES
@@ -147,7 +150,8 @@ def main() -> int:
 
     # Persist rows for the report writer
     import json
-    out = Path("/tmp/claude-0/-home-user-Valkyrie/6c733103-2c92-531d-9622-a8c9045146af/scratchpad/diag_rows.json")
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    out = OUT_DIR / "diag_rows.json"
     json.dump({d: rows[d] for d in MISSED}, open(out, "w"), indent=2)
     json.dump({d: finals[d.lower()] for d in MISSED}, open(str(out)+".finals", "w"), indent=2)
     print("\nsaved:", out)

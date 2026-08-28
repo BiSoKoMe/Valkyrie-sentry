@@ -1,11 +1,11 @@
 """Server-side device registry for the fleet control plane.
 
 A small SQLite table of enrolled devices and their last reported status.
-Security-relevant invariant: this store NEVER holds a usable device token —
+Security-relevant invariant: this store NEVER holds a usable device token -
 only sha256(token). A dump of fleet.db does not let an attacker impersonate a
 device.
 
-Thread-safe: a single connection guarded by a lock (write volume is tiny —
+Thread-safe: a single connection guarded by a lock (write volume is tiny -
 one row-update per device per heartbeat interval).
 """
 
@@ -166,7 +166,7 @@ class FleetStore:
         """Return pending signed-command bundles this device hasn't acked yet.
 
         A command applies if it targets this device explicitly OR the whole org
-        (device_id ''), and this device has no ack row for it — that's the
+        (device_id ''), and this device has no ack row for it - that's the
         at-most-once + anti-replay guarantee.
         """
         with self._lock:

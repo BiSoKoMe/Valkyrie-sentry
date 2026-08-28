@@ -8,7 +8,7 @@
    restarts under a still-running Electron shell (POST /api/system/restart,
    a component restart, the self-healing watchdog recovering a crash), every
    subsequent POST would silently 403 with the stale cached token until the
-   whole app was relaunched — including the restart control itself being the
+   whole app was relaunched - including the restart control itself being the
    one action that broke every other control afterward.
 
    'electron's net module is faked by pre-populating require.cache with a
@@ -16,12 +16,12 @@
    engine.js's own `const { net } = require('electron')` resolves to this
    fake instead of running the real (stub, path-string-only outside the
    Electron runtime) 'electron' package). No real listener, no new
-   dependency — same zero-dependency style as the existing renderer tests.
+   dependency - same zero-dependency style as the existing renderer tests.
 
    Updated 2026-08-07 for commit 34d037c, which replaced Node's http module
    with Electron's net module for the actual loopback API calls (raw
    Winsock connections were getting silently black-holed on a host running
-   Valkyrie's own traffic filtering — see engine.js's netGet() comment).
+   Valkyrie's own traffic filtering - see engine.js's netGet() comment).
    Before that fix this file mocked 'http'; net.request's shape differs
    (setHeader()/abort() instead of a headers option, and the request
    object itself emits 'response' rather than a get()/request() callback
@@ -72,7 +72,7 @@ require.cache[ELECTRON_PATH] = {
 };
 
 // engine.js's _tokenCache is module-level state, exactly like it would be in
-// a real Electron process — so each test needs a FRESH module instance (a
+// a real Electron process - so each test needs a FRESH module instance (a
 // fresh cache), same as each test simulating its own independent app launch.
 // Reusing one require()'d instance across tests leaked test 1's cached token
 // into test 2 and desynced the scripted response queue against it.

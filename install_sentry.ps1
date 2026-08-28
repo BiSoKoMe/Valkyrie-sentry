@@ -1,14 +1,14 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    Valkyrie Sentry — Windows installer (testing / desktop use)
+    Valkyrie Sentry - Windows installer (testing / desktop use)
     Mirrors the logic of install_sentry.sh using NSSM + netsh portproxy.
 
 .DESCRIPTION
     1. System check
     2. Verify Python
     3. Install pip dependencies
-    4. DNS redirect via netsh portproxy (port 53 → 5300)
+    4. DNS redirect via netsh portproxy (port 53 -> 5300)
     5. Create Windows service via NSSM
     6. Open firewall port 8080
     7. Verify installation
@@ -29,7 +29,7 @@ function Write-Pass { param([string]$msg) Write-Host "[PASS] $msg" -ForegroundCo
 function Write-Fail { param([string]$msg) Write-Host "[FAIL] $msg" -ForegroundColor Red; exit 1 }
 function Write-Info { param([string]$msg) Write-Host "[INFO] $msg" -ForegroundColor Yellow }
 
-# ── Step 1: System check ─────────────────────────────────────────────────────
+# --- Step 1: System check ---
 Write-Info "Step 1 - System check"
 
 $os = [System.Environment]::OSVersion
@@ -43,7 +43,7 @@ if ($freeRam -lt 32MB) { Write-Fail "Not enough RAM (need >32 MB free)" }
 
 Write-Pass "System checks passed"
 
-# ── Step 2: Python check ──────────────────────────────────────────────────────
+# --- Step 2: Python check ---
 Write-Info "Step 2 - Checking Python"
 
 try {
@@ -53,7 +53,7 @@ try {
     Write-Fail "Python not found. Install from https://python.org"
 }
 
-# ── Step 3: Install pip dependencies ─────────────────────────────────────────
+# --- Step 3: Install pip dependencies ---
 Write-Info "Step 3 - Installing Python dependencies"
 
 $packages = "dnspython", "psutil", "pyyaml", "rich", "fastapi", "uvicorn", "aiofiles"
@@ -64,7 +64,7 @@ foreach ($pkg in $packages) {
 
 Write-Pass "Python dependencies installed"
 
-# ── Step 4: DNS redirect via netsh portproxy ─────────────────────────────────
+# --- Step 4: DNS redirect via netsh portproxy ---
 Write-Info "Step 4 - Configuring DNS portproxy (port 53 -> $DnsPort)"
 
 # Remove existing rule if present
@@ -77,7 +77,7 @@ netsh interface portproxy add v4tov4 `
 
 Write-Pass "DNS portproxy: port 53 -> 127.0.0.1:$DnsPort"
 
-# ── Step 5: Install NSSM and create service ───────────────────────────────────
+# --- Step 5: Install NSSM and create service ---
 Write-Info "Step 5 - Installing Windows service via NSSM"
 
 $toolsDir = Join-Path $ValkyrieDir "tools"
@@ -123,7 +123,7 @@ Write-Pass "Service '$ServiceName' created"
 Start-Sleep -Seconds 3
 Write-Pass "Service started"
 
-# ── Step 6: Firewall rules ────────────────────────────────────────────────────
+# --- Step 6: Firewall rules ---
 Write-Info "Step 6 - Opening firewall ports"
 
 $ruleName = "Valkyrie Web Dashboard"
@@ -142,7 +142,7 @@ netsh advfirewall firewall add rule `
 
 Write-Pass "Firewall rules added for ports $WebPort (TCP) and $DnsPort (UDP)"
 
-# ── Step 7: Verify ────────────────────────────────────────────────────────────
+# --- Step 7: Verify ---
 Write-Info "Step 7 - Verifying installation (waiting 10s)"
 Start-Sleep -Seconds 10
 
@@ -181,10 +181,10 @@ try {
         Write-Host "[WARN] Web UI responded but content unexpected" -ForegroundColor Yellow
     }
 } catch {
-    Write-Host "[WARN] Web UI not responding on port $WebPort — may still be starting" -ForegroundColor Yellow
+    Write-Host "[WARN] Web UI not responding on port $WebPort - may still be starting" -ForegroundColor Yellow
 }
 
-# ── Step 8: Summary ───────────────────────────────────────────────────────────
+# --- Step 8: Summary ---
 Write-Host ""
 Write-Host "================================================" -ForegroundColor Cyan
 Write-Host "Valkyrie Sentry installed and running." -ForegroundColor Green

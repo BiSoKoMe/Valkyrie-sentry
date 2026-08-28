@@ -55,14 +55,14 @@ print("=" * 50)
 
 TOKEN = srv._CONTROL_TOKEN
 
-# ── peer check ───────────────────────────────────────────────────────────────
+# --- peer check ---
 print("\n-- loopback peer -------------------------------------")
 check("127.0.0.1 is local",         srv._peer_is_local(_Req(host="127.0.0.1")))
 check("::1 is local",               srv._peer_is_local(_Req(host="::1")))
 check("LAN IP is NOT local",    not srv._peer_is_local(_Req(host="192.168.1.50")))
 check("public IP is NOT local", not srv._peer_is_local(_Req(host="8.8.8.8")))
 
-# ── origin check ─────────────────────────────────────────────────────────────
+# --- origin check ---
 print("\n-- origin --------------------------------------------")
 check("absent Origin allowed (curl/launcher)", srv._origin_is_local(_Req()))
 check("null Origin allowed (file://)",         srv._origin_is_local(_Req(origin="null")))
@@ -70,14 +70,14 @@ check("localhost Origin allowed",              srv._origin_is_local(_Req(origin=
 check("127.0.0.1 Origin allowed",              srv._origin_is_local(_Req(origin="http://127.0.0.1:8090")))
 check("remote Origin blocked",             not srv._origin_is_local(_Req(origin="https://evil.example.com")))
 
-# ── token check ──────────────────────────────────────────────────────────────
+# --- token check ---
 print("\n-- token ---------------------------------------------")
 check("correct token in header",     srv._token_ok(_Req(token=TOKEN)))
 check("correct token in query",      srv._token_ok(_Req(qtoken=TOKEN)))
 check("wrong token rejected",    not srv._token_ok(_Req(token="nope")))
 check("missing token rejected",  not srv._token_ok(_Req()))
 
-# ── full guard ───────────────────────────────────────────────────────────────
+# --- full guard ---
 print("\n-- _control_guard ------------------------------------")
 if os.name != "nt":
     g = srv._control_guard(_Req(host="127.0.0.1", origin="http://localhost:8090", token=TOKEN))

@@ -97,7 +97,15 @@ param(
     # evidence-capture logic instead of duplicating it. Empty (default) runs
     # the full battery exactly as before; this parameter changes nothing when
     # omitted.
-    [string[]]$OnlyIds = @()
+    [string[]]$OnlyIds = @(),
+    # Run only techniques whose catalog `tactic` field exactly matches one of
+    # these (e.g. -OnlyTactic "Discovery","Persistence"). Added for the
+    # matrix-job split once the catalog grew past what one ~90min job could
+    # comfortably run (52 -> 90+ techniques): each matrix leg filters by
+    # tactic instead of needing a hand-maintained id list per leg, so it
+    # never drifts out of sync as catalog.py grows. Composable with -OnlyIds
+    # (both filters apply; a technique must pass whichever ones are non-empty).
+    [string[]]$OnlyTactic = @()
 )
 
 $ErrorActionPreference = "Continue"
@@ -117,6 +125,11 @@ if ($OnlyIds.Count -gt 0) {
     $Techniques = @($Techniques | Where-Object { $OnlyIds -contains $_.id })
     Info "OnlyIds filter active: running $($Techniques.Count) of $($Catalog.techniques.Count) catalog techniques ($($OnlyIds -join ', '))"
     if ($Techniques.Count -eq 0) { throw "No catalog technique matched -OnlyIds $($OnlyIds -join ', ')" }
+}
+if ($OnlyTactic.Count -gt 0) {
+    $Techniques = @($Techniques | Where-Object { $OnlyTactic -contains $_.tactic })
+    Info "OnlyTactic filter active: running $($Techniques.Count) of $($Catalog.techniques.Count) catalog techniques (tactic in: $($OnlyTactic -join ', '))"
+    if ($Techniques.Count -eq 0) { throw "No catalog technique matched -OnlyTactic $($OnlyTactic -join ', ')" }
 }
 
 # Techniques with a verified Atomic Red Team mapping, carried over from the
@@ -139,6 +152,61 @@ $VettedAtomics = @{
     # evasion-process-injection intentionally NOT delegated to ART -- Test #1
     # drifted onto an Office-dependent variant (see the "sysmon_eid8" probe
     # case below). catalog.py's own probe="sysmon_eid8" now drives it.
+}
+
+# Best-effort revert for the Round 2/2B literal-command ("ioa_rule") entries
+# that write real, persistent registry keys or drop real files. Every
+# scriptblock here undoes exactly what that ONE catalog entry's probe_input
+# cmdline did - nothing more (e.g. removing a single value, never an entire
+# pre-existing key that might hold unrelated data). -ErrorAction
+# SilentlyContinue throughout: a technique that never actually executed
+# (tool missing, blocked) must not fail cleanup trying to undo something
+# that was never done.
+$IoaRuleCleanup = @{
+    "cred-lsa-secrets" = {
+        Remove-Item "C:\Users\Public\secrets" -Force -ErrorAction SilentlyContinue
+    }
+    "evasion-masquerade-lsass" = {
+        Get-Process | Where-Object { $_.Path -eq "C:\Windows\Temp\lsass.exe" } |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+        Remove-Item "C:\Windows\Temp\lsass.exe" -Force -ErrorAction SilentlyContinue
+    }
+    "evasion-modify-registry" = {
+        Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" `
+            -Name "HideFileExt" -ErrorAction SilentlyContinue
+    }
+    "persist-winlogon-shell" = {
+        Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\" `
+            -Name "Shell" -ErrorAction SilentlyContinue
+    }
+    "persist-logon-script" = {
+        Remove-ItemProperty -Path "HKCU:\Environment" -Name "UserInitMprLogonScript" -ErrorAction SilentlyContinue
+        Remove-Item "C:\Users\Public\art.bat" -Force -ErrorAction SilentlyContinue
+    }
+    "privesc-uac-eventvwr" = {
+        Remove-Item -Path "HKCU:\Software\Classes\mscfile" -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    "privesc-uac-sdclt" = {
+        # Matches ART's own T1548.002 Test #7 cleanup command exactly.
+        Remove-Item -Path "HKCU:\Software\Classes\Folder" -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    "privesc-uac-wsreset" = {
+        Remove-Item -Path "HKCU:\Software\Classes\AppX82a6gwre4fdg3bt635tn5ctqjf8msdd2" `
+            -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    "privesc-uac-progids" = {
+        Remove-Item -Path "HKCU:\Software\Classes\.pwn" -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path "HKCU:\Software\Classes\ms-settings\CurVer" -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    "privesc-dll-searchorder-amsi" = {
+        Remove-Item "$env:APPDATA\updater.exe", "$env:APPDATA\amsi.dll" -Force -ErrorAction SilentlyContinue
+    }
+    "collect-stage-download" = {
+        Remove-Item "$env:TEMP\discovery.bat" -Force -ErrorAction SilentlyContinue
+    }
+    "disc-file-directory" = {
+        Remove-Item "C:\Users\Public\t1083.txt" -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -418,13 +486,55 @@ foreach ($t in $Techniques) {
                     $attackExecuted = $true
                 }
                 "ransomware" {
-                    # Use Valkyrie's OWN self-test endpoint rather than writing
-                    # into a real user's Documents folder -- it exercises the
-                    # canary + entropy path the way the product ships it.
+                    # REWRITTEN 2026-08-27. Found via a real live run: this
+                    # technique (Valkyrie's own most mature, purpose-built
+                    # detector, "genuinely expected to be strong" per its own
+                    # catalog notes) scored a clean miss - attack_executed=
+                    # true, classifier_logic_fires=false. Traced to source
+                    # rather than accepted as a real gap: /api/ransomware/
+                    # self-test calls ransomware_shield.py's simulate(), which
+                    # builds an ISOLATED, throwaway CanaryManager scoped to a
+                    # temp dir (see the function's own docstring: "proving the
+                    # tripwire + entropy logic... Used by the /api self-test
+                    # and unit tests"). It is a unit test wearing an API route
+                    # - by construction it never touches the REAL, running
+                    # shield's own watched canaries, publishes no
+                    # TelemetryEvent, and can never produce a real, scoreable
+                    # incident. Calling it only ever proved the CanaryManager
+                    # class works in isolation, never that a live attack
+                    # against the real watchers is detected.
+                    #
+                    # The actual test: still call self-test first (keeps that
+                    # class-level signal), then read the REAL armed shield's
+                    # own manifest (CanaryManager._save_manifest(), written at
+                    # startup) and overwrite one REAL canary with random
+                    # high-entropy bytes - exactly what a real ransomware
+                    # attack does to a real tripwire - then let the SAME
+                    # detection-window polling every other technique uses find
+                    # a real incident. Safe here specifically because this is
+                    # a disposable runner with no real user data: the canary
+                    # IS the intended attack surface, by design.
                     try {
                         Invoke-CurlPost -Uri "$ApiBase/api/ransomware/self-test" `
                             -Headers @{ "X-Valkyrie-Token" = $env:VALKYRIE_TOKEN } -TimeoutSec 15 | Out-Null
-                        $attackExecuted = $true
+                    } catch {}
+                    $manifestPath = Join-Path $RepoRoot "data\ransomware_canaries.json"
+                    try {
+                        if (-not (Test-Path $manifestPath)) {
+                            $executionError = "ransomware canary manifest not found at $manifestPath - shield may not have armed"
+                        } else {
+                            $canaries = @(Get-Content $manifestPath -Raw | ConvertFrom-Json)
+                            $target = $canaries | Select-Object -First 1
+                            if (-not $target -or -not $target.path) {
+                                $executionError = "canary manifest exists but is empty - shield armed 0 canaries"
+                            } else {
+                                $bytes = New-Object byte[] 512
+                                (New-Object Random).NextBytes($bytes)
+                                [System.IO.File]::WriteAllBytes($target.path, $bytes)
+                                Info "   overwrote a REAL, live-armed canary with random high-entropy bytes: $($target.path)"
+                                $attackExecuted = $true
+                            }
+                        }
                     } catch { $executionError = $_.Exception.Message }
                 }
                 "sysmon_eid8" {
@@ -772,6 +882,21 @@ foreach ($t in $Techniques) {
     if ($t.probe -eq "persistence" -and $t.probe_input.activity -eq "service") {
         & sc.exe delete "ValkyrieEvalTestSvc" | Out-Null
     }
+    # Round 2/2B additions (catalog.py, 2026-08-26): these write real registry
+    # keys or drop real files via the generic literal-command ("ioa_rule")
+    # path, which has no cleanup mechanism of its own - unlike the "service"/
+    # "run_key" cases above, nothing reverted them before this. Left dirty,
+    # a persistence-shaped key (Winlogon Shell, UserInitMprLogonScript) could
+    # both leave the runner in a genuinely broken logon state for the rest of
+    # the job AND get re-observed by the 15s artifact-at-rest poller on a
+    # LATER technique's detection window, misattributing a stale leftover as
+    # a fresh detection. Keyed by catalog id, mirroring $VettedAtomics' own
+    # id-keyed shape, since these are not their own probe type.
+    if ($IoaRuleCleanup.ContainsKey($t.id)) {
+        try { & $IoaRuleCleanup[$t.id] } catch {
+            Warn "   cleanup for $($t.id) raised: $($_.Exception.Message)"
+        }
+    }
 
     # Let the sensor pipeline drain before the next technique fires (see
     # -SettleSeconds). Without this the battery is one long burst and the
@@ -828,3 +953,17 @@ if ($totalFp -gt 0) {
                "this number as meaningful on its own.") -ForegroundColor DarkYellow
 }
 Write-Host "  REVERT THE SNAPSHOT NOW." -ForegroundColor Yellow
+
+# Explicit success exit. Found via the matrix-job split (2026-08-26): a tactic
+# whose ENTIRE in-scope set is destructive (Impact: all 3 techniques) runs
+# every iteration through the SKIP branch with -SkipDestructive set, producing
+# a valid, complete, zero-record run - legitimate output, not a failure. But
+# with no explicit exit code here, the calling workflow's $? read $false
+# anyway (some incidental non-terminating error/warning elsewhere in the run
+# left that residue) and reported the whole job FAILED, even though the
+# script had done exactly what it was asked and printed a clean summary. A
+# harness reporting its own correct, intentional outcome as a failure is
+# exactly the class of bug this project's evidence-librarian discipline
+# exists to prevent - so make the signal explicit rather than inferred from
+# whatever $? happens to hold by the time control reaches here.
+exit 0

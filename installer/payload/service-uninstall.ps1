@@ -3,7 +3,7 @@
     Stop + remove the ValkyrieShield service and restore native Unbound.
     Called at uninstall time (elevated).
 .PARAMETER Root
-    Directory containing nssm.exe (…\resources\engine).
+    Directory containing nssm.exe (...\resources\engine).
 #>
 param([string]$Root = $PSScriptRoot)
 $ErrorActionPreference = 'Continue'
