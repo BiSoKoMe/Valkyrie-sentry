@@ -23,9 +23,9 @@ def main() -> int:
 
     # ------------------------------------------------------------------
     print("[1] _sysmon_health classifies present/live/EID-complete correctly")
-    from valkyrie.sysmon_manager import SysmonEnvironment
+    from valkyrie.sysmon_manager import _EID_RULE_SECTION, SysmonEnvironment
 
-    def _env(present=True, live=True, eids=(1, 3, 7, 8, 10)):
+    def _env(present=True, live=True, eids=tuple(sorted(_EID_RULE_SECTION))):
         return SysmonEnvironment(present=present, service_state="Running" if present else "not-found",
                                  log_enabled=live, collection_live=live,
                                  configured_eids=tuple(eids),

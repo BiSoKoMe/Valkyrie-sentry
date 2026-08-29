@@ -1,0 +1,105 @@
+name: Browser Extension Integrity (live Sysmon)
+
+# Mechanism validation on a disposable Windows runner. This performs no attack
+# and installs no extension. It applies Valkyrie's exact shipped Sysmon config,
+# creates one harmless synthetic extension manifest, writes one inert enterprise
+# policy value, and proves that the required EID 11/13 evidence is delivered.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/efficacy-etw-coverage]
+    paths:
+      - ".github/workflows/browser-extension-integrity.yml"
+      - "valkyrie/browser_extension_integrity.py"
+      - "valkyrie/etw/sysmon.py"
+      - "valkyrie/sysmon_manager.py"
+      - "tests/test_browser_extension_integrity.py"
+
+jobs:
+  live-sysmon:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements_modular.txt
+
+      - name: Run structural tests first
+        shell: pwsh
+        run: python -m pytest tests/test_browser_extension_integrity.py tests/test_etw_sensors.py -q
+
+      - name: Download, verify, and install Microsoft Sysmon with shipped config
+        id: sysmon
+        shell: pwsh
+        run: |
+          if (Get-Service Sysmon64, Sysmon -ErrorAction SilentlyContinue) {
+            throw "Runner already has Sysmon. Refusing to overwrite a foreign configuration."
+          }
+          python -c "from pathlib import Path; from valkyrie.sysmon_manager import VALKYRIE_SYSMON_CONFIG; Path('valkyrie_sysmon.xml').write_text(VALKYRIE_SYSMON_CONFIG, encoding='utf-8')"
+          Invoke-WebRequest https://download.sysinternals.com/files/Sysmon.zip -OutFile Sysmon.zip
+          Expand-Archive Sysmon.zip -DestinationPath Sysmon -Force
+          $signature = Get-AuthenticodeSignature -LiteralPath Sysmon\Sysmon64.exe
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Microsoft Corporation') {
+            throw "Downloaded Sysmon64.exe did not have a valid Microsoft signature."
+          }
+          & Sysmon\Sysmon64.exe -accepteula -i valkyrie_sysmon.xml
+          if ($LASTEXITCODE -ne 0) { throw "Sysmon rejected the shipped configuration." }
+          "installed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Generate harmless extension-state evidence
+        id: evidence
+        shell: pwsh
+        run: |
+          $started = Get-Date
+          $extensionId = 'abcdefghijklmnopabcdefghijklmnop'
+          $extensionDir = Join-Path $env:LOCALAPPDATA "Google\Chrome\User Data\Default\Extensions\$extensionId\1.0.0_0"
+          New-Item -ItemType Directory -Path $extensionDir -Force | Out-Null
+          Set-Content -LiteralPath (Join-Path $extensionDir 'manifest.json') -Value '{"manifest_version":3,"name":"Valkyrie CI inert fixture","version":"1.0.0"}'
+
+          $policyPath = 'HKLM:\Software\Policies\Google\Chrome\ExtensionInstallForcelist'
+          New-Item -Path $policyPath -Force | Out-Null
+          New-ItemProperty -Path $policyPath -Name '98765' -PropertyType String -Value "$extensionId;https://clients2.google.com/service/update2/crx" -Force | Out-Null
+          Start-Sleep -Seconds 3
+
+          $fileEvents = @(Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Sysmon/Operational'; Id=11; StartTime=$started} -ErrorAction Stop |
+            Where-Object { $_.Message -match [regex]::Escape($extensionId) })
+          $registryEvents = @(Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Sysmon/Operational'; Id=13; StartTime=$started} -ErrorAction Stop |
+            Where-Object { $_.Message -match 'ExtensionInstallForcelist' })
+
+          $report = [ordered]@{
+            file_event_count = $fileEvents.Count
+            registry_event_count = $registryEvents.Count
+            sysmon_service = (Get-Service Sysmon64).Status.ToString()
+            config_sha256 = (Get-FileHash valkyrie_sysmon.xml -Algorithm SHA256).Hash
+          }
+          $report | ConvertTo-Json | Set-Content browser_extension_integrity_live.json
+          $report | ConvertTo-Json
+          if ($fileEvents.Count -lt 1) { throw "No targeted Sysmon EID 11 was delivered." }
+          if ($registryEvents.Count -lt 1) { throw "No targeted Sysmon EID 13 was delivered." }
+
+      - name: Clean up the disposable runner
+        if: always()
+        shell: pwsh
+        run: |
+          Remove-ItemProperty -Path 'HKLM:\Software\Policies\Google\Chrome\ExtensionInstallForcelist' -Name '98765' -ErrorAction SilentlyContinue
+          if (Test-Path Sysmon\Sysmon64.exe) {
+            & Sysmon\Sysmon64.exe -accepteula -u force
+          }
+
+      - name: Upload live evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-extension-integrity-live
+          path: browser_extension_integrity_live.json
+          if-no-files-found: warn
+          retention-days: 30
