@@ -8,4 +8,5 @@
 # until the next checkout. This makes CRLF an explicit, repo-level property
 # of the file type instead of an assumption.
 *.bat text eol=crlf
+*.pdf binary
 graphify-out/graph.json merge=graphify

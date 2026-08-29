@@ -10,6 +10,8 @@ interchangeable.
 
 - [Valkyrie research paper](VALKYRIE_RESEARCH_PAPER.md) — formal description of
   the local privacy/security provenance experiment.
+- [Research paper PDF](../output/pdf/Valkyrie_Research_Paper.pdf) —
+  print-ready edition of the same evidence-bounded paper.
 - [Provenance architecture assessment](PROVENANCE_ARCHITECTURE_ASSESSMENT.md) —
   implementation inventory, Windows data-source reality, gaps, and risks.
 - [Provenance phase status](PROVENANCE_PHASE_STATUS.md) — current evidence

@@ -66,6 +66,7 @@ Windows.lnk
 # One-off local verification output and backups.
 ci_*/
 *.bak
+tmp/
 
 # Electron desktop app — dependencies & build outputs (never commit)
 node_modules/
