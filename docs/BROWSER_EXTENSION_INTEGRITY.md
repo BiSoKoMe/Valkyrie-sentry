@@ -83,13 +83,23 @@ page content, full URLs, cookies, form values, or keystrokes.
 - end-to-end Sysmon emission with registry payload-retention checks;
 - XML well-formedness and narrow path coverage in the shipped Sysmon config.
 
-Focused validation on 2026-08-29 passed 56 pytest checks plus all 36 checks in
-`tests/test_sysmon_manager.py`.
+Focused local validation on 2026-08-29 passed 43 pytest checks, all 37 checks in
+`tests/test_sysmon_manager.py`, and all 19 sensor-tamper checks.
+
+GitHub Actions run
+[`33269846059`](https://github.com/BiSoKoMe/Valkyrie-sentry/actions/runs/33269846059)
+then applied the exact shipped configuration to Microsoft Sysmon on a disposable
+Windows runner. Sysmon accepted the configuration, remained running, and emitted
+three targeted FileCreate events plus one targeted RegistryEvent for harmless
+synthetic state changes. The evidence artifact recorded configuration SHA-256
+`F2E88F620495C0BD9ABC4137B64CA6C8BECC69EFCE21FAE3DD5583E2CD7AFB36`.
 
 ## What this does not prove
 
-- No extension was installed in a live isolated Windows VM.
-- Sysmon configuration acceptance and event delivery are not yet live-verified.
+- The live workflow created inert extension-state files and policy metadata; it
+  did not install or execute a browser extension.
+- Live event delivery proves the sensor mechanism, not malicious-extension
+  efficacy.
 - False-positive volume on managed enterprise browsers is not measured.
 - A browser writing its own extension store is not assumed benign. It is retained
   as low-severity evidence because store compromise and malicious updates can use

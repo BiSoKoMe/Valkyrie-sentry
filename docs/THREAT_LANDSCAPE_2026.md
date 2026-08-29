@@ -197,9 +197,10 @@ moment across every 2026 supply-chain campaign.
 Ranked by mission fit × visibility in telemetry Valkyrie already has × how well the
 rule generalizes rather than lists.
 
-1. **Validate browser extension integrity live** — the classifier and narrowed
-   Sysmon configuration now exist, but the configuration has not been exercised
-   in an isolated Windows VM and false-positive volume is unmeasured.
+1. **Measure browser extension integrity efficacy** — the classifier and narrowed
+   Sysmon configuration now have live mechanism validation on a disposable
+   Windows runner. Malicious-extension efficacy and false-positive volume remain
+   unmeasured.
 2. **RMM install/execution IOA** — behavioural shape (unattended install → service
    → outbound to relay) rather than a vendor name list, so it survives new RMM
    products.
