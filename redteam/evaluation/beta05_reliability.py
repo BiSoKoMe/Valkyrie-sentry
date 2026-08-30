@@ -21,6 +21,8 @@ Modes:
     dry-run     CI, ~5 minutes, validates the harness + artifact pipeline.
     fault-test  CI, boots with the debug fault collector, freezes it mid-run,
                 proves DEGRADED then real-recovery-to-HEALTHY.
+    contention  CI, same soak workload on one fresh runner, stopping at the
+                first API timeout or stale transition and dumping attribution.
     soak        CI, the real 20-30 minute qualification run.
 
 Usage:
@@ -127,14 +129,19 @@ def start_engine(extra_env: dict | None = None) -> tuple[subprocess.Popen, str, 
            "--web", "--web-port", str(port)]
     print(f"[ENGINE] starting: {' '.join(cmd)}")
     print(f"[ENGINE] isolated data dir: {data_dir}")
+    log_path = RESULTS_DIR / "beta05_engine.log"
+    log_fh = open(log_path, "w", encoding="utf-8")
     proc = subprocess.Popen(cmd, cwd=str(_ROOT), env=env,
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            stdout=log_fh, stderr=subprocess.STDOUT,
                             text=True, encoding="utf-8", errors="replace")
+    proc._beta05_log_fh = log_fh  # type: ignore[attr-defined]
+    proc._beta05_log_path = log_path  # type: ignore[attr-defined]
     api_base = f"http://127.0.0.1:{port}"
     deadline = time.time() + BOOT_TIMEOUT_S
     while time.time() < deadline:
         if proc.poll() is not None:
-            out = (proc.stdout.read() or "")[-4000:]
+            log_fh.flush()
+            out = log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
             raise RuntimeError(f"engine exited during startup:\n{out}")
         try:
             _get(api_base, "/api/health", timeout=3.0)
@@ -147,14 +154,18 @@ def start_engine(extra_env: dict | None = None) -> tuple[subprocess.Popen, str, 
 
 
 def stop_engine(proc: subprocess.Popen) -> str:
-    if proc.poll() is not None:
-        return proc.stdout.read() or ""
-    proc.terminate()
-    try:
-        return proc.communicate(timeout=15)[0] or ""
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        return proc.communicate()[0] or ""
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+    log_fh = getattr(proc, "_beta05_log_fh", None)
+    if log_fh:
+        log_fh.close()
+    path = getattr(proc, "_beta05_log_path", None)
+    return path.read_text(encoding="utf-8", errors="replace") if path else ""
 
 
 def wait_for_real_readiness(api_base: str, timeout_s: float = READY_TIMEOUT_S) -> dict:
@@ -201,16 +212,22 @@ def run_command(argv: tuple[str, ...]) -> None:
         print(f"    !! {exc}")
 
 
-def run_benign_activity(duration_s: float, gap_s: float = 3.0) -> None:
+def run_benign_activity(duration_s: float, gap_s: float = 3.0,
+                        stop_event: threading.Event | None = None) -> None:
     """Phase B / D / E's stimulus: ordinary process launches, harmless
     registry reads, and (via netstat) a look at real outbound connections -
     spaced out, never bursted."""
     deadline = time.time() + duration_s
     i = 0
     while time.time() < deadline:
+        if stop_event and stop_event.is_set():
+            return
         run_command(_BENIGN_COMMANDS[i % len(_BENIGN_COMMANDS)])
         i += 1
-        time.sleep(gap_s)
+        if stop_event:
+            stop_event.wait(gap_s)
+        else:
+            time.sleep(gap_s)
 
 
 def run_phase_c(api_base: str) -> bool:
@@ -259,7 +276,8 @@ class Sampler:
     it is taken (crash-proof, matching this project's Tier B convention) and
     keeps derived state a scoring pass reads afterward."""
 
-    def __init__(self, api_base: str, out_path: Path) -> None:
+    def __init__(self, api_base: str, out_path: Path, engine_pid: int | None = None,
+                 stop_on_failure: bool = False) -> None:
         self._api_base = api_base
         self._out_path = out_path
         self._stop = threading.Event()
@@ -271,6 +289,10 @@ class Sampler:
         self.health_successes = 0
         self._prev_overall: str | None = None
         self._prev_reasons: list = []
+        self._engine_pid = engine_pid
+        self._stop_on_failure = stop_on_failure
+        self.failure = threading.Event()
+        self.first_failure: dict | None = None
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._loop, daemon=True, name="beta05-sampler")
@@ -288,17 +310,75 @@ class Sampler:
                 self.samples.append(rec)
                 fh.write(json.dumps(rec, default=str) + "\n")
                 fh.flush()
+                if self._stop_on_failure and self._failure_reason(rec):
+                    self.first_failure = self._capture_failure(rec)
+                    fh.write(json.dumps({"contention_failure": self.first_failure}, default=str) + "\n")
+                    fh.flush()
+                    self.failure.set()
+                    return
                 self._stop.wait(SAMPLE_INTERVAL_S)
+
+    @staticmethod
+    def _failure_reason(rec: dict) -> str | None:
+        if not rec.get("health_ok"):
+            return "api_health_failure"
+        for name in ("watchdog", "causality", "sensors"):
+            request = (rec.get("requests") or {}).get(name) or {}
+            if not request.get("ok"):
+                return f"api_{name}_failure"
+        wd = rec.get("watchdog") or {}
+        if wd.get("overall") == "DEGRADED":
+            return "watchdog_degraded"
+        return None
+
+    def _capture_failure(self, rec: dict) -> dict:
+        result = {"detected_at": time.time(), "phase": self.current_phase,
+                  "reason": self._failure_reason(rec), "trigger_sample": rec}
+        try:
+            result["contention_endpoint"] = _get(
+                self._api_base, "/api/telemetry/contention", timeout=5.0)
+        except Exception as exc:
+            result["contention_endpoint_error"] = repr(exc)
+        if self._engine_pid:
+            try:
+                import psutil
+                proc = psutil.Process(self._engine_pid)
+                with proc.oneshot():
+                    result["engine_process"] = {
+                        "pid": proc.pid, "cpu_percent": proc.cpu_percent(),
+                        "rss": proc.memory_info().rss, "vms": proc.memory_info().vms,
+                        "threads": proc.num_threads(),
+                        "handles": proc.num_handles() if hasattr(proc, "num_handles") else None,
+                    }
+            except Exception as exc:
+                result["engine_process_error"] = repr(exc)
+        return result
+
+    def _timed_get(self, label: str, path: str) -> tuple[object | None, dict]:
+        started_wall = time.time()
+        started = time.monotonic()
+        request = {"started_at": started_wall, "path": path}
+        try:
+            value = _get(self._api_base, path, timeout=5.0)
+            request.update(ok=True, ended_at=time.time(),
+                           duration_s=time.monotonic() - started)
+            return value, request
+        except Exception as exc:
+            request.update(ok=False, ended_at=time.time(),
+                           duration_s=time.monotonic() - started, error=repr(exc))
+            return None, request
 
     def _sample_once(self) -> dict:
         now = time.time()
         rec: dict = {"t": now, "phase": self.current_phase}
 
-        t0 = time.monotonic()
+        rec["requests"] = {}
+        health, rec["requests"]["health"] = self._timed_get("health", "/api/health")
         try:
-            _get(self._api_base, "/api/health", timeout=5.0)
+            if health is None:
+                raise RuntimeError(rec["requests"]["health"].get("error"))
             rec["health_ok"] = True
-            rec["health_latency_s"] = time.monotonic() - t0
+            rec["health_latency_s"] = rec["requests"]["health"]["duration_s"]
             self.health_successes += 1
         except Exception as exc:                       # noqa: BLE001
             rec["health_ok"] = False
@@ -306,7 +386,10 @@ class Sampler:
             self.health_failures += 1
 
         try:
-            wd = _get(self._api_base, "/api/telemetry/watchdog", timeout=5.0)
+            wd, rec["requests"]["watchdog"] = self._timed_get(
+                "watchdog", "/api/telemetry/watchdog")
+            if wd is None:
+                raise RuntimeError(rec["requests"]["watchdog"].get("error"))
             rec["watchdog"] = wd
             overall = wd.get("overall")
             reasons = wd.get("degraded_reasons", [])
@@ -320,15 +403,17 @@ class Sampler:
             rec["watchdog"] = None
             rec["watchdog_error"] = str(exc)
 
-        try:
-            rec["causality_stats"] = _get(self._api_base, "/api/edr/causality/stats", timeout=5.0)
-        except Exception as exc:                         # noqa: BLE001
+        rec["causality_stats"], rec["requests"]["causality"] = self._timed_get(
+            "causality", "/api/edr/causality/stats")
+        if rec["causality_stats"] is None:
+            exc = rec["requests"]["causality"].get("error")
             rec["causality_stats"] = None
             rec["causality_error"] = str(exc)
 
-        try:
-            rec["sensors_status"] = _get(self._api_base, "/api/sensors/status", timeout=5.0)
-        except Exception as exc:                          # noqa: BLE001
+        rec["sensors_status"], rec["requests"]["sensors"] = self._timed_get(
+            "sensors", "/api/sensors/status")
+        if rec["sensors_status"] is None:
+            exc = rec["requests"]["sensors"].get("error")
             rec["sensors_status"] = None
             rec["sensors_error"] = str(exc)
 
@@ -643,18 +728,27 @@ def run_fault_test() -> int:
         shutil.rmtree(data_dir, ignore_errors=True)
 
 
-def run_soak(minutes: float) -> int:
+def run_soak(minutes: float, contention: bool = False) -> int:
     print("=" * 70)
-    print(f"MODE: soak -- CI, {minutes:.0f}-minute qualification run")
+    mode = "contention" if contention else "soak"
+    print(f"MODE: {mode} -- CI, {minutes:.0f}-minute "
+          f"{'first-failure attribution' if contention else 'qualification run'}")
     print("=" * 70)
     proc, api_base, data_dir = start_engine()
     try:
         wait_for_real_readiness(api_base)
-        out = RESULTS_DIR / "beta05_soak.jsonl"
+        out = RESULTS_DIR / f"beta05_{mode}.jsonl"
         if out.exists():
             out.unlink()
-        sampler = Sampler(api_base, out)
+        sampler = Sampler(api_base, out, engine_pid=proc.pid,
+                          stop_on_failure=contention)
         sampler.start()
+
+        def pause(seconds: float) -> None:
+            if contention:
+                sampler.failure.wait(seconds)
+            else:
+                time.sleep(seconds)
 
         total_s = minutes * 60.0
         # Fixed A/B/C/D budgets per the predeclared spec; whatever remains
@@ -664,44 +758,58 @@ def run_soak(minutes: float) -> int:
         e_s = max(0.0, total_s - (a_s + b_s + c_settle_s + d_s))
 
         sampler.current_phase = "A"
-        time.sleep(a_s)
+        pause(a_s)
 
         sampler.current_phase = "B"
-        run_benign_activity(b_s)
+        run_benign_activity(b_s, stop_event=sampler.failure if contention else None)
 
-        before_c = _get(api_base, "/api/edr/causality/stats", timeout=5.0)
+        if contention and sampler.failure.is_set():
+            before_c = after_c = {"nodes": None}
+        else:
+            before_c = _get(api_base, "/api/edr/causality/stats", timeout=5.0)
+            after_c = {"nodes": None}
+
         sampler.current_phase = "C"
-        if not run_phase_c(api_base):
+        if not sampler.failure.is_set() and not run_phase_c(api_base):
             raise RuntimeError("Phase C safe Tier B subset did not execute successfully")
         elapsed = min(60.0, c_settle_s)
-        time.sleep(elapsed)
-        run_benign_activity(max(0.0, c_settle_s - elapsed))
-        after_c = _get(api_base, "/api/edr/causality/stats", timeout=5.0)
+        pause(elapsed)
+        run_benign_activity(max(0.0, c_settle_s - elapsed),
+                            stop_event=sampler.failure if contention else None)
+        if not sampler.failure.is_set():
+            after_c = _get(api_base, "/api/edr/causality/stats", timeout=5.0)
 
         sampler.current_phase = "D"
-        run_benign_activity(d_s)
+        run_benign_activity(d_s, stop_event=sampler.failure if contention else None)
 
         sampler.current_phase = "E"
         e_deadline = time.time() + e_s
         toggle = 0
-        while time.time() < e_deadline:
+        while time.time() < e_deadline and not sampler.failure.is_set():
             remaining = e_deadline - time.time()
             if toggle % 3 == 2 and remaining > 60:
                 if not run_phase_c(api_base):
                     raise RuntimeError("Phase E safe Tier B subset did not execute successfully")
             else:
-                run_benign_activity(min(90.0, max(1.0, remaining)))
+                run_benign_activity(min(90.0, max(1.0, remaining)),
+                                    stop_event=sampler.failure if contention else None)
             toggle += 1
 
         sampler.stop()
         result = score(sampler.samples, sampler.transitions,
                        sampler.health_failures, sampler.health_successes,
-                       before_c.get("nodes"), after_c.get("nodes"), "soak")
-        result["mode"] = "soak"
+                       before_c.get("nodes"), after_c.get("nodes"), mode)
+        result["mode"] = mode
         result["minutes"] = minutes
         result["platform"] = platform.platform()
-        _write_summary("soak", result)
+        if contention:
+            result["first_failure"] = sampler.first_failure
+            result["experiment_completed_without_failure"] = not sampler.failure.is_set()
+        _write_summary(mode, result)
         print(json.dumps(result, indent=2, default=str))
+        # Finding and preserving the failure is a successful attribution run.
+        if contention:
+            return 0 if sampler.first_failure is not None else 1
         return 0 if result["overall"] == "PASS" else 1
     finally:
         stop_engine(proc)
@@ -710,7 +818,7 @@ def run_soak(minutes: float) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--mode", choices=["smoke", "dry-run", "fault-test", "soak"],
+    ap.add_argument("--mode", choices=["smoke", "dry-run", "fault-test", "contention", "soak"],
                     required=True)
     ap.add_argument("--minutes", type=float, default=25.0,
                     help="soak mode only: total qualification duration in minutes")
@@ -722,6 +830,8 @@ def main() -> int:
         return run_dry_run()
     if args.mode == "fault-test":
         return run_fault_test()
+    if args.mode == "contention":
+        return run_soak(args.minutes, contention=True)
     return run_soak(args.minutes)
 
 

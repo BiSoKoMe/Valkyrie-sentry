@@ -190,6 +190,8 @@ class NetworkCollector:
         # shape every per-connection swallow inside poll_once() itself
         # cannot hide.
         self.exception_count: int = 0
+        from .collector_diagnostics import PollDiagnostics
+        self._diagnostics = PollDiagnostics()
 
     def available(self) -> bool:
         return _PSUTIL
@@ -199,7 +201,8 @@ class NetworkCollector:
         if not _PSUTIL:
             return out
         try:
-            conns = psutil.net_connections(kind="inet")
+            with self._diagnostics.stage("net_connections"):
+                conns = psutil.net_connections(kind="inet")
         except Exception:
             return out   # access denied / unsupported -> disabled, no raise
         names: dict[int, str] = {}
@@ -258,33 +261,36 @@ class NetworkCollector:
         return classify_connection_anomaly(facts)
 
     def poll_once(self) -> int:
+        self._diagnostics.poll_started()
         try:
             new = self.snapshot()
             if self._last is None:
                 self._last = new
                 return 0
-            fresh = diff_snapshots(self._last, new)
-            self._last = new
-            emitted = 0
-            for ci in fresh:
-                try:
-                    blocked = bool(self._rep(ci.raddr_ip))
-                except Exception:
-                    blocked = False
-                try:
-                    anomaly = self._score(ci)
-                except Exception:
-                    anomaly = None
-                if not blocked and anomaly is None and not self._emit_all:
-                    continue
-                try:
-                    self._emit(ci.to_event(blocked, anomaly))
-                    emitted += 1
-                except Exception:
-                    pass
+            with self._diagnostics.stage("diff_score_emit"):
+                fresh = diff_snapshots(self._last, new)
+                self._last = new
+                emitted = 0
+                for ci in fresh:
+                    try:
+                        blocked = bool(self._rep(ci.raddr_ip))
+                    except Exception:
+                        blocked = False
+                    try:
+                        anomaly = self._score(ci)
+                    except Exception:
+                        anomaly = None
+                    if not blocked and anomaly is None and not self._emit_all:
+                        continue
+                    try:
+                        self._emit(ci.to_event(blocked, anomaly))
+                        emitted += 1
+                    except Exception:
+                        pass
             return emitted
         finally:
             self.last_poll_completed_at = time.time()
+            self._diagnostics.poll_completed()
 
     def start(self) -> None:
         if self._running or not _PSUTIL:
@@ -308,7 +314,7 @@ class NetworkCollector:
             "poll_interval_s": self._interval,
             "last_poll_completed_at": self.last_poll_completed_at,
             "exception_count": self.exception_count,
-        }
+        } | self._diagnostics.status()
 
     def _loop(self) -> None:
         while self._running:

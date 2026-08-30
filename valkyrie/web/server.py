@@ -1233,6 +1233,52 @@ def create_app(ctx: Optional[AppContext] = None):
                 {"error": "telemetry watchdog not initialized"}, status_code=503)
         return wd.status()
 
+    @app.get("/api/telemetry/contention")
+    async def telemetry_contention_status():
+        """Beta 0.5.1 attribution snapshot, intentionally async.
+
+        A synchronous route would need a free AnyIO worker merely to report
+        that every worker is occupied. This route stays on the event loop and
+        only reads in-memory state, so it remains useful during contention.
+        """
+        collectors = {}
+        for name in ("process_collector", "network_collector", "persistence_collector"):
+            collector = getattr(state, name, None)
+            if collector is not None:
+                try:
+                    collectors[name] = collector.status()
+                except Exception as exc:  # diagnostics must not hide other data
+                    collectors[name] = {"status_error": repr(exc)}
+
+        worker_pool: dict = {}
+        try:
+            import anyio
+            limiter = anyio.to_thread.current_default_thread_limiter()
+            worker_pool = {
+                "borrowed_tokens": limiter.borrowed_tokens,
+                "total_tokens": limiter.total_tokens,
+            }
+            stats = limiter.statistics()
+            worker_pool.update({
+                "tasks_waiting": stats.tasks_waiting,
+                "borrowers": len(stats.borrowers),
+            })
+        except Exception as exc:
+            worker_pool = {"error": repr(exc)}
+
+        heartbeat = getattr(state, "loop_heartbeat", None)
+        return {
+            "timestamp": time.time(),
+            "loop": heartbeat.status() if heartbeat is not None else None,
+            "worker_pool": worker_pool,
+            "threads": [
+                {"name": t.name, "ident": t.ident, "native_id": t.native_id,
+                 "daemon": t.daemon, "alive": t.is_alive()}
+                for t in threading.enumerate()
+            ],
+            "collectors": collectors,
+        }
+
     if _debug_fault_collector_enabled():
         # This route ONLY exists in the app's route table when
         # VALKYRIE_DEBUG_FAULT_COLLECTOR=1 was set before the process

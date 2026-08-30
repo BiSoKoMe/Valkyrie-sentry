@@ -513,6 +513,8 @@ class ProcessCollector:
         # failure shape every per-item swallow inside poll_once() itself
         # cannot hide.
         self.exception_count: int = 0
+        from .collector_diagnostics import PollDiagnostics
+        self._diagnostics = PollDiagnostics()
 
     def available(self) -> bool:
         return _PSUTIL
@@ -555,35 +557,31 @@ class ProcessCollector:
         # Cache pid -> name to resolve parent names cheaply.
         names: dict[int, str] = {}
         try:
-            procs = list(psutil.process_iter(["pid", "name", "ppid", "create_time"]))
+            with self._diagnostics.stage("process_iter"):
+                procs = list(psutil.process_iter(["pid", "name", "ppid", "create_time"]))
         except Exception:
             return out
-        for pr in procs:
-            try:
-                names[pr.info.get("pid", 0)] = (pr.info.get("name") or "")
-            except Exception:
-                pass
-        for pr in procs:
-            try:
-                info = pr.info
-                pid = int(info.get("pid", 0) or 0)
-                ppid = int(info.get("ppid", 0) or 0)
-                path = ""
+        with self._diagnostics.stage("process_metadata"):
+            for pr in procs:
                 try:
-                    path = pr.exe() or ""
+                    names[pr.info.get("pid", 0)] = (pr.info.get("name") or "")
                 except Exception:
-                    path = ""
-                pi = ProcInfo(
-                    pid=pid,
-                    name=info.get("name") or "",
-                    path=path,
-                    ppid=ppid,
-                    parent_name=names.get(ppid, ""),
-                    create_time=float(info.get("create_time") or 0.0),
-                )
-                out[pi.key()] = pi
-            except Exception:
-                continue
+                    pass
+            for pr in procs:
+                try:
+                    info = pr.info
+                    pid = int(info.get("pid", 0) or 0)
+                    ppid = int(info.get("ppid", 0) or 0)
+                    try:
+                        path = pr.exe() or ""
+                    except Exception:
+                        path = ""
+                    pi = ProcInfo(pid=pid, name=info.get("name") or "", path=path,
+                                  ppid=ppid, parent_name=names.get(ppid, ""),
+                                  create_time=float(info.get("create_time") or 0.0))
+                    out[pi.key()] = pi
+                except Exception:
+                    continue
         return out
 
     def _enrich(self, pi: "ProcInfo", pid_index: dict) -> "ProcInfo":
@@ -615,25 +613,28 @@ class ProcessCollector:
 
         On the very first call it only seeds the baseline (returns 0).
         """
+        self._diagnostics.poll_started()
         try:
             new = self.snapshot()
             if self._last is None:
                 self._last = new
                 return 0
-            fresh = diff_snapshots(self._last, new)
-            self._last = new
-            pid_index = {info.pid: info for info in new.values()}
-            for pi in fresh:
-                try:
-                    self._emit(self._enrich(pi, pid_index).to_event())
-                except Exception:
-                    pass   # a bad emitter must never stop collection
+            with self._diagnostics.stage("diff_enrich_emit"):
+                fresh = diff_snapshots(self._last, new)
+                self._last = new
+                pid_index = {info.pid: info for info in new.values()}
+                for pi in fresh:
+                    try:
+                        self._emit(self._enrich(pi, pid_index).to_event())
+                    except Exception:
+                        pass
             return len(fresh)
         finally:
             # Recorded even on an early return or an exception path above, so
             # "no recent poll" only ever means "the thread stopped running,"
             # never "it happened to find nothing this cycle."
             self.last_poll_completed_at = time.time()
+            self._diagnostics.poll_completed()
 
     def start(self) -> None:
         if self._running or not _PSUTIL:
@@ -657,7 +658,7 @@ class ProcessCollector:
             "poll_interval_s": self._interval,
             "last_poll_completed_at": self.last_poll_completed_at,
             "exception_count": self.exception_count,
-        }
+        } | self._diagnostics.status()
 
     def _loop(self) -> None:
         while self._running:

@@ -7,10 +7,11 @@ name: Platform Beta 0.5 (telemetry reliability)
 # document is the predeclared spec; redteam/evaluation/beta05_reliability.py
 # implements exactly what it says.
 #
-# Manual trigger only. Three modes, run in this order per the doc's own
+# Manual trigger only. Qualification modes run in this order per the doc's own
 # sequence:
 #   dry-run     ~5 minutes  - validates the harness + artifact pipeline
 #   fault-test  ~2 minutes  - proves the watchdog catches a stalled collector
+#   contention  <=25 min    - one-run, stop-on-first-failure attribution
 #   soak        20-30 min   - the real qualification run, repeated on 3
 #                             independent fresh runners (matrix), never one
 
@@ -20,10 +21,10 @@ on:
       mode:
         description: "Which Beta 0.5 stage to run"
         type: choice
-        options: [dry-run, fault-test, soak]
+        options: [dry-run, fault-test, contention, soak]
         default: dry-run
       minutes:
-        description: "soak mode only: total qualification duration in minutes"
+        description: "soak/contention maximum duration in minutes"
         type: string
         default: "25"
 
@@ -86,8 +87,8 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: |
           $mode = "${{ inputs.mode }}"
-          if ($mode -eq "soak") {
-            python redteam\evaluation\beta05_reliability.py --mode soak --minutes ${{ inputs.minutes }}
+          if ($mode -eq "soak" -or $mode -eq "contention") {
+            python redteam\evaluation\beta05_reliability.py --mode $mode --minutes ${{ inputs.minutes }}
           } else {
             python redteam\evaluation\beta05_reliability.py --mode $mode
           }
@@ -114,5 +115,6 @@ jobs:
           path: |
             redteam/evaluation/results/beta05_*.json
             redteam/evaluation/results/beta05_*.jsonl
+            redteam/evaluation/results/beta05_*.log
           if-no-files-found: warn
           retention-days: 30

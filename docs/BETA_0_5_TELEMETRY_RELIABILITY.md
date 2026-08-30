@@ -179,3 +179,37 @@ transient slowness, so a single clean run is weak evidence on its own.
 7. If all pass per the criteria above, freeze this as the Beta 0.5 baseline
    and move to Platform Beta 1 (NYX). If not, the gap is named and fixed
    before re-running — never averaged away or quietly dropped.
+
+## Beta 0.5.1: contention attribution
+
+The corrected qualification run remains a failure: only one of three fresh
+runners completed, Runs 1 and 2 lost API responsiveness, and Runs 2 and 3
+reported stale collectors. Platform Alpha stayed green on all three, which
+isolates the open problem to live telemetry reliability rather than reasoning.
+
+Before another 3 x 25-minute qualification, the `contention` workflow mode
+runs the exact same A-E workload and strict bounds on one fresh runner. It
+stops at the first API failure or watchdog DEGRADED transition and records:
+
+- start, end, duration, and outcome for every sampled API request;
+- event-loop heartbeat state and drift;
+- collector poll start time, running duration, current internal stage, stage
+  running duration, last stage durations, and longest completed poll;
+- active Python thread inventory and AnyIO worker-pool token/waiter state;
+- engine CPU, memory, thread, and handle counts;
+- the continuously drained engine log.
+
+Persistence stages are split into run keys, services, scheduled tasks, startup
+folders, and diff/normalization/emission. Process stages are split into process
+enumeration, per-process metadata, and diff/enrichment/emission. Network stages
+separate connection enumeration from diff/scoring/emission.
+
+The harness previously left engine stdout connected to an undrained pipe until
+shutdown. A full Windows pipe can block its writer, so that setup could itself
+create progress loss. Engine output now streams directly to the evidence log.
+This is a harness correction, not a relaxed reliability bound. API timeouts,
+collector stale bounds, workload density, and scoring remain unchanged.
+
+After attribution, fix only the smallest demonstrated cause, preserve a
+regression test, run the corrected 5-minute dry-run, repeat the fault test only
+if watchdog behavior changed, then repeat the full 3 x 25-minute qualification.

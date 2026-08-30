@@ -244,6 +244,8 @@ class PersistenceCollector:
         # (which cannot distinguish "quiet, nothing new" from "quietly
         # failing every cycle").
         self.exception_count: int = 0
+        from .collector_diagnostics import PollDiagnostics
+        self._diagnostics = PollDiagnostics()
         # Seconds to wait before the first baseline snapshot, keeping the engine's
         # startup + readiness window clear of the heavy enumeration.
         # 5s, not 45s. MEASURED, not guessed.
@@ -309,54 +311,59 @@ class PersistenceCollector:
 
         try:
             # Run / RunOnce / Winlogon values (cheap; always completes).
-            for hive, subkey, loc in _run_key_specs():
-                for name, data in _read_values(hive, subkey).items():
-                    snap[PERSIST_RUN_KEY][f"{loc}::{name}"] = data
-                    _tick()
+            with self._diagnostics.stage("run_keys"):
+                for hive, subkey, loc in _run_key_specs():
+                    for name, data in _read_values(hive, subkey).items():
+                        snap[PERSIST_RUN_KEY][f"{loc}::{name}"] = data
+                        _tick()
             # Services - enumerated INLINE (not via _subkeys) so the GIL yield
             # and the budget apply to the enumeration itself, which is a prime
             # suspect for the runaway. ImagePath is still read lazily on emit.
             if _WINREG:
+                stage = self._diagnostics.stage("services")
                 try:
-                    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _SERVICES_KEY) as k:
-                        i = 0
-                        while True:
-                            try:
-                                svc = winreg.EnumKey(k, i)
-                            except OSError:
-                                break
-                            snap[PERSIST_SERVICE][svc] = ""
-                            i += 1
-                            if _tick():
-                                truncated.append("services")
-                                break
+                    with stage:
+                        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _SERVICES_KEY) as k:
+                            i = 0
+                            while True:
+                                try:
+                                    svc = winreg.EnumKey(k, i)
+                                except OSError:
+                                    break
+                                snap[PERSIST_SERVICE][svc] = ""
+                                i += 1
+                                if _tick():
+                                    truncated.append("services")
+                                    break
                 except OSError:
                     pass
             # Scheduled tasks - file names under the Tasks tree (os.walk is
             # incremental, so the yield/budget bite per file).
-            if time.monotonic() < deadline and os.path.isdir(_TASKS_DIR):
-                stop = False
-                for root, _dirs, files in os.walk(_TASKS_DIR):
-                    for f in files:
-                        full = os.path.join(root, f)
-                        rel = os.path.relpath(full, _TASKS_DIR)
-                        snap[PERSIST_SCHEDULED_TASK][rel] = ""
-                        if _tick():
-                            truncated.append("scheduled_tasks")
-                            stop = True
+            with self._diagnostics.stage("scheduled_tasks"):
+                if time.monotonic() < deadline and os.path.isdir(_TASKS_DIR):
+                    stop = False
+                    for root, _dirs, files in os.walk(_TASKS_DIR):
+                        for f in files:
+                            full = os.path.join(root, f)
+                            rel = os.path.relpath(full, _TASKS_DIR)
+                            snap[PERSIST_SCHEDULED_TASK][rel] = ""
+                            if _tick():
+                                truncated.append("scheduled_tasks")
+                                stop = True
+                                break
+                        if stop:
                             break
-                    if stop:
-                        break
             # Startup folders - files (cheap).
-            for d in _startup_dirs():
-                try:
-                    for f in os.listdir(d):
-                        if f.lower() == "desktop.ini":
-                            continue
-                        snap[PERSIST_STARTUP_FOLDER][os.path.join(d, f)] = os.path.join(d, f)
-                        _tick()
-                except OSError:
-                    continue
+            with self._diagnostics.stage("startup_folders"):
+                for d in _startup_dirs():
+                    try:
+                        for f in os.listdir(d):
+                            if f.lower() == "desktop.ini":
+                                continue
+                            snap[PERSIST_STARTUP_FOLDER][os.path.join(d, f)] = os.path.join(d, f)
+                            _tick()
+                    except OSError:
+                        continue
         except Exception:
             pass
 
@@ -419,25 +426,28 @@ class PersistenceCollector:
             # The honest headline: a caller that acts on this collector's
             # silence before the baseline exists is acting on nothing.
             "detects_before_baseline": False,
-        }
+        } | self._diagnostics.status()
 
     def poll_once(self) -> int:
+        self._diagnostics.poll_started()
         try:
             new = self.snapshot()
             if self._last is None:
                 self._last = new
                 return 0
-            count = 0
-            for activity, entries in new.items():
-                prev = self._last.get(activity, {})
-                for identity, value in entries.items():
-                    if identity not in prev:
-                        self._emit_new(activity, identity, value)
-                        count += 1
-            self._last = new
+            with self._diagnostics.stage("diff_normalize_emit"):
+                count = 0
+                for activity, entries in new.items():
+                    prev = self._last.get(activity, {})
+                    for identity, value in entries.items():
+                        if identity not in prev:
+                            self._emit_new(activity, identity, value)
+                            count += 1
+                self._last = new
             return count
         finally:
             self.last_poll_completed_at = time.time()
+            self._diagnostics.poll_completed()
 
     # -- lifecycle ----------------------------------------------------------
     def start(self) -> None:
