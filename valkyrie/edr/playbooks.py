@@ -241,8 +241,12 @@ class PlaybookEngine:
                 continue
             key = (pb.id, f"{act.action}:{target}")
             with self._lock:
-                last = self._fired.get(key, 0.0)
-                if now - last < pb.cooldown_seconds:
+                last = self._fired.get(key)
+                # A missing key means this action has never fired. Comparing
+                # against 0.0 incorrectly suppresses the first response on a
+                # freshly booted host whose monotonic clock is still inside
+                # the cooldown window.
+                if last is not None and now - last < pb.cooldown_seconds:
                     self._suppressed += 1
                     continue
                 self._fired[key] = now

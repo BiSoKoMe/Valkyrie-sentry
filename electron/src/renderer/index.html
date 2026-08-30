@@ -6,8 +6,17 @@
         content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self';" />
   <title>Valkyrie</title>
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="console-v2.css" />
 </head>
 <body>
+  <!--
+  THESIS: A live decision instrument, not a wall of dashboard cards. The causal story is the primary object and aggregate telemetry supports it.
+  OWN-WORLD: Pure black instrument surfaces, white calibration marks, compact grotesk labels, monospace evidence, square controls, and hairline ledger rules.
+  STORY: The operator sees whether local protection is active, inspects what caused the latest decision, verifies present and missing evidence, then chooses a bounded response.
+  FIRST VIEWPORT: Fixed navigation and status bars frame a dense center ledger; the selected causal step owns the persistent evidence-and-authority inspector at right.
+  FORM: Instrument-grade incident console, seventh grounded direction, seed fe27994f.
+  FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
+  -->
   <!-- ===================== Cinematic splash ===================== -->
   <div id="splash">
     <canvas id="particles"></canvas>
@@ -23,6 +32,7 @@
   <div id="app">
     <div class="titlebar">
       <div class="brand"><span id="brandMark"></span>Valkyrie</div>
+      <div class="local-badge"><span class="local-dot"></span>Local console</div>
       <div class="spacer"></div>
       <div class="win-controls">
         <button class="win-btn" id="minBtn" title="Minimize" aria-label="Minimize"></button>
@@ -42,9 +52,9 @@
           <div class="metric-chip"><span class="k">Blocked</span><span class="v" id="tbBlocked">0</span></div>
           <div class="metric-chip"><span class="k">Privacy</span><span class="v" id="tbPrivacy">—</span></div>
           <div class="metric-chip"><span class="k">Uptime</span><span class="v" id="tbUptime">—</span></div>
-          <button class="icon-btn" id="searchBtn" title="Search everything (Ctrl+K)" aria-label="Search everything"></button>
+          <button class="icon-btn command-trigger" id="searchBtn" title="Search everything (Ctrl+K)" aria-label="Search everything"><span class="search-icon"></span><span class="search-label">Search</span><kbd>Ctrl K</kbd></button>
           <button class="icon-btn" id="notifBtn" title="Notifications" aria-label="Open logs and notifications"></button>
-          <div class="avatar">V</div>
+          <div class="device-local" title="Telemetry remains on this device"><span></span>On-device</div>
         </div>
 
         <div class="page" id="page"></div>

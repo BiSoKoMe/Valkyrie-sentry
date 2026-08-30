@@ -58,6 +58,12 @@ class AppContext:
     sensor_tamper:  Optional[object] = None   # valkyrie.sensor_tamper.SensorTamperMonitor
     doh:            Optional[object] = None   # valkyrie.doh_detector.DoHDetector
     asset_inventory: Optional[object] = None  # valkyrie.asset_inventory.AssetInventoryCollector
+    loop_heartbeat: Optional[object] = None   # valkyrie.telemetry_watchdog.LoopHeartbeat
+    telemetry_watchdog: Optional[object] = None  # valkyrie.telemetry_watchdog.TelemetryWatchdog
+    # TEST-ONLY, never wired outside VALKYRIE_DEBUG_FAULT_COLLECTOR=1 (see
+    # web/server.py) - a fake collector used to prove the watchdog catches a
+    # stalled source without touching any real one.
+    debug_fault_collector: Optional[object] = None  # valkyrie.telemetry_watchdog.FaultInjectableTestCollector
 
     # LIVENESS IS NOT READINESS, and every endpoint has to be able to say which.
     #

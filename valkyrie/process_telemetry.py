@@ -502,6 +502,17 @@ class ProcessCollector:
         self._last: Optional[dict] = None
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        # Updated at the end of every poll_once() call, successful or not --
+        # a reliability watchdog needs "is this collector still making
+        # progress" (a thread can be alive but stuck inside a slow poll,
+        # which is exactly the startup-deafness failure mode), not merely
+        # "is the thread alive." See valkyrie/telemetry_watchdog.py.
+        self.last_poll_completed_at: float = 0.0
+        # See PersistenceCollector's identical field: counts a poll cycle
+        # that raised all the way out to _loop()'s outer guard, the one
+        # failure shape every per-item swallow inside poll_once() itself
+        # cannot hide.
+        self.exception_count: int = 0
 
     def available(self) -> bool:
         return _PSUTIL
@@ -604,19 +615,25 @@ class ProcessCollector:
 
         On the very first call it only seeds the baseline (returns 0).
         """
-        new = self.snapshot()
-        if self._last is None:
+        try:
+            new = self.snapshot()
+            if self._last is None:
+                self._last = new
+                return 0
+            fresh = diff_snapshots(self._last, new)
             self._last = new
-            return 0
-        fresh = diff_snapshots(self._last, new)
-        self._last = new
-        pid_index = {info.pid: info for info in new.values()}
-        for pi in fresh:
-            try:
-                self._emit(self._enrich(pi, pid_index).to_event())
-            except Exception:
-                pass   # a bad emitter must never stop collection
-        return len(fresh)
+            pid_index = {info.pid: info for info in new.values()}
+            for pi in fresh:
+                try:
+                    self._emit(self._enrich(pi, pid_index).to_event())
+                except Exception:
+                    pass   # a bad emitter must never stop collection
+            return len(fresh)
+        finally:
+            # Recorded even on an early return or an exception path above, so
+            # "no recent poll" only ever means "the thread stopped running,"
+            # never "it happened to find nothing this cycle."
+            self.last_poll_completed_at = time.time()
 
     def start(self) -> None:
         if self._running or not _PSUTIL:
@@ -630,6 +647,18 @@ class ProcessCollector:
     def stop(self) -> None:
         self._running = False
 
+    def is_running(self) -> bool:
+        return bool(self._thread and self._thread.is_alive())
+
+    def status(self) -> dict:
+        return {
+            "running": self.is_running(),
+            "baseline_ready": self._last is not None,
+            "poll_interval_s": self._interval,
+            "last_poll_completed_at": self.last_poll_completed_at,
+            "exception_count": self.exception_count,
+        }
+
     def _loop(self) -> None:
         while self._running:
             time.sleep(self._interval)
@@ -638,4 +667,4 @@ class ProcessCollector:
             try:
                 self.poll_once()
             except Exception:
-                pass
+                self.exception_count += 1

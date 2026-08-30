@@ -181,6 +181,15 @@ class NetworkCollector:
         self._last: Optional[dict] = None
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        # See ProcessCollector's identical field: updated at the end of every
+        # poll_once() call, so a reliability watchdog can tell "still making
+        # progress" apart from "thread alive but stuck."
+        self.last_poll_completed_at: float = 0.0
+        # See ProcessCollector's identical field: counts a poll cycle that
+        # raised all the way out to _loop()'s outer guard, the one failure
+        # shape every per-connection swallow inside poll_once() itself
+        # cannot hide.
+        self.exception_count: int = 0
 
     def available(self) -> bool:
         return _PSUTIL
@@ -249,30 +258,33 @@ class NetworkCollector:
         return classify_connection_anomaly(facts)
 
     def poll_once(self) -> int:
-        new = self.snapshot()
-        if self._last is None:
+        try:
+            new = self.snapshot()
+            if self._last is None:
+                self._last = new
+                return 0
+            fresh = diff_snapshots(self._last, new)
             self._last = new
-            return 0
-        fresh = diff_snapshots(self._last, new)
-        self._last = new
-        emitted = 0
-        for ci in fresh:
-            try:
-                blocked = bool(self._rep(ci.raddr_ip))
-            except Exception:
-                blocked = False
-            try:
-                anomaly = self._score(ci)
-            except Exception:
-                anomaly = None
-            if not blocked and anomaly is None and not self._emit_all:
-                continue
-            try:
-                self._emit(ci.to_event(blocked, anomaly))
-                emitted += 1
-            except Exception:
-                pass
-        return emitted
+            emitted = 0
+            for ci in fresh:
+                try:
+                    blocked = bool(self._rep(ci.raddr_ip))
+                except Exception:
+                    blocked = False
+                try:
+                    anomaly = self._score(ci)
+                except Exception:
+                    anomaly = None
+                if not blocked and anomaly is None and not self._emit_all:
+                    continue
+                try:
+                    self._emit(ci.to_event(blocked, anomaly))
+                    emitted += 1
+                except Exception:
+                    pass
+            return emitted
+        finally:
+            self.last_poll_completed_at = time.time()
 
     def start(self) -> None:
         if self._running or not _PSUTIL:
@@ -286,6 +298,18 @@ class NetworkCollector:
     def stop(self) -> None:
         self._running = False
 
+    def is_running(self) -> bool:
+        return bool(self._thread and self._thread.is_alive())
+
+    def status(self) -> dict:
+        return {
+            "running": self.is_running(),
+            "baseline_ready": self._last is not None,
+            "poll_interval_s": self._interval,
+            "last_poll_completed_at": self.last_poll_completed_at,
+            "exception_count": self.exception_count,
+        }
+
     def _loop(self) -> None:
         while self._running:
             time.sleep(self._interval)
@@ -294,4 +318,4 @@ class NetworkCollector:
             try:
                 self.poll_once()
             except Exception:
-                pass
+                self.exception_count += 1

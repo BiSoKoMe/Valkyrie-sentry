@@ -1,0 +1,870 @@
+{
+  "aegis": {
+    "exposure_observations": [
+      {
+        "category": "DESTINATION",
+        "flow_id": "process:4242/1.000000",
+        "observation_point": "HOST_NETWORK_VANTAGE",
+        "precision": 1.0,
+        "provenance": [
+          "evt-net-1",
+          "network_collector",
+          "network",
+          "process:process:4242/1.000000"
+        ]
+      },
+      {
+        "category": "DESTINATION",
+        "flow_id": "process:4242/1.000000",
+        "observation_point": "HOST_NETWORK_VANTAGE",
+        "precision": 1.0,
+        "provenance": [
+          "evt-priv-1",
+          "nyx.tls",
+          "privacy",
+          "process:process:4242/1.000000"
+        ]
+      },
+      {
+        "category": "TIMING",
+        "flow_id": "process:4242/1.000000",
+        "observation_point": "HOST_NETWORK_VANTAGE",
+        "precision": 1.0,
+        "provenance": [
+          "evt-net-1",
+          "evt-priv-1",
+          "process:process:4242/1.000000"
+        ]
+      },
+      {
+        "category": "FREQUENCY",
+        "flow_id": "process:4242/1.000000",
+        "observation_point": "HOST_NETWORK_VANTAGE",
+        "precision": 1.0,
+        "provenance": [
+          "evt-net-1",
+          "evt-priv-1",
+          "process:process:4242/1.000000"
+        ]
+      },
+      {
+        "category": "SEQUENCE",
+        "flow_id": "process:4242/1.000000",
+        "observation_point": "HOST_NETWORK_VANTAGE",
+        "precision": 1.0,
+        "provenance": [
+          "evt-net-1",
+          "evt-priv-1",
+          "process:process:4242/1.000000"
+        ]
+      }
+    ],
+    "inference_hypotheses": {
+      "ACTIVITY_CLASSIFICATION": {
+        "action": "alert",
+        "assessments": [
+          {
+            "confidence": 0.936,
+            "contradicting": [],
+            "contradiction_strength": 0.0,
+            "description": "Activity Classification",
+            "hypothesis_id": "ACTIVITY_CLASSIFICATION",
+            "support_strength": 0.936,
+            "supporting": [
+              {
+                "behavior": "sequence_available",
+                "blocks_decision": false,
+                "contradicts": [],
+                "explanation": "sequence is observable and activity-bearing",
+                "fact_id": "process:4242/1.000000:sequence_available",
+                "provenance": [
+                  "HOST_NETWORK_VANTAGE:SEQUENCE"
+                ],
+                "supports": [
+                  "ACTIVITY_CLASSIFICATION"
+                ],
+                "weight": 0.6
+              },
+              {
+                "behavior": "timing_available",
+                "blocks_decision": false,
+                "contradicts": [],
+                "explanation": "timing is observable and activity-bearing",
+                "fact_id": "process:4242/1.000000:timing_available",
+                "provenance": [
+                  "HOST_NETWORK_VANTAGE:TIMING"
+                ],
+                "supports": [
+                  "ACTIVITY_CLASSIFICATION"
+                ],
+                "weight": 0.6
+              },
+              {
+                "behavior": "frequency_available",
+                "blocks_decision": false,
+                "contradicts": [],
+                "explanation": "frequency is observable and activity-bearing",
+                "fact_id": "process:4242/1.000000:frequency_available",
+                "provenance": [
+                  "HOST_NETWORK_VANTAGE:FREQUENCY"
+                ],
+                "supports": [
+                  "ACTIVITY_CLASSIFICATION"
+                ],
+                "weight": 0.6
+              }
+            ]
+          }
+        ],
+        "blockers": [],
+        "confidence": 0.936,
+        "margin": 0.936,
+        "reason": "ACTIVITY_CLASSIFICATION is best supported at 0.94 with margin 0.94",
+        "selected": "ACTIVITY_CLASSIFICATION"
+      },
+      "CROSS_SESSION_LINKABILITY": {
+        "action": "observe",
+        "assessments": [
+          {
+            "confidence": 0.0,
+            "contradicting": [],
+            "contradiction_strength": 0.0,
+            "description": "Cross Session Linkability",
+            "hypothesis_id": "CROSS_SESSION_LINKABILITY",
+            "support_strength": 0.0,
+            "supporting": []
+          }
+        ],
+        "blockers": [],
+        "confidence": 0.0,
+        "margin": 0.0,
+        "reason": "CROSS_SESSION_LINKABILITY has only 0 supporting fact(s); 1 required",
+        "selected": "CROSS_SESSION_LINKABILITY"
+      },
+      "DESTINATION_DISCLOSURE": {
+        "action": "alert",
+        "assessments": [
+          {
+            "confidence": 1.0,
+            "contradicting": [],
+            "contradiction_strength": 0.0,
+            "description": "Destination Disclosure",
+            "hypothesis_id": "DESTINATION_DISCLOSURE",
+            "support_strength": 1.0,
+            "supporting": [
+              {
+                "behavior": "destination_visible",
+                "blocks_decision": false,
+                "contradicts": [],
+                "explanation": "destination is observable at at least one point",
+                "fact_id": "process:4242/1.000000:destination_visible",
+                "provenance": [
+                  "HOST_NETWORK_VANTAGE:DESTINATION"
+                ],
+                "supports": [
+                  "DESTINATION_DISCLOSURE"
+                ],
+                "weight": 1.0
+              }
+            ]
+          }
+        ],
+        "blockers": [],
+        "confidence": 1.0,
+        "margin": 1.0,
+        "reason": "DESTINATION_DISCLOSURE is best supported at 1.00 with margin 1.00",
+        "selected": "DESTINATION_DISCLOSURE"
+      },
+      "FLOW_LINKAGE": {
+        "action": "observe",
+        "assessments": [
+          {
+            "confidence": 0.0,
+            "contradicting": [],
+            "contradiction_strength": 0.0,
+            "description": "Flow Linkage",
+            "hypothesis_id": "FLOW_LINKAGE",
+            "support_strength": 0.0,
+            "supporting": []
+          }
+        ],
+        "blockers": [],
+        "confidence": 0.0,
+        "margin": 0.0,
+        "reason": "FLOW_LINKAGE has only 0 supporting fact(s); 1 required",
+        "selected": "FLOW_LINKAGE"
+      },
+      "USER_LINKABILITY": {
+        "action": "observe",
+        "assessments": [
+          {
+            "confidence": 0.0,
+            "contradicting": [],
+            "contradiction_strength": 0.0,
+            "description": "User Linkability",
+            "hypothesis_id": "USER_LINKABILITY",
+            "support_strength": 0.0,
+            "supporting": []
+          }
+        ],
+        "blockers": [],
+        "confidence": 0.0,
+        "margin": 0.0,
+        "reason": "USER_LINKABILITY has only 0 supporting fact(s); 1 required",
+        "selected": "USER_LINKABILITY"
+      }
+    }
+  },
+  "causal_process_identity": {
+    "confidence": 1.0,
+    "image": "browser.exe",
+    "inferred": false,
+    "instance_id": "process:4242/1.000000"
+  },
+  "fused_decision": {
+    "description": "what the real DetectionArchitectureV2 instance actually concluded, fusing Valkyrie's and NYX's evidence together -- this, not either isolated view above, is what a real deployment would act on.",
+    "hypothesis": {
+      "action": "alert",
+      "assessments": [
+        {
+          "confidence": 0.0,
+          "contradicting": [
+            {
+              "behavior": "unexpected_process_relationship",
+              "blocks_decision": false,
+              "contradicts": [
+                "ordinary_activity"
+              ],
+              "explanation": "Execution context contains a reusable suspicious relationship primitive",
+              "fact_id": "evt-proc-1:unexpected_process_relationship",
+              "provenance": [
+                "evt-proc-1",
+                "process_collector",
+                "process",
+                "office_child_shell"
+              ],
+              "supports": [
+                "suspicious_execution_chain"
+              ],
+              "weight": 0.74
+            },
+            {
+              "behavior": "sensitive_data_disclosure",
+              "blocks_decision": false,
+              "contradicts": [
+                "ordinary_activity"
+              ],
+              "explanation": "Nyx observed a metadata-only sensitive category crossing a boundary",
+              "fact_id": "evt-priv-1:sensitive_data_disclosure",
+              "provenance": [
+                "evt-priv-1",
+                "nyx.tls",
+                "privacy"
+              ],
+              "supports": [
+                "possible_data_theft"
+              ],
+              "weight": 0.82
+            }
+          ],
+          "contradiction_strength": 0.9532,
+          "description": "Normal application or user activity",
+          "hypothesis_id": "ordinary_activity",
+          "support_strength": 0.0,
+          "supporting": []
+        },
+        {
+          "confidence": 0.0,
+          "contradicting": [],
+          "contradiction_strength": 0.0,
+          "description": "Expected administrative or maintenance work",
+          "hypothesis_id": "administrative_activity",
+          "support_strength": 0.0,
+          "supporting": []
+        },
+        {
+          "confidence": 0.87,
+          "contradicting": [],
+          "contradiction_strength": 0.0,
+          "description": "A suspicious execution chain is developing",
+          "hypothesis_id": "suspicious_execution_chain",
+          "support_strength": 0.87,
+          "supporting": [
+            {
+              "behavior": "unexpected_process_relationship",
+              "blocks_decision": false,
+              "contradicts": [
+                "ordinary_activity"
+              ],
+              "explanation": "Execution context contains a reusable suspicious relationship primitive",
+              "fact_id": "evt-proc-1:unexpected_process_relationship",
+              "provenance": [
+                "evt-proc-1",
+                "process_collector",
+                "process",
+                "office_child_shell"
+              ],
+              "supports": [
+                "suspicious_execution_chain"
+              ],
+              "weight": 0.74
+            },
+            {
+              "behavior": "external_communication",
+              "blocks_decision": false,
+              "contradicts": [],
+              "explanation": "A process communicated with an external destination",
+              "fact_id": "evt-net-1:external_communication",
+              "provenance": [
+                "evt-net-1",
+                "network_collector",
+                "network"
+              ],
+              "supports": [
+                "suspicious_execution_chain",
+                "possible_data_theft"
+              ],
+              "weight": 0.5
+            }
+          ]
+        },
+        {
+          "confidence": 0.0,
+          "contradicting": [],
+          "contradiction_strength": 0.0,
+          "description": "A process is attempting durable persistence",
+          "hypothesis_id": "persistence_attempt",
+          "support_strength": 0.0,
+          "supporting": []
+        },
+        {
+          "confidence": 0.9784,
+          "contradicting": [],
+          "contradiction_strength": 0.0,
+          "description": "Sensitive data may be leaving without authority",
+          "hypothesis_id": "possible_data_theft",
+          "support_strength": 0.9784,
+          "supporting": [
+            {
+              "behavior": "external_communication",
+              "blocks_decision": false,
+              "contradicts": [],
+              "explanation": "A process communicated with an external destination",
+              "fact_id": "evt-net-1:external_communication",
+              "provenance": [
+                "evt-net-1",
+                "network_collector",
+                "network"
+              ],
+              "supports": [
+                "suspicious_execution_chain",
+                "possible_data_theft"
+              ],
+              "weight": 0.5
+            },
+            {
+              "behavior": "sensitive_data_disclosure",
+              "blocks_decision": false,
+              "contradicts": [
+                "ordinary_activity"
+              ],
+              "explanation": "Nyx observed a metadata-only sensitive category crossing a boundary",
+              "fact_id": "evt-priv-1:sensitive_data_disclosure",
+              "provenance": [
+                "evt-priv-1",
+                "nyx.tls",
+                "privacy"
+              ],
+              "supports": [
+                "possible_data_theft"
+              ],
+              "weight": 0.82
+            },
+            {
+              "behavior": "disclosure_authority_absent",
+              "blocks_decision": false,
+              "contradicts": [],
+              "explanation": "No trusted local authority signal accompanied the disclosure",
+              "fact_id": "evt-priv-1:disclosure_authority_absent",
+              "provenance": [
+                "evt-priv-1",
+                "nyx.tls",
+                "privacy"
+              ],
+              "supports": [
+                "possible_data_theft"
+              ],
+              "weight": 0.76
+            }
+          ]
+        }
+      ],
+      "blockers": [],
+      "confidence": 0.9784,
+      "margin": 0.9784,
+      "reason": "possible_data_theft is best supported at 0.98 with margin 0.98",
+      "selected": "possible_data_theft"
+    }
+  },
+  "note": "valkyrie.hypothesis_isolated, nyx.hypothesis_isolated, fused_decision.hypothesis, and aegis.inference_hypotheses are reported SEPARATELY and are never merged into one global verdict -- see docs/AEGIS_PLATFORM_BRIDGE.md for why that separation is deliberate.",
+  "nyx": {
+    "evidence": [
+      {
+        "behavior": "sensitive_data_disclosure",
+        "contradicts": [
+          "ordinary_activity"
+        ],
+        "explanation": "Nyx observed a metadata-only sensitive category crossing a boundary",
+        "fact_id": "evt-priv-1:sensitive_data_disclosure",
+        "provenance": [
+          "evt-priv-1",
+          "nyx.tls",
+          "privacy"
+        ],
+        "supports": [
+          "possible_data_theft"
+        ],
+        "weight": 0.82
+      },
+      {
+        "behavior": "disclosure_authority_absent",
+        "contradicts": [],
+        "explanation": "No trusted local authority signal accompanied the disclosure",
+        "fact_id": "evt-priv-1:disclosure_authority_absent",
+        "provenance": [
+          "evt-priv-1",
+          "nyx.tls",
+          "privacy"
+        ],
+        "supports": [
+          "possible_data_theft"
+        ],
+        "weight": 0.76
+      }
+    ],
+    "hypothesis_isolated": {
+      "action": "alert",
+      "assessments": [
+        {
+          "confidence": 0.0,
+          "contradicting": [
+            {
+              "behavior": "sensitive_data_disclosure",
+              "blocks_decision": false,
+              "contradicts": [
+                "ordinary_activity"
+              ],
+              "explanation": "Nyx observed a metadata-only sensitive category crossing a boundary",
+              "fact_id": "evt-priv-1:sensitive_data_disclosure",
+              "provenance": [
+                "evt-priv-1",
+                "nyx.tls",
+                "privacy"
+              ],
+              "supports": [
+                "possible_data_theft"
+              ],
+              "weight": 0.82
+            }
+          ],
+          "contradiction_strength": 0.82,
+          "description": "Normal application or user activity",
+          "hypothesis_id": "ordinary_activity",
+          "support_strength": 0.0,
+          "supporting": []
+        },
+        {
+          "confidence": 0.0,
+          "contradicting": [],
+          "contradiction_strength": 0.0,
+          "description": "Expected administrative or maintenance work",
+          "hypothesis_id": "administrative_activity",
+          "support_strength": 0.0,
+          "supporting": []
+        },
+        {
+          "confidence": 0.0,
+          "contradicting": [],
+          "contradiction_strength": 0.0,
+          "description": "A suspicious execution chain is developing",
+          "hypothesis_id": "suspicious_execution_chain",
+          "support_strength": 0.0,
+          "supporting": []
+        },
+        {
+          "confidence": 0.0,
+          "contradicting": [],
+          "contradiction_strength": 0.0,
+          "description": "A process is attempting durable persistence",
+          "hypothesis_id": "persistence_attempt",
+          "support_strength": 0.0,
+          "supporting": []
+        },
+        {
+          "confidence": 0.9568,
+          "contradicting": [],
+          "contradiction_strength": 0.0,
+          "description": "Sensitive data may be leaving without authority",
+          "hypothesis_id": "possible_data_theft",
+          "support_strength": 0.9568,
+          "supporting": [
+            {
+              "behavior": "sensitive_data_disclosure",
+              "blocks_decision": false,
+              "contradicts": [
+                "ordinary_activity"
+              ],
+              "explanation": "Nyx observed a metadata-only sensitive category crossing a boundary",
+              "fact_id": "evt-priv-1:sensitive_data_disclosure",
+              "provenance": [
+                "evt-priv-1",
+                "nyx.tls",
+                "privacy"
+              ],
+              "supports": [
+                "possible_data_theft"
+              ],
+              "weight": 0.82
+            },
+            {
+              "behavior": "disclosure_authority_absent",
+              "blocks_decision": false,
+              "contradicts": [],
+              "explanation": "No trusted local authority signal accompanied the disclosure",
+              "fact_id": "evt-priv-1:disclosure_authority_absent",
+              "provenance": [
+                "evt-priv-1",
+                "nyx.tls",
+                "privacy"
+              ],
+              "supports": [
+                "possible_data_theft"
+              ],
+              "weight": 0.76
+            }
+          ]
+        }
+      ],
+      "blockers": [],
+      "confidence": 0.9568,
+      "margin": 0.9568,
+      "reason": "possible_data_theft is best supported at 0.96 with margin 0.96",
+      "selected": "possible_data_theft"
+    }
+  },
+  "provenance": {
+    "aegis_observation_provenance": [
+      {
+        "category": "DESTINATION",
+        "observation_point": "HOST_NETWORK_VANTAGE",
+        "provenance": [
+          "evt-net-1",
+          "network_collector",
+          "network",
+          "process:process:4242/1.000000"
+        ]
+      },
+      {
+        "category": "DESTINATION",
+        "observation_point": "HOST_NETWORK_VANTAGE",
+        "provenance": [
+          "evt-priv-1",
+          "nyx.tls",
+          "privacy",
+          "process:process:4242/1.000000"
+        ]
+      },
+      {
+        "category": "TIMING",
+        "observation_point": "HOST_NETWORK_VANTAGE",
+        "provenance": [
+          "evt-net-1",
+          "evt-priv-1",
+          "process:process:4242/1.000000"
+        ]
+      },
+      {
+        "category": "FREQUENCY",
+        "observation_point": "HOST_NETWORK_VANTAGE",
+        "provenance": [
+          "evt-net-1",
+          "evt-priv-1",
+          "process:process:4242/1.000000"
+        ]
+      },
+      {
+        "category": "SEQUENCE",
+        "observation_point": "HOST_NETWORK_VANTAGE",
+        "provenance": [
+          "evt-net-1",
+          "evt-priv-1",
+          "process:process:4242/1.000000"
+        ]
+      }
+    ],
+    "canonical_event_ids": [
+      "evt-proc-1",
+      "evt-net-1",
+      "evt-priv-1"
+    ],
+    "nyx_fact_provenance": {
+      "evt-priv-1:disclosure_authority_absent": [
+        "evt-priv-1",
+        "nyx.tls",
+        "privacy"
+      ],
+      "evt-priv-1:sensitive_data_disclosure": [
+        "evt-priv-1",
+        "nyx.tls",
+        "privacy"
+      ]
+    },
+    "valkyrie_fact_provenance": {
+      "evt-net-1:external_communication": [
+        "evt-net-1",
+        "network_collector",
+        "network"
+      ],
+      "evt-proc-1:unexpected_process_relationship": [
+        "evt-proc-1",
+        "process_collector",
+        "process",
+        "office_child_shell"
+      ]
+    }
+  },
+  "valkyrie": {
+    "evidence": [
+      {
+        "behavior": "unexpected_process_relationship",
+        "contradicts": [
+          "ordinary_activity"
+        ],
+        "explanation": "Execution context contains a reusable suspicious relationship primitive",
+        "fact_id": "evt-proc-1:unexpected_process_relationship",
+        "provenance": [
+          "evt-proc-1",
+          "process_collector",
+          "process",
+          "office_child_shell"
+        ],
+        "supports": [
+          "suspicious_execution_chain"
+        ],
+        "weight": 0.74
+      },
+      {
+        "behavior": "external_communication",
+        "contradicts": [],
+        "explanation": "A process communicated with an external destination",
+        "fact_id": "evt-net-1:external_communication",
+        "provenance": [
+          "evt-net-1",
+          "network_collector",
+          "network"
+        ],
+        "supports": [
+          "suspicious_execution_chain",
+          "possible_data_theft"
+        ],
+        "weight": 0.5
+      }
+    ],
+    "hypothesis_isolated": {
+      "action": "alert",
+      "assessments": [
+        {
+          "confidence": 0.0,
+          "contradicting": [
+            {
+              "behavior": "unexpected_process_relationship",
+              "blocks_decision": false,
+              "contradicts": [
+                "ordinary_activity"
+              ],
+              "explanation": "Execution context contains a reusable suspicious relationship primitive",
+              "fact_id": "evt-proc-1:unexpected_process_relationship",
+              "provenance": [
+                "evt-proc-1",
+                "process_collector",
+                "process",
+                "office_child_shell"
+              ],
+              "supports": [
+                "suspicious_execution_chain"
+              ],
+              "weight": 0.74
+            }
+          ],
+          "contradiction_strength": 0.74,
+          "description": "Normal application or user activity",
+          "hypothesis_id": "ordinary_activity",
+          "support_strength": 0.0,
+          "supporting": []
+        },
+        {
+          "confidence": 0.0,
+          "contradicting": [],
+          "contradiction_strength": 0.0,
+          "description": "Expected administrative or maintenance work",
+          "hypothesis_id": "administrative_activity",
+          "support_strength": 0.0,
+          "supporting": []
+        },
+        {
+          "confidence": 0.87,
+          "contradicting": [],
+          "contradiction_strength": 0.0,
+          "description": "A suspicious execution chain is developing",
+          "hypothesis_id": "suspicious_execution_chain",
+          "support_strength": 0.87,
+          "supporting": [
+            {
+              "behavior": "unexpected_process_relationship",
+              "blocks_decision": false,
+              "contradicts": [
+                "ordinary_activity"
+              ],
+              "explanation": "Execution context contains a reusable suspicious relationship primitive",
+              "fact_id": "evt-proc-1:unexpected_process_relationship",
+              "provenance": [
+                "evt-proc-1",
+                "process_collector",
+                "process",
+                "office_child_shell"
+              ],
+              "supports": [
+                "suspicious_execution_chain"
+              ],
+              "weight": 0.74
+            },
+            {
+              "behavior": "external_communication",
+              "blocks_decision": false,
+              "contradicts": [],
+              "explanation": "A process communicated with an external destination",
+              "fact_id": "evt-net-1:external_communication",
+              "provenance": [
+                "evt-net-1",
+                "network_collector",
+                "network"
+              ],
+              "supports": [
+                "suspicious_execution_chain",
+                "possible_data_theft"
+              ],
+              "weight": 0.5
+            }
+          ]
+        },
+        {
+          "confidence": 0.0,
+          "contradicting": [],
+          "contradiction_strength": 0.0,
+          "description": "A process is attempting durable persistence",
+          "hypothesis_id": "persistence_attempt",
+          "support_strength": 0.0,
+          "supporting": []
+        },
+        {
+          "confidence": 0.5,
+          "contradicting": [],
+          "contradiction_strength": 0.0,
+          "description": "Sensitive data may be leaving without authority",
+          "hypothesis_id": "possible_data_theft",
+          "support_strength": 0.5,
+          "supporting": [
+            {
+              "behavior": "external_communication",
+              "blocks_decision": false,
+              "contradicts": [],
+              "explanation": "A process communicated with an external destination",
+              "fact_id": "evt-net-1:external_communication",
+              "provenance": [
+                "evt-net-1",
+                "network_collector",
+                "network"
+              ],
+              "supports": [
+                "suspicious_execution_chain",
+                "possible_data_theft"
+              ],
+              "weight": 0.5
+            }
+          ]
+        }
+      ],
+      "blockers": [],
+      "confidence": 0.87,
+      "margin": 0.87,
+      "reason": "suspicious_execution_chain is best supported at 0.87 with margin 0.87",
+      "selected": "suspicious_execution_chain"
+    }
+  },
+  "what_happened": [
+    {
+      "action": "observed",
+      "activity": "exec",
+      "actor_name": "browser.exe",
+      "actor_path": "",
+      "actor_pid": 4242,
+      "category": "process",
+      "fields": {
+        "create_time": 1.0,
+        "event_id": "evt-proc-1"
+      },
+      "labels": [
+        "office_child_shell"
+      ],
+      "reason": "",
+      "severity": "info",
+      "source": "process_collector",
+      "target": {},
+      "ts": 1.0
+    },
+    {
+      "action": "observed",
+      "activity": "connect",
+      "actor_name": "browser.exe",
+      "actor_path": "",
+      "actor_pid": 4242,
+      "category": "network",
+      "fields": {
+        "event_id": "evt-net-1"
+      },
+      "labels": [],
+      "reason": "",
+      "severity": "info",
+      "source": "network_collector",
+      "target": {
+        "domain": "collector.example",
+        "ip": "203.0.113.9"
+      },
+      "ts": 2.0
+    },
+    {
+      "action": "observed",
+      "activity": "outbound_observation",
+      "actor_name": "browser.exe",
+      "actor_path": "",
+      "actor_pid": 4242,
+      "category": "privacy",
+      "fields": {
+        "authorized": false,
+        "destination_host": "collector.example",
+        "event_id": "evt-priv-1",
+        "privacy_category": "identifier"
+      },
+      "labels": [
+        "nyx_leak"
+      ],
+      "reason": "",
+      "severity": "info",
+      "source": "nyx.tls",
+      "target": {
+        "domain": "collector.example"
+      },
+      "ts": 3.0
+    }
+  ]
+}

@@ -611,6 +611,53 @@ def fake_outbound(method, url, headers=None, body=None, persona=None,
     return new_url, new_body, faked
 
 
+# Header names inspect_outbound() itself refuses to scan for an identifier,
+# because they carry routing/session/proxy information rather than a
+# device-style id -- kept identical to the skip-list in inspect_outbound so
+# the two never disagree about what counts as an identifier header.
+_ID_HEADER_SKIP = frozenset({"referer", "origin", "cookie", "authorization", "host"})
+
+
+def fake_outbound_headers(method, url, headers=None, body=None, persona=None,
+                          first_party_origin=None) -> tuple[dict, list[str]]:
+    """ACT on a personal identifier carried in a REQUEST HEADER rather than the
+    url or body - e.g. a tracker SDK's ``X-Device-Id: <uuid>``. inspect_outbound()
+    already sees this (its own header scan), but fake_outbound() only ever
+    rewrites (url, body) and can never reach a header-only identifier. This is
+    the companion that closes that gap.
+
+    Returns (changed_headers, faked_categories). changed_headers maps the
+    ORIGINAL header name to its persona-consistent replacement value; empty
+    when there is nothing to fake, so a caller can apply it unconditionally
+    without special-casing "nothing changed". Pure aside from reading the
+    current persona, same as fake_outbound().
+    """
+    dest_host = _host_of(url)
+    if not dest_host:
+        return {}, []
+    dest_base = registrable_base(dest_host)
+    h = _lower_headers(headers)
+    fp = (first_party_origin or "").strip() or first_party_of(headers)
+    if not fp or fp == dest_base:
+        return {}, []
+    if persona is None:
+        from .persona import current_persona
+        persona = current_persona()
+
+    changed: dict = {}
+    for key, value in dict(headers or {}).items():
+        lk = str(key).lower()
+        if lk in _ID_HEADER_SKIP:
+            continue
+        vs = str(value)
+        if _ID_KEY.search(lk) and (_UUID.search(vs) or _LONG_TOKEN.match(vs.strip())):
+            fake = _fake_for(CAT_IDENTIFIER, vs, "", persona)
+            if fake is not None and str(fake) != vs:
+                changed[key] = str(fake)
+            break   # one identifier header is enough, same as inspect_outbound
+    return changed, (["identifier"] if changed else [])
+
+
 # --- SELF-TEST: prove the guard live, on demand ---
 def self_test() -> dict:
     """Run a fixed set of SYNTHETIC third-party leaks through the real observe +

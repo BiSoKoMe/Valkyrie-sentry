@@ -29,8 +29,13 @@ from pathlib import Path
 from ..eventbus import EventBus
 from .builtin import register_builtin
 from .causality import CausalityGraph
-from .causal_detect import CausalBaseline, score_subgraph
+from .causal_detect import (
+    CausalBaseline,
+    evaluate_causal_hypotheses,
+    score_subgraph,
+)
 from .consequence import score_privacy_consequence
+from .detection_v2 import DetectionArchitectureV2
 from .investigate import Investigator
 from .hunt import ThreatHunter
 from .killchain import KillChainCorrelator
@@ -145,6 +150,13 @@ class EdrEngine:
         self._causal_seen: set = set()   # subgraph keys already scored this run
         self._consequence_seen: set = set()  # (CGO, destination), bounded below
         self._causal_event_seen: set = set()  # retry-safe telemetry learning
+        # Detection Architecture v2 runs in shadow mode over every normalized
+        # event, including Nyx privacy metadata. It cannot originate incidents
+        # or authorize enforcement. This lets the shared evidence architecture
+        # be measured before it is trusted with response authority.
+        self._detection_v2 = DetectionArchitectureV2()
+        self._v2_stop = threading.Event()
+        self._v2_worker: Optional[threading.Thread] = None
         self._running = False
 
     # ------------------------------------------------------------------
@@ -155,13 +167,36 @@ class EdrEngine:
         self._edr.init_schema()
         self._store.subscribe(self._on_store_event)
         self._running = True
+        self._v2_stop.clear()
+        if self._v2_worker is None or not self._v2_worker.is_alive():
+            self._v2_worker = threading.Thread(
+                target=self._run_v2_analytics,
+                name="valkyrie-detection-v2-analytics",
+                daemon=True,
+            )
+            self._v2_worker.start()
 
     def stop(self) -> None:
         self._running = False
+        self._v2_stop.set()
+        worker = self._v2_worker
+        if worker is not None and worker is not threading.current_thread():
+            worker.join(timeout=2.0)
+        self._v2_worker = None
         try:
             self._store.unsubscribe(self._on_store_event)
         except Exception:
             pass
+
+    def _run_v2_analytics(self) -> None:
+        """Bounded analytics lane. It has no incident or response authority."""
+        while not self._v2_stop.wait(0.25):
+            try:
+                self._detection_v2.run_analytics(128)
+            except Exception:
+                # The established detector must remain available if shadow
+                # analytics encounters malformed state.
+                continue
 
     # ------------------------------------------------------------------
     # Live-event ingest (runs on the Store writer thread)
@@ -217,6 +252,23 @@ class EdrEngine:
             self._record_causality(d)
         except Exception:
             pass
+
+        # Canonical event -> entity -> behavior evidence -> competing
+        # hypotheses. Keep this above the severity gate so ordinary and
+        # contradictory evidence is retained too. A suspicious-only ledger
+        # would recreate the false-positive problem v2 is meant to solve.
+        architecture_v2 = None
+        try:
+            pid = int(d.get("actor_pid", 0) or 0)
+            create_time = float((d.get("fields") or {}).get("create_time") or 0.0)
+            subgraph = (self._causality.subgraph(pid, create_time, max_nodes=128)
+                        if pid > 0 else None)
+            architecture_v2 = self._detection_v2.observe(
+                d, causal_subgraph=subgraph)
+        except Exception:
+            # Shadow analysis may degrade, but it must never interrupt the
+            # established detection and response pipeline.
+            architecture_v2 = None
 
         severity = str(d.get("severity", "info"))
         action = str(d.get("action", ""))
@@ -331,6 +383,8 @@ class EdrEngine:
                      # so correlation and the SOC view never lose the others.
                      "all_techniques": list(fields.get("all_techniques") or [])},
         )
+        if architecture_v2 is not None:
+            det_kwargs["details"]["architecture_v2"] = architecture_v2.to_dict()
         # Preserve the COLLECTOR's own event timestamp (event.ts) instead of
         # defaulting to "now" (when the engine got around to processing it).
         # For a polling collector (process/persistence/network telemetry) the
@@ -540,6 +594,18 @@ class EdrEngine:
         if not finding.fires:
             return
 
+        # Detection Architecture v2 gate: motifs and rarity are behavioural
+        # evidence, not the final verdict.  Compare the attack explanation with
+        # explicit routine/maintenance explanations before originating a new
+        # detection.  Existing rule detections are unaffected by this gate.
+        try:
+            hypothesis = evaluate_causal_hypotheses(
+                sub, self._causal_baseline, finding)
+        except Exception:
+            return
+        if not hypothesis.alerts or hypothesis.selected != "malicious_execution":
+            return
+
         owner = str(cgo.get("name") or "?")
         det = Detection(
             source="edr.causal",
@@ -553,6 +619,7 @@ class EdrEngine:
             details={
                 "causal_score": finding.score,
                 "causal_rarity": finding.rarity,
+                "hypothesis": hypothesis.to_dict(),
                 "motifs": list(finding.motifs),
                 "rare_edges": list(finding.rare_edges),
                 # The explanation rides on the detection: this is the one
@@ -617,6 +684,18 @@ class EdrEngine:
         return {"observations": b.observations, "sessions": b.sessions,
                 "mature": b.mature, "edges": len(b.edges),
                 "artifact_patterns": len(b.artifacts)}
+
+    def detection_v2_status(self) -> dict:
+        """Read-only status for the deterministic shadow architecture."""
+        return self._detection_v2.status()
+
+    def evidence_ledger(self, limit: int = 100) -> list[dict]:
+        """Recent content-safe v2 evidence ledgers, newest last."""
+        return self._detection_v2.ledger(limit)
+
+    def drain_detection_v2_analytics(self, budget: int = 128) -> list[dict]:
+        """Drain bounded async-work candidates for a background scheduler."""
+        return [event.to_dict() for event in self._detection_v2.drain_analytics(budget)]
 
     def _enrich_causality(self, det: Detection) -> None:
         """Record the detection on its process node and stamp the CGO on it.

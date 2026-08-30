@@ -323,6 +323,14 @@ class ValkyrieAddon:
             if NYX_ACT:
                 new_url, new_body, faked = nyx.fake_outbound(
                     req.method, url, headers, body)
+                # fake_outbound() only ever rewrites (url, body), so an
+                # identifier a tracker SDK put in a request HEADER (e.g.
+                # X-Device-Id) would otherwise be observed and reported but
+                # never deceived. fake_outbound_headers() is the companion
+                # that closes that gap.
+                new_headers, header_faked = nyx.fake_outbound_headers(
+                    req.method, url, headers, body)
+                faked = list(dict.fromkeys(faked + header_faked))
                 if faked:
                     try:
                         if new_url != url:
@@ -330,6 +338,8 @@ class ValkyrieAddon:
                         if new_body is not None and new_body != body:
                             req.set_content(new_body if isinstance(new_body, bytes)
                                             else str(new_body).encode("utf-8"))
+                        for hk, hv in new_headers.items():
+                            req.headers[hk] = hv
                         self._log(domain, url, proc, "deceived",
                                   "Nyx fed fake data for your "
                                   + ", ".join(faked) + f" to {domain}",
