@@ -3,9 +3,6 @@ name: Causal authority evidence
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-      - master
     paths:
       - "browser_extension/**"
       - "valkyrie/browser_context.py"
