@@ -8,8 +8,22 @@ interchangeable.
 
 ## Start here
 
+- [Causal authority research paper](CAUSAL_AUTHORITY_RESEARCH_PAPER.md) - the
+  newest fixed-corpus experiment, results, limitations, and next hypothesis.
+- [Causal authority research paper PDF](../output/pdf/Valkyrie_Causal_Authority_Research_Paper.pdf) -
+  print-ready four-page edition.
+- [Safe reproduction guide](SAFE_REPRODUCTION.md) - exact local and GitHub
+  Windows evidence commands with the safety boundary.
+- [Application engineering narrative](APPLICATION_ENGINEERING_NARRATIVE.md) -
+  a concise account of building, finding failures, and changing the design.
+- [Causal authority experiment report](AUTHORITY_EXPERIMENT_REPORT.md) - local
+  and clean Windows 500 plus 100 synthetic corpus result.
+- [Raw Windows evidence](evidence/authority-windows-6113502.json) - all 600
+  expected and actual trial verdicts from the cited GitHub run.
 - [Valkyrie research paper](VALKYRIE_RESEARCH_PAPER.md) — formal description of
   the local privacy/security provenance experiment.
+- [Research paper PDF](../output/pdf/Valkyrie_Research_Paper.pdf) —
+  print-ready edition of the same evidence-bounded paper.
 - [Provenance architecture assessment](PROVENANCE_ARCHITECTURE_ASSESSMENT.md) —
   implementation inventory, Windows data-source reality, gaps, and risks.
 - [Provenance phase status](PROVENANCE_PHASE_STATUS.md) — current evidence
@@ -29,7 +43,8 @@ interchangeable.
 ## Browser and application context
 
 - [Browser context bridge](BROWSER_CONTEXT_BRIDGE.md) — experimental Chromium
-  extension/native-host design and privacy boundary.
+  extension/native-host design, causal-authority experiment, and privacy
+  boundary.
 
 ## Evaluation and future work
 

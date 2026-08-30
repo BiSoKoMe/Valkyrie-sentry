@@ -25,7 +25,7 @@ DOWNLOAD_URL`), verify its Authenticode signature names Microsoft BEFORE
 executing anything extracted from the archive, then install it with
 Valkyrie's own minimal event config (`VALKYRIE_SYSMON_CONFIG` below) -
 narrowly scoped to exactly the event types Valkyrie's detectors read
-(1/3/7/8/10/11/13/25), not the much larger SwiftOnSecurity community config
+(1/3/6/7/8/10/11/13/25), not the much larger SwiftOnSecurity community config
 used only by the dev/red-team provisioning script (redteam/provision.ps1),
 which is appropriate for a researcher's box, not for a shipped agent's
 telemetry footprint.
@@ -113,9 +113,12 @@ FRESHNESS_SECONDS = 600
 _EID_RULE_SECTION = {
     1:  "ProcessCreate",
     3:  "NetworkConnect",
+    6:  "DriverLoad",
     7:  "ImageLoad",
     8:  "CreateRemoteThread",
     10: "ProcessAccess",
+    11: "FileCreate",
+    13: "RegistryEvent",
 }
 
 _LOG_NAME = "Microsoft-Windows-Sysmon/Operational"
@@ -375,13 +378,14 @@ def check_requirements(requires: tuple, sysmon: SysmonEnvironment) -> tuple:
 #   1  ProcessCreate      - command-line detection (IOA rules, cmdline_normalize,
 #                           reconnaissance-burst)
 #   3  NetworkConnect     - corroborates network_score.py's list-free signals
-#   7  ImageLoad          - unsigned modules + kernel-driver-load (BYOVD)
+#   6  DriverLoad         - unsigned or user-directory driver load (BYOVD)
+#   7  ImageLoad          - unsigned user-mode modules
 #   8  CreateRemoteThread - T1055 process injection (etw/sysmon.py EID 8)
 #   10 ProcessAccess      - T1003.001 LSASS credential dumping (EID 10),
 #                           scoped to lsass.exe only - this is not a general
 #                           process-access monitor
-#   11 FileCreate         - startup-folder persistence
-#   13 RegistryEvent      - Run-key persistence
+#   11 FileCreate         - startup-folder and browser-extension integrity
+#   13 RegistryEvent      - Run-key and extension-policy integrity
 #   25 ProcessTampering   - process hollowing
 # Deliberately NOT the SwiftOnSecurity community config used by
 # redteam/provision.ps1 for red-team research - that config is appropriate
@@ -392,7 +396,9 @@ VALKYRIE_SYSMON_CONFIG = """<Sysmon schemaversion="4.90">
     <RuleGroup groupRelation="or"><ProcessCreate onmatch="exclude" /></RuleGroup>
     <!-- 3: network connect -->
     <RuleGroup groupRelation="or"><NetworkConnect onmatch="exclude" /></RuleGroup>
-    <!-- 7: image load - unsigned modules + BYOVD -->
+    <!-- 6: driver load - rare, high-value BYOVD evidence -->
+    <RuleGroup groupRelation="or"><DriverLoad onmatch="exclude" /></RuleGroup>
+    <!-- 7: image load - unsigned user-mode modules -->
     <RuleGroup groupRelation="or">
       <ImageLoad onmatch="include"><Signed condition="is">false</Signed></ImageLoad>
     </RuleGroup>
@@ -404,16 +410,49 @@ VALKYRIE_SYSMON_CONFIG = """<Sysmon schemaversion="4.90">
         <TargetImage condition="image">lsass.exe</TargetImage>
       </ProcessAccess>
     </RuleGroup>
-    <!-- 11: file create in startup locations -->
+    <!-- 11: startup and browser-extension integrity. Nested AND rules keep
+         browser cache/history writes out of the event log. -->
     <RuleGroup groupRelation="or">
       <FileCreate onmatch="include">
         <TargetFilename condition="contains">\\Start Menu\\Programs\\Startup</TargetFilename>
+        <Rule groupRelation="and">
+          <TargetFilename condition="contains">\\Google\\Chrome\\User Data\\</TargetFilename>
+          <TargetFilename condition="contains">\\Extensions\\</TargetFilename>
+        </Rule>
+        <Rule groupRelation="and">
+          <TargetFilename condition="contains">\\Microsoft\\Edge\\User Data\\</TargetFilename>
+          <TargetFilename condition="contains">\\Extensions\\</TargetFilename>
+        </Rule>
+        <Rule groupRelation="and">
+          <TargetFilename condition="contains">\\BraveSoftware\\Brave-Browser\\User Data\\</TargetFilename>
+          <TargetFilename condition="contains">\\Extensions\\</TargetFilename>
+        </Rule>
+        <Rule groupRelation="and">
+          <TargetFilename condition="contains">\\Vivaldi\\User Data\\</TargetFilename>
+          <TargetFilename condition="contains">\\Extensions\\</TargetFilename>
+        </Rule>
+        <Rule groupRelation="and">
+          <TargetFilename condition="contains">\\Mozilla\\Firefox\\Profiles\\</TargetFilename>
+          <TargetFilename condition="contains">\\extensions\\</TargetFilename>
+        </Rule>
+        <Rule groupRelation="and">
+          <TargetFilename condition="contains">\\Mozilla\\Firefox\\Profiles\\</TargetFilename>
+          <TargetFilename condition="end with">\\extensions.json</TargetFilename>
+        </Rule>
+        <!-- Preference writes matter only when a non-browser actor makes them.
+             Browser self-writes are intentionally filtered at source. -->
+        <Rule groupRelation="and">
+          <TargetFilename condition="contains any">\\Google\\Chrome\\User Data\\;\\Microsoft\\Edge\\User Data\\;\\BraveSoftware\\Brave-Browser\\User Data\\;\\Vivaldi\\User Data\\</TargetFilename>
+          <TargetFilename condition="contains any">\\Preferences;\\Secure Preferences</TargetFilename>
+          <Image condition="excludes any">\\chrome.exe;\\msedge.exe;\\brave.exe;\\vivaldi.exe;\\opera.exe</Image>
+        </Rule>
       </FileCreate>
     </RuleGroup>
-    <!-- 12/13: registry autostart -->
+    <!-- 12/13: registry autostart and extension force-install policy -->
     <RuleGroup groupRelation="or">
       <RegistryEvent onmatch="include">
         <TargetObject condition="contains">\\CurrentVersion\\Run</TargetObject>
+        <TargetObject condition="contains any">\\ExtensionInstallForcelist;\\ExtensionSettings</TargetObject>
       </RegistryEvent>
     </RuleGroup>
     <!-- 25: process tampering (hollowing) -->

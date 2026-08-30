@@ -441,7 +441,7 @@ class EdrEngine:
     # where the structure actually becomes interesting.
     _CAUSAL_TRIGGER_KINDS = frozenset({
         "registry", "persistence", "autostart", "service", "scheduled_task",
-        "startup_folder", "dns", "network", "connection",
+        "startup_folder", "browser_extension", "dns", "network", "connection",
     })
 
     def _causal_check(self, pid: int, kind: str, create_time: float = 0.0,

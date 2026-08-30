@@ -163,10 +163,15 @@ for server-side decryption will not necessarily hit those filename markers, and 
 design produce no local decryption telemetry. The generalizing signal is
 archive-then-egress over a browser profile path, not the filenames.
 
-**3. Malicious browser extension load — zero coverage.** No detection for unpacked
-extension loads, `ExtensionInstallForcelist` registry writes, or extension-directory
-writes by a non-browser process. Given that this is squarely a *privacy* attack and
-Valkyrie is a privacy product, this is arguably the most on-mission gap in the list.
+**3. Malicious browser extension load — partial structural coverage.** Imported
+Sigma content already detects Chromium launched with `--load-extension`. The
+August 2026 integrity increment additionally observes targeted Sysmon file writes
+inside Chromium/Firefox extension stores, non-browser modification of Chromium
+Preferences files, and writes to `ExtensionInstallForcelist` or
+`ExtensionSettings`. It grades the change by writer provenance and retains no
+registry payload or extension source. This is mechanism coverage, not proof that
+Valkyrie can identify a store-delivered malicious extension or its runtime intent.
+See `BROWSER_EXTENSION_INTEGRITY.md`.
 
 **4. Driverless EDR killers — zero coverage.** `etw/sysmon.py` covers the driver-load
 path only. EDRSilencer-style WFP filter additions and EDR-Freeze-style process
@@ -192,8 +197,10 @@ moment across every 2026 supply-chain campaign.
 Ranked by mission fit × visibility in telemetry Valkyrie already has × how well the
 rule generalizes rather than lists.
 
-1. **Browser extension integrity** — most on-mission, and the telemetry (file writes
-   into extension dirs, force-install registry keys) already flows.
+1. **Measure browser extension integrity efficacy** — the classifier and narrowed
+   Sysmon configuration now have live mechanism validation on a disposable
+   Windows runner. Malicious-extension efficacy and false-positive volume remain
+   unmeasured.
 2. **RMM install/execution IOA** — behavioural shape (unattended install → service
    → outbound to relay) rather than a vendor name list, so it survives new RMM
    products.

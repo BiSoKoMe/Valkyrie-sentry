@@ -4,6 +4,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 from unittest.mock import patch
 
@@ -68,7 +69,44 @@ class BrowserContextTests(unittest.TestCase):
         token = "t" * 32
         self.assertTrue(self.collector.token_ok(token))
         self.assertFalse(self.collector.token_ok("wrong"))
-        self.assertIn("no page text", self.collector.status()["privacy_boundary"])
+        self.assertIn("raw values are transient", self.collector.status()["privacy_boundary"])
+
+    def test_scoped_gesture_authorizes_one_matching_submit(self):
+        interaction = str(uuid.uuid4())
+        gesture = self._event(
+            event_type="user_gesture", gesture="pointer",
+            interaction_id=interaction, intended_action="form_submit",
+            destination_origin="https://receiver.test/upload?ignored=yes",
+            data_labels=["email", "ordinary"],
+        )
+        issued = self.collector.ingest(gesture)
+        self.assertEqual(issued["event"]["authority"]["disposition"], "issued")
+
+        submit = self._event(
+            interaction_id=interaction,
+            destination_origin="https://receiver.test/collect?secret=never-retain",
+            data_labels=["email"],
+        )
+        allowed = self.collector.ingest(submit)
+        self.assertEqual(allowed["event"]["authority"]["disposition"], "allow")
+        self.assertFalse(allowed["event"]["authority"]["enforced"])
+
+        replay = self.collector.ingest(submit)
+        self.assertEqual(replay["event"]["authority"]["disposition"], "refuse")
+
+    def test_raw_payload_fields_never_cross_sanitizer_or_telemetry(self):
+        secret = "raw-secret-4f902a74"
+        result = self.collector.ingest(self._event(
+            raw_form_value=secret,
+            page_text=secret,
+            cookie=secret,
+            data_labels=["email", secret],
+            destination_origin="https://receiver.test/path?q=" + secret,
+        ))
+        encoded = str(result) + str(self.collector.status()) + str(
+            [event.to_dict() for event in self.edr.events])
+        self.assertNotIn(secret, encoded)
+        self.assertEqual(result["event"]["destination_origin"], "https://receiver.test")
 
     def test_unverifiable_token_file_fails_closed(self):
         token_path = Path(self.temp.name) / "unverifiable-token.txt"
@@ -97,4 +135,7 @@ class BrowserContextTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    suite = unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    print("PASS" if result.wasSuccessful() else "FAIL")
+    raise SystemExit(0 if result.wasSuccessful() else 1)

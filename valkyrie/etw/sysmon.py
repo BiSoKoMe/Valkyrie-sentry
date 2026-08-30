@@ -30,6 +30,7 @@ from typing import Optional
 
 from .framework import Sensor
 from .wineventlog import ChannelReader, parse_event_xml
+from ..browser_extension_integrity import classify_extension_change
 from ..behavior_score import classify_anomaly
 from ..behavioral_rules import classify_behavior
 from ..process_telemetry import classify_cmdline, classify_discovery, classify_process
@@ -42,7 +43,7 @@ from ..telemetry import (
 
 _CHANNEL = "Microsoft-Windows-Sysmon/Operational"
 # The subset we consume (Sysmon logs far more; these carry the most signal).
-_EVENT_IDS = (1, 3, 6, 7, 8, 10, 11, 12, 13, 25)
+_EVENT_IDS = (1, 3, 6, 7, 8, 10, 11, 12, 13, 14, 25)
 
 # Directories a legitimate kernel driver never loads from. A signed-but-
 # vulnerable driver dropped here is the BYOVD pattern; genuine drivers live in
@@ -360,8 +361,11 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
             "context": {"call_trace": (d.get("CallTrace", "") or "")[:400]},
         }
 
-    # EID 11 - file create in a startup / autorun location.
+    # EID 11 - browser-extension state or startup-folder persistence.
     if eid == 11:
+        extension = classify_extension_change(eid, d)
+        if extension is not None:
+            return extension
         fn = (d.get("TargetFilename", "") or "")
         low = fn.lower().replace("/", "\\")
         if "\\startup\\" not in low and "\\start menu\\programs\\startup" not in low:
@@ -385,8 +389,13 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
             "context": {},
         }
 
-    # EID 12/13 - registry create/set in an autorun key.
-    if eid in (12, 13):
+    # EID 12/13/14 - registry create/set/rename in an autorun or extension
+    # policy key. Rename matters because staging a value elsewhere and moving
+    # it into policy must not bypass the same invariant.
+    if eid in (12, 13, 14):
+        extension = classify_extension_change(eid, d)
+        if extension is not None:
+            return extension
         obj = (d.get("TargetObject", "") or "")
         low = obj.lower()
         if not any(k in low for k in ("\\run\\", "\\runonce\\", "currentversion\\run",

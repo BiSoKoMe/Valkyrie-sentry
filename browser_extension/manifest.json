@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Valkyrie Local Context",
-  "version": "0.1.0",
-  "description": "Sends privacy-minimized browser interaction context to the local Valkyrie engine.",
+  "version": "0.2.0",
+  "description": "Creates local, privacy-minimized causal authority for browser form consequences.",
   "permissions": ["nativeMessaging", "tabs", "webNavigation"],
   "background": {"service_worker": "background.js", "type": "module"},
   "content_scripts": [{

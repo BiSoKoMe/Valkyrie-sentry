@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from .causal_authority import (CausalAuthorityEngine, EgressRequest,
+                               normalize_labels, valid_uuid)
 from .config import DATA_DIR
 from .telemetry import ACT_OBSERVED, CAT_PRIVACY, SEV_INFO, TelemetryEvent
 
@@ -68,8 +70,10 @@ class BrowserContextCollector:
     """Validate browser-native messages and emit metadata-only privacy telemetry."""
 
     def __init__(self, edr: object | None = None, *, token_path: Path | None = None,
-                 token: str = "") -> None:
+                 token: str = "",
+                 authority: CausalAuthorityEngine | None = None) -> None:
         self._edr = edr
+        self._authority = authority or CausalAuthorityEngine()
         self._token_path = Path(token_path or BROWSER_CONTEXT_TOKEN_PATH)
         self._native_host_ready = False
         self._token = str(token) if len(str(token)) >= 32 else self._load_or_create_token()
@@ -152,6 +156,14 @@ class BrowserContextCollector:
             "consent_state": consent if consent in _CONSENT else "unknown",
             "browser": browser,
             "ts": observed_at,
+            # The browser inspects values only inside its capture compartment.
+            # Only controlled labels and scoped origins cross this boundary.
+            "interaction_id": valid_uuid(payload.get("interaction_id")),
+            "intended_action": (
+                "form_submit" if payload.get("intended_action") == "form_submit" else ""
+            ),
+            "destination_origin": _origin(payload.get("destination_origin")),
+            "data_labels": sorted(normalize_labels(payload.get("data_labels") or [])),
         }
 
     def ingest(self, payload: object) -> dict[str, Any]:
@@ -160,6 +172,8 @@ class BrowserContextCollector:
             with self._lock:
                 self._rejected += 1
             return {"accepted": False, "reason": "invalid browser context event"}
+        authority_result = self._evaluate_authority(event)
+        event["authority"] = authority_result
         with self._lock:
             self._accepted += 1
             self._recent.append(dict(event))
@@ -171,7 +185,8 @@ class BrowserContextCollector:
                 ts=event["ts"], severity=SEV_INFO,
                 reason="Browser supplied local interaction context",
                 source="browser_native_messaging",
-                labels=["browser_context", event["event_type"]],
+                labels=["browser_context", event["event_type"],
+                        f"authority_{authority_result['disposition']}"],
                 target={"origin": event["first_party_origin"]},
                 fields={
                     "artifact_kind": "browser_context",
@@ -182,6 +197,11 @@ class BrowserContextCollector:
                     "gesture": event["gesture"],
                     "consent_state": event["consent_state"],
                     "attribution_confidence": "browser_semantic_no_process_pid",
+                    "authority_disposition": authority_result["disposition"],
+                    "authority_reason": authority_result["reason"],
+                    "authority_present": str(bool(event["interaction_id"])).lower(),
+                    "destination_origin": event["destination_origin"],
+                    "data_labels": ",".join(event["data_labels"]),
                 },
             )
             try:
@@ -191,6 +211,46 @@ class BrowserContextCollector:
                 pass
         return {"accepted": True, "event": event}
 
+    def _evaluate_authority(self, event: dict[str, Any]) -> dict[str, Any]:
+        """Issue or verify a local grant without claiming browser enforcement."""
+        if event["event_type"] == "user_gesture":
+            if not event["user_initiated"]:
+                return {"disposition": "not_issued", "reason": "gesture was not trusted"}
+            grant = self._authority.issue(
+                interaction_id=event["interaction_id"],
+                source_origin=event["first_party_origin"],
+                destination_origin=event["destination_origin"],
+                tab_id=event["tab_id"],
+                frame_id=event["frame_id"],
+                action=event["intended_action"],
+                data_labels=event["data_labels"],
+            )
+            if grant is None:
+                return {"disposition": "not_issued", "reason": "gesture had no valid egress scope"}
+            return {
+                "disposition": "issued",
+                "reason": "short-lived one-shot causal grant created locally",
+                "expires_in_ms": int((grant.expires_at - grant.issued_at) * 1000),
+            }
+        if event["event_type"] != "form_submit":
+            return {"disposition": "not_applicable", "reason": "event has no egress consequence"}
+        verdict = self._authority.verify_and_consume(EgressRequest(
+            request_id=event["event_id"],
+            interaction_id=event["interaction_id"],
+            source_origin=event["first_party_origin"],
+            destination_origin=event["destination_origin"],
+            tab_id=event["tab_id"],
+            frame_id=event["frame_id"],
+            action="form_submit",
+            data_labels=frozenset(event["data_labels"]),
+        ))
+        result = verdict.to_dict()
+        # The grant id is useful internally for a single response, but retaining
+        # it in telemetry creates unnecessary cross-event linkage.
+        result.pop("grant_id", None)
+        result["enforced"] = False
+        return result
+
     def status(self) -> dict[str, Any]:
         with self._lock:
             return {
@@ -199,5 +259,6 @@ class BrowserContextCollector:
                 "accepted": self._accepted,
                 "rejected": self._rejected,
                 "recent": list(self._recent),
-                "privacy_boundary": "origin and interaction metadata only; no page text, form values, cookies, DOM, paths, or query strings",
+                "authority": self._authority.status(),
+                "privacy_boundary": "origin, controlled data labels, and interaction metadata only; raw values are transient in the browser and never enter telemetry, logs, graph state, disk, paths, or query strings",
             }

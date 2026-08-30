@@ -115,7 +115,7 @@ def main() -> int:
         c.check("healthy + ours -> MODE_ALREADY_OURS, not degraded",
                 r.mode == MODE_ALREADY_OURS and not r.degraded)
 
-    with mock.patch.object(sm, "probe_sysmon", lambda: _env(present=True, live=True, eids=(1, 3, 7, 8, 10))), \
+    with mock.patch.object(sm, "probe_sysmon", lambda: _env(present=True, live=True, eids=(1, 3, 6, 7, 8, 10, 11, 13))), \
          mock.patch.object(sm, "_we_installed_it", return_value=False):
         r = sm.install_or_verify()
         c.check("healthy + foreign + full EID coverage -> MODE_FOREIGN_CONFIG, "
@@ -232,8 +232,9 @@ def main() -> int:
 
     # ------------------------------------------------------------------
     print("\n[5] The shipped config matches what environment.py checks for")
-    for section in ("ProcessCreate", "NetworkConnect", "ImageLoad",
-                    "CreateRemoteThread", "ProcessAccess"):
+    for section in ("ProcessCreate", "NetworkConnect", "DriverLoad", "ImageLoad",
+                    "CreateRemoteThread", "ProcessAccess", "FileCreate",
+                    "RegistryEvent"):
         c.check(f"VALKYRIE_SYSMON_CONFIG includes {section}",
                 section in sm.VALKYRIE_SYSMON_CONFIG)
     c.check("ProcessAccess is scoped to lsass.exe only, not every process",

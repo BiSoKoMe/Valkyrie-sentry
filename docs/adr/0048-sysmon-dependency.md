@@ -68,7 +68,7 @@ install/first-run time, verifies the Authenticode signature names Microsoft
 binary, not just an invalid one) **before executing anything extracted from
 the archive**, then installs it with Valkyrie's own minimal event config
 (`VALKYRIE_SYSMON_CONFIG`) - narrowly scoped to exactly what this product's
-detectors read (EID 1/3/7/8/10/11/13/25), not the much larger
+detectors read (EID 1/3/6/7/8/10/11/13/25), not the much larger
 SwiftOnSecurity community config `redteam/provision.ps1` uses for red-team
 research. A researcher's box and a shipped agent's telemetry footprint are
 different things.
