@@ -547,19 +547,20 @@ def _build_telemetry_watchdog():
         loop_status_fn=(state.loop_heartbeat.status if state.loop_heartbeat else None),
     )
 
-    def _wire(name: str, collector, default_interval: float) -> None:
-        if collector is None:
-            wd.add_source(name, lambda: None, default_interval)
-            return
-        try:
-            interval = float(collector.status().get("poll_interval_s", default_interval))
-        except Exception:
-            interval = default_interval
-        wd.add_source(name, collector.status, interval)
+    def _wire(name: str, state_attr: str, default_interval: float) -> None:
+        # The web server binds before endpoint collectors are constructed, then
+        # the composition root attaches them to the SAME AppContext later. Do
+        # not capture the startup-time value here: that permanently wired None
+        # and made a live collector look "not_available" for the whole run.
+        def _dynamic_status():
+            collector = getattr(state, state_attr, None)
+            return collector.status() if collector is not None else None
 
-    _wire("process_collector", state.process_collector, 2.0)
-    _wire("network_collector", state.network_collector, 3.0)
-    _wire("persistence_collector", state.persistence_collector, 15.0)
+        wd.add_source(name, _dynamic_status, default_interval)
+
+    _wire("process_collector", "process_collector", 2.0)
+    _wire("network_collector", "network_collector", 3.0)
+    _wire("persistence_collector", "persistence_collector", 15.0)
     if state.debug_fault_collector is not None:
         fic = state.debug_fault_collector
         wd.add_source("debug_fault_collector", fic.status, fic.poll_interval_s)

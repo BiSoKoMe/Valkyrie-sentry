@@ -167,7 +167,16 @@ def wait_for_real_readiness(api_base: str, timeout_s: float = READY_TIMEOUT_S) -
     while time.time() < deadline:
         try:
             last = _get(api_base, "/api/telemetry/watchdog", timeout=5.0)
-            if last.get("overall") == "HEALTHY":
+            sources = last.get("sources") or {}
+            real_sources_ready = bool(sources) and all(
+                src.get("available")
+                and (src.get("status") or {}).get("running") is not False
+                and float((src.get("status") or {}).get("last_poll_completed_at", 0) or 0) > 0
+                for name, src in sources.items()
+                if name != "debug_fault_collector"
+            )
+            loop_ready = bool((last.get("loop") or {}).get("beating"))
+            if last.get("overall") == "HEALTHY" and real_sources_ready and loop_ready:
                 print(f"[READY] watchdog reports HEALTHY: {last.get('sources', {}).keys()}")
                 return last
         except Exception as exc:                      # noqa: BLE001
@@ -399,13 +408,41 @@ def score(samples: list[dict], transitions: list[Transition],
         "detail": {"worst_drift_seconds": worst_stall, "stalls_over_5s": stalls[:10]},
     }
 
-    # 4. Every wired collector completes repeated polls throughout the run -
-    #    already covered by check 2's per-sample sweep, but report distinctly
-    #    since it is a separate predeclared criterion (per-sample coverage,
-    #    not just start/end).
+    # 4. Every wired collector must actually exist and complete repeated polls.
+    #    "not_available" is not progress, and check 2 intentionally skips a
+    #    missing status, so derive this independently rather than aliasing it.
+    source_names = sorted({
+        name
+        for rec in samples
+        for name in (((rec.get("watchdog") or {}).get("sources") or {}).keys())
+        if name != "debug_fault_collector"
+    })
+    progress_detail = {}
+    collectors_advance = bool(source_names)
+    for name in source_names:
+        observations = [
+            ((rec.get("watchdog") or {}).get("sources") or {}).get(name) or {}
+            for rec in samples
+        ]
+        available = [src for src in observations if src.get("available")]
+        polls = {
+            float((src.get("status") or {}).get("last_poll_completed_at", 0) or 0)
+            for src in available
+            if float((src.get("status") or {}).get("last_poll_completed_at", 0) or 0) > 0
+        }
+        ok = len(available) == len(observations) and len(polls) >= 2
+        collectors_advance = collectors_advance and ok
+        progress_detail[name] = {
+            "available_samples": len(available),
+            "total_samples": len(observations),
+            "distinct_completed_polls": len(polls),
+            "pass": ok,
+        }
     checks["collectors_advance_throughout"] = {
-        "pass": checks["no_stale_while_healthy"]["pass"] and checks["no_silent_collector_deaths"]["pass"],
-        "detail": f"{len(samples)} samples evaluated",
+        "pass": (collectors_advance
+                 and checks["no_stale_while_healthy"]["pass"]
+                 and checks["no_silent_collector_deaths"]["pass"]),
+        "detail": progress_detail,
     }
 
     # 5. API stays responsive.
@@ -505,7 +542,8 @@ def run_dry_run() -> int:
 
         before_c = _get(api_base, "/api/edr/causality/stats", timeout=5.0)
         sampler.current_phase = "C"
-        run_phase_c(api_base)
+        if not run_phase_c(api_base):
+            raise RuntimeError("Phase C safe Tier B subset did not execute successfully")
         time.sleep(20)
         after_c = _get(api_base, "/api/edr/causality/stats", timeout=5.0)
 
@@ -613,7 +651,8 @@ def run_soak(minutes: float) -> int:
 
         before_c = _get(api_base, "/api/edr/causality/stats", timeout=5.0)
         sampler.current_phase = "C"
-        run_phase_c(api_base)
+        if not run_phase_c(api_base):
+            raise RuntimeError("Phase C safe Tier B subset did not execute successfully")
         elapsed = min(60.0, c_settle_s)
         time.sleep(elapsed)
         run_benign_activity(max(0.0, c_settle_s - elapsed))
@@ -628,7 +667,8 @@ def run_soak(minutes: float) -> int:
         while time.time() < e_deadline:
             remaining = e_deadline - time.time()
             if toggle % 3 == 2 and remaining > 60:
-                run_phase_c(api_base)
+                if not run_phase_c(api_base):
+                    raise RuntimeError("Phase E safe Tier B subset did not execute successfully")
             else:
                 run_benign_activity(min(90.0, max(1.0, remaining)))
             toggle += 1

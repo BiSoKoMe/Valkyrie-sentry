@@ -44,7 +44,8 @@ def main() -> int:
     _check("2.0s interval -> bound is 2*5+5=15, not 2*4=8", b2 == 15.0)
 
     print("\n[2] a clean run (no deaths, no staleness, no stalls) -> PASS")
-    src = lambda last: {"status": {"running": True, "last_poll_completed_at": last,
+    src = lambda last: {"available": True,
+                        "status": {"running": True, "last_poll_completed_at": last,
                                    "poll_interval_s": 2.0}}
     samples = [
         _sample(100.0, "A", "HEALTHY", {"process_collector": src(99.0)}),
@@ -56,6 +57,19 @@ def main() -> int:
     _check("overall PASS", result["overall"] == "PASS")
     _check("no_silent_collector_deaths passes", result["checks"]["no_silent_collector_deaths"]["pass"])
     _check("no_stale_while_healthy passes", result["checks"]["no_stale_while_healthy"]["pass"])
+
+    print("\n[2b] a source that stays unavailable is not collector progress")
+    unavailable = [
+        _sample(100.0, "A", "HEALTHY",
+                {"process_collector": {"available": False, "status": None}}),
+        _sample(102.0, "A", "HEALTHY",
+                {"process_collector": {"available": False, "status": None}}),
+    ]
+    unavailable_result = score(
+        unavailable, [], health_failures=0, health_successes=2,
+        causality_before_c=None, causality_after_c=None, mode="dry-run")
+    _check("unavailable collector FAILS collectors_advance_throughout",
+           unavailable_result["checks"]["collectors_advance_throughout"]["pass"] is False)
 
     print("\n[3] a collector reporting running=False -> FAILS "
           "no_silent_collector_deaths, and overall FAILS")
