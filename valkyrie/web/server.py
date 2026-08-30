@@ -1368,6 +1368,20 @@ def create_app(ctx: Optional[AppContext] = None):
             return _subsystem_unavailable("EDR")
         return state.edr.causality_stats()
 
+    @app.get("/api/edr/detection-v2/status")
+    def edr_detection_v2_status():
+        """Health and bounds of the deterministic shadow evidence pipeline."""
+        if state.edr is None:
+            return _subsystem_unavailable("EDR")
+        return state.edr.detection_v2_status()
+
+    @app.get("/api/edr/detection-v2/ledger")
+    def edr_detection_v2_ledger(limit: int = 100):
+        """Content-safe evidence ledgers. Read-only and locally generated."""
+        if state.edr is None:
+            return _subsystem_unavailable("EDR")
+        return {"entries": state.edr.evidence_ledger(max(0, min(limit, 200)))}
+
     @app.post("/api/edr/incidents/{incident_id}/status")
     async def edr_incident_status(incident_id: str, request: Request):
         if state.edr is None:

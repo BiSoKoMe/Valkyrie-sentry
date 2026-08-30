@@ -137,7 +137,18 @@ def evaluate_hypotheses(
 
     ranked = sorted(assessments, key=lambda item: item.confidence, reverse=True)
     winner = ranked[0]
-    runner_up = ranked[1].confidence if len(ranked) > 1 else 0.0
+    # Hypotheses compete across decision classes, not merely by name. Two
+    # attack explanations can both be true (for example persistence_attempt
+    # and suspicious_execution_chain). Treating them as mutually exclusive
+    # lets one malicious hypothesis suppress another through the margin gate.
+    # Compare an alert winner with the strongest non-alert explanation, and a
+    # benign winner with the strongest alert explanation.
+    winner_alerts = winner.hypothesis_id in alert_hypotheses
+    competitors = [
+        item for item in ranked[1:]
+        if (item.hypothesis_id in alert_hypotheses) != winner_alerts
+    ]
+    runner_up = max((item.confidence for item in competitors), default=0.0)
     margin = max(0.0, winner.confidence - runner_up)
     winner_spec = next(spec for spec in spec_list
                        if spec.hypothesis_id == winner.hypothesis_id)

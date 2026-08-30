@@ -70,6 +70,24 @@ def test_generic_engine_deduplicates_and_records_contradiction():
     assert attack.contradiction_strength > 0
 
 
+def test_two_attack_explanations_do_not_suppress_each_other():
+    specs = (
+        HypothesisSpec("execution", "execution", 0.60, 1),
+        HypothesisSpec("persistence", "persistence", 0.60, 1),
+        HypothesisSpec("benign", "benign", 0.60, 1),
+    )
+    facts = [
+        EvidenceFact("e", "unexpected_chain", 0.80, supports=("execution",)),
+        EvidenceFact("p", "autostart_change", 0.78, supports=("persistence",)),
+    ]
+    decision = evaluate_hypotheses(
+        specs, facts,
+        alert_hypotheses=frozenset({"execution", "persistence"}),
+    )
+    assert decision.alerts
+    assert decision.margin >= 0.78
+
+
 def test_rare_chain_selects_attack_with_auditable_ledger():
     baseline = _mature()
     finding = score_subgraph(_chain(), baseline)
@@ -160,6 +178,7 @@ def test_engine_retains_hypothesis_ledger_on_originated_detection(tmp_path: Path
 
 if __name__ == "__main__":
     test_generic_engine_deduplicates_and_records_contradiction()
+    test_two_attack_explanations_do_not_suppress_each_other()
     test_rare_chain_selects_attack_with_auditable_ledger()
     test_benign_twin_selects_routine_activity()
     test_trusted_maintenance_competes_with_attack_shape()
@@ -167,4 +186,4 @@ if __name__ == "__main__":
     test_held_out_script_host_reuses_existing_behavior_primitives()
     with tempfile.TemporaryDirectory(prefix="valkyrie_hypothesis_") as tmp:
         test_engine_retains_hypothesis_ledger_on_originated_detection(Path(tmp))
-    print("7 passed")
+    print("8 passed")
