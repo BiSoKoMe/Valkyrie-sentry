@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""Platform Beta 0.5 harness - score() logic tested offline against
+synthetic sample timelines, so a scoring bug is caught before any CI minute
+is spent on a live run. Never touches a real engine."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+_FAILURES: list[str] = []
+
+
+def _check(label: str, ok: bool) -> None:
+    print(f"  [{'+' if ok else '!'}] {label}: {'PASS' if ok else 'FAIL'}")
+    if not ok:
+        _FAILURES.append(label)
+
+
+def _sample(t: float, phase: str, overall: str, sources: dict,
+           loop_drift: float = 0.0, loop_worst: float = 0.0,
+           health_ok: bool = True) -> dict:
+    return {
+        "t": t, "phase": phase, "health_ok": health_ok,
+        "watchdog": {
+            "overall": overall,
+            "degraded_reasons": [] if overall == "HEALTHY" else ["x:stale_poll"],
+            "sources": sources,
+            "loop": {"last_drift_seconds": loop_drift, "worst_drift_seconds": loop_worst},
+        },
+    }
+
+
+def main() -> int:
+    from redteam.evaluation.beta05_reliability import score, _independent_stale_bound, Transition
+
+    print("\n=== Beta 0.5 harness: score() ===\n")
+
+    print("[1] _independent_stale_bound uses a DIFFERENT formula than the "
+          "watchdog's own (interval*4) - not byte-identical logic")
+    b2 = _independent_stale_bound(2.0)
+    _check("2.0s interval -> bound is 2*5+5=15, not 2*4=8", b2 == 15.0)
+
+    print("\n[2] a clean run (no deaths, no staleness, no stalls) -> PASS")
+    src = lambda last: {"status": {"running": True, "last_poll_completed_at": last,
+                                   "poll_interval_s": 2.0}}
+    samples = [
+        _sample(100.0, "A", "HEALTHY", {"process_collector": src(99.0)}),
+        _sample(102.0, "A", "HEALTHY", {"process_collector": src(101.5)}),
+        _sample(104.0, "A", "HEALTHY", {"process_collector": src(103.8)}),
+    ]
+    result = score(samples, [], health_failures=0, health_successes=3,
+                  causality_before_c=None, causality_after_c=None, mode="dry-run")
+    _check("overall PASS", result["overall"] == "PASS")
+    _check("no_silent_collector_deaths passes", result["checks"]["no_silent_collector_deaths"]["pass"])
+    _check("no_stale_while_healthy passes", result["checks"]["no_stale_while_healthy"]["pass"])
+
+    print("\n[3] a collector reporting running=False -> FAILS "
+          "no_silent_collector_deaths, and overall FAILS")
+    samples_dead = [
+        _sample(100.0, "A", "DEGRADED",
+               {"process_collector": {"status": {"running": False,
+                                                 "last_poll_completed_at": 50.0,
+                                                 "poll_interval_s": 2.0}}}),
+    ]
+    result2 = score(samples_dead, [], health_failures=0, health_successes=1,
+                    causality_before_c=None, causality_after_c=None, mode="dry-run")
+    _check("no_silent_collector_deaths FAILS", result2["checks"]["no_silent_collector_deaths"]["pass"] is False)
+    _check("overall FAILS", result2["overall"] == "FAIL")
+
+    print("\n[4] THE critical contradiction: watchdog says HEALTHY but the "
+          "raw poll age is far past even the harness's OWN (different, "
+          "looser) stale bound - this is exactly the failure mode a buggy "
+          "watchdog integration would produce, and must be caught")
+    samples_contradiction = [
+        _sample(1000.0, "E", "HEALTHY",
+               {"persistence_collector": {"status": {"running": True,
+                                                     "last_poll_completed_at": 100.0,
+                                                     "poll_interval_s": 15.0}}}),
+    ]
+    result3 = score(samples_contradiction, [], health_failures=0, health_successes=1,
+                    causality_before_c=None, causality_after_c=None, mode="dry-run")
+    _check("no_stale_while_healthy FAILS", result3["checks"]["no_stale_while_healthy"]["pass"] is False)
+    _check("overall FAILS", result3["overall"] == "FAIL")
+
+    print("\n[5] a loop stall over 5.0s fails no_unexplained_loop_stalls")
+    samples_stall = [
+        _sample(100.0, "C", "HEALTHY", {}, loop_drift=0.1, loop_worst=0.1),
+        _sample(102.0, "C", "HEALTHY", {}, loop_drift=6.2, loop_worst=6.2),
+    ]
+    result4 = score(samples_stall, [], health_failures=0, health_successes=2,
+                    causality_before_c=None, causality_after_c=None, mode="dry-run")
+    _check("no_unexplained_loop_stalls FAILS", result4["checks"]["no_unexplained_loop_stalls"]["pass"] is False)
+    _check("worst_drift_seconds recorded correctly", result4["checks"]["no_unexplained_loop_stalls"]["detail"]["worst_drift_seconds"] == 6.2)
+
+    print("\n[6] API failures fail api_responsive")
+    samples_api = [_sample(100.0, "A", "HEALTHY", {}, health_ok=False)]
+    result5 = score(samples_api, [], health_failures=2, health_successes=5,
+                    causality_before_c=None, causality_after_c=None, mode="dry-run")
+    _check("api_responsive FAILS with nonzero failures", result5["checks"]["api_responsive"]["pass"] is False)
+
+    print("\n[7] phase C event-count progression: strictly higher after -> pass")
+    result6 = score([], [], health_failures=0, health_successes=0,
+                    causality_before_c=5, causality_after_c=12, mode="dry-run")
+    _check("advancing count passes", result6["checks"]["phase_c_advances_event_count"]["pass"] is True)
+
+    print("\n[8] phase C event-count progression: FLAT count fails "
+          "(the pipe went quiet during known telemetry-producing activity)")
+    result7 = score([], [], health_failures=0, health_successes=0,
+                    causality_before_c=5, causality_after_c=5, mode="dry-run")
+    _check("flat count FAILS", result7["checks"]["phase_c_advances_event_count"]["pass"] is False)
+
+    print("\n[9] fault-test mode requires BOTH a degraded and a recovered "
+          "transition to be observed - a freeze with no confirmed DEGRADED "
+          "transition must not silently pass")
+    result8 = score([], [Transition(100.0, "degraded", ["x:stale_poll"])],
+                    health_failures=0, health_successes=1,
+                    causality_before_c=None, causality_after_c=None, mode="fault-test")
+    _check("degraded-only (no recovery) FAILS fault_detected_and_recovered",
+           result8["checks"]["fault_detected_and_recovered"]["pass"] is False)
+
+    result9 = score([], [Transition(100.0, "degraded", ["x:stale_poll"]),
+                        Transition(120.0, "recovered", ["x:stale_poll"])],
+                    health_failures=0, health_successes=1,
+                    causality_before_c=None, causality_after_c=None, mode="fault-test")
+    _check("degraded+recovered PASSES fault_detected_and_recovered",
+           result9["checks"]["fault_detected_and_recovered"]["pass"] is True)
+
+    print("\n[10] fault_detected_and_recovered is NOT even scored outside fault-test mode")
+    result10 = score([], [], health_failures=0, health_successes=0,
+                     causality_before_c=None, causality_after_c=None, mode="soak")
+    _check("no such key in soak-mode results", "fault_detected_and_recovered" not in result10["checks"])
+
+    print("\n" + "=" * 48)
+    if _FAILURES:
+        print(f"FAILED: {len(_FAILURES)} check(s)")
+        for f in _FAILURES:
+            print(f"  - {f}")
+        return 1
+    print("All checks PASSED.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

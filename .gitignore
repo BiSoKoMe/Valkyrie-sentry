@@ -93,6 +93,7 @@ htmlcov/
 
 # Red-team evaluation run outputs (generated; scores should not live in the repo)
 redteam/evaluation/results/*.json
+redteam/evaluation/results/*.jsonl
 valkyrie/_build.py
 
 # Kernel driver build output (driver/build_km.bat). Never commit a .sys — an
