@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from valkyrie.edr.causal_detect import CausalBaseline, MIN_OBSERVATIONS, MIN_SESSIONS
+from valkyrie.edr.causal_detect import MIN_OBSERVATIONS, MIN_SESSIONS, CausalBaseline
 from valkyrie.edr.consequence import score_privacy_consequence
 
 
@@ -171,6 +171,37 @@ def test_policy_gated_playbook_uses_persisted_incident_records():
     engine._playbooks = [book]
     engine._on_incident(payload)
     assert refused.calls == []
+
+
+def test_playbook_first_response_is_not_suppressed_soon_after_boot():
+    """A low monotonic clock is uptime, not evidence of a prior response."""
+    from valkyrie.edr import playbooks as playbook_module
+    from valkyrie.edr.playbooks import Playbook, PlaybookAction, PlaybookEngine
+
+    class Edr:
+        def __init__(self):
+            self.calls = []
+
+        def respond(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+
+    original_monotonic = playbook_module.time.monotonic
+    try:
+        playbook_module.time.monotonic = lambda: 12.0
+        edr = Edr()
+        engine = PlaybookEngine(edr)
+        incident = {"id": "inc-fresh-boot", "entity": "tracker.example",
+                    "severity": "high", "category": "privacy_consequence"}
+        book = Playbook(id="fresh-boot", cooldown_seconds=300.0,
+                        actions=[PlaybookAction("block_domain")])
+
+        engine._run_playbook(book, incident)
+        engine._run_playbook(book, incident)
+
+        assert len(edr.calls) == 1
+        assert engine.status()["suppressed_by_cooldown"] == 1
+    finally:
+        playbook_module.time.monotonic = original_monotonic
 
 
 def test_tls_addon_emits_metadata_only_normalized_privacy_event():
