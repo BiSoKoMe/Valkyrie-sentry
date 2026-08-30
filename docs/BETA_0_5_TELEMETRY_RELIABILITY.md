@@ -213,3 +213,24 @@ collector stale bounds, workload density, and scoring remain unchanged.
 After attribution, fix only the smallest demonstrated cause, preserve a
 regression test, run the corrected 5-minute dry-run, repeat the fault test only
 if watchdog behavior changed, then repeat the full 3 x 25-minute qualification.
+
+### Attribution result, 2026-08-30
+
+The single fresh-runner contention experiment completed the full 25 minutes
+without reaching its stop-on-first-failure condition. Run 33332925488 produced
+690 successful API samples with zero failures, no stale or dead collectors,
+zero DEGRADED transitions, and event-node progression from 239 to 450. Platform
+Alpha remained green. The worst loop drift was 4.765 seconds, below the strict
+5-second bound.
+
+The corrected output handling supplies a direct mechanism for both symptoms in
+the failed qualification. Uvicorn request logging and the persistence poll
+diagnostic both wrote to the same undrained subprocess pipe. Once its finite
+Windows buffer filled, an API worker writing an access log could block, and the
+persistence thread writing its poll diagnostic could block before beginning its
+next poll. Redirecting stdout/stderr to the continuously written evidence file
+removes that shared blocking resource. A regression test now forbids restoring
+`subprocess.PIPE` without a concurrent drain.
+
+This run is attribution evidence, not qualification evidence. Beta 0.5 remains
+open until the corrected dry-run and three independent qualification runs pass.
