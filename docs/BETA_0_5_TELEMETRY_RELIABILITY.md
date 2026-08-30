@@ -420,3 +420,32 @@ a change rushed under this qualification's time pressure.
 
 Beta 0.5 remains **OPEN**. Next: rerun the 3x25-minute qualification with the
 `diff_normalize_emit` bound in place.
+
+## Beta 0.5.4: the persistence stall is gone; the same fix applied to ProcessCollector
+
+CI qualification, fourth attempt, 2026-08-30 (`33338623568`, after the
+`emit_budget` fix): corrected dry-run passed again. The 3x25-minute soak:
+**2/3 passed** (runs 2 and 3), up from 1/3. Run 1's own
+`persistence_collector` was **696/696 healthy samples, `pass: true`** - the
+72s-class stall is gone. Its only remaining failure was a single
+`process_collector:stale_poll` sample (695/696 healthy) - the same small,
+recurring, one-or-two-sample pattern already seen (unexplained) across
+multiple earlier runs.
+
+`ProcessCollector.poll_once()` had the exact same shape as
+`PersistenceCollector`'s pre-fix `diff_normalize_emit`: `self._last = new`
+committed immediately, then an unbounded loop calling `self._emit(...)` once
+per newly-discovered process - subject to the identical `EdrStore`
+lock-contention mechanism, just far less often triggered (process_collector
+polls every 2s vs. persistence's 15s, so far fewer new items typically
+accumulate per cycle before its own, much shorter, 8s stale bound is
+reached). Applied the identical fix: `ProcessCollector` gained the same
+`emit_budget` parameter and `diff_enrich_emit` wall-clock bound, deferring
+any not-yet-emitted new process to the next poll rather than blocking
+`last_poll_completed_at` on a slow/contended emit. Covered by
+`tests/test_process_telemetry.py`'s new `[5b]` checks, mirroring
+`test_endpoint_telemetry.py`'s persistence-side test exactly.
+
+Beta 0.5 remains **OPEN**. Next: rerun the 3x25-minute qualification with
+both collectors bounded; if this was the last of the recurring
+single-sample staleness, all three runs should pass clean.

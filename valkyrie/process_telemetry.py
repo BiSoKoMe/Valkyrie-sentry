@@ -493,7 +493,7 @@ class ProcessCollector:
     """
 
     def __init__(self, emit: Callable[[TelemetryEvent], None],
-                 interval: float = 2.0) -> None:
+                 interval: float = 2.0, emit_budget: float = 4.0) -> None:
         self._emit = emit
         self._base_interval = max(0.25, float(interval))
         self._interval = self._base_interval
@@ -515,6 +515,14 @@ class ProcessCollector:
         self.exception_count: int = 0
         from .collector_diagnostics import PollDiagnostics
         self._diagnostics = PollDiagnostics()
+        # See PersistenceCollector's identical field (docs/BETA_0_5_TELEMETRY_RELIABILITY.md
+        # "Beta 0.5.3"): bounds the emit loop's wall-clock time so a slow/
+        # contended ingest_telemetry() call (EdrStore's shared write lock
+        # under concurrent load) cannot hold last_poll_completed_at hostage.
+        # Entries not yet emitted when the budget expires are deferred to
+        # the next poll's diff rather than dropped.
+        self._emit_budget = max(1.0, float(emit_budget))
+        self._truncated: list[str] = []
 
     def available(self) -> bool:
         return _PSUTIL
@@ -621,14 +629,36 @@ class ProcessCollector:
                 return 0
             with self._diagnostics.stage("diff_enrich_emit"):
                 fresh = diff_snapshots(self._last, new)
-                self._last = new
                 pid_index = {info.pid: info for info in new.values()}
+                deadline = time.monotonic() + self._emit_budget
+                budget_spent = False
+                emitted_keys: set = set()
                 for pi in fresh:
+                    if budget_spent or time.monotonic() >= deadline:
+                        budget_spent = True
+                        continue
                     try:
                         self._emit(self._enrich(pi, pid_index).to_event())
                     except Exception:
                         pass
-            return len(fresh)
+                    emitted_keys.add(pi.key())
+                if budget_spent:
+                    # Defer: keep any not-yet-emitted fresh process OUT of the
+                    # new baseline so the next poll's diff rediscovers it,
+                    # rather than a slow/contended emit holding this whole
+                    # cycle (and last_poll_completed_at) hostage. Everything
+                    # else in `new` (unchanged + already-emitted processes,
+                    # and any that exited) still becomes the new baseline.
+                    next_last = dict(new)
+                    for pi in fresh:
+                        if pi.key() not in emitted_keys:
+                            next_last.pop(pi.key(), None)
+                    self._last = next_last
+                    self._truncated = self._truncated + ["diff_enrich_emit"]
+                else:
+                    self._last = new
+                    self._truncated = []
+            return len(emitted_keys)
         finally:
             # Recorded even on an early return or an exception path above, so
             # "no recent poll" only ever means "the thread stopped running,"
@@ -658,6 +688,7 @@ class ProcessCollector:
             "poll_interval_s": self._interval,
             "last_poll_completed_at": self.last_poll_completed_at,
             "exception_count": self.exception_count,
+            "truncated": list(self._truncated),
         } | self._diagnostics.status()
 
     def _loop(self) -> None:

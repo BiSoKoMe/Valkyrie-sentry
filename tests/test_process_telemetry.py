@@ -201,6 +201,43 @@ def main() -> int:
     _check("emitted a TelemetryEvent for pid 3",
            emitted[0].category == T.CAT_PROCESS and emitted[0].actor_pid == 3)
 
+    print("\n[5b] diff_enrich_emit budget (Beta 0.5.3: the SAME EdrStore-"
+          "lock-contention shape found in PersistenceCollector, applied to "
+          "ProcessCollector - see docs/BETA_0_5_TELEMETRY_RELIABILITY.md)")
+    import time
+    emitted3: list = []
+    col3 = ProcessCollector(emit=emitted3.append, emit_budget=1.0)
+    _check("emit_budget floored at 1.0", col3._emit_budget == 1.0)
+    d = ProcInfo(pid=4, name="d", create_time=4.0)
+    baseline3 = {a.key(): a, b.key(): b}
+    cycle3 = {a.key(): a, b.key(): b, c.key(): c, d.key(): d}   # c, d both new
+    col3._last = baseline3
+    col3.snapshot = lambda: cycle3             # type: ignore[assignment]
+
+    real_emit = col3._emit
+    def _slow_emit(ev):
+        real_emit(ev)
+        if ev.actor_pid == c.pid:
+            time.sleep(1.1)   # simulates a contended/slow ingest_telemetry()
+    col3._emit = _slow_emit
+    n3 = col3.poll_once()
+    _check("exactly one emit before the budget tripped", n3 == 1)
+    _check("the emitted one is c, not d",
+           len(emitted3) == 1 and emitted3[0].actor_pid == c.pid)
+    _check("status() reports the truncation", "diff_enrich_emit" in col3.status()["truncated"])
+    _check("deferred process (d) is NOT folded into the new baseline",
+           d.key() not in col3._last)
+    _check("emitted process (c) IS folded into the new baseline", c.key() in col3._last)
+
+    col3._emit = real_emit
+    emitted3.clear()
+    col3.snapshot = lambda: cycle3              # type: ignore[assignment]
+    n4 = col3.poll_once()
+    _check("the deferred process is emitted on the very next poll",
+           n4 == 1 and emitted3[0].actor_pid == d.pid)
+    _check("truncated clears once a cycle completes without truncation",
+           col3.status()["truncated"] == [])
+
     print("\n[5] A raising emitter never breaks collection")
     def _boom(_ev):
         raise RuntimeError("bad sink")
