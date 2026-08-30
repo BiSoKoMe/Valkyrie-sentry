@@ -1,7 +1,9 @@
 # Valkyrie Security Engineering Increment
 
-**Date:** 2026-08-29  
-**Scope:** Local browser-extension integrity and Sysmon delivery validation  
+**Date:** 2026-08-29
+
+**Scope:** Local browser-extension integrity and Sysmon delivery validation
+
 **Status:** Implemented, locally tested, and mechanism-validated on a disposable Windows runner
 
 ## Executive summary
