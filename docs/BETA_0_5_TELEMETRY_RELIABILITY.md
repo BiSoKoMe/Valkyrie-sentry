@@ -1,5 +1,29 @@
 # Platform Beta 0.5 — Telemetry Reliability Qualification
 
+## Qualification status
+
+**OPEN. Do not freeze this baseline.**
+
+Corrected CI qualification on 2026-08-30:
+
+- Dry-run `33330512824`: PASS. All three collectors were available for all
+  127 samples and completed repeated polls; the scoped Tier B workload ran
+  exactly 3 catalog techniques; API failures were zero.
+- Fault test `33330847426`: PASS. A frozen test collector produced
+  `DEGRADED`, and `HEALTHY` returned only after a real completed poll resumed.
+- Three-run 25-minute soak `33330959664`: FAIL (1/3 runners passed).
+  - Run 1: 25 API health timeouts; the second Phase E scoped workload timed out.
+  - Run 2: 26 API health timeouts, one `process_collector:stale_poll`, and the
+    second Phase E scoped workload timed out.
+  - Run 3: workload and API checks completed, but 30 consecutive watchdog
+    samples reported `persistence_collector:stale_poll` before recovery.
+  - Platform Alpha's frozen baseline passed on all three runners.
+
+The failed soak is evidence of progress stalls without collector exceptions,
+which is the exact failure class Beta 0.5 exists to eliminate. Eventual recovery
+does not convert a stale interval into a pass. NYX work does not begin from this
+result.
+
 Predeclared 2026-08-30, before any CI run. This document is written first;
 `redteam/evaluation/beta05_reliability.py` implements exactly what is written
 here, not the reverse. If the harness and this document ever disagree, the

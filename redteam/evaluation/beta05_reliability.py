@@ -408,6 +408,22 @@ def score(samples: list[dict], transitions: list[Transition],
         "detail": {"worst_drift_seconds": worst_stall, "stalls_over_5s": stalls[:10]},
     }
 
+    # A soak has no deliberate fault injection. Any DEGRADED sample therefore
+    # means the watchdog observed a real reliability breach, even if the source
+    # later recovered and accumulated many distinct polls overall. Eventual
+    # recovery must not erase a minute-long persistence stall from the verdict.
+    unexpected_degraded = []
+    if mode != "fault-test":
+        for rec in samples:
+            wd = rec.get("watchdog") or {}
+            if wd.get("overall") == "DEGRADED":
+                unexpected_degraded.append(
+                    (rec["t"], rec.get("phase"), wd.get("degraded_reasons", [])))
+    checks["no_unexpected_degraded_intervals"] = {
+        "pass": len(unexpected_degraded) == 0,
+        "detail": unexpected_degraded[:20],
+    }
+
     # 4. Every wired collector must actually exist and complete repeated polls.
     #    "not_available" is not progress, and check 2 intentionally skips a
     #    missing status, so derive this independently rather than aliasing it.
@@ -430,11 +446,15 @@ def score(samples: list[dict], transitions: list[Transition],
             for src in available
             if float((src.get("status") or {}).get("last_poll_completed_at", 0) or 0) > 0
         }
-        ok = len(available) == len(observations) and len(polls) >= 2
+        healthy = [src for src in observations if src.get("healthy")]
+        ok = (len(available) == len(observations)
+              and len(healthy) == len(observations)
+              and len(polls) >= 2)
         collectors_advance = collectors_advance and ok
         progress_detail[name] = {
             "available_samples": len(available),
             "total_samples": len(observations),
+            "healthy_samples": len(healthy),
             "distinct_completed_polls": len(polls),
             "pass": ok,
         }

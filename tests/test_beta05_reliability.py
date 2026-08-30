@@ -44,7 +44,7 @@ def main() -> int:
     _check("2.0s interval -> bound is 2*5+5=15, not 2*4=8", b2 == 15.0)
 
     print("\n[2] a clean run (no deaths, no staleness, no stalls) -> PASS")
-    src = lambda last: {"available": True,
+    src = lambda last: {"available": True, "healthy": True,
                         "status": {"running": True, "last_poll_completed_at": last,
                                    "poll_interval_s": 2.0}}
     samples = [
@@ -70,6 +70,23 @@ def main() -> int:
         causality_before_c=None, causality_after_c=None, mode="dry-run")
     _check("unavailable collector FAILS collectors_advance_throughout",
            unavailable_result["checks"]["collectors_advance_throughout"]["pass"] is False)
+
+    print("\n[2c] a DEGRADED interval fails soak even when the collector later recovers")
+    recovered_after_stall = [
+        _sample(100.0, "E", "DEGRADED",
+                {"persistence_collector": {"available": True, "healthy": False,
+                 "status": {"running": True, "last_poll_completed_at": 10.0,
+                            "poll_interval_s": 15.0}}}),
+        _sample(102.0, "E", "HEALTHY",
+                {"persistence_collector": {"available": True, "healthy": True,
+                 "status": {"running": True, "last_poll_completed_at": 101.0,
+                            "poll_interval_s": 15.0}}}),
+    ]
+    recovered_result = score(
+        recovered_after_stall, [], health_failures=0, health_successes=2,
+        causality_before_c=None, causality_after_c=None, mode="soak")
+    _check("unexpected DEGRADED interval FAILS soak",
+           recovered_result["checks"]["no_unexpected_degraded_intervals"]["pass"] is False)
 
     print("\n[3] a collector reporting running=False -> FAILS "
           "no_silent_collector_deaths, and overall FAILS")
