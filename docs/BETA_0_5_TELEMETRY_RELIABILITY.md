@@ -24,6 +24,16 @@ which is the exact failure class Beta 0.5 exists to eliminate. Eventual recovery
 does not convert a stale interval into a pass. NYX work does not begin from this
 result.
 
+**Update, same day, after the undrained-pipe fix (see "Beta 0.5.1" below):**
+the corrected dry-run and fault test passed again; the 3x25-minute soak
+(`33334684087`) was still 1/3 (run 1 PASS). The pipe fix clearly worked - no
+run showed the old 25+-API-timeout / 200s+-stall shape - but run 2 had one
+API failure plus two small `process_collector:stale_poll` samples during
+phase C (real, unexplained, much smaller magnitude), and run 3 crashed with
+an uncaught harness exception (a `subprocess` timeout shorter than the
+Tier B runner's own documented worst case, discarding its evidence). See
+"Beta 0.5.2" for the fix and what is still open. **Still OPEN.**
+
 Predeclared 2026-08-30, before any CI run. This document is written first;
 `redteam/evaluation/beta05_reliability.py` implements exactly what is written
 here, not the reverse. If the harness and this document ever disagree, the
@@ -234,3 +244,63 @@ removes that shared blocking resource. A regression test now forbids restoring
 
 This run is attribution evidence, not qualification evidence. Beta 0.5 remains
 open until the corrected dry-run and three independent qualification runs pass.
+
+## Beta 0.5.2: the pipe fix held, a harness timeout bug did not
+
+Corrected CI qualification, second attempt, 2026-08-30 (`33334684087`, after
+the undrained-pipe fix): the corrected dry-run (`33334364642`, 6m40s) and the
+fault test (unchanged, already green) both passed cleanly first. The 3x25-minute
+soak itself: **1/3 passed (run 1)**, run 2 FAILED, run 3 CRASHED.
+
+The pipe fix demonstrably worked: no run this time showed the old shape (25+
+API timeouts, 30-consecutive-sample stale stretches, 200s+ loop stalls). Run
+2's worst loop drift was 2.58s, comfortably under the 5s bound, and its API
+responsiveness was 690/691 samples successful.
+
+**Run 2 (FAIL, real, small-magnitude):** exactly one API health failure and
+two `process_collector:stale_poll` samples, both during phase C while the
+Tier B subset's process-launch techniques were executing. `no_stale_while_healthy`
+(the independent cross-check) still passed - the watchdog itself never lied -
+but `no_unexpected_degraded_intervals` and `collectors_advance_throughout`
+correctly caught it, exactly the criteria added after the first corrected
+attempt to stop eventual recovery from erasing a real stall. This is a much
+smaller-magnitude version of the same failure class (thread alive, briefly
+not progressing) and remains unexplained: plausibly GIL contention between
+`process_collector`'s own `psutil.process_iter()` poll and the ART battery's
+process launches, but that is a hypothesis, not yet demonstrated.
+
+**Run 3 (CRASHED, a harness bug, not a reliability finding):** the harness's
+own `RuntimeError("Phase E safe Tier B subset did not execute successfully")`
+escaped uncaught when `run_phase_c`'s second (Phase E) invocation hit the
+harness's `subprocess.run(..., timeout=300)` bound and was killed. That bound
+was never checked against what it was timing: `run_live_evaluation.ps1`'s own
+`-ReadyTimeoutSeconds` defaults to 420s and its readiness gate legitimately
+tolerates gaps up to that whole budget before a single technique executes,
+plus up to 30s x 3 techniques after that - a documented worst case of ~510s,
+already past the harness's 300s bound. The crash discarded all 20+ minutes of
+sampler evidence run 3 had already collected, which is precisely the failure
+mode this project's own Tier B tooling (`.partial.jsonl` streaming,
+`union_coverage.py`'s crash-tolerant union) was already built to avoid
+elsewhere - this harness had not yet applied that lesson to itself.
+
+Fixed (not yet re-verified in CI):
+- `PHASE_C_TIMEOUT_S` raised to 600s, with the 510s worst-case budget stated
+  in the code as the reason, not a round number picked by feel.
+- On a timeout, `run_phase_c` now prints whatever stdout/stderr the script
+  had already produced before the kill, so a future occurrence is
+  diagnosable (was a technique executing, or still waiting on the readiness
+  gate?) instead of just "it timed out."
+- A Tier B subset failure or timeout in phase C or phase E is now a scored
+  criterion (`phase_c_technique_execution_completed`) rather than a raised
+  exception - the harness always finishes, writes its summary, and reports
+  what it actually observed, matching the crash-proof discipline the rest of
+  this project already applies to Tier B. Covered by
+  `tests/test_beta05_reliability.py` checks [11]-[12].
+
+Beta 0.5 remains **OPEN**. Next: rerun the 3x25-minute qualification with
+these fixes; if run 3's crash was purely the timeout bug, it should now
+produce a real, scored result instead of losing its evidence. Run 2's
+small-magnitude `process_collector:stale_poll` during phase C is still real
+and still needs its own root cause before this qualification can pass -
+being smaller than the pre-pipe-fix failures does not make it acceptable on
+its own terms, per this document's own criterion 2.

@@ -230,6 +230,18 @@ def run_benign_activity(duration_s: float, gap_s: float = 3.0,
             time.sleep(gap_s)
 
 
+# run_live_evaluation.ps1's OWN worst-case, not a guess: its readiness gate
+# alone (-ReadyTimeoutSeconds, default 420) tolerates gaps and can legitimately
+# take the full 420s before a single technique runs, plus up to
+# -DetectWindowSeconds (30) per technique for all 3 PHASE_C_TECHNIQUE_IDS. A
+# harness timeout shorter than that budget is a harness bug, not a reliability
+# finding - run 3 of the 2026-08-30 soak hit exactly this: killed at 300s while
+# still legitimately inside the script's own documented wait, discarding every
+# sample the run had collected because the RuntimeError below used to escape
+# uncaught. 600s leaves real margin over the 420 + 3*30 = 510s worst case.
+PHASE_C_TIMEOUT_S = 600
+
+
 def run_phase_c(api_base: str) -> bool:
     """Known telemetry-producing activity: the existing run_live_evaluation.ps1
     runner, filtered to PHASE_C_TECHNIQUE_IDS, against the already-running
@@ -247,15 +259,24 @@ def run_phase_c(api_base: str) -> bool:
            "-ApiBase", api_base, "-DetectWindowSeconds", "30", "-SkipDestructive"]
     print(f"[PHASE C] {' '.join(cmd)}")
     try:
-        result = subprocess.run(cmd, cwd=str(_ROOT), timeout=300,
+        result = subprocess.run(cmd, cwd=str(_ROOT), timeout=PHASE_C_TIMEOUT_S,
                                 capture_output=True, text=True,
                                 encoding="utf-8", errors="replace")
         print(result.stdout[-4000:])
         if result.returncode != 0:
             print(result.stderr[-2000:])
         return result.returncode == 0
-    except subprocess.TimeoutExpired:
-        print("[PHASE C] run_live_evaluation.ps1 timed out")
+    except subprocess.TimeoutExpired as exc:
+        # Print whatever the script had already written before the kill -
+        # without this, a real "stuck in its own readiness gate" vs. "hung
+        # mid-technique" distinction is unrecoverable after the fact (exactly
+        # what run 3 above lost).
+        print(f"[PHASE C] run_live_evaluation.ps1 timed out after "
+              f"{PHASE_C_TIMEOUT_S}s - partial output follows:")
+        if exc.stdout:
+            print(exc.stdout[-4000:])
+        if exc.stderr:
+            print(exc.stderr[-2000:])
         return False
 
 
@@ -438,7 +459,7 @@ def _independent_stale_bound(interval: float) -> float:
 def score(samples: list[dict], transitions: list[Transition],
          health_failures: int, health_successes: int,
          causality_before_c: int | None, causality_after_c: int | None,
-         mode: str) -> dict:
+         mode: str, phase_c_failures: list[str] | None = None) -> dict:
     checks: dict[str, dict] = {}
 
     # 1. Zero silent collector deaths.
@@ -569,6 +590,16 @@ def score(samples: list[dict], transitions: list[Transition],
             "detail": "not measured this run (phase C skipped or counters unavailable)",
         }
 
+    # A Tier B subset invocation (phase C's own run, or its Phase E rerun)
+    # that fails or times out is a real finding, but it must be SCORED, not
+    # allowed to crash the harness and discard every sample already
+    # collected - run 3 of the 2026-08-30 soak lost its entire evidence
+    # trail to exactly this before this check existed.
+    checks["phase_c_technique_execution_completed"] = {
+        "pass": not phase_c_failures,
+        "detail": phase_c_failures or [],
+    }
+
     # 7. Fault-test only: a degraded-then-recovered pair was observed.
     if mode == "fault-test":
         has_degraded = any(t.kind == "degraded" for t in transitions)
@@ -647,8 +678,7 @@ def run_dry_run() -> int:
 
         before_c = _get(api_base, "/api/edr/causality/stats", timeout=5.0)
         sampler.current_phase = "C"
-        if not run_phase_c(api_base):
-            raise RuntimeError("Phase C safe Tier B subset did not execute successfully")
+        phase_c_failures = [] if run_phase_c(api_base) else ["phase_c"]
         time.sleep(20)
         after_c = _get(api_base, "/api/edr/causality/stats", timeout=5.0)
 
@@ -658,7 +688,8 @@ def run_dry_run() -> int:
         sampler.stop()
         result = score(sampler.samples, sampler.transitions,
                        sampler.health_failures, sampler.health_successes,
-                       before_c.get("nodes"), after_c.get("nodes"), "dry-run")
+                       before_c.get("nodes"), after_c.get("nodes"), "dry-run",
+                       phase_c_failures=phase_c_failures)
         result["mode"] = "dry-run"
         result["evidence"] = False
         result["note"] = "Validates the harness itself, not reliability. Not a qualification pass/fail."
@@ -743,6 +774,12 @@ def run_soak(minutes: float, contention: bool = False) -> int:
         sampler = Sampler(api_base, out, engine_pid=proc.pid,
                           stop_on_failure=contention)
         sampler.start()
+        # A Tier B subset failure/timeout is a scored finding
+        # (phase_c_technique_execution_completed), never an uncaught
+        # exception - the whole point is to keep every sample already
+        # collected instead of discarding it (see PHASE_C_TIMEOUT_S's
+        # docstring for the run that motivated this).
+        phase_c_failures: list[str] = []
 
         def pause(seconds: float) -> None:
             if contention:
@@ -771,7 +808,7 @@ def run_soak(minutes: float, contention: bool = False) -> int:
 
         sampler.current_phase = "C"
         if not sampler.failure.is_set() and not run_phase_c(api_base):
-            raise RuntimeError("Phase C safe Tier B subset did not execute successfully")
+            phase_c_failures.append("phase_c")
         elapsed = min(60.0, c_settle_s)
         pause(elapsed)
         run_benign_activity(max(0.0, c_settle_s - elapsed),
@@ -789,7 +826,7 @@ def run_soak(minutes: float, contention: bool = False) -> int:
             remaining = e_deadline - time.time()
             if toggle % 3 == 2 and remaining > 60:
                 if not run_phase_c(api_base):
-                    raise RuntimeError("Phase E safe Tier B subset did not execute successfully")
+                    phase_c_failures.append(f"phase_e_toggle_{toggle}")
             else:
                 run_benign_activity(min(90.0, max(1.0, remaining)),
                                     stop_event=sampler.failure if contention else None)
@@ -798,7 +835,8 @@ def run_soak(minutes: float, contention: bool = False) -> int:
         sampler.stop()
         result = score(sampler.samples, sampler.transitions,
                        sampler.health_failures, sampler.health_successes,
-                       before_c.get("nodes"), after_c.get("nodes"), mode)
+                       before_c.get("nodes"), after_c.get("nodes"), mode,
+                       phase_c_failures=phase_c_failures)
         result["mode"] = mode
         result["minutes"] = minutes
         result["platform"] = platform.platform()

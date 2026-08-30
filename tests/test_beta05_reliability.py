@@ -164,6 +164,31 @@ def main() -> int:
                      causality_before_c=None, causality_after_c=None, mode="soak")
     _check("no such key in soak-mode results", "fault_detected_and_recovered" not in result10["checks"])
 
+    print("\n[11] a Tier B subset failure/timeout is a SCORED criterion, "
+          "never a reason to lose every sample already collected (run 3 of "
+          "the 2026-08-30 soak crashed with an uncaught RuntimeError here "
+          "before this check existed)")
+    result11 = score([], [], health_failures=0, health_successes=0,
+                     causality_before_c=None, causality_after_c=None, mode="soak",
+                     phase_c_failures=["phase_e_toggle_5"])
+    _check("phase_c_technique_execution_completed FAILS with the failure named",
+           result11["checks"]["phase_c_technique_execution_completed"]["pass"] is False
+           and result11["checks"]["phase_c_technique_execution_completed"]["detail"] == ["phase_e_toggle_5"])
+    _check("overall FAILS", result11["overall"] == "FAIL")
+
+    result12 = score([], [], health_failures=0, health_successes=0,
+                     causality_before_c=None, causality_after_c=None, mode="soak",
+                     phase_c_failures=[])
+    _check("empty failure list -> phase_c_technique_execution_completed PASSES",
+           result12["checks"]["phase_c_technique_execution_completed"]["pass"] is True)
+
+    print("\n[12] omitting phase_c_failures entirely (older call sites) "
+          "defaults to passing, not silently failing")
+    result13 = score([], [], health_failures=0, health_successes=0,
+                     causality_before_c=None, causality_after_c=None, mode="soak")
+    _check("default (no phase_c_failures arg) PASSES",
+           result13["checks"]["phase_c_technique_execution_completed"]["pass"] is True)
+
     print("\n" + "=" * 48)
     if _FAILURES:
         print(f"FAILED: {len(_FAILURES)} check(s)")
