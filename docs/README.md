@@ -17,7 +17,9 @@ interchangeable.
 - [Application engineering narrative](APPLICATION_ENGINEERING_NARRATIVE.md) -
   a concise account of building, finding failures, and changing the design.
 - [Causal authority experiment report](AUTHORITY_EXPERIMENT_REPORT.md) - local
-  500 plus 100 synthetic corpus result.
+  and clean Windows 500 plus 100 synthetic corpus result.
+- [Raw Windows evidence](evidence/authority-windows-6113502.json) - all 600
+  expected and actual trial verdicts from the cited GitHub run.
 - [Valkyrie research paper](VALKYRIE_RESEARCH_PAPER.md) — formal description of
   the local privacy/security provenance experiment.
 - [Research paper PDF](../output/pdf/Valkyrie_Research_Paper.pdf) —

@@ -38,6 +38,8 @@ python tools/authority_experiment.py --authorized 500 --unauthorized 100 --max-p
 The command exits nonzero if any fixed criterion fails. Inspect the JSON rather
 than relying only on the summary. It contains the source revision, environment,
 thresholds, aggregate metrics, and every expected and actual trial verdict.
+The repository also preserves the clean Windows result used in the paper at
+`docs/evidence/authority-windows-6113502.json`.
 
 ## Independent Windows run
 

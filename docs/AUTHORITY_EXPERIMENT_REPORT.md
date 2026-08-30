@@ -2,6 +2,12 @@
 
 **Result:** PASS
 
+**Independent run:** [GitHub Actions 33287499023](https://github.com/BiSoKoMe/Valkyrie-sentry/actions/runs/33287499023)
+
+**Source revision:** `61135020c4d194196a28e75fea38e3104e90c1b7`
+
+**Runner:** Windows 10 build 26100, Python 3.11.9
+
 ## Question
 
 A fresh one-shot grant scoped to origin, destination, tab, frame, action, and data labels can distinguish the fixed authorized and unauthorized corpus locally without retaining raw values.
@@ -21,7 +27,8 @@ A fresh one-shot grant scoped to origin, destination, tab, frame, action, and da
 - False allows: 0
 - False refusals: 0
 - Raw sentinel leaks: 0
-- In-process latency p50/p95/p99: 0.0404 / 0.0708 / 0.1139 ms
+- In-process latency p50/p95/p99: 0.0531 / 0.0864 / 0.1206 ms
+- Maximum observed in-process latency: 1.2960 ms
 
 ## What this refuses to claim
 
@@ -31,6 +38,8 @@ A fresh one-shot grant scoped to origin, destination, tab, frame, action, and da
 - No malware efficacy or production false-positive rate was measured.
 - No kernel driver was loaded or validated.
 
-The JSON evidence artifact contains every trial, its expected and actual
-verdict, the refusal reason, the measured in-process decision latency,
-and the source revision used for the run.
+The committed [JSON evidence](evidence/authority-windows-6113502.json) contains
+every trial, its expected and actual verdict, the refusal reason, the measured
+in-process decision latency, the environment, and the exact source revision.
+Its SHA-256 is
+`80292A5B9488CC1FD498AB6BF4CB68F8E9C89BDAC2603AAA182A873B8723E949`.

@@ -35,9 +35,9 @@ evidence runner fail its process when a threshold is missed, because a report
 that always generates a green result is not evidence.
 
 In the fixed synthetic experiment, Valkyrie classified 500 authorized and 100
-unauthorized consequences correctly, with zero false allows, zero false
-refusals, and zero retained raw sentinels. The in-process p99 was below one
-millisecond on the local run. I do not present that as browser or enforcement
+unauthorized consequences correctly on a clean GitHub Windows runner, with
+zero false allows, zero false refusals, and zero retained raw sentinels. The
+in-process p99 was 0.1206 ms. I do not present that as browser or enforcement
 latency. The current extension records the decision but does not cancel the
 request, and it still lacks authoritative Windows PID attribution.
 

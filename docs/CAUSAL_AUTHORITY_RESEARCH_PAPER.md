@@ -23,10 +23,10 @@ A fixed synthetic corpus exercised the real browser-context collector and
 authority engine with 500 authorized consequences and 100 unauthorized
 variants. The unauthorized variants included absent grants, replay, changed
 source or destination, changed tab or frame, label escalation, and expiry. The
-local development run classified all 600 cases correctly, produced zero false
+clean GitHub Windows run classified all 600 cases correctly, produced zero false
 allows, zero false refusals, and zero retained copies of a raw sentinel. The
-in-process submit-observation-to-verdict latency was 0.0404 ms at p50, 0.0708 ms
-at p95, and 0.1139 ms at p99 on that run.
+in-process submit-observation-to-verdict latency was 0.0531 ms at p50, 0.0864 ms
+at p95, and 0.1206 ms at p99 on that run.
 
 These results establish only that the deterministic mechanism works on its
 fixed synthetic corpus and is fast inside one Python process. They do not
@@ -102,7 +102,8 @@ reason, latency, environment, source revision, thresholds, and refused claims.
 
 ## 4. Results
 
-The local development run produced:
+GitHub Actions run 33287499023 executed commit `6113502` on a clean Windows
+runner and produced:
 
 | Measure | Result |
 |---|---:|
@@ -111,14 +112,16 @@ The local development run produced:
 | False allows | 0 |
 | False refusals | 0 |
 | Raw sentinel leaks | 0 |
-| In-process p50 | 0.0404 ms |
-| In-process p95 | 0.0708 ms |
-| In-process p99 | 0.1139 ms |
-| Maximum observed | 0.3033 ms |
+| In-process p50 | 0.0531 ms |
+| In-process p95 | 0.0864 ms |
+| In-process p99 | 0.1206 ms |
+| Maximum observed | 1.2960 ms |
 
 The experiment passed every predeclared criterion. This result supports the
 mechanism hypothesis for this corpus. It does not prove the broader product
 hypothesis that Valkyrie can mediate all browser or endpoint consequences.
+The repository preserves all 600 trial records in
+`docs/evidence/authority-windows-6113502.json`.
 
 ## 5. Engineering failures and corrections
 

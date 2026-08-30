@@ -167,6 +167,7 @@ Start with the [documentation index](docs/README.md).
 - [Causal authority research paper PDF](output/pdf/Valkyrie_Causal_Authority_Research_Paper.pdf)
 - [Safe reproduction guide](docs/SAFE_REPRODUCTION.md)
 - [Application engineering narrative](docs/APPLICATION_ENGINEERING_NARRATIVE.md)
+- [Raw clean-Windows evidence](docs/evidence/authority-windows-6113502.json)
 - [Provenance architecture assessment](docs/PROVENANCE_ARCHITECTURE_ASSESSMENT.md)
 - [Provenance experiment report](docs/PROVENANCE_EXPERIMENT_REPORT.md)
 - [Phase status](docs/PROVENANCE_PHASE_STATUS.md)
