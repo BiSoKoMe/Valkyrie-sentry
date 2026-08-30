@@ -32,7 +32,19 @@ API failure plus two small `process_collector:stale_poll` samples during
 phase C (real, unexplained, much smaller magnitude), and run 3 crashed with
 an uncaught harness exception (a `subprocess` timeout shorter than the
 Tier B runner's own documented worst case, discarding its evidence). See
-"Beta 0.5.2" for the fix and what is still open. **Still OPEN.**
+"Beta 0.5.2" for the fix and what is still open.
+
+**Third attempt**, after the Phase C timeout fix (`33336540336`): 1/3 passed
+(run 3), and critically **no run crashed** - the crash-proofing held. Run 1
+surfaced a precise, evidenced finding via the new stage-level diagnostics: a
+persistence-collector poll cycle stuck for 72.6s inside `diff_normalize_emit`
+specifically (not the already-protected registry/service/task-enumeration
+stages), while the causality graph, sensors, event loop, and API all kept
+advancing normally - ruling out a global freeze and pointing at write-path
+lock contention instead. See "Beta 0.5.3". **Still OPEN** - holding for
+direction on which of two possible fixes (bound this stage's own wall-clock
+time vs. address `EdrStore`'s shared lock) to pursue, since the second
+touches shared production code every detection source depends on.
 
 Predeclared 2026-08-30, before any CI run. This document is written first;
 `redteam/evaluation/beta05_reliability.py` implements exactly what is written
@@ -304,3 +316,61 @@ small-magnitude `process_collector:stale_poll` during phase C is still real
 and still needs its own root cause before this qualification can pass -
 being smaller than the pre-pipe-fix failures does not make it acceptable on
 its own terms, per this document's own criterion 2.
+
+## Beta 0.5.3: the timeout fix held (no more crashes); a new, more precise finding
+
+CI qualification, third attempt, 2026-08-30 (`33336540336`, after the
+Phase C timeout fix): corrected dry-run (`33336229646`) passed again. The
+3x25-minute soak: **1/3 passed (run 3 this time)**, run 1 and run 2 FAILED -
+but critically, **neither crashed**. Both ran the full 25 minutes and
+produced a real, scored result, confirming the crash-proofing fix worked.
+
+**Run 2:** one API failure, one `process_collector:stale_poll` sample.
+Small, matches the pre-existing unexplained pattern from Beta 0.5.2.
+
+**Run 1:** `no_unexplained_loop_stalls` PASS (worst drift 4.625s), `api_responsive`
+PASS (0/692 failures) - the event loop and API were fine the entire run. But
+`persistence_collector` went DEGRADED for 14 consecutive 2-second samples
+(~26s of sampling, corresponding to a much longer real stall) during phase E.
+
+`PollDiagnostics` (Beta 0.5.1's stage instrumentation) pinpointed this
+precisely, which is exactly what it was built for: the stall was NOT in
+`run_keys`, `services`, `scheduled_tasks`, or `startup_folders` (the stages
+the original 253s-freeze fix already protects with a cooperative yield and a
+wall-clock budget) - it was entirely inside `diff_normalize_emit`, which has
+no such protection, and it ran for **72.594 seconds** in one poll cycle.
+
+Cross-checking the same window's `/api/edr/causality/stats` (`nodes`) and
+`/api/sensors/status` (`submitted`/`emitted`) shows both climbing normally
+throughout the entire 72s stall. That rules out a global GIL/event-loop
+freeze (the original failure class) - everything else in the process kept
+making progress. Only this one thread's own poll cycle was stuck, which
+points at something that blocks that thread specifically rather than
+starving the whole interpreter.
+
+The leading hypothesis, from reading the code (not yet proven by a targeted
+repro): `valkyrie/edr/store.py`'s `EdrStore` guards every write
+(`add_detection`, incident upsert, response log) behind one shared
+`threading.RLock()`, and every telemetry source's `ingest_telemetry()` call
+writes through it. `diff_normalize_emit` calls `_emit_new()` once per new
+persistence entry found in that cycle's diff, each of which blocks on that
+same lock. Under Phase E's dense concurrent write load (process launches
+from the benign command loop, PLUS the ART battery's own detections, all
+landing on the same lock), a cycle that discovers several new entries at
+once would wait its turn for each one sequentially - unbounded Python-level
+lock queueing, not a 5-second SQLite `busy_timeout` (`valkyrie/store.py`
+already sets `PRAGMA busy_timeout=5000` and WAL mode, which caps genuine
+SQLite-level contention, but does not bound how long this collector's thread
+queues on the shared Python `RLock` before ever reaching SQLite).
+
+This is left as a named, evidenced finding rather than an in-flight fix: it
+touches `EdrStore`, the shared write path every detection source in the
+product depends on, not test-only harness code. Two different-sized fixes
+are possible - give `diff_normalize_emit` the same wall-clock-budget-and-defer
+treatment `snapshot()`'s other stages already have (bounds this symptom
+without touching the shared lock), or address the lock contention in
+`EdrStore` itself (a bigger, more invasive change to code every collector and
+the EDR engine depend on). Which one to pursue is a real design decision, not
+a mechanical fix, and is being held for direction rather than decided alone.
+
+Beta 0.5 remains **OPEN**.
