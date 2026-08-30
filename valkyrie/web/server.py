@@ -517,6 +517,55 @@ def _get_mac_randomizer():
     return state.mac_randomizer
 
 
+# TEST-ONLY escape hatch (Platform Beta 0.5's fault-detection CI step): set
+# to "1" to wire a fake, never-real collector into the telemetry watchdog so
+# a harness can prove DEGRADED/HEALTHY transitions fire correctly without
+# touching any real collector. The route this gates does not exist in the
+# app's route table at all unless this is set - never present in a normal
+# run, regardless of any request header or token.
+_DEBUG_FAULT_COLLECTOR_ENV = "VALKYRIE_DEBUG_FAULT_COLLECTOR"
+
+
+def _debug_fault_collector_enabled() -> bool:
+    return os.environ.get(_DEBUG_FAULT_COLLECTOR_ENV) == "1"
+
+
+def _build_telemetry_watchdog():
+    """Wire the three periodic collectors + the event loop's own heartbeat
+    into one HEALTHY/DEGRADED reliability read (Platform Beta 0.5).
+
+    Built once per app instance at lifespan startup, by which point the
+    composition root has already assigned state.process_collector /
+    network_collector / persistence_collector (or left them None, e.g.
+    --no-endpoint) - a missing collector is wired as "not available", never
+    silently reported healthy against fabricated data.
+    """
+    from ..telemetry_watchdog import TelemetryWatchdog
+
+    wd = TelemetryWatchdog(
+        started_at=state.start_time or time.time(),
+        loop_status_fn=(state.loop_heartbeat.status if state.loop_heartbeat else None),
+    )
+
+    def _wire(name: str, collector, default_interval: float) -> None:
+        if collector is None:
+            wd.add_source(name, lambda: None, default_interval)
+            return
+        try:
+            interval = float(collector.status().get("poll_interval_s", default_interval))
+        except Exception:
+            interval = default_interval
+        wd.add_source(name, collector.status, interval)
+
+    _wire("process_collector", state.process_collector, 2.0)
+    _wire("network_collector", state.network_collector, 3.0)
+    _wire("persistence_collector", state.persistence_collector, 15.0)
+    if state.debug_fault_collector is not None:
+        fic = state.debug_fault_collector
+        wd.add_source("debug_fault_collector", fic.status, fic.poll_interval_s)
+    return wd
+
+
 # ---------------------------------------------------------------------------
 # FastAPI app factory
 # ---------------------------------------------------------------------------
@@ -543,7 +592,12 @@ def create_app(ctx: Optional[AppContext] = None):
         failure (see valkyrie_startup_deafness). Writes to stderr with a
         wall-clock stamp so it lands in the CI transcript next to whatever
         subsystem log fired at the same moment, naming the GIL hog instead of
-        guessing. Cheap (one 1s sleep); safe to leave on."""
+        guessing. Cheap (one 1s sleep); safe to leave on.
+
+        Also feeds ``state.loop_heartbeat`` (a telemetry_watchdog.LoopHeartbeat)
+        on every wake, not just a stalled one - so a status endpoint can read
+        "is the loop beating at all right now", the same liveness question the
+        stderr print alone could not answer outside a live CI transcript."""
         import sys as _sys
         interval = 1.0
         while True:
@@ -553,6 +607,11 @@ def create_app(ctx: Optional[AppContext] = None):
             except asyncio.CancelledError:
                 return
             drift = time.monotonic() - t0 - interval
+            if state.loop_heartbeat is not None:
+                try:
+                    state.loop_heartbeat.beat(drift)
+                except Exception:
+                    pass
             if drift > 1.5:
                 print(f"[loop-stall] {time.strftime('%H:%M:%S')} event loop was "
                       f"BLOCKED for {drift:.1f}s (health would have been deaf this "
@@ -564,12 +623,35 @@ def create_app(ctx: Optional[AppContext] = None):
         global _loop
         _loop = asyncio.get_running_loop()
         _stall_task = asyncio.create_task(_loop_stall_monitor())
+        if state.loop_heartbeat is None:
+            from ..telemetry_watchdog import LoopHeartbeat
+            state.loop_heartbeat = LoopHeartbeat()
+        _fault_stop_event: Optional[threading.Event] = None
+        if _debug_fault_collector_enabled() and state.debug_fault_collector is None:
+            from ..telemetry_watchdog import FaultInjectableTestCollector
+            state.debug_fault_collector = FaultInjectableTestCollector(poll_interval_s=1.0)
+            _fault_stop_event = threading.Event()
+
+            def _fault_ticker(fic=state.debug_fault_collector, stop=_fault_stop_event):
+                # Ticks like a healthy collector by default; freeze()/unfreeze()
+                # (via /api/debug/telemetry/fault) is the only thing that
+                # changes what this loop's tick() actually does.
+                while not stop.is_set():
+                    fic.tick()
+                    stop.wait(1.0)
+
+            threading.Thread(target=_fault_ticker, daemon=True,
+                             name="debug-fault-collector").start()
+        if state.telemetry_watchdog is None:
+            state.telemetry_watchdog = _build_telemetry_watchdog()
         if state.store is not None:
             state.store.subscribe(manager.broadcast_sync)
         # Stream EDR incidents to dashboards over the same WebSocket.
         if state.edr is not None:
             state.edr.subscribe(manager.broadcast_sync)
         yield
+        if _fault_stop_event is not None:
+            _fault_stop_event.set()
         # Shutdown: unregister subscriber
         _stall_task.cancel()
         if state.store is not None:
@@ -1133,6 +1215,42 @@ def create_app(ctx: Optional[AppContext] = None):
             "persistence_collector": pc is not None,
             "persistence_running":  bool(pc and pc.is_running()),
         }
+
+    @app.get("/api/telemetry/watchdog")
+    def telemetry_watchdog_status():
+        """Platform Beta 0.5: HEALTHY/DEGRADED read of the telemetry PIPE
+        itself - is each collector thread alive AND still making progress
+        (not just alive), and is the event loop still beating - as distinct
+        from /api/sensors/status's raw per-sensor metrics. Never a security
+        verdict: DEGRADED means "don't trust this sensor's silence as an
+        all-clear right now", not "the host is compromised". Returns 503
+        (not a crash) if the watchdog was never built, e.g. this process was
+        started without the web lifespan (a bare create_app() in a test)."""
+        wd = getattr(state, "telemetry_watchdog", None)
+        if wd is None:
+            return JSONResponse(
+                {"error": "telemetry watchdog not initialized"}, status_code=503)
+        return wd.status()
+
+    if _debug_fault_collector_enabled():
+        # This route ONLY exists in the app's route table when
+        # VALKYRIE_DEBUG_FAULT_COLLECTOR=1 was set before the process
+        # started - a normal run never defines it, at any token or origin.
+        # Exists solely so a CI harness can prove the watchdog actually
+        # transitions DEGRADED/HEALTHY on the fake fault collector wired in
+        # above, without touching any real collector (Platform Beta 0.5's
+        # fault-detection step).
+        @app.post("/api/debug/telemetry/fault")
+        def debug_telemetry_fault(freeze: bool = True):
+            fic = getattr(state, "debug_fault_collector", None)
+            if fic is None:
+                return JSONResponse(
+                    {"error": "fault collector not initialized"}, status_code=503)
+            if freeze:
+                fic.freeze()
+            else:
+                fic.unfreeze()
+            return fic.status()
 
     @app.get("/api/asset-inventory")
     def asset_inventory_status():

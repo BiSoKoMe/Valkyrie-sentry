@@ -231,6 +231,19 @@ class PersistenceCollector:
         # snapshot() docstring). Truncated sections are recorded here.
         self._snapshot_budget = max(1.0, float(snapshot_budget))
         self._truncated: list[str] = []
+        # See ProcessCollector's identical field: updated at the end of every
+        # poll_once() call so a reliability watchdog can tell "still making
+        # progress" apart from "thread alive but stuck" -- exactly the
+        # distinction is_running() alone could not have caught in the 253s
+        # freeze this collector already survived once.
+        self.last_poll_completed_at: float = 0.0
+        # Counts a poll cycle that raised all the way out to _loop()'s outer
+        # guard - the one failure shape that survives every per-item swallow
+        # inside poll_once() itself. A reliability harness needs to see this
+        # number stay at 0, not infer it from last_poll_completed_at alone
+        # (which cannot distinguish "quiet, nothing new" from "quietly
+        # failing every cycle").
+        self.exception_count: int = 0
         # Seconds to wait before the first baseline snapshot, keeping the engine's
         # startup + readiness window clear of the heavy enumeration.
         # 5s, not 45s. MEASURED, not guessed.
@@ -401,25 +414,30 @@ class PersistenceCollector:
             "baseline_ready": self._last is not None,
             "startup_grace_s": self._startup_grace,
             "poll_interval_s": self._interval,
+            "last_poll_completed_at": self.last_poll_completed_at,
+            "exception_count": self.exception_count,
             # The honest headline: a caller that acts on this collector's
             # silence before the baseline exists is acting on nothing.
             "detects_before_baseline": False,
         }
 
     def poll_once(self) -> int:
-        new = self.snapshot()
-        if self._last is None:
+        try:
+            new = self.snapshot()
+            if self._last is None:
+                self._last = new
+                return 0
+            count = 0
+            for activity, entries in new.items():
+                prev = self._last.get(activity, {})
+                for identity, value in entries.items():
+                    if identity not in prev:
+                        self._emit_new(activity, identity, value)
+                        count += 1
             self._last = new
-            return 0
-        count = 0
-        for activity, entries in new.items():
-            prev = self._last.get(activity, {})
-            for identity, value in entries.items():
-                if identity not in prev:
-                    self._emit_new(activity, identity, value)
-                    count += 1
-        self._last = new
-        return count
+            return count
+        finally:
+            self.last_poll_completed_at = time.time()
 
     # -- lifecycle ----------------------------------------------------------
     def start(self) -> None:
@@ -490,4 +508,4 @@ class PersistenceCollector:
                           f"held the thread for {_dur:.1f}s", file=_sys.stderr,
                           flush=True)
             except Exception:
-                pass
+                self.exception_count += 1
