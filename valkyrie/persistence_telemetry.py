@@ -220,7 +220,8 @@ class PersistenceCollector:
     """Polls ASEP locations and emits a TelemetryEvent per newly-created entry."""
 
     def __init__(self, emit: Callable[[TelemetryEvent], None], interval: float = 15.0,
-                 snapshot_budget: float = 4.0, startup_grace: float = 5.0) -> None:
+                 snapshot_budget: float = 4.0, startup_grace: float = 5.0,
+                 emit_budget: float = 4.0) -> None:
         self._emit = emit
         self._interval = max(2.0, float(interval))
         self._last: Optional[dict] = None      # {activity: {identity: value}}
@@ -231,6 +232,22 @@ class PersistenceCollector:
         # snapshot() docstring). Truncated sections are recorded here.
         self._snapshot_budget = max(1.0, float(snapshot_budget))
         self._truncated: list[str] = []
+        # Wall-clock cap on poll_once()'s diff_normalize_emit stage -
+        # separate from _snapshot_budget because it bounds a DIFFERENT kind of
+        # cost. snapshot()'s budget bounds registry/task enumeration (CPU
+        # work); this bounds _emit_new(), which calls into the EDR engine's
+        # ingest_telemetry() and can block on EdrStore's shared write lock
+        # under concurrent load from other collectors. Measured live
+        # (2026-08-30 qualification soak, see docs/BETA_0_5_TELEMETRY_RELIABILITY.md
+        # "Beta 0.5.3"): one cycle spent 72.6s inside this exact stage while
+        # every OTHER subsystem (causality graph, sensors, event loop, API)
+        # kept advancing normally - not a GIL freeze, a lock-contention wait
+        # specific to this thread. A budget here bounds last_poll_completed_at
+        # staleness the same way snapshot_budget already bounds snapshot() -
+        # entries not yet emitted when the budget expires are deliberately
+        # left OUT of the new baseline so the next poll rediscovers and
+        # retries them, rather than being silently dropped.
+        self._emit_budget = max(1.0, float(emit_budget))
         # See ProcessCollector's identical field: updated at the end of every
         # poll_once() call so a reliability watchdog can tell "still making
         # progress" apart from "thread alive but stuck" -- exactly the
@@ -423,6 +440,10 @@ class PersistenceCollector:
             "poll_interval_s": self._interval,
             "last_poll_completed_at": self.last_poll_completed_at,
             "exception_count": self.exception_count,
+            # Non-empty means the most recent poll deferred some work rather
+            # than silently dropping or blocking on it - see snapshot()'s and
+            # poll_once()'s docstrings for which budget triggered it.
+            "truncated": list(self._truncated),
             # The honest headline: a caller that acts on this collector's
             # silence before the baseline exists is acting on nothing.
             "detects_before_baseline": False,
@@ -437,13 +458,29 @@ class PersistenceCollector:
                 return 0
             with self._diagnostics.stage("diff_normalize_emit"):
                 count = 0
+                deadline = time.monotonic() + self._emit_budget
+                budget_spent = False
+                next_last: dict = {}
                 for activity, entries in new.items():
                     prev = self._last.get(activity, {})
+                    kept: dict = {}
                     for identity, value in entries.items():
                         if identity not in prev:
+                            if budget_spent or time.monotonic() >= deadline:
+                                # Defer: leave this identity OUT of the new
+                                # baseline so the next poll's diff rediscovers
+                                # it and gets another chance to emit, instead
+                                # of a slow/contended emit holding this whole
+                                # cycle (and last_poll_completed_at) hostage.
+                                budget_spent = True
+                                continue
                             self._emit_new(activity, identity, value)
                             count += 1
-                self._last = new
+                        kept[identity] = value
+                    next_last[activity] = kept
+                self._last = next_last
+                if budget_spent:
+                    self._truncated = self._truncated + ["diff_normalize_emit"]
             return count
         finally:
             self.last_poll_completed_at = time.time()

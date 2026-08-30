@@ -206,6 +206,62 @@ def test_first_poll_is_silent_baseline():
     assert coll.poll_once() == 0
 
 
+# --- diff_normalize_emit budget (Beta 0.5.3: a 72.6s live stall traced to
+# this exact stage - see docs/BETA_0_5_TELEMETRY_RELIABILITY.md) ---
+def test_diff_normalize_emit_defers_rather_than_blocks_when_budget_exhausted():
+    """A slow/contended _emit_new() must not hold last_poll_completed_at
+    hostage: once the emit budget is spent mid-cycle, remaining new entries
+    are deferred (left out of the new baseline) rather than emitted, and the
+    poll still completes. The deferred entry must be rediscovered - not
+    silently dropped - on the next poll."""
+    import time as _time
+    events = []
+    # emit_budget is floored at 1.0s in __init__ (a near-zero budget would
+    # make normal, uncontended emits spuriously defer every cycle) - so the
+    # injected delay below must clear that real floor, not a smaller value.
+    coll = PersistenceCollector(emit=events.append, interval=60, emit_budget=1.0)
+    assert coll._emit_budget == 1.0
+
+    baseline = {PERSIST_RUN_KEY: {"loc::a": "cmd_a"}}
+    # Two new entries this cycle; a real (not mocked) delay after the first
+    # emit blows the budget before the second is reached - robust to exactly
+    # how many internal time.monotonic() calls the diagnostics
+    # instrumentation happens to make, unlike patching the clock itself.
+    cycle_1 = {PERSIST_RUN_KEY: {"loc::a": "cmd_a", "loc::b": "cmd_b", "loc::c": "cmd_c"}}
+    coll._last = baseline
+    coll.snapshot = lambda: cycle_1
+
+    real_emit_new = coll._emit_new
+    def _slow_emit_new(activity, identity, value):
+        real_emit_new(activity, identity, value)
+        if identity == "loc::b":
+            _time.sleep(1.1)   # simulates a contended/slow ingest_telemetry()
+    coll._emit_new = _slow_emit_new
+
+    n = coll.poll_once()
+
+    assert n == 1, f"expected exactly one emit before the budget tripped, got {n}"
+    emitted_locations = {e.target["location"] for e in events}
+    assert emitted_locations == {"loc::b"}, emitted_locations
+
+    st = coll.status()
+    assert "diff_normalize_emit" in st["truncated"], st["truncated"]
+
+    # The deferred entry ("loc::c") must NOT have been folded into the new
+    # baseline - it needs to look "new" again next cycle, or it is lost
+    # forever instead of merely delayed.
+    assert "loc::c" not in coll._last[PERSIST_RUN_KEY]
+    assert "loc::b" in coll._last[PERSIST_RUN_KEY]   # the one that WAS emitted is baselined
+
+    # Next poll (budget healthy again): the deferred entry is rediscovered.
+    events.clear()
+    coll._emit_new = real_emit_new
+    coll.snapshot = lambda: cycle_1
+    n2 = coll.poll_once()
+    assert n2 == 1, "the deferred entry should be emitted on the very next poll"
+    assert events[0].target["location"] == "loc::c"
+
+
 # --- benchmark ---
 def test_persistence_snapshot_is_reasonable():
     if not _WINDOWS:

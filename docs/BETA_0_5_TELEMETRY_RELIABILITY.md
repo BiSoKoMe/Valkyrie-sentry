@@ -373,4 +373,50 @@ without touching the shared lock), or address the lock contention in
 the EDR engine depend on). Which one to pursue is a real design decision, not
 a mechanical fix, and is being held for direction rather than decided alone.
 
-Beta 0.5 remains **OPEN**.
+**Decision: do both, landed separately.** The small fix (bound
+`diff_normalize_emit`'s own wall-clock time) is landed now, so Beta 0.5 has a
+concrete mitigation to re-test. The `EdrStore` lock-contention question is
+**not** being fixed under this qualification's time pressure - it is tracked
+as its own follow-up investigation (see "Follow-up" below), separate from
+whether Beta 0.5 itself passes.
+
+### The `diff_normalize_emit` budget (landed)
+
+`PersistenceCollector` gained an `emit_budget` parameter (default 4.0s,
+floored at 1.0s, mirroring `snapshot_budget`'s own floor). `poll_once()` now
+tracks wall-clock time across the diff/emit loop; once the budget is spent,
+any remaining newly-discovered entries this cycle are deliberately left OUT
+of the new baseline (`self._last`) rather than emitted or dropped - so the
+next poll's diff rediscovers and retries them. `last_poll_completed_at` is
+therefore bounded by `emit_budget` the same way `snapshot()` is already
+bounded by `snapshot_budget`, regardless of how long the underlying
+`EdrStore` write actually takes. `.status()`'s existing `truncated` field
+(previously set by `snapshot()` but never actually surfaced anywhere) now
+also reports when this stage had to defer, and now that it is read anywhere,
+it is exposed. Covered by
+`tests/test_endpoint_telemetry.py::test_diff_normalize_emit_defers_rather_than_blocks_when_budget_exhausted`.
+
+Trade-off, stated plainly: a persistence detection whose emit is deferred
+surfaces one poll cycle later (up to `poll_interval_s`, 15s by default) than
+it otherwise would have. That is the accepted cost of never letting
+`last_poll_completed_at` go stale for longer than `emit_budget` regardless of
+write-path contention.
+
+### Follow-up (tracked, not fixed here): `EdrStore`'s shared write lock
+
+`valkyrie/edr/store.py`'s `EdrStore` serializes every write
+(`add_detection`, incident upsert, response log) behind one
+`threading.RLock()` shared across every telemetry source and the EDR engine
+itself. The evidence above is consistent with this becoming a real
+contention point under concurrent write load (dense process-launch activity
+plus simultaneous ART-technique detections), but it has not yet been
+directly proven with a targeted repro (e.g. instrumenting the lock's own
+acquisition wait time). Whether and how to relax this - per-writer batching,
+a queue instead of synchronous inline writes, sharding the lock, or leaving
+it as-is if a targeted repro shows the contention is rarer than this one
+sample suggests - is an open design question against code every collector
+and the EDR engine depend on, and deserves its own investigation rather than
+a change rushed under this qualification's time pressure.
+
+Beta 0.5 remains **OPEN**. Next: rerun the 3x25-minute qualification with the
+`diff_normalize_emit` bound in place.
