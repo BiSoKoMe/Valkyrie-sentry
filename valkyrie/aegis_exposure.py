@@ -299,3 +299,40 @@ def exposure_cut(scenario: Scenario, flow_a: str, flow_b: str, target: str,
            "note": f"no cut of size <= {max_cut_size} found -- either the "
                    "hypothesis is overdetermined by more paths than searched, "
                    "or it does not depend on the observations checked"}
+
+
+def enumerate_minimal_cuts(scenario: Scenario, flow_a: str, flow_b: str, target: str,
+                          max_cut_size: int = 3) -> tuple[tuple[ExposureObservation, ...], ...]:
+    """Every MINIMAL cut for `target` up to `max_cut_size` -- a cut whose
+    removal flips `target` from established to not-established, where no
+    strict subset of it is itself already a cut. Aegis 3's planner needs
+    every distinct cut (redundant inference paths mean there can be more
+    than one), not just the first one found -- `exposure_cut` above answers
+    "is there a small cut" for a human reading one hypothesis at a time;
+    this answers "what are ALL the ways to break it," which a set-cover-style
+    planner needs to reason about mechanism coverage.
+
+    Returns an empty tuple both when `target` is already not established
+    (nothing to cut) and when it IS established but no cut was found within
+    `max_cut_size` -- callers that need to distinguish those two cases
+    should check the target's own decision via `evaluate_pair` first.
+    """
+    if target not in INFERENCE_HYPOTHESES:
+        raise ValueError(f"unknown inference hypothesis: {target!r}")
+
+    baseline = evaluate_pair(scenario, flow_a, flow_b)
+    if baseline["decisions"][target]["action"] != "alert":
+        return ()
+
+    relevant = [o for o in scenario if o.flow_id in (flow_a, flow_b)]
+    found: list[tuple[ExposureObservation, ...]] = []
+    for size in range(1, min(max_cut_size, len(relevant)) + 1):
+        for combo in itertools.combinations(relevant, size):
+            combo_set = set(combo)
+            if any(set(existing) <= combo_set for existing in found):
+                continue   # a smaller already-found cut makes this one non-minimal
+            reduced = tuple(o for o in scenario if o not in combo)
+            result = evaluate_pair(reduced, flow_a, flow_b)
+            if result["decisions"][target]["action"] != "alert":
+                found.append(combo)
+    return tuple(found)
