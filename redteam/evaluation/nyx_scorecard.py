@@ -130,14 +130,10 @@ def build_scenarios() -> tuple[Scenario, ...]:
     add("unauth-json-nested-id", "sync", "unauthorized", "POST", THIRD_PARTY,
         _hdr(FIRST_PARTY, **_JSON_HDR),
         json.dumps({"device": {"uuid": _RAW_ADID}}).encode())
-    # Filed as a NAMED gap, not plain "unauthorized": Nyx's own header scan in
-    # inspect_outbound() DOES catch a device id sent via a request header, but
-    # fake_outbound() only ever returns a rewritten (url, body) -- there is no
-    # header-rewrite path, and tls_addon.py's wiring never touches
-    # flow.request.headers either. So this is observed and correctly reported
-    # to the user, but not deceived -- a real production gap this harness
-    # exists to surface, not a bug in the harness itself.
-    add("gap-header-only-identifier", "background", "unauthorized", "GET",
+    # A device id sent via a request HEADER rather than the body/query --
+    # inspect_outbound()'s header scan catches it, and fake_outbound_headers()
+    # (added alongside this scorecard) now deceives it too.
+    add("unauth-header-device-id", "background", "unauthorized", "GET",
         THIRD_PARTY, {"Referer": FIRST_PARTY, "X-Device-Id": _RAW_ADID}, b"")
     add("unauth-tracking-cookie", "background", "unauthorized", "GET",
         THIRD_PARTY,
@@ -187,17 +183,24 @@ def run_scenario(scenario: Scenario) -> ScenarioResult:
     new_url, new_body, faked = nyx.fake_outbound(
         scenario.method, scenario.url, scenario.headers, scenario.body,
         persona=_PERSONA)
+    # Mirrors the real tls_addon.py wiring: fake_outbound() alone never
+    # reaches an identifier carried in a request HEADER, so the header-rewrite
+    # companion runs alongside it, same as production.
+    new_headers, header_faked = nyx.fake_outbound_headers(
+        scenario.method, scenario.url, scenario.headers, scenario.body,
+        persona=_PERSONA)
+    faked = list(dict.fromkeys(faked + header_faked))
     elapsed_ms = (time.perf_counter_ns() - started) / 1_000_000.0
 
     request_unchanged = (new_url == scenario.url and new_body == scenario.body
-                         and not faked)
+                         and not new_headers and not faked)
     # Retaining a raw value is only a leak where Nyx claims to have acted:
     # an untouched authorized/benign request legitimately still carries the
     # user's own data, and an unauthorized-but-cookie-only observation is the
     # documented exception (see cookie_never_entered_act_path). So this only
     # checks requests Nyx actually faked: did every raw sentinel it detected
     # in the ORIGINAL request actually disappear from what would be sent.
-    serialized = repr((new_url, new_body))
+    serialized = repr((new_url, new_body, new_headers))
     raw_value_leaked = bool(faked) and any(
         raw in scenario.body.decode("utf-8", "replace") + " " + scenario.url
         and raw in serialized
@@ -225,13 +228,10 @@ def score(scenarios: Iterable[Scenario]) -> dict:
     # Scenarios filed as a NAMED gap are reported on their own rather than
     # folded into the pass rate, where a known blind spot would either
     # misleadingly read as a failure or get averaged away and hidden inside a
-    # passing aggregate. Two distinct reasons currently exist in this corpus:
+    # passing aggregate.
     _GAP_REASONS = {
         "gap-no-referer-context": "no Referer/Origin means no first party to "
             "compare against; Nyx stays silent by design rather than guess",
-        "gap-header-only-identifier": "the identifier is observed via Nyx's "
-            "header scan, but fake_outbound() only rewrites (url, body) -- "
-            "there is no outbound header-rewrite path in Nyx or tls_addon.py",
     }
     structural_gaps = [r for r in unauthorized_all if r.scenario_id in _GAP_REASONS]
     unauthorized = [r for r in unauthorized_all if r not in structural_gaps]

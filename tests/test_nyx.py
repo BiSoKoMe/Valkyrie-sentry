@@ -225,6 +225,25 @@ def main() -> int:
     _, bbn, fbn = nyx.fake_outbound("POST", THIRD, HDR, b"page=3&sort=asc", persona)
     c.check("act: benign request is NOT touched", fbn == [] and bbn == b"page=3&sort=asc")
 
+    # fake_outbound() only ever rewrites (url, body) -- a device id sent via a
+    # request HEADER (a real tracker-SDK pattern) needs the companion below.
+    hdr_id_headers = {**HDR, "X-Device-Id": "550e8400-e29b-41d4-a716-446655440000"}
+    changed, hfaked = nyx.fake_outbound_headers(
+        "GET", THIRD, hdr_id_headers, b"", persona)
+    c.check("header identifier is rewritten to the persona id",
+            changed.get("X-Device-Id") == persona.advertising_id
+            and hfaked == ["identifier"])
+    fp_changed, fp_faked = nyx.fake_outbound_headers(
+        "GET", "https://news.example/x",
+        {"Referer": FP, "X-Device-Id": "550e8400-e29b-41d4-a716-446655440000"},
+        b"", persona)
+    c.check("act (headers): first-party header id is NOT faked",
+            fp_changed == {} and fp_faked == [])
+    ref_changed, ref_faked = nyx.fake_outbound_headers(
+        "GET", THIRD, {**HDR, "X-Request-Id": "abcd1234efgh5678ijkl"}, b"", persona)
+    c.check("act (headers): an ordinary trace header (not id-shaped) is untouched",
+            ref_changed == {} and ref_faked == [])
+
     # Wired through the addon: ACT rewrites the live flow; OBSERVE leaves it alone.
     print("\n[6] wired: NYX_ACT rewrites the flow; observe mode leaves it untouched")
     import valkyrie.config as _cfg
@@ -238,7 +257,8 @@ def main() -> int:
         method = "POST"
         def __init__(self):
             self.url = THIRD
-            self.headers = {"Referer": FP, "Content-Type": "application/x-www-form-urlencoded"}
+            self.headers = {"Referer": FP, "Content-Type": "application/x-www-form-urlencoded",
+                            "X-Device-Id": "550e8400-e29b-41d4-a716-446655440000"}
             self.raw_content = b"adid=550e8400-e29b-41d4-a716-446655440000&x=1"
         def set_content(self, b): self.raw_content = b
 
@@ -255,6 +275,8 @@ def main() -> int:
         addon2._nyx_observe(f, "collector.tracker.example", THIRD, "test")
         c.check("ACT: flow body was rewritten (real id removed)",
                 b"550e8400-e29b-41d4-a716-446655440000" not in f.request.raw_content)
+        c.check("ACT: the same real id in a request HEADER was also rewritten",
+                f.request.headers["X-Device-Id"] != "550e8400-e29b-41d4-a716-446655440000")
         c.check("ACT: a 'deceived' nyx_fake event was logged",
                 any(getattr(e, "raw_category", "") == "nyx_fake"
                     and e.decision == "deceived" for e in addon2.store.events))
@@ -265,6 +287,8 @@ def main() -> int:
         addon2._nyx_observe(f2, "collector.tracker.example", THIRD, "test")
         c.check("OBSERVE: flow body is left UNTOUCHED",
                 f2.request.raw_content == b"adid=550e8400-e29b-41d4-a716-446655440000&x=1")
+        c.check("OBSERVE: the request HEADER is left UNTOUCHED too",
+                f2.request.headers["X-Device-Id"] == "550e8400-e29b-41d4-a716-446655440000")
         c.check("OBSERVE: a 'flagged' nyx_leak event was logged",
                 any(getattr(e, "raw_category", "") == "nyx_leak" for e in addon2.store.events))
     finally:

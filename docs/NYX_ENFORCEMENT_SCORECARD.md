@@ -30,36 +30,44 @@ request is fabricated; nothing here is a live browser capture.
 |---|---:|
 | Authorized flows left byte-identical | 100% (7/7) |
 | Benign flows left byte-identical | 100% (4/4) |
-| Unauthorized disclosures deceived (scored subset) | 90.9% (10/11) |
+| Unauthorized disclosures deceived (scored subset) | 91.7% (11/12) |
 | Tracking cookie ever entered the act path | never (by design) |
 | Raw sentinel value retained after a claimed fake | never |
-| p99 latency (inspect + fake, per request) | < 0.3 ms |
+| p99 latency (inspect + fake, per request) | < 0.4 ms |
 
 The one scored-but-undeceived case is `unauth-tracking-cookie`: a
 third-party tracking cookie is deliberately excluded from the rewrite path,
 because blanking it can break a legitimately logged-in embed. That is an
 intentional design choice in `tls_addon.py`, not a miss.
 
+## A gap this scorecard found and closed
+
+Building this harness surfaced a real production gap: `inspect_outbound`'s
+header scan correctly *saw* a device id sent via a request header (e.g.
+`X-Device-Id`, a real pattern used by some tracker SDKs), but
+`fake_outbound()` only ever returned a rewritten `(url, body)` -- there was
+no header-rewrite path in Nyx, and `tls_addon.py`'s wiring never touched
+`flow.request.headers` either. The identifier was observed and reported to
+the user, but never deceived.
+
+That gap is now closed: `nyx.fake_outbound_headers()` is a new, additive
+companion to `fake_outbound()` that scans headers the same way
+`inspect_outbound` already does and returns persona-consistent replacements;
+`tls_addon.py`'s `_nyx_observe` calls it alongside the existing url/body
+rewrite and applies both. `unauth-header-device-id` is scored as an ordinary
+unauthorized scenario now, not a named gap.
+
 ## Named gaps (not folded into the pass rate)
 
-Two scenarios are filed separately rather than averaged into the 90.9%,
-because doing so would either hide a real limitation inside a passing
-number or unfairly count a case the mechanism cannot act on as a failure:
+One scenario is still filed separately rather than averaged into the 91.7%,
+because doing so would hide a real, deliberate limitation inside a passing
+number:
 
 - **`gap-no-referer-context`** -- a request with no `Referer`/`Origin`
   header gives Nyx no first party to compare against, so it stays silent by
   design (`nyx.first_party_of`). A real device-id disclosure over such a
-  connection is invisible to Nyx today.
-- **`gap-header-only-identifier`** -- `inspect_outbound`'s header scan
-  correctly *sees* a device id sent via a request header (e.g. `X-Device-Id`,
-  a real pattern used by some tracker SDKs), but `fake_outbound()` only
-  returns a rewritten `(url, body)`. There is no header-rewrite path in Nyx,
-  and `tls_addon.py`'s wiring never touches `flow.request.headers` either.
-  This is observed and reported to the user, but never deceived.
-
-The second gap is the more actionable one: it is a concrete, scoped
-production change (teach `fake_outbound` to return replacement headers, and
-wire `tls_addon.py` to apply them) rather than a fundamental limitation.
+  connection is invisible to Nyx today, and there is no proposed fix here --
+  without a first party, there is nothing to judge "third party" against.
 
 ## Limitations
 

@@ -60,12 +60,21 @@ def test_scorecard_is_honest_about_its_own_evidence_class():
 def test_known_gaps_are_named_not_hidden_in_the_pass_rate():
     report = score(build_scenarios())
     gaps = {gap["scenario_id"]: gap for gap in report["structural_gaps"]}
-    assert set(gaps) == {"gap-no-referer-context", "gap-header-only-identifier"}
+    assert set(gaps) == {"gap-no-referer-context"}
     # No first-party context: Nyx stays silent by design -- not observed.
     assert not gaps["gap-no-referer-context"]["observed"]
-    # Header-only identifier: Nyx observes it but cannot rewrite a header.
-    assert gaps["gap-header-only-identifier"]["observed"]
-    assert not gaps["gap-header-only-identifier"]["deceived"]
+
+
+def test_header_carried_identifier_is_now_deceived():
+    # Regression: fake_outbound_headers() closes the gap this scorecard first
+    # surfaced -- an identifier sent via a request header (a real tracker-SDK
+    # pattern) used to be observed but never faked.
+    report = score(build_scenarios())
+    result = next(r for r in report["results"]
+                 if r["scenario_id"] == "unauth-header-device-id")
+    assert result["observed_categories"] == ("identifier",)
+    assert result["faked_categories"] == ("identifier",)
+    assert not result["raw_value_leaked"]
 
 
 if __name__ == "__main__":
@@ -76,4 +85,5 @@ if __name__ == "__main__":
     test_no_raw_sentinel_value_survives_into_the_report()
     test_scorecard_is_honest_about_its_own_evidence_class()
     test_known_gaps_are_named_not_hidden_in_the_pass_rate()
-    print("7 passed")
+    test_header_carried_identifier_is_now_deceived()
+    print("8 passed")
