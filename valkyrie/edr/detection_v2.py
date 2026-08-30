@@ -19,6 +19,7 @@ from collections import OrderedDict, deque
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from .behavior_ontology import canonicalize
 from .hypothesis import EvidenceFact, HypothesisDecision, HypothesisSpec, evaluate_hypotheses
 
 MAX_ENTITIES = 4096
@@ -235,27 +236,76 @@ _ALERT_HYPOTHESES = frozenset({
 
 
 class BehaviorEngine:
-    """Translate normalized context into reusable facts, not verdicts."""
+    """Translate normalized context into reusable facts, not verdicts.
 
-    _EXECUTION_LABELS = frozenset({
-        "lolbin", "office_child_shell", "encoded_powershell", "download_cradle",
-        "dynamic_exec", "obfuscation", "remote_thread_injection", "process_tampering",
-    })
-    _TRUST_LABELS = frozenset({
-        "trusted", "trusted_os_path", "signed", "known_admin", "expected_maintenance",
-    })
+    Raw detector labels are translated through behavior_ontology.canonicalize()
+    before this class ever looks at them, so a new rule in behavioral_rules.py
+    (or any other upstream detector) only needs a canonical mapping ONCE --
+    not a bespoke check here per rule. See docs/TIER_A_V2_PIPELINE_TRACE.md
+    for the vocabulary gap this replaced and
+    docs/DETECTION_V2_CANONICALIZATION.md for the translation boundary itself.
+    """
+
+    # weight, hypotheses supported, hypotheses contradicted, explanation --
+    # one row per canonical behavior in behavior_ontology.CANONICAL_BEHAVIORS.
+    # Weights are judgment calls grounded in the source rules' own typical
+    # severity (see docs/DETECTION_V2_CANONICALIZATION.md): destructive/
+    # credential/injection primitives are historically high-severity and
+    # high-precision when they fire at all; discovery is deliberately weak
+    # because a single recon command is extremely common and mostly benign
+    # (the project already has a dedicated sequence engine, behavioral_
+    # sequences.py, for recon BURSTS -- this is only the single-event case).
+    _CANONICAL_FACTS: dict[str, tuple] = {
+        "unexpected_process_relationship": (
+            0.74, ("suspicious_execution_chain",), ("ordinary_activity",),
+            "Execution context contains a reusable suspicious relationship primitive"),
+        "sensitive_configuration_modified": (
+            0.78, ("persistence_attempt", "suspicious_execution_chain"), ("ordinary_activity",),
+            "An autostart or durable configuration object changed"),
+        "external_communication": (
+            0.50, ("suspicious_execution_chain", "possible_data_theft"), (),
+            "A process communicated with an external destination"),
+        "security_control_tampering": (
+            0.80, ("suspicious_execution_chain",), ("ordinary_activity", "administrative_activity"),
+            "A security control (AV, logging, telemetry, firewall) was tampered with"),
+        "credential_access_attempt": (
+            0.82, ("suspicious_execution_chain", "possible_data_theft"), ("ordinary_activity",),
+            "Credential material was accessed, dumped, or enumerated"),
+        "discovery_activity": (
+            0.45, ("suspicious_execution_chain",), (),
+            "Host, domain, or account reconnaissance was observed"),
+        "lateral_movement": (
+            0.76, ("suspicious_execution_chain",), ("ordinary_activity",),
+            "Remote-execution or lateral-movement tooling was used"),
+        "code_injection": (
+            0.80, ("suspicious_execution_chain",), ("ordinary_activity",),
+            "A process/memory injection primitive was observed"),
+        "obfuscated_execution": (
+            0.68, ("suspicious_execution_chain",), ("ordinary_activity",),
+            "What is executing was encoded, decoded, or obfuscated"),
+        "lolbin_proxy_execution": (
+            0.72, ("suspicious_execution_chain",), ("ordinary_activity",),
+            "A trusted OS binary proxied execution or content retrieval"),
+        "destructive_impact": (
+            0.85, ("suspicious_execution_chain",), ("ordinary_activity", "administrative_activity"),
+            "Data destruction or recovery inhibition was observed"),
+        "collection_staging": (
+            0.65, ("suspicious_execution_chain", "possible_data_theft"), (),
+            "Data was staged, archived, or captured ahead of possible exfiltration"),
+    }
 
     def extract(self, event: CanonicalEvent, causal_subgraph: dict | None = None) -> tuple[EvidenceFact, ...]:
         facts: list[EvidenceFact] = []
         labels = set(event.properties.get("labels") or ())
         prefix = event.event_id
+        canon = canonicalize(labels)
 
         def add(behavior: str, weight: float, *, supports=(), contradicts=(),
-                explanation: str, blocks: bool = False) -> None:
+                explanation: str, blocks: bool = False, extra_provenance=()) -> None:
             facts.append(EvidenceFact(
                 f"{prefix}:{behavior}", behavior, weight,
                 supports=tuple(supports), contradicts=tuple(contradicts),
-                provenance=(event.event_id,) + event.provenance,
+                provenance=(event.event_id,) + event.provenance + tuple(extra_provenance),
                 explanation=explanation, blocks_decision=blocks,
             ))
 
@@ -263,20 +313,27 @@ class BehaviorEngine:
             add("incomplete_process_identity", 1.0,
                 explanation="Process identity lacks authoritative creation metadata",
                 blocks=True)
-        if labels & self._EXECUTION_LABELS:
-            add("unexpected_process_relationship", 0.74,
-                supports=("suspicious_execution_chain",),
-                contradicts=("ordinary_activity",),
-                explanation="Execution context contains a reusable suspicious relationship primitive")
-        if event.event_type == "PERSISTENCE":
-            add("sensitive_configuration_modified", 0.78,
-                supports=("persistence_attempt", "suspicious_execution_chain"),
-                contradicts=("ordinary_activity",),
-                explanation="An autostart or durable configuration object changed")
-        if event.event_type in ("DNS", "NETWORK"):
-            add("external_communication", 0.50,
-                supports=("suspicious_execution_chain", "possible_data_theft"),
-                explanation="A process communicated with an external destination")
+
+        emitted: set[str] = set()
+        for behavior in canon.hit:
+            weight, supports, contradicts, explanation = self._CANONICAL_FACTS[behavior]
+            add(behavior, weight, supports=supports, contradicts=contradicts,
+                explanation=explanation, extra_provenance=canon.provenance.get(behavior, ()))
+            emitted.add(behavior)
+        # event_type is authoritative even with no canonical label present (a
+        # persistence-category event from a collector that never attached one
+        # of the canonical persistence labels still IS a configuration change;
+        # a DNS/NETWORK event is still external communication by definition
+        # of its own category). Guarded by `emitted` so a category match and a
+        # label match for the SAME canonical behavior never double-fire.
+        if event.event_type == "PERSISTENCE" and "sensitive_configuration_modified" not in emitted:
+            weight, supports, contradicts, explanation = self._CANONICAL_FACTS["sensitive_configuration_modified"]
+            add("sensitive_configuration_modified", weight, supports=supports,
+                contradicts=contradicts, explanation=explanation)
+        if event.event_type in ("DNS", "NETWORK") and "external_communication" not in emitted:
+            weight, supports, contradicts, explanation = self._CANONICAL_FACTS["external_communication"]
+            add("external_communication", weight, supports=supports,
+                contradicts=contradicts, explanation=explanation)
         if event.event_type == "PRIVACY":
             add("sensitive_data_disclosure", 0.82,
                 supports=("possible_data_theft",),
@@ -295,11 +352,12 @@ class BehaviorEngine:
                 add("disclosure_authority_absent", 0.76,
                     supports=("possible_data_theft",),
                     explanation="No trusted local authority signal accompanied the disclosure")
-        if labels & self._TRUST_LABELS:
+        if canon.trust:
             add("trusted_maintenance_context", 0.84,
                 supports=("administrative_activity",),
                 contradicts=("suspicious_execution_chain", "persistence_attempt"),
-                explanation="Signed or expected maintenance context explains the behavior")
+                explanation="Signed or expected maintenance context explains the behavior",
+                extra_provenance=canon.trust)
         if "trusted_gesture" in labels or "user_initiated" in labels:
             add("active_user_context", 0.72,
                 supports=("ordinary_activity",),

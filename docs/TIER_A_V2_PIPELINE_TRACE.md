@@ -5,6 +5,12 @@ live attack, and not the committed synthetic corpus in
 `docs/DETECTION_V2_EXPERIMENT.md`.
 **Independent:** no.
 
+> **Update:** the vocabulary gap this document found (39/50) is closed --
+> see `docs/DETECTION_V2_CANONICALIZATION.md`. The numbers below are kept as
+> the historical record of the finding; current numbers are in the
+> canonicalization doc's before/after table and reproduce by rerunning
+> `redteam/evaluation/tier_a_pipeline_trace.py`.
+
 ## Research question
 
 `generalization.py` proves the v2 mechanism against 30 scenarios written to
@@ -85,7 +91,7 @@ shape of testing single events in isolation, not a regression to chase.
 - Every technique here is malicious by construction (the catalog has no
   benign twins), so `benign_control` is not applicable in this report.
 
-## Next falsifiable hypothesis
+## Next falsifiable hypothesis (confirmed)
 
 Building a label-translation layer from `behavioral_rules.classify_behavior()`'s
 per-rule vocabulary into `detection_v2.BehaviorEngine`'s recognized facts
@@ -94,3 +100,10 @@ decision-stage rate much, since decision is gated by causal chains and
 corroborating evidence this single-event replay does not supply. That
 isolates the translation-layer question from the "does v2 need real causal
 context to alert" question, instead of conflating them in one number.
+
+**Confirmed.** `behavior_ontology.py` (see `docs/DETECTION_V2_CANONICALIZATION.md`)
+raised the behavior stage to 84.1% (53/63) while the decision stage moved
+only from 1.6% to 4.8% (1/63 to 3/63) -- exactly the predicted shape. The
+open question now is the one this isolated it to: does the real world
+supply the second corroborating fact a causal chain or multi-collector
+context would provide, where this single-event replay structurally cannot.

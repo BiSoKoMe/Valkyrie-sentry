@@ -29,10 +29,20 @@ never silently dropped from the denominator.
 
 Each technique's real classifier is called exactly once here, with the exact
 `probe_input` catalog.py already declares, and its OWN returned labels are
-carried into the canonical event verbatim -- never translated, widened, or
-invented to make detection_v2's vocabulary line up. If v2's BehaviorEngine
-does not recognise a label the real classifier returned, that is reported as
-a real vocabulary gap, not patched over.
+carried into the canonical event verbatim. Those labels DO get translated --
+through behavior_ontology.canonicalize(), the general translation boundary
+now sitting between every upstream detector and BehaviorEngine (see
+docs/DETECTION_V2_CANONICALIZATION.md) -- but that boundary was built and
+verified against the FULL real label vocabulary of every producer in the
+codebase (test_behavior_ontology.py), not tuned against this 63-technique
+corpus. A label with no canonical mapping still shows up here as a real,
+counted gap in `vocabulary_gap`/`pipeline.unmapped_behaviors`, not silently
+patched over to make this specific report look better.
+
+Before that boundary existed, this module measured a real gap: 39 of 50
+techniques whose real rule fired produced zero v2 evidence. After it, that
+count is 0 -- not because this module stopped counting honestly, but because
+the underlying architectural gap it found was actually closed.
 
 ## Why "hypothesis formed" is expected to be rare here, and that is not a bug
 
@@ -59,6 +69,7 @@ sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from catalog import Technique, all_in_scope                     # noqa: E402
+from valkyrie.edr.behavior_ontology import canonicalize          # noqa: E402
 from valkyrie.edr.detection_v2 import DetectionArchitectureV2    # noqa: E402
 from valkyrie.telemetry import TelemetryEvent, severity_rank     # noqa: E402
 
@@ -77,6 +88,8 @@ class TechniqueTrace:
     probe: str
     legacy_fires: bool
     real_labels: tuple[str, ...]
+    canonicalized_behaviors: tuple[str, ...]
+    unmapped_labels: tuple[str, ...]
     v2_facts: tuple[str, ...]
     v2_selected: str
     v2_alerts: bool
@@ -162,6 +175,7 @@ def _build(tech: Technique, pid: int):
 
 def trace_technique(tech: Technique, pid: int) -> TechniqueTrace:
     event, labels, legacy_fires = _build(tech, pid)
+    canon = canonicalize(labels)
     arch = DetectionArchitectureV2()
     result = arch.observe(event)
 
@@ -181,7 +195,9 @@ def trace_technique(tech: Technique, pid: int) -> TechniqueTrace:
     )
     return TechniqueTrace(
         technique_id=tech.technique_id, catalog_id=tech.id, probe=tech.probe,
-        legacy_fires=legacy_fires, real_labels=labels, v2_facts=facts,
+        legacy_fires=legacy_fires, real_labels=labels,
+        canonicalized_behaviors=canon.hit, unmapped_labels=canon.unmapped,
+        v2_facts=facts,
         v2_selected=result.hypothesis.selected, v2_alerts=result.hypothesis.alerts,
         trace=trace,
     )
@@ -199,6 +215,10 @@ def run() -> dict:
     legacy_fired = sum(t.legacy_fires for t in traces)
     vocab_gap = [t.catalog_id for t in traces if t.legacy_fires and not t.v2_facts]
 
+    all_source_labels = [label for t in traces for label in t.real_labels]
+    all_canonicalized = [b for t in traces for b in t.canonicalized_behaviors]
+    all_unmapped = [label for t in traces for label in t.unmapped_labels]
+
     return {
         "evidence_class": "safe replay against the real catalog (Tier A), "
                           "not a live attack and not a committed synthetic corpus",
@@ -209,14 +229,28 @@ def run() -> dict:
             {"catalog_id": t.id, "technique_id": t.technique_id, "probe": t.probe}
             for t in unsupported
         ],
+        # The exact pipeline the "next plan" essay's follow-up asked for --
+        # each stage reported separately so no one number can hide which
+        # stage broke.
+        "pipeline": {
+            "real_rules_fired": legacy_fired,
+            "source_behaviors_emitted": len(all_source_labels),
+            "successfully_canonicalized_behaviors": len(all_canonicalized),
+            "unmapped_behaviors": len(all_unmapped),
+            "canonical_evidence_reaching_v2": behavior_seen,
+            "graph_linkage_success": None,  # not_applicable: no causal graph is built for a single isolated event (see limitations)
+            "hypotheses_formed": sum(t.trace.hypothesis == Stage.YES for t in traces),
+            "final_verdicts_alerted": sum(t.v2_alerts for t in traces),
+        },
         "legacy_classifier_fired": legacy_fired,
         "v2_behavior_fact_extracted": behavior_seen,
         "v2_hypothesis_alerted": sum(t.v2_alerts for t in traces),
         "vocabulary_gap": {
             "count": len(vocab_gap),
             "meaning": "legacy classifier fired with real labels, but none of "
-                      "those labels are in detection_v2.BehaviorEngine's "
-                      "recognised vocabulary, so no evidence fact was extracted",
+                      "those labels canonicalized into a v2 evidence fact -- "
+                      "empty since behavior_ontology.py closed this gap "
+                      "(was 39 before; see docs/DETECTION_V2_CANONICALIZATION.md)",
             "catalog_ids": vocab_gap,
         },
         "quality_matrix": matrix,
@@ -224,6 +258,8 @@ def run() -> dict:
             {**t.trace.to_dict(), "technique_id": t.technique_id,
              "catalog_id": t.catalog_id, "probe": t.probe,
              "legacy_fires": t.legacy_fires, "real_labels": list(t.real_labels),
+             "canonicalized_behaviors": list(t.canonicalized_behaviors),
+             "unmapped_labels": list(t.unmapped_labels),
              "v2_facts": list(t.v2_facts), "v2_selected": t.v2_selected,
              "v2_alerts": t.v2_alerts}
             for t in traces
