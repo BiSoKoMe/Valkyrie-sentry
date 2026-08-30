@@ -189,6 +189,24 @@ def main() -> int:
     _check("default (no phase_c_failures arg) PASSES",
            result13["checks"]["phase_c_technique_execution_completed"]["pass"] is True)
 
+    print("\n[13] the engine process disappearing entirely is its own "
+          "criterion (Beta 0.5.5) - distinct from any per-collector or "
+          "per-request check, checked directly against the subprocess")
+    result14 = score([], [], health_failures=0, health_successes=0,
+                     causality_before_c=None, causality_after_c=None, mode="soak",
+                     engine_exit_code=None)
+    _check("engine still running (exit_code None) PASSES",
+           result14["checks"]["engine_process_alive_throughout"]["pass"] is True)
+
+    result15 = score([], [], health_failures=0, health_successes=0,
+                     causality_before_c=None, causality_after_c=None, mode="soak",
+                     engine_exit_code=1)
+    _check("engine exited (any code) FAILS",
+           result15["checks"]["engine_process_alive_throughout"]["pass"] is False)
+    _check("exit code recorded in the detail",
+           result15["checks"]["engine_process_alive_throughout"]["detail"] == {"exit_code": 1})
+    _check("overall FAILS", result15["overall"] == "FAIL")
+
     print("\n" + "=" * 48)
     if _FAILURES:
         print(f"FAILED: {len(_FAILURES)} check(s)")

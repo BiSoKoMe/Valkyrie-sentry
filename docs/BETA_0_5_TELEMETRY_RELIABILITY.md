@@ -449,3 +449,63 @@ any not-yet-emitted new process to the next poll rather than blocking
 Beta 0.5 remains **OPEN**. Next: rerun the 3x25-minute qualification with
 both collectors bounded; if this was the last of the recurring
 single-sample staleness, all three runs should pass clean.
+
+## Beta 0.5.5: a new, more fundamental failure - the engine process itself, not a collector
+
+CI qualification, fifth attempt, 2026-08-30 (`33340339842`, after the
+`ProcessCollector` fix): dry-run passed again. The 3x25-minute soak: **1/3
+passed** (run 2). Run 1 **crashed** the harness with an uncaught
+`ConnectionRefusedError`; run 3 produced a real scored FAIL (19 API
+failures, one Phase E Tier B subset failure).
+
+This is NOT the collector-staleness class the `emit_budget` fixes address.
+In both failing runs, `/api/health` went from succeeding to
+`ConnectionResetError` ("forcibly closed by the remote host") to
+`ConnectionRefusedError` ("actively refused") - the shape of a listening
+socket that stopped existing, not a slow response. Run 1's own engine log
+(now fully captured thanks to the Beta 0.5.2 pipe fix) confirms this: it
+printed startup banners and healthy `[persist-poll]` timings up to
+`23:02:55`, then stopped entirely - no exception, no shutdown message,
+nothing - while the harness kept trying and failing to reach it for the
+next ~7 minutes until an unprotected `_safe_get`-less call crashed the
+script. Run 3 hit the same "engine unreachable" shape for about 19 samples
+(~38s) but recovered on its own and finished the full run. This happened
+during Phase C / early Phase E - the highest concurrent-load window (the
+harness's own benign-command loop, `run_live_evaluation.ps1`'s ART battery,
+and the engine's own collectors/ETW sensors/EDR reasoning all running at
+once on a 2-vCPU runner). The leading hypothesis is resource exhaustion
+(memory or handle pressure) under that combined load, not yet confirmed -
+stated as a hypothesis, not a proven cause.
+
+Two things fixed, both harness robustness (not reliability-bound changes):
+- Every direct API call in `run_soak`/`run_dry_run` outside the Sampler now
+  goes through `_safe_get`, which never raises - a before/after causality
+  snapshot that fails is recorded as unavailable, not a crash.
+- The entire phase-execution body in both functions is now wrapped in a
+  top-level `try/except`: any unhandled exception is recorded
+  (`unhandled_exception` in the result, forcing `overall: FAIL`) and
+  scoring still runs against whatever samples were already collected,
+  instead of losing them. This is the same principle behind Beta 0.5.2's
+  crash-proofing, generalized - a new call site crashing (this one) proved
+  the earlier fix was scoped to one symptom, not the actual invariant
+  ("this harness must never lose evidence to an uncaught exception,
+  anywhere").
+- A new, explicit criterion, `engine_process_alive_throughout`, checks the
+  engine subprocess's own exit code directly (`proc.poll()`) rather than
+  inferring "the engine is fine" from the absence of HTTP errors - the
+  engine disappearing entirely is a more fundamental failure than any
+  single collector or API call going stale, and deserves its own name in
+  the report rather than showing up only as a pile of `api_responsive`
+  failures.
+
+This finding is NOT yet root-caused, unlike the collector-level stalls.
+Whether it is resource exhaustion, something specific to running the
+benign-command loop and the ART battery concurrently, or a runner-specific
+flake needs its own targeted investigation (e.g. capturing engine memory/
+handle counts throughout a run, or running phase C and the benign loop
+sequentially instead of concurrently as a controlled experiment) rather than
+another guess-and-patch cycle.
+
+Beta 0.5 remains **OPEN**. The qualification cannot pass while the engine
+process itself can disappear mid-run, regardless of how clean the
+collector-level metrics are otherwise.

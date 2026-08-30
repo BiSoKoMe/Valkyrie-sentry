@@ -112,6 +112,16 @@ def _get(api_base: str, path: str, timeout: float = 8.0):
         return json.load(r)
 
 
+def _safe_get(api_base: str, path: str, timeout: float = 5.0) -> dict:
+    """Like _get, but never raises - a before/after snapshot read that fails
+    (the engine briefly or permanently unreachable, see Beta 0.5.5) must not
+    crash the whole harness and discard every sample already collected."""
+    try:
+        return _get(api_base, path, timeout=timeout)
+    except Exception:                              # noqa: BLE001
+        return {}
+
+
 def _post(api_base: str, path: str, timeout: float = 8.0):
     req = urllib.request.Request(f"{api_base}{path}", method="POST", data=b"")
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -459,8 +469,17 @@ def _independent_stale_bound(interval: float) -> float:
 def score(samples: list[dict], transitions: list[Transition],
          health_failures: int, health_successes: int,
          causality_before_c: int | None, causality_after_c: int | None,
-         mode: str, phase_c_failures: list[str] | None = None) -> dict:
+         mode: str, phase_c_failures: list[str] | None = None,
+         engine_exit_code: int | None = None) -> dict:
     checks: dict[str, dict] = {}
+
+    # The engine process disappearing entirely is a distinct, more
+    # fundamental failure than any per-collector or per-request check can
+    # see on its own (Beta 0.5.5) - checked directly against the subprocess.
+    checks["engine_process_alive_throughout"] = {
+        "pass": engine_exit_code is None,
+        "detail": {"exit_code": engine_exit_code} if engine_exit_code is not None else {},
+    }
 
     # 1. Zero silent collector deaths.
     dead = []
@@ -670,29 +689,44 @@ def run_dry_run() -> int:
         sampler = Sampler(api_base, out)
         sampler.start()
 
-        sampler.current_phase = "A"
-        time.sleep(60)
+        before_c: dict = {}
+        after_c: dict = {}
+        phase_c_failures: list[str] = []
+        unhandled_exception: str | None = None
+        try:
+            sampler.current_phase = "A"
+            time.sleep(60)
 
-        sampler.current_phase = "B"
-        run_benign_activity(90)
+            sampler.current_phase = "B"
+            run_benign_activity(90)
 
-        before_c = _get(api_base, "/api/edr/causality/stats", timeout=5.0)
-        sampler.current_phase = "C"
-        phase_c_failures = [] if run_phase_c(api_base) else ["phase_c"]
-        time.sleep(20)
-        after_c = _get(api_base, "/api/edr/causality/stats", timeout=5.0)
+            before_c = _safe_get(api_base, "/api/edr/causality/stats")
+            sampler.current_phase = "C"
+            if not run_phase_c(api_base):
+                phase_c_failures.append("phase_c")
+            time.sleep(20)
+            after_c = _safe_get(api_base, "/api/edr/causality/stats")
 
-        sampler.current_phase = "D"
-        run_benign_activity(60)
+            sampler.current_phase = "D"
+            run_benign_activity(60)
+        except Exception as exc:                     # noqa: BLE001
+            unhandled_exception = f"{type(exc).__name__}: {exc}"
+            print(f"[run_dry_run] unhandled exception during phase execution, "
+                  f"scoring what was already collected: {unhandled_exception}")
 
         sampler.stop()
+        engine_exit_code = proc.poll()
         result = score(sampler.samples, sampler.transitions,
                        sampler.health_failures, sampler.health_successes,
                        before_c.get("nodes"), after_c.get("nodes"), "dry-run",
-                       phase_c_failures=phase_c_failures)
+                       phase_c_failures=phase_c_failures,
+                       engine_exit_code=engine_exit_code)
         result["mode"] = "dry-run"
         result["evidence"] = False
         result["note"] = "Validates the harness itself, not reliability. Not a qualification pass/fail."
+        if unhandled_exception:
+            result["unhandled_exception"] = unhandled_exception
+            result["overall"] = "FAIL"
         _write_summary("dryrun", result)
         print(json.dumps(result, indent=2, default=str))
         return 0
@@ -780,6 +814,9 @@ def run_soak(minutes: float, contention: bool = False) -> int:
         # collected instead of discarding it (see PHASE_C_TIMEOUT_S's
         # docstring for the run that motivated this).
         phase_c_failures: list[str] = []
+        before_c: dict = {}
+        after_c: dict = {}
+        unhandled_exception: str | None = None
 
         def pause(seconds: float) -> None:
             if contention:
@@ -794,52 +831,68 @@ def run_soak(minutes: float, contention: bool = False) -> int:
         a_s, b_s, c_settle_s, d_s = 150.0, 300.0, 300.0, 300.0
         e_s = max(0.0, total_s - (a_s + b_s + c_settle_s + d_s))
 
-        sampler.current_phase = "A"
-        pause(a_s)
+        # EVERYTHING below is wrapped: an engine that becomes briefly or
+        # permanently unreachable mid-run (Beta 0.5.5 - a real, unexplained
+        # finding, not a harness bug) must never crash this script and
+        # discard every sample already collected. Whatever samples exist by
+        # the time anything raises still get scored.
+        try:
+            sampler.current_phase = "A"
+            pause(a_s)
 
-        sampler.current_phase = "B"
-        run_benign_activity(b_s, stop_event=sampler.failure if contention else None)
+            sampler.current_phase = "B"
+            run_benign_activity(b_s, stop_event=sampler.failure if contention else None)
 
-        if contention and sampler.failure.is_set():
-            before_c = after_c = {"nodes": None}
-        else:
-            before_c = _get(api_base, "/api/edr/causality/stats", timeout=5.0)
-            after_c = {"nodes": None}
+            if not (contention and sampler.failure.is_set()):
+                before_c = _safe_get(api_base, "/api/edr/causality/stats")
 
-        sampler.current_phase = "C"
-        if not sampler.failure.is_set() and not run_phase_c(api_base):
-            phase_c_failures.append("phase_c")
-        elapsed = min(60.0, c_settle_s)
-        pause(elapsed)
-        run_benign_activity(max(0.0, c_settle_s - elapsed),
-                            stop_event=sampler.failure if contention else None)
-        if not sampler.failure.is_set():
-            after_c = _get(api_base, "/api/edr/causality/stats", timeout=5.0)
+            sampler.current_phase = "C"
+            if not sampler.failure.is_set() and not run_phase_c(api_base):
+                phase_c_failures.append("phase_c")
+            elapsed = min(60.0, c_settle_s)
+            pause(elapsed)
+            run_benign_activity(max(0.0, c_settle_s - elapsed),
+                                stop_event=sampler.failure if contention else None)
+            if not sampler.failure.is_set():
+                after_c = _safe_get(api_base, "/api/edr/causality/stats")
 
-        sampler.current_phase = "D"
-        run_benign_activity(d_s, stop_event=sampler.failure if contention else None)
+            sampler.current_phase = "D"
+            run_benign_activity(d_s, stop_event=sampler.failure if contention else None)
 
-        sampler.current_phase = "E"
-        e_deadline = time.time() + e_s
-        toggle = 0
-        while time.time() < e_deadline and not sampler.failure.is_set():
-            remaining = e_deadline - time.time()
-            if toggle % 3 == 2 and remaining > 60:
-                if not run_phase_c(api_base):
-                    phase_c_failures.append(f"phase_e_toggle_{toggle}")
-            else:
-                run_benign_activity(min(90.0, max(1.0, remaining)),
-                                    stop_event=sampler.failure if contention else None)
-            toggle += 1
+            sampler.current_phase = "E"
+            e_deadline = time.time() + e_s
+            toggle = 0
+            while time.time() < e_deadline and not sampler.failure.is_set():
+                remaining = e_deadline - time.time()
+                if toggle % 3 == 2 and remaining > 60:
+                    if not run_phase_c(api_base):
+                        phase_c_failures.append(f"phase_e_toggle_{toggle}")
+                else:
+                    run_benign_activity(min(90.0, max(1.0, remaining)),
+                                        stop_event=sampler.failure if contention else None)
+                toggle += 1
+        except Exception as exc:                    # noqa: BLE001
+            unhandled_exception = f"{type(exc).__name__}: {exc}"
+            print(f"[run_soak] unhandled exception during phase execution, "
+                  f"scoring what was already collected: {unhandled_exception}")
 
         sampler.stop()
+        # Beta 0.5.5: the engine process disappearing entirely (not just one
+        # collector or one API call) is a distinct, more fundamental failure
+        # than anything the per-collector checks can see - checked directly
+        # against the subprocess, not inferred from HTTP errors alone.
+        engine_exit_code = proc.poll()
         result = score(sampler.samples, sampler.transitions,
                        sampler.health_failures, sampler.health_successes,
                        before_c.get("nodes"), after_c.get("nodes"), mode,
-                       phase_c_failures=phase_c_failures)
+                       phase_c_failures=phase_c_failures,
+                       engine_exit_code=engine_exit_code)
         result["mode"] = mode
         result["minutes"] = minutes
         result["platform"] = platform.platform()
+        if unhandled_exception:
+            result["unhandled_exception"] = unhandled_exception
+            result["overall"] = "FAIL"
         if contention:
             result["first_failure"] = sampler.first_failure
             result["experiment_completed_without_failure"] = not sampler.failure.is_set()
