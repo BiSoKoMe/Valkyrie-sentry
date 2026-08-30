@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import sys
 import xml.etree.ElementTree as ET
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from valkyrie.browser_extension_integrity import classify_extension_change
 from valkyrie.etw.sysmon import classify_sysmon
@@ -150,3 +154,13 @@ def test_shipped_sysmon_config_is_valid_and_collects_only_targeted_state():
     assert "\\Microsoft\\Edge\\User Data\\" in VALKYRIE_SYSMON_CONFIG
     assert "\\Mozilla\\Firefox\\Profiles\\" in VALKYRIE_SYSMON_CONFIG
     assert "FileCreate onmatch=\"exclude\"" not in VALKYRIE_SYSMON_CONFIG
+
+
+if __name__ == "__main__":
+    checks = [
+        value for name, value in sorted(globals().items())
+        if name.startswith("test_") and callable(value)
+    ]
+    for check in checks:
+        check()
+    print(f"PASS: {len(checks)} browser-extension integrity checks")

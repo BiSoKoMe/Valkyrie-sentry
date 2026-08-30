@@ -135,4 +135,7 @@ class BrowserContextTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    suite = unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    print("PASS" if result.wasSuccessful() else "FAIL")
+    raise SystemExit(0 if result.wasSuccessful() else 1)
