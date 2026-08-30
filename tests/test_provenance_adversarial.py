@@ -5,6 +5,11 @@ start, and generate a bounded event burst. They prove failure handling and
 graph integrity only; they are not a substitute for a disposable-VM live run.
 """
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from valkyrie.edr.causal_detect import CausalBaseline, MIN_OBSERVATIONS, MIN_SESSIONS
 from valkyrie.edr.engine import EdrEngine
 from valkyrie.store import Store
@@ -114,3 +119,18 @@ def test_event_storm_stays_bounded_and_does_not_duplicate_consequence(tmp_path):
         assert len(_consequences(engine)) <= 1
     finally:
         _close(store, engine)
+
+
+if __name__ == "__main__":
+    import inspect
+    import tempfile
+
+    tests = [value for name, value in list(globals().items())
+             if name.startswith("test_") and callable(value)]
+    for test in tests:
+        if "tmp_path" in inspect.signature(test).parameters:
+            with tempfile.TemporaryDirectory(prefix="valkyrie_provenance_") as tmp:
+                test(Path(tmp))
+        else:
+            test()
+    print(f"{len(tests)} passed")

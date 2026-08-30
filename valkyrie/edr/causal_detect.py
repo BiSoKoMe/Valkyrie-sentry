@@ -63,8 +63,14 @@ invents a detection is exhaustively testable offline.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
-from typing import Optional
+from dataclasses import asdict, dataclass, field
+
+from .hypothesis import (
+    EvidenceFact,
+    HypothesisDecision,
+    HypothesisSpec,
+    evaluate_hypotheses,
+)
 
 # --- maturity thresholds -----------------------------------------------------
 # Deliberately conservative. The cost of firing too early is an alert storm on a
@@ -423,3 +429,110 @@ def score_subgraph(sub: dict, baseline: CausalBaseline) -> CausalFinding:
         reasons=tuple(reasons), fires=fires,
         suppressed_by="" if fires else "below_threshold",
         technique=max(motifs, key=lambda m: m.weight).technique)
+
+
+# ---------------------------------------------------------------------------
+# 4. Competing explanations over the same reusable behavioural facts
+# ---------------------------------------------------------------------------
+_CAUSAL_HYPOTHESES = (
+    HypothesisSpec(
+        "malicious_execution",
+        "A rare causal chain is producing attack-relevant consequences",
+        decision_threshold=0.70,
+        minimum_support=2,
+    ),
+    HypothesisSpec(
+        "routine_activity",
+        "The causal shape is established normal behavior on this host",
+        decision_threshold=0.65,
+        minimum_support=1,
+    ),
+    HypothesisSpec(
+        "trusted_maintenance",
+        "A trusted installer, updater, or development lineage explains the activity",
+        decision_threshold=0.65,
+        minimum_support=1,
+    ),
+)
+
+
+def evaluate_causal_hypotheses(
+    sub: dict, baseline: CausalBaseline, finding: CausalFinding | None = None,
+) -> HypothesisDecision:
+    """Build an evidence ledger and compare malicious and benign explanations.
+
+    This is the first Detection Architecture v2 vertical slice.  Existing
+    motifs remain behavior extractors.  They no longer stand alone as the whole
+    explanation: host routine and trusted-maintenance evidence explicitly
+    compete with the attack hypothesis, while incomplete observation blocks a
+    new graph-originated alert rather than being misread as benign evidence.
+    """
+    facts: list[EvidenceFact] = []
+    if not sub or not sub.get("found"):
+        facts.append(EvidenceFact(
+            "missing-subgraph", "missing_causal_state", 1.0,
+            provenance=("causality_graph",),
+            explanation="No causal subgraph was available",
+            blocks_decision=True,
+        ))
+    if not baseline.mature:
+        facts.append(EvidenceFact(
+            "immature-baseline", "baseline_immature", 1.0,
+            provenance=("causal_baseline",),
+            explanation=(f"Only {baseline.observations} observations across "
+                         f"{baseline.sessions} sessions are available"),
+            blocks_decision=True,
+        ))
+    if sub and (sub.get("truncated") or sub.get("inferred_nodes")
+                or sub.get("evicted")):
+        facts.append(EvidenceFact(
+            "incomplete-provenance", "incomplete_provenance", 1.0,
+            provenance=("causality_graph",),
+            explanation="The graph is truncated, inferred, or has evicted state",
+            blocks_decision=True,
+        ))
+
+    finding = finding or score_subgraph(sub, baseline)
+    motifs = match_motifs(sub) if sub and sub.get("found") else []
+    for motif in motifs:
+        facts.append(EvidenceFact(
+            f"motif:{motif.id}", motif.id, motif.weight,
+            supports=("malicious_execution",),
+            provenance=tuple(finding.rare_edges) or ("causality_graph",),
+            explanation=motif.description,
+        ))
+
+    if finding.rarity >= 0.25:
+        facts.append(EvidenceFact(
+            "host-rarity", "rare_on_this_host", min(1.0, finding.rarity),
+            supports=("malicious_execution",),
+            contradicts=("routine_activity",),
+            provenance=("causal_baseline",),
+            explanation=f"Causal shape rarity is {finding.rarity:.2f}",
+        ))
+    else:
+        routine_weight = max(0.0, 1.0 - finding.rarity)
+        facts.append(EvidenceFact(
+            "host-routine", "routine_on_this_host", routine_weight,
+            supports=("routine_activity",),
+            contradicts=("malicious_execution",),
+            provenance=("causal_baseline",),
+            explanation=f"Causal shape rarity is only {finding.rarity:.2f}",
+        ))
+
+    if sub and _trusted_lineage(sub):
+        owner = _name(sub.get("cgo") or {}) or "unknown"
+        facts.append(EvidenceFact(
+            "trusted-lineage", "trusted_maintenance_lineage", 0.85,
+            supports=("trusted_maintenance",),
+            contradicts=("malicious_execution",),
+            provenance=(f"process:{owner}",),
+            explanation=f"{owner} is an installer, updater, development, or OS lineage",
+        ))
+
+    return evaluate_hypotheses(
+        _CAUSAL_HYPOTHESES,
+        facts,
+        alert_hypotheses=frozenset({"malicious_execution"}),
+        minimum_margin=0.10,
+    )

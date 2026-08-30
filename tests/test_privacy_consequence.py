@@ -1,3 +1,8 @@
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from valkyrie.edr.causal_detect import CausalBaseline, MIN_OBSERVATIONS, MIN_SESSIONS
 from valkyrie.edr.consequence import score_privacy_consequence
 
@@ -217,3 +222,18 @@ def test_privacy_event_retry_is_idempotent_in_the_graph(tmp_path):
     finally:
         engine.stop()
         store.stop()
+
+
+if __name__ == "__main__":
+    import inspect
+    import tempfile
+
+    tests = [value for name, value in list(globals().items())
+             if name.startswith("test_") and callable(value)]
+    for test in tests:
+        if "tmp_path" in inspect.signature(test).parameters:
+            with tempfile.TemporaryDirectory(prefix="valkyrie_privacy_") as tmp:
+                test(Path(tmp))
+        else:
+            test()
+    print(f"{len(tests)} passed")

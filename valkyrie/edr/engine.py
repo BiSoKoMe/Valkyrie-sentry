@@ -29,7 +29,11 @@ from pathlib import Path
 from ..eventbus import EventBus
 from .builtin import register_builtin
 from .causality import CausalityGraph
-from .causal_detect import CausalBaseline, score_subgraph
+from .causal_detect import (
+    CausalBaseline,
+    evaluate_causal_hypotheses,
+    score_subgraph,
+)
 from .consequence import score_privacy_consequence
 from .investigate import Investigator
 from .hunt import ThreatHunter
@@ -540,6 +544,18 @@ class EdrEngine:
         if not finding.fires:
             return
 
+        # Detection Architecture v2 gate: motifs and rarity are behavioural
+        # evidence, not the final verdict.  Compare the attack explanation with
+        # explicit routine/maintenance explanations before originating a new
+        # detection.  Existing rule detections are unaffected by this gate.
+        try:
+            hypothesis = evaluate_causal_hypotheses(
+                sub, self._causal_baseline, finding)
+        except Exception:
+            return
+        if not hypothesis.alerts or hypothesis.selected != "malicious_execution":
+            return
+
         owner = str(cgo.get("name") or "?")
         det = Detection(
             source="edr.causal",
@@ -553,6 +569,7 @@ class EdrEngine:
             details={
                 "causal_score": finding.score,
                 "causal_rarity": finding.rarity,
+                "hypothesis": hypothesis.to_dict(),
                 "motifs": list(finding.motifs),
                 "rare_edges": list(finding.rare_edges),
                 # The explanation rides on the detection: this is the one
