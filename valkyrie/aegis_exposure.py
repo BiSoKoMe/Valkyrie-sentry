@@ -102,6 +102,12 @@ class ExposureObservation:
     category: str
     flow_id: str
     precision: float = 1.0
+    # Traceable back to whatever produced this observation -- a source
+    # event id, a causal/process identity, or (for hand-built scenarios in
+    # Aegis 0-4's own tests) empty. Never required, always preserved when a
+    # translator supplies it; see valkyrie.aegis_bridge for the real
+    # CanonicalEvent -> ExposureObservation path that populates this.
+    provenance: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.category not in EXPOSURE_CATEGORIES:
