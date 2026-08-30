@@ -235,7 +235,7 @@ function startParticles() {
 const CHECKS = [
   'Loading Configuration', 'Starting DNS Engine', 'Initializing Firewall',
   'Loading Intelligence Engine', 'Loading Behavioral Engine', 'Loading Threat Detection',
-  'Loading AI Engine', 'Verifying Rules', 'Loading Threat Intelligence',
+  'Loading Causal Engine', 'Verifying Policy', 'Loading Threat Intelligence',
   'Starting Local Services', 'Connecting Internal Components', 'Protection Ready',
 ];
 async function typeLine(text) {
@@ -374,7 +374,7 @@ function buildChrome() {
   $('brandMark').innerHTML = ICON.mark;
   $('minBtn').innerHTML = ICON.min; $('maxBtn').innerHTML = ICON.max;
   $('closeBtn').innerHTML = ICON.x; $('notifBtn').innerHTML = ICON.bell;
-  $('searchBtn').innerHTML = ICON.search;
+  $('searchBtn').innerHTML = `${ICON.search}<span class="search-label">Search</span><kbd>Ctrl K</kbd>`;
   $('searchBtn').onclick = () => CommandPalette.open();
   const sb = $('sidebar');
   NAV_GROUPS.forEach(([group, items]) => {
@@ -442,6 +442,123 @@ const PAGES = {};
    thin 2px accent line, faint area fill, rounded end-cap, minimal
    crosshair+tooltip on hover. Reset each time the page is (re)opened. */
 const dashTrend = { buf: [], lastBlocked: null, canvas: null, hoverX: null };
+const dashDecision = { key: '', selected: 'request' };
+
+function firstValue(...values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && String(value).trim()) return String(value).trim();
+  }
+  return '';
+}
+
+function decisionStage(id, label, value, detail, fields, routeName, inferred) {
+  const observed = !!value;
+  return {
+    id, label,
+    value: observed ? value : 'Not observed',
+    detail: observed ? (detail || 'Recorded by the local engine') : 'This join is absent from the available telemetry.',
+    state: observed ? (inferred ? 'inferred' : 'observed') : 'missing',
+    fields: fields || [], route: routeName || 'hunting',
+  };
+}
+
+function buildDecisionModel(events, up) {
+  const e = up && Array.isArray(events) && events.length ? events[0] : null;
+  if (!e) {
+    return {
+      key: up ? 'empty' : 'offline', event: null,
+      stages: [
+        decisionStage('origin', 'Origin', '', '', [], 'nyx'),
+        decisionStage('actor', 'Actor', '', '', [], 'applications'),
+        decisionStage('request', 'Request', '', '', [], 'dns'),
+        decisionStage('evidence', 'Consequence', '', '', [], 'threats'),
+        decisionStage('verdict', 'Verdict', '', '', [], 'protection'),
+      ],
+    };
+  }
+
+  const time = firstValue(e.time, e.timestamp);
+  const origin = firstValue(e.first_party, e.origin, e.source_origin, e.referrer_origin);
+  const process = firstValue(e.process, e.process_name, e.actor_name);
+  const pid = firstValue(e.pid, e.actor_pid);
+  const target = firstValue(e.domain, e.query, e.name, e.host, e.target);
+  const requestType = firstValue(e.type, e.qtype, e.transport);
+  const reason = firstValue(e.reason, e.category, e.event_type);
+  const verdict = firstValue(e.action, e.verdict, e.decision);
+  const incident = firstValue(e.incident_id, e.detection_id);
+  const key = [time, origin, process, pid, target, reason, verdict, incident].join('|');
+  return {
+    key, event: e,
+    stages: [
+      decisionStage('origin', 'Origin', origin, 'Application or first-party context attached to this event.',
+        [['Time', time || 'Not recorded'], ['Source', origin || 'Not recorded']], 'nyx'),
+      decisionStage('actor', 'Actor', process, pid ? `Process identifier ${pid}` : 'Process name observed; PID unavailable.',
+        [['Process', process || 'Not recorded'], ['PID', pid || 'Not recorded']], 'applications'),
+      decisionStage('request', 'Request', target, requestType || 'Outbound destination observed.',
+        [['Destination', target || 'Not recorded'], ['Type', requestType || 'Not recorded']], 'dns'),
+      decisionStage('evidence', 'Consequence', reason, 'Evidence or consequence recorded with the request.',
+        [['Reason', reason || 'Not recorded'], ['Incident', incident || 'Not attached']], 'threats'),
+      decisionStage('verdict', 'Verdict', verdict, 'Deterministic local policy outcome.',
+        [['Decision', verdict || 'Not recorded'], ['Enforcement', /block|deny|sinkhole/i.test(verdict) ? 'Applied inline' : 'No block recorded']], 'protection'),
+    ],
+  };
+}
+
+function renderDecisionStory(events, up, force) {
+  const host = $('decisionStoryHost'), inspector = $('decisionInspector');
+  if (!host || !inspector) return;
+  const model = buildDecisionModel(events, up);
+  const selected = model.stages.find((stage) => stage.id === dashDecision.selected) || model.stages[2];
+  if (!force && dashDecision.key === model.key && inspector.dataset.stage === selected.id) return;
+  dashDecision.key = model.key;
+
+  host.innerHTML = `<div class="chain-flow" role="list" aria-label="Latest decision stages">
+    ${model.stages.map((stage, index) => `${index ? `<span class="chain-link ${model.stages[index - 1].state === 'observed' && stage.state === 'observed' ? 'joined' : ''}" aria-hidden="true"></span>` : ''}
+      <button class="chain-step ${stage.state} ${stage.id === selected.id ? 'selected' : ''}" data-stage="${stage.id}"
+              aria-pressed="${stage.id === selected.id}" role="listitem">
+        <span class="step-order">${String(index + 1).padStart(2, '0')}</span>
+        <span class="step-label">${escapeHtml(stage.label)}</span>
+        <strong>${escapeHtml(stage.value)}</strong>
+        <span class="step-state">${stage.state}</span>
+      </button>`).join('')}
+  </div>`;
+
+  host.querySelectorAll('.chain-step').forEach((node) => {
+    node.addEventListener('click', () => {
+      dashDecision.selected = node.dataset.stage;
+      renderDecisionStory(events, up, true);
+    });
+  });
+
+  const present = model.stages.filter((stage) => stage.state !== 'missing').map((stage) => stage.label);
+  const missing = model.stages.filter((stage) => stage.state === 'missing').map((stage) => stage.label);
+  inspector.dataset.stage = selected.id;
+  inspector.innerHTML = `
+    <div class="inspector-head">
+      <div><span>Evidence &amp; authority</span><strong>${escapeHtml(selected.label)}</strong></div>
+      <span class="evidence-state ${selected.state}">${selected.state}</span>
+    </div>
+    <p class="inspector-summary">${escapeHtml(selected.detail)}</p>
+    <dl class="evidence-pairs">
+      ${selected.fields.map(([key, value]) => `<div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}
+    </dl>
+    <div class="evidence-group">
+      <span class="evidence-caption">Evidence present</span>
+      <p>${present.length ? escapeHtml(present.join(' · ')) : 'None on this poll'}</p>
+    </div>
+    <div class="evidence-group missing-copy">
+      <span class="evidence-caption">Evidence missing</span>
+      <p>${missing.length ? escapeHtml(missing.join(' · ')) : 'No missing stage in this summary'}</p>
+    </div>
+    <div class="authority-box">
+      <span class="evidence-caption">Authority boundary</span>
+      <strong>${selected.id === 'verdict' ? 'Policy-gated local response' : 'Observation only'}</strong>
+      <p>${selected.id === 'verdict' ? 'The console reports the recorded outcome. It does not widen response authority.' : 'Selecting evidence never triggers a response.'}</p>
+    </div>
+    <button class="inspect-action" id="inspectStageBtn">Open ${escapeHtml(selected.label.toLowerCase())} evidence <span aria-hidden="true">→</span></button>`;
+  const inspect = $('inspectStageBtn');
+  if (inspect) inspect.onclick = () => route(selected.route);
+}
 function pushTrendSample(up, stats) {
   if (!up) return;                       // no real data this tick - don't fabricate a point
   const now = (stats.dns_blocked || 0) + (stats.fw_blocked || 0);
@@ -523,60 +640,79 @@ function drawTrend() {
 PAGES.dashboard = {
   render() {
     dashTrend.buf = []; dashTrend.lastBlocked = null; dashTrend.hoverX = null;
+    dashDecision.key = ''; dashDecision.selected = 'request';
     // Posture first: a console opens by STATING where you stand, then shows
     // the numbers behind it. The protection control keeps its original IDs
     // (#orbWrap/#orbLabel/#statusPill/#statusText) so setProtectionUI() and
     // toggleProtection() keep working exactly as before.
     $('page').innerHTML = `
-      <div class="hero">
-        <div class="orb-wrap" id="orbWrap">
-          <div class="posture-ring">
-            <svg viewBox="0 0 62 62" aria-hidden="true">
-              <circle class="track" cx="31" cy="31" r="27" fill="none" stroke-width="4"/>
-              <circle class="value" id="postureArc" cx="31" cy="31" r="27" fill="none" stroke-width="4"
-                      stroke-linecap="round" stroke-dasharray="169.6" stroke-dashoffset="169.6"/>
-            </svg>
+      <section class="command-posture" aria-labelledby="postureHeadline">
+        <div class="posture-instrument">
+          <div class="orb-wrap" id="orbWrap">
+            <div class="posture-ring">
+              <svg viewBox="0 0 62 62" aria-hidden="true">
+                <circle class="track" cx="31" cy="31" r="27" fill="none" stroke-width="3"/>
+                <circle class="value" id="postureArc" cx="31" cy="31" r="27" fill="none" stroke-width="3"
+                        stroke-linecap="square" stroke-dasharray="169.6" stroke-dashoffset="169.6"/>
+              </svg>
+            </div>
+            <div class="posture-score" id="postureScore">—</div>
           </div>
-          <div class="posture-score" id="postureScore">—</div>
+          <div class="posture-copy">
+            <div class="posture-title-row">
+              <h1 id="postureHeadline">Checking local protection…</h1>
+              <div class="status-pill" id="statusPill"><span class="dot"></span><span id="statusText">Checking…</span></div>
+            </div>
+            <p id="postureDetail">Contacting the local engine</p>
+            <span class="local-proof">Processing and decision history remain on this device</span>
+          </div>
         </div>
-        <div class="posture-text">
-          <div class="pl">Security posture</div>
-          <div class="pt" id="postureHeadline">Checking…</div>
-          <div class="ps" id="postureDetail">Contacting the local engine</div>
-        </div>
-        <div class="hero-spacer"></div>
-        <div class="status-pill" id="statusPill"><span class="dot"></span><span id="statusText">Checking…</span></div>
         <button class="orb" id="orb"><span class="orb-icon">${ICON.power}</span><span class="orb-label" id="orbLabel">—</span></button>
-      </div>
+      </section>
 
-      ${sectionHead('Security telemetry', 'Live · updates every 1.5s')}
-      <div class="grid cols-3">
-        ${statCard('flagged', 'Threats flagged', 'alert')}
+      <section class="instrument-grid" aria-label="Current security telemetry">
+        ${statCard('flagged', 'Open detections', 'alert')}
         ${statCard('dns_blocked', 'DNS blocked', 'shield', 'accent-green')}
         ${statCard('fw_blocked', 'Firewall blocks', 'flame')}
-        ${statCard('elements_cleaned', 'Trackers cleaned', 'lock')}
-        ${statCard('scanner_decisions', 'Scanner decisions', 'activity')}
-        ${statCard('total_24h', 'DNS requests (24h)', 'dns', 'accent-blue')}
+        ${statCard('elements_cleaned', 'Privacy actions', 'lock')}
+        ${statCard('scanner_decisions', 'Policy verdicts', 'activity')}
+        ${statCard('total_24h', 'Requests · 24h', 'dns', 'accent-blue')}
+      </section>
+
+      <div class="operations-grid">
+        <div class="operations-main">
+          <section class="decision-console">
+            <div class="decision-titlebar">
+              <div>
+                <h2>Latest decision story</h2>
+                <p>Solid joins are observed. Open joins mark evidence Valkyrie does not have.</p>
+              </div>
+              <span class="live-calibration"><i></i>Live · 1.5s</span>
+            </div>
+            <div id="decisionStoryHost" class="decision-story-host"></div>
+          </section>
+
+          <section class="activity-console">
+            <div class="decision-titlebar compact">
+              <div><h2>Decision activity</h2><p>Blocked outcomes per local telemetry tick</p></div>
+              <strong><span id="trendHeadline">0</span><small> this session</small></strong>
+            </div>
+            <div class="chart-wrap">
+              <canvas id="trendChart"></canvas>
+              <div class="chart-tip" id="trendTip"></div>
+            </div>
+          </section>
+        </div>
+
+        <aside class="decision-inspector" id="decisionInspector" aria-live="polite"></aside>
       </div>
 
-      ${sectionHead('Detection activity', 'Blocked events per tick, this session')}
-      <div class="chart-card">
-        <div class="chart-head">
-          <div>
-            <div class="ct">Blocked, cumulative</div>
-            <div class="cv"><span id="trendHeadline">0</span><span class="cu">this session</span></div>
-          </div>
-          <div class="clabel"><span class="csw"></span>Blocked / tick</div>
-        </div>
-        <div class="chart-wrap">
-          <canvas id="trendChart"></canvas>
-          <div class="chart-tip" id="trendTip"></div>
-        </div>
-      </div>
-
-      ${sectionHead('Recent events', '')}
-      <div class="feed" id="feed"><div class="empty">Waiting for live events…</div></div>`;
+      <section class="recent-ledger">
+        <div class="decision-titlebar compact"><div><h2>Recent telemetry</h2><p>Newest local observations and decisions</p></div><button class="text-action" id="viewAllEvents">Open DNS ledger →</button></div>
+        <div class="feed" id="feed"><div class="empty">Waiting for live events…</div></div>
+      </section>`;
     const orb = $('orb'); if (orb) orb.onclick = toggleProtection;
+    const allEvents = $('viewAllEvents'); if (allEvents) allEvents.onclick = () => route('dns');
     const canvas = $('trendChart');
     dashTrend.canvas = canvas;
     if (canvas) {
@@ -587,6 +723,7 @@ PAGES.dashboard = {
       canvas.addEventListener('mouseleave', () => { dashTrend.hoverX = null; drawTrend(); });
     }
     drawTrend();
+    renderDecisionStory([], false, true);
   },
   onTele(data) {
     const stats = (data && data.stats) || {}, up = !!(data && data.ok);
@@ -605,6 +742,7 @@ PAGES.dashboard = {
     };
     for (const [k, v] of Object.entries(vals)) animateNumber($('card-' + k), v);
     renderFeed((data && data.events) || [], up);
+    renderDecisionStory((data && data.events) || [], up);
     pushTrendSample(up, stats);
     const headline = $('trendHeadline');
     if (headline) headline.textContent = fmt(up ? (stats.dns_blocked || 0) + (stats.fw_blocked || 0) : 0);
@@ -2236,22 +2374,21 @@ const Replay = {
      Wires the already-shipped explainability + triage backend
      (edr/investigate.py, POST .../status) into the one incident-detail
      surface the app has, instead of a second modal. Offline analysis loads
-     by default (no network call); the AI narrative is a separate, explicit
-     opt-in click, matching the app's opt-in-AI stance elsewhere. */
+     by default with deterministic local analysis and no model call. */
   switchTab(tab) {
     this.root.querySelectorAll('.rp-tab').forEach((b) => {
       const on = b.dataset.tab === tab;
       b.classList.toggle('active', on); b.setAttribute('aria-selected', String(on));
     });
     this.root.querySelectorAll('.rp-tabpane').forEach((p) => { p.hidden = p.dataset.pane !== tab; });
-    if (tab === 'investigate' && !this.report) this.loadInvestigation(false);
+    if (tab === 'investigate' && !this.report) this.loadInvestigation();
   },
 
-  async loadInvestigation(useAi) {
+  async loadInvestigation() {
     const box = this.root && this.root.querySelector('#rpInv'); if (!box) return;
-    box.innerHTML = `<div class="empty" style="padding:20px 0">${useAi ? 'Asking the AI provider…' : 'Loading investigation…'}</div>`;
+    box.innerHTML = `<div class="empty" style="padding:20px 0">Loading local investigation…</div>`;
     const incId = this.inc.id;
-    const rep = await safe(() => V.api.post('/api/edr/incidents/' + incId + '/investigate', { use_ai: !!useAi }), null);
+    const rep = await safe(() => V.api.post('/api/edr/incidents/' + incId + '/investigate', { use_ai: false }), null);
     if (!this.root || this.inc.id !== incId) return;   // closed, or a different incident opened meanwhile
     this.report = rep;
     this.renderInvestigation();
@@ -2274,7 +2411,7 @@ const Replay = {
     // Wired to the real, existing action vocabulary (edr/response.py:
     // block_domain / unblock_domain / kill_process / isolate_host /
     // release_isolation) via the same dry-run-first, explicit-second-click
-    // pattern this file already uses for the AI narrative just above.
+    // pattern used throughout the response surface.
     const actions = (r.recommended_actions || []).map((a, i) => `
       <div class="rp-rec">
         <div class="rp-rec-head"><span class="mono-tag">${escapeHtml(a.action || '')}</span>${a.target ? `<span class="rp-rec-t">${escapeHtml(a.target)}</span>` : ''}</div>
@@ -2286,13 +2423,6 @@ const Replay = {
         </div>` : ''}
       </div>`).join('')
       || '<div class="rp-desc" style="opacity:.6">No specific response action recommended.</div>';
-
-    const aiBtn = (r.ai_available && !r.ai_narrative)
-      ? `<button class="btn" id="rpAskAi" style="margin-top:4px">${ICON.brain}<span>Ask AI for a deeper narrative</span></button>` : '';
-    const aiBlock = r.ai_narrative
-      ? `<div class="rp-sec" style="margin-top:16px">AI narrative — ${escapeHtml(r.analyst || 'ai')}</div>
-         <div class="rp-desc">${escapeHtml(r.ai_narrative)}</div>` : '';
-    const aiErr = r.ai_error ? `<div class="rp-desc" style="opacity:.75;margin-top:8px">${escapeHtml(r.ai_error)}</div>` : '';
 
     // The human decision layer (edr/investigate.py's _decision_layer): what
     // happened / how / why it matters / confidence / what to do, in plain
@@ -2346,7 +2476,6 @@ const Replay = {
       <div class="rp-desc" style="opacity:.75">${escapeHtml(r.meaning || '—')}</div>
       <div class="rp-sec" style="margin-top:16px">Recommended response</div>
       ${actions}
-      ${aiBtn}${aiBlock}${aiErr}
       <div class="rp-sec" style="margin-top:18px">Triage</div>
       <div class="rp-triage">
         <label class="rp-field"><span>Status</span>
@@ -2363,8 +2492,6 @@ const Replay = {
         <button class="btn primary" id="rpSaveTriage">${ICON.check}<span>Save Triage</span></button>
       </div>`;
 
-    const askBtn = box.querySelector('#rpAskAi');
-    if (askBtn) askBtn.onclick = () => this.loadInvestigation(true);
     const saveBtn = box.querySelector('#rpSaveTriage');
     if (saveBtn) saveBtn.onclick = () => this.saveTriage();
 
