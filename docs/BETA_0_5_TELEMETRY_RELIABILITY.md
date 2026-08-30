@@ -2,7 +2,9 @@
 
 ## Qualification status
 
-**OPEN. Do not freeze this baseline.**
+**OPEN — tracked, not blocking. Do not freeze this baseline as a PASS.**
+Development has moved on to Platform Beta 1 (NYX); see "Decision, 2026-08-30"
+near the end of this document for why, and what would bring work back here.
 
 Corrected CI qualification on 2026-08-30:
 
@@ -509,3 +511,38 @@ another guess-and-patch cycle.
 Beta 0.5 remains **OPEN**. The qualification cannot pass while the engine
 process itself can disappear mid-run, regardless of how clean the
 collector-level metrics are otherwise.
+
+### Contention-mode attempt, 2026-08-30 (inconclusive)
+
+A single dedicated `--mode contention` run (`33341952582`, one fresh
+runner, stop-on-first-failure, rich psutil/thread/worker-pool diagnostics
+armed) ran the full 25 minutes and did **not** reproduce the engine-death
+shape: `overall: PASS`, `first_failure: null`,
+`experiment_completed_without_failure: true`. This does not clear the
+finding - the failure was already intermittent (2 of 3 runners hit it in
+the batch that found it, 1 did not), so one clean attempt is exactly the
+kind of single-run result this project's own methodology (union-across-runs,
+`docs/LIVE_FIRE_EVALUATION.md`) already treats as weak evidence on its own.
+It is recorded as inconclusive, not as a clean bill of health.
+
+## Decision, 2026-08-30: close this qualification round, track the finding, proceed to NYX
+
+Two real, well-evidenced collector bugs were found and durably fixed this
+round (persistence and process collector staleness, both traced to a precise
+code stage via `PollDiagnostics` and confirmed gone in live CI runs). The
+engine-process-disappearing finding is real, but unattributed, intermittent,
+and did not reproduce in a dedicated attempt to capture it directly. Rather
+than continue an open-ended series of ~25-55 minute CI cycles chasing an
+intermittent, unconfirmed root cause, this is being tracked as a known,
+documented open risk (see "Beta 0.5.5" above) rather than block on it
+indefinitely.
+
+Per the sequence set at the start of this work (Platform Alpha → Beta 0 →
+Beta 0.5 → Beta 1/NYX → Beta 2/Aegis), development now proceeds to **Platform
+Beta 1 (NYX)**. This is not the same as declaring Beta 0.5 fully passed - the
+qualification's own predeclared criteria (see above) are not all met, and
+this document stays open rather than being marked frozen/closed. If the
+engine-death class resurfaces (in a future Beta 0.5 revisit, or as a real
+symptom reported from an actual deployment rather than only a CI runner),
+that is the trigger to resume this investigation with fresh evidence, not a
+signal that it was ever fully closed.
