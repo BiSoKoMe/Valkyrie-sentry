@@ -55,6 +55,10 @@ isolated signals alone?
 - An experimental Chromium native-messaging bridge for sanitized navigation,
   trusted-gesture, form-submit, and coarse-consent metadata. It is
   observation-only and does not fabricate a Windows PID relationship.
+- A deterministic causal-authority experiment that issues two-second,
+  one-shot grants scoped to browser origin, destination, tab, frame, action,
+  and controlled data labels. It records allow/refuse verdicts but does not
+  yet cancel browser requests.
 - A narrow consequence experiment that joins browser/document lineage, a Nyx
   observation, and rare descendant egress into a policy-gated future-DNS
   incident.
@@ -83,6 +87,21 @@ python tools/provenance_demo.py
 The demonstration shows one causal chain, retained metadata, the policy
 decision, and a deliberate refusal to score content-bearing privacy metadata.
 
+## Reproducible causal-authority evidence
+
+The fixed evidence corpus runs 500 authorized consequences and 100
+unauthorized variants through the real browser-context collector and
+deterministic authority engine:
+
+```powershell
+python tools/authority_experiment.py --authorized 500 --unauthorized 100 --max-p99-ms 10 --output artifacts/authority-evidence.json --report artifacts/AUTHORITY_EXPERIMENT_REPORT.md
+```
+
+It fails on any incorrect verdict, false allow, false refusal, retained raw
+sentinel, or missed in-process p99 budget. This is a synthetic mechanism test.
+It does not launch a browser or enforce a network response. See the
+[safe reproduction guide](docs/SAFE_REPRODUCTION.md) for exact interpretation.
+
 ## Local development
 
 ### Requirements
@@ -103,7 +122,7 @@ pip install -r requirements_modular.txt
 Run the focused provenance tests:
 
 ```powershell
-python -m pytest -q tests/test_provenance_demo.py tests/test_privacy_consequence.py tests/test_provenance_adversarial.py tests/test_browser_context.py
+python -m pytest -q tests/test_provenance_demo.py tests/test_privacy_consequence.py tests/test_provenance_adversarial.py tests/test_browser_context.py tests/test_causal_authority.py
 ```
 
 Run the synthetic local-ingest benchmark:
@@ -114,6 +133,22 @@ python tools/provenance_benchmark.py --events 1000
 
 The benchmark measures synchronous local `EdrEngine.ingest_telemetry()` cost
 only. It is not a DNS hot-path, live-efficacy, or response-latency benchmark.
+
+Run the isolated causal-authority reflex benchmark:
+
+```powershell
+python scripts/authority_benchmark.py --iterations 20000
+```
+
+This second benchmark excludes extension, native-messaging, loopback HTTP,
+browser, graph, network, and enforcement latency. It is a microbenchmark of the
+deterministic in-memory issue-and-verify operation only.
+
+Run the safe synthetic causal-authority demonstration:
+
+```powershell
+python scripts/causal_authority_demo.py
+```
 
 ## Validation policy
 
@@ -128,6 +163,10 @@ latency, benign installer/updater false positives, and rollback.
 Start with the [documentation index](docs/README.md).
 
 - [Research paper](docs/VALKYRIE_RESEARCH_PAPER.md)
+- [Causal authority research paper](docs/CAUSAL_AUTHORITY_RESEARCH_PAPER.md)
+- [Causal authority research paper PDF](output/pdf/Valkyrie_Causal_Authority_Research_Paper.pdf)
+- [Safe reproduction guide](docs/SAFE_REPRODUCTION.md)
+- [Application engineering narrative](docs/APPLICATION_ENGINEERING_NARRATIVE.md)
 - [Provenance architecture assessment](docs/PROVENANCE_ARCHITECTURE_ASSESSMENT.md)
 - [Provenance experiment report](docs/PROVENANCE_EXPERIMENT_REPORT.md)
 - [Phase status](docs/PROVENANCE_PHASE_STATUS.md)
@@ -141,6 +180,7 @@ valkyrie/              Core application, telemetry, DNS, EDR, and web API
 valkyrie/edr/          Causality graph, correlation, policy, and response
 tests/                 Unit, integration, adversarial, and regression tests
 tools/                 Safe demo and synthetic benchmark tools
+scripts/               Maintained command-line experiments and utilities
 browser_extension/     Experimental Chromium native-messaging bridge
 driver/                 Kernel driver source; not signed or deployed
 docs/                   Evidence, architecture, experiment, and safety documents

@@ -1,6 +1,24 @@
 const NATIVE_HOST = "com.valkyrie.browser_context";
 const MAX_PER_TAB_PER_SECOND = 8;
 const counters = new Map();
+let nativePort = null;
+
+function orderedNativePort() {
+  if (nativePort) return nativePort;
+  try {
+    const port = chrome.runtime.connectNative(NATIVE_HOST);
+    port.onMessage.addListener(() => {
+      // Acknowledgements contain no browser data and need no retention.
+    });
+    port.onDisconnect.addListener(() => {
+      if (nativePort === port) nativePort = null;
+    });
+    nativePort = port;
+    return port;
+  } catch (_) {
+    return null;
+  }
+}
 
 function originOf(value) {
   try {
@@ -38,11 +56,19 @@ function sendContext(input, sender = null) {
     gesture: input.gesture || "unknown",
     consent_state: input.consent_state || "unknown",
     browser: "chromium",
-    ts: Date.now() / 1000
+    ts: Date.now() / 1000,
+    interaction_id: typeof input.interaction_id === "string" ? input.interaction_id : "",
+    intended_action: input.intended_action === "form_submit" ? "form_submit" : "",
+    destination_origin: originOf(input.destination_origin || ""),
+    data_labels: Array.isArray(input.data_labels) ? input.data_labels.slice(0, 10) : []
   };
-  chrome.runtime.sendNativeMessage(NATIVE_HOST, event).catch(() => {
-    // Native host absence is an honest disabled state; do not retry/buffer page activity.
-  });
+  try {
+    // One persistent port preserves gesture -> consequence ordering. Native host
+    // absence is an honest disabled state; do not retry or buffer page activity.
+    orderedNativePort()?.postMessage(event);
+  } catch (_) {
+    nativePort = null;
+  }
 }
 
 chrome.runtime.onMessage.addListener((message, sender) => {
