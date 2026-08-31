@@ -238,6 +238,40 @@ def main() -> int:
     _check("truncated clears once a cycle completes without truncation",
            col3.status()["truncated"] == [])
 
+    print("\n[5c] snapshot() reuses an already-known process's path instead "
+          "of re-querying it (Beta 0.5.5/.6: a live contention run measured "
+          "this exact call - pr.exe() for every running process, every "
+          "poll - taking ~3.8s under load and pushing the collector past "
+          "its own stale bound; see docs/BETA_0_5_TELEMETRY_RELIABILITY.md)")
+    import os
+    import psutil as _psutil_mod
+    call_count = {"n": 0}
+    real_exe = _psutil_mod.Process.exe
+    def _counting_exe(self):
+        call_count["n"] += 1
+        return real_exe(self)
+    col4 = ProcessCollector(emit=lambda ev: None)
+    me = os.getpid()
+    first = col4.snapshot()
+    my_key = next((k for k in first if k[0] == me), None)
+    if my_key is None:
+        print("  SKIP (this test process's own pid not visible via psutil "
+              "in this sandbox)")
+    else:
+        col4._last = first   # simulate this WAS the prior poll's baseline
+        _psutil_mod.Process.exe = _counting_exe
+        try:
+            second = col4.snapshot()
+        finally:
+            _psutil_mod.Process.exe = real_exe
+        _check("already-known process's path is byte-identical across polls "
+               "(reused, not merely equal by coincidence)",
+               second[my_key].path == first[my_key].path and first[my_key].path != "")
+        _check("pr.exe() was NOT called again for the already-known pid "
+               "(the exact fix: was O(all running processes) every cycle, "
+               "now O(new processes) only)",
+               call_count["n"] < len(first))
+
     print("\n[5] A raising emitter never breaks collection")
     def _boom(_ev):
         raise RuntimeError("bad sink")

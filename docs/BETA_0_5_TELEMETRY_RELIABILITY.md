@@ -568,3 +568,57 @@ Covered by `tests/test_beta05_reliability.py` checks `[14]`-`[17]`.
 Next: rerun contention mode (and/or the full soak) with this instrumentation
 active, and read the actual resource trend - whether or not the engine-death
 shape reproduces this time - before deciding what, if anything, needs fixing.
+
+## Beta 0.5.6: a real, precise cause found - not resource exhaustion
+
+A contention-mode run with the new instrumentation active (`33343938831`)
+stopped early at 11m33s, having caught a real failure: `process_collector`
+went `stale_poll` (8.32s vs. its own 8.0s bound) during phase C. Critically,
+the engine's own resource snapshot at that exact moment was completely
+unremarkable - 84.7MB RSS, 696 handles, 29 threads, 14.8% CPU, no different
+from the clean dry-run's baseline range. **This rules out resource
+exhaustion as the cause of this failure.** The API was still answering
+(`health_ok: true`) throughout - this was never the "engine disappears
+entirely" shape, a smaller and more mundane failure than the one this
+instrumentation was built to catch, but a real one, and precisely
+diagnosable from the data this run captured.
+
+`process_collector`'s own `PollDiagnostics` pinned it exactly:
+`poll_started_at` to `current_stage_started_at` (entering
+`diff_enrich_emit`) was **3.8 seconds**, before `emit_budget` even had a
+chance to bound anything. That time was spent in the `process_iter` /
+`process_metadata` stages - i.e., inside `ProcessCollector.snapshot()`
+itself, not the emit path the earlier fixes addressed.
+
+Reading `snapshot()`'s code confirmed why: it called `pr.exe()` (a real
+syscall) for **every currently-running process on the host, every single
+poll** - not only newly-appeared ones - to populate a `path` field that,
+for a process already seen in a prior poll, cannot have changed. Under
+Phase C/E's process-launch load this is O(all running processes) work every
+2 seconds, for a value that is almost always unchanged from last time.
+`PersistenceCollector`'s `snapshot()` already had cost-bounding from the
+original 253s-freeze fix; `ProcessCollector`'s never did.
+
+**Fixed:** `snapshot()` now looks up each process by `(pid, create_time)`
+against `self._last` (the prior poll's baseline) before calling `pr.exe()`;
+an already-known process instance reuses its previously-observed path
+instead of re-querying it, turning the cost from O(every running process)
+into O(genuinely new processes) per cycle. Verified live: a real
+`snapshot()`/`snapshot()` back-to-back pair on this machine's own process
+table shows the second call makes zero `pr.exe()` calls for any process
+seen in the first (`tests/test_process_telemetry.py` `[5c]`, which
+monkeypatches `psutil.Process.exe` to count real calls rather than
+asserting on a guess).
+
+This is real, causally-verified progress on the reliability question, but it
+answers "why did ProcessCollector go briefly stale under load" - it is not
+yet proven to be the same or a different mechanism from the earlier,
+more severe "engine becomes completely unreachable" shape (Beta 0.5.5),
+which this run did not reproduce. Both are real; only one is now fixed with
+proof.
+
+Beta 0.5 remains **OPEN**. Next: rerun contention mode and the soak with
+this fix in place, and keep reading the engine_resource_trend data on every
+attempt - if the engine-death shape does reproduce again, this same
+methodical stage-level attribution is exactly what should be pointed at it
+next, not a repeat of the same guess-and-patch loop.

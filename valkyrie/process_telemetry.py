@@ -558,6 +558,18 @@ class ProcessCollector:
 
         Never raises: per-process access errors are skipped, and an absent psutil
         yields an empty snapshot (collector effectively disabled).
+
+        COST-BOUNDED (Beta 0.5.5/.6, docs/BETA_0_5_TELEMETRY_RELIABILITY.md):
+        a live contention run measured this method's process_metadata stage
+        taking ~3.8s under Phase C/E load, pushing the collector's whole poll
+        cycle past its own stale bound (8s) while the engine's own resources
+        stayed completely normal - ruling out resource exhaustion and
+        pointing at real per-cycle cost instead. The cause: pr.exe() was
+        called for EVERY currently-running process on EVERY poll, not only
+        newly-appeared ones - O(all processes on the host), every 2 seconds,
+        for a value (the executable path) that cannot change for a pid that
+        was already seen. Reusing the prior poll's path for an already-known
+        process instance turns this into O(new processes) instead.
         """
         out: dict = {}
         if not _PSUTIL:
@@ -569,6 +581,7 @@ class ProcessCollector:
                 procs = list(psutil.process_iter(["pid", "name", "ppid", "create_time"]))
         except Exception:
             return out
+        known = self._last or {}
         with self._diagnostics.stage("process_metadata"):
             for pr in procs:
                 try:
@@ -580,13 +593,22 @@ class ProcessCollector:
                     info = pr.info
                     pid = int(info.get("pid", 0) or 0)
                     ppid = int(info.get("ppid", 0) or 0)
-                    try:
-                        path = pr.exe() or ""
-                    except Exception:
-                        path = ""
+                    create_time = float(info.get("create_time") or 0.0)
+                    prior = known.get((pid, round(create_time, 3)))
+                    if prior is not None:
+                        # Same (pid, create_time) instance as last poll - the
+                        # executable path of a live process cannot change, so
+                        # skip the syscall entirely rather than repeating it
+                        # for a process we already looked up.
+                        path = prior.path
+                    else:
+                        try:
+                            path = pr.exe() or ""
+                        except Exception:
+                            path = ""
                     pi = ProcInfo(pid=pid, name=info.get("name") or "", path=path,
                                   ppid=ppid, parent_name=names.get(ppid, ""),
-                                  create_time=float(info.get("create_time") or 0.0))
+                                  create_time=create_time)
                     out[pi.key()] = pi
                 except Exception:
                     continue
