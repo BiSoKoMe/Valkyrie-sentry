@@ -34,9 +34,15 @@ function hash(s) { let h = 0; for (let i = 0; i < s.length; i++) { h = (h * 31 +
   const tracker = params.get('tracker') || '';
   // Opt-in, additive: when absent, behavior is byte-for-byte what it always
   // was (the 'adid=' field is included). When present, the beacon carries
-  // NO personal data at all - the "third party, nothing to fake" case
-  // (nyx_scorecard.py's 'benign' category), replayed through a real browser
-  // instead of only a synthetic string.
+  // NO personal or fingerprint-shaped data at all - the "third party,
+  // nothing to fake" case (nyx_scorecard.py's 'benign' category), replayed
+  // through a real browser instead of only a synthetic string. This means
+  // dropping screen/timezone/lang/cores too, not just adid: nyx.py's
+  // _personal_values() treats each of those as an individually fake-able
+  // fingerprint field regardless of inspect_outbound's own "3+ signals in
+  // one request" bundling threshold for the OBSERVE-side alert - a body
+  // that still carries all four is a real fingerprint disclosure by Nyx's
+  // own definition, not a benign one, and gets faked correctly.
   const noPersonal = params.get('nopersonal') === '1';
   // A proper UUID-v4 string, generated without crypto.randomUUID (which needs a
   // secure context that plain HTTP is not) so it matches Nyx's real detection.
@@ -49,11 +55,12 @@ function hash(s) { let h = 0; for (let i = 0; i < s.length; i++) { h = (h * 31 +
   const id = uuid();
   window.__beaconId = id;
   if (!tracker) { document.getElementById('beacon-status').textContent = 'BEACON:no-tracker'; return; }
-  const body = (noPersonal ? '' : 'adid=' + id + '&')
-    + 'screen=' + screen.width + 'x' + screen.height
-    + '&timezone=' + (Intl.DateTimeFormat().resolvedOptions().timeZone || 'x')
-    + '&lang=' + navigator.language
-    + '&cores=' + (navigator.hardwareConcurrency || 0);
+  const body = noPersonal
+    ? 'event=pageview&ts=' + Date.now()
+    : 'adid=' + id + '&screen=' + screen.width + 'x' + screen.height
+      + '&timezone=' + (Intl.DateTimeFormat().resolvedOptions().timeZone || 'x')
+      + '&lang=' + navigator.language
+      + '&cores=' + (navigator.hardwareConcurrency || 0);
   // Exposed so a harness driving this page can compare what it INTENDED to
   // send against what the tracker endpoint actually received, without
   // needing to reconstruct this string independently.
