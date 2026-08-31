@@ -1595,6 +1595,24 @@ def create_app(ctx: Optional[AppContext] = None):
             return _subsystem_unavailable("EDR")
         return {"entries": state.edr.evidence_ledger(max(0, min(limit, 200)))}
 
+    @app.get("/api/aegis/status")
+    def aegis_status():
+        """Health and bounds of the Aegis exposure/inference reasoning
+        layer (docs/AEGIS_PLATFORM_BRIDGE.md, Platform Beta 2/3) - reasoning
+        only, cannot originate an incident or authorize enforcement."""
+        if state.edr is None:
+            return _subsystem_unavailable("EDR")
+        return state.edr.aegis_status()
+
+    @app.get("/api/aegis/ledger")
+    def aegis_ledger(limit: int = 100):
+        """Recent Aegis exposure observations + inference hypotheses,
+        newest last. Read-only; never merges into Valkyrie's or NYX's own
+        verdict."""
+        if state.edr is None:
+            return _subsystem_unavailable("EDR")
+        return {"entries": state.edr.aegis_ledger(max(0, min(limit, 200)))}
+
     @app.post("/api/edr/incidents/{incident_id}/status")
     async def edr_incident_status(incident_id: str, request: Request):
         if state.edr is None:

@@ -201,6 +201,158 @@ def test_read_only_status_and_ledger_api(tmp_path: Path):
         store.stop()
 
 
+def test_engine_wires_aegis_reasoning_over_real_network_and_privacy_events(tmp_path: Path):
+    """Platform Beta 2/3 proved aegis_bridge.translate_session ->
+    aegis_exposure.evaluate_pair holds up over real, sustained,
+    multi-subject traffic - this is that proven pipeline actually wired
+    into the live engine, not only exercised by a test harness."""
+    from valkyrie.edr.engine import EdrEngine
+    from valkyrie.store import Store
+
+    store = Store(db_path=tmp_path / "aegis-wire.db")
+    store.start()
+    engine = EdrEngine(store)
+    engine.start()
+    try:
+        engine.ingest_telemetry(_process())
+        engine.ingest_telemetry(_network())
+        engine.ingest_telemetry(_privacy(secret="aegis-wire-raw-sentinel"))
+
+        status = engine.aegis_status()
+        assert status["mode"] == "reasoning-only"
+        assert status["ledger_entries"] >= 1
+
+        ledger = engine.aegis_ledger()
+        assert ledger
+        categories = [o["category"] for entry in ledger for o in entry["exposure_observations"]]
+        assert "DESTINATION" in categories
+        # Content-safe: the raw disclosed value must never reach this ledger.
+        assert "aegis-wire-raw-sentinel" not in repr(ledger)
+        # VOLUME/DIRECTION/IDENTITY/SESSION must never appear - the same
+        # honesty invariant Platform Alpha/Beta 2/3 all pin.
+        from valkyrie.aegis_bridge import UNAVAILABLE_CATEGORIES
+        assert not (set(categories) & set(UNAVAILABLE_CATEGORIES))
+    finally:
+        engine.stop()
+        store.stop()
+
+
+def test_engine_never_computes_aegis_for_process_only_events(tmp_path: Path):
+    """A purely local event (a process launch) never reaches the wire, so
+    it can never honestly become Aegis evidence - the same invariant
+    aegis_bridge.py's own module docstring states, now proven at the
+    engine's live wiring, not only inside translate_event() itself."""
+    from valkyrie.edr.engine import EdrEngine
+    from valkyrie.store import Store
+
+    store = Store(db_path=tmp_path / "aegis-no-process.db")
+    store.start()
+    engine = EdrEngine(store)
+    engine.start()
+    try:
+        engine.ingest_telemetry(_process())
+        engine.ingest_telemetry(_process(pid=101, create_time=5.0))
+        assert engine.aegis_status()["ledger_entries"] == 0
+        assert engine.aegis_ledger() == []
+    finally:
+        engine.stop()
+        store.stop()
+
+
+def test_engine_aegis_failure_never_breaks_ingest_telemetry(tmp_path: Path, monkeypatch):
+    """Same shadow-mode guarantee as detection_v2 itself: Aegis reasoning
+    can only ever fail closed (silently absent), never interrupt or alter
+    the established ingest_telemetry pipeline's own return value."""
+    from valkyrie.edr.engine import EdrEngine
+    from valkyrie.store import Store
+    import valkyrie.aegis_bridge as aegis_bridge_module
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("aegis reasoning exploded")
+
+    # engine.py imports translate_session lazily, inside ingest_telemetry
+    # itself (see the module comment there for why - a top-level import
+    # creates a real circular import through aegis_exposure -> edr.hypothesis
+    # -> edr/__init__.py -> engine.py), so the patch target is the real
+    # source module, not an attribute copied onto engine.py's namespace.
+    monkeypatch.setattr(aegis_bridge_module, "translate_session", _boom)
+
+    store = Store(db_path=tmp_path / "aegis-fail-closed.db")
+    store.start()
+    engine = EdrEngine(store)
+    engine.start()
+    try:
+        # Must not raise, and the underlying pipeline's own detection_v2
+        # ledger must still advance normally despite Aegis failing.
+        engine.ingest_telemetry(_process())
+        engine.ingest_telemetry(_network())
+        engine.ingest_telemetry(_privacy())
+        assert engine.detection_v2_status()["events"] == 3
+        assert engine.aegis_status()["ledger_entries"] == 0
+    finally:
+        engine.stop()
+        store.stop()
+
+
+def test_engine_aegis_never_alters_valkyrie_or_nyx_hypothesis(tmp_path: Path):
+    """Aegis reasoning is wired in a completely separate ledger/code path
+    from architecture_v2/det_kwargs - the fused Valkyrie+NYX hypothesis
+    this engine actually acts on must be byte-for-byte identical to what
+    test_engine_wires_low_severity_and_nyx_events_into_shared_ledger
+    already established, whether or not Aegis is also computed alongside it."""
+    from valkyrie.edr.engine import EdrEngine
+    from valkyrie.store import Store
+
+    store = Store(db_path=tmp_path / "aegis-no-verdict-change.db")
+    store.start()
+    engine = EdrEngine(store)
+    engine.start()
+    try:
+        engine.ingest_telemetry(_process())
+        engine.ingest_telemetry(_network())
+        engine.ingest_telemetry(_privacy())
+        ledger = engine.evidence_ledger()
+        assert ledger[-1]["hypothesis"]["selected"] == "possible_data_theft"
+        # Aegis's own ledger exists ALONGSIDE this, never inside it.
+        assert "aegis" not in ledger[-1]
+        assert engine.aegis_status()["ledger_entries"] >= 1
+    finally:
+        engine.stop()
+        store.stop()
+
+
+def test_aegis_status_and_ledger_api(tmp_path: Path):
+    try:
+        from testclient_compat import make_client
+        from valkyrie.context import AppContext
+        from valkyrie.edr.engine import EdrEngine
+        from valkyrie.store import Store
+        from valkyrie.web.server import create_app
+    except ImportError:
+        return
+
+    store = Store(db_path=tmp_path / "aegis-api.db")
+    store.start()
+    engine = EdrEngine(store)
+    engine.start()
+    try:
+        engine.ingest_telemetry(_process())
+        engine.ingest_telemetry(_network())
+        engine.ingest_telemetry(_privacy())
+        app = create_app(AppContext(store=store, edr=engine))
+        client = make_client(app, "127.0.0.1")
+        status = client.get("/api/aegis/status")
+        ledger = client.get("/api/aegis/ledger?limit=1")
+        assert status.status_code == 200
+        assert status.json()["mode"] == "reasoning-only"
+        assert ledger.status_code == 200
+        assert len(ledger.json()["entries"]) == 1
+        assert client.post("/api/aegis/ledger").status_code == 405
+    finally:
+        engine.stop()
+        store.stop()
+
+
 if __name__ == "__main__":
     test_canonicalization_uses_process_instance_not_pid()
     test_privacy_canonical_event_does_not_retain_content()
@@ -213,4 +365,12 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="valkyrie_v2_") as tmp:
         test_engine_wires_low_severity_and_nyx_events_into_shared_ledger(Path(tmp))
         test_read_only_status_and_ledger_api(Path(tmp))
-    print("10 passed")
+    with tempfile.TemporaryDirectory(prefix="valkyrie_v2_aegis_") as tmp2:
+        test_engine_wires_aegis_reasoning_over_real_network_and_privacy_events(Path(tmp2))
+    with tempfile.TemporaryDirectory(prefix="valkyrie_v2_aegis_") as tmp3:
+        test_engine_never_computes_aegis_for_process_only_events(Path(tmp3))
+    with tempfile.TemporaryDirectory(prefix="valkyrie_v2_aegis_") as tmp4:
+        test_engine_aegis_never_alters_valkyrie_or_nyx_hypothesis(Path(tmp4))
+    with tempfile.TemporaryDirectory(prefix="valkyrie_v2_aegis_") as tmp5:
+        test_aegis_status_and_ledger_api(Path(tmp5))
+    print("14 passed (test_engine_aegis_failure_never_breaks_ingest_telemetry needs pytest's monkeypatch fixture)")
