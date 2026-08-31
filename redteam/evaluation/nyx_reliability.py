@@ -132,6 +132,7 @@ def _do_visit(ctx, kind: str) -> dict:
     before_n = len(RECEIVED)
     beacon_id = None
     beacon_body = None
+    beacon_status = None
     error = None
     page = ctx.new_page()
     try:
@@ -141,6 +142,14 @@ def _do_visit(ctx, kind: str) -> dict:
             "/sent|err|no-tracker/.test("
             "document.getElementById('beacon-status').textContent)",
             timeout=10000)
+        # "err" is an ACCEPTED terminal state above (matches nyx_live_test.py's
+        # own wait condition) - it means the wait didn't time out, not that
+        # the beacon succeeded. Capture the actual text so a client-side
+        # fetch failure (a real one, or a false "success" from wait_for_
+        # function's own regex) is distinguishable from a genuine send,
+        # instead of only inferring it from the endpoint never being reached.
+        beacon_status = page.evaluate(
+            "document.getElementById('beacon-status').textContent")
         beacon_id = page.evaluate("window.__beaconId")
         beacon_body = page.evaluate("window.__beaconBody")
     except Exception as exc:                              # noqa: BLE001
@@ -154,6 +163,7 @@ def _do_visit(ctx, kind: str) -> dict:
         "kind": kind,
         "beacon_id": beacon_id,
         "beacon_body": beacon_body,
+        "beacon_status": beacon_status,
         "received": RECEIVED[before_n:],
         "error": error,
     }
@@ -175,6 +185,13 @@ def _score_visit(outcome: dict, persona) -> dict:
         "unaltered": unaltered,
         "error": outcome.get("error"),
     }
+    if not result["reached_endpoint"] and result["error"] is None:
+        # The browser-side wait completed without a Python-level exception,
+        # yet nothing arrived at the endpoint - "err" is an accepted
+        # terminal state for wait_for_function (see _do_visit), so this is
+        # the one case that needs the actual beacon-status text to tell a
+        # real client-side failure apart from a harness miscount.
+        result["_beacon_status"] = outcome.get("beacon_status")
     if kind in _AUTHORIZED_BENIGN_KINDS and not unaltered:
         # Only captured on a mismatch, to keep the common-case log lean -
         # this is exactly the raw diff a "0 never reached, 0 errors" count
@@ -322,6 +339,17 @@ def _store_queue_trend(samples: list[dict]) -> dict | None:
     }
 
 
+def _status_tally(visits) -> dict:
+    """Counts of the actual browser-side beacon-status text among visits
+    that never reached the endpoint - lets a stdout-only read (no artifact
+    download needed) tell a real client-side failure apart from a harness
+    miscount, capped to the 3 most common so one run's summary can't blow
+    up into an unbounded wall of distinct strings."""
+    from collections import Counter
+    tally = Counter(v.get("_beacon_status") or "(no status captured)" for v in visits)
+    return dict(tally.most_common(3))
+
+
 def score(visit_log: list[dict], samples: list[dict], self_tests: list[dict],
           run_error: str | None = None) -> dict:
     """Predeclared, independent PASS criteria - see
@@ -342,6 +370,7 @@ def score(visit_log: list[dict], samples: list[dict], self_tests: list[dict],
 
     unauth_not_reached = sum(1 for v in unauthorized if not v["reached_endpoint"])
     unauth_errors = sum(1 for v in unauthorized if v.get("error"))
+    unauth_statuses = _status_tally(v for v in unauthorized if not v["reached_endpoint"])
     leaked = sum(1 for v in unauthorized if v["real_leaked"])
     checks["zero_real_value_leaks"] = {
         "pass": bool(unauthorized) and leaked == 0,
@@ -353,7 +382,8 @@ def score(visit_log: list[dict], samples: list[dict], self_tests: list[dict],
     checks["every_unauthorized_visit_deceived"] = {
         "pass": bool(unauthorized) and deceived == len(unauthorized),
         "detail": (f"{deceived} of {len(unauthorized)} unauthorized visit(s) deceived "
-                  f"({unauth_not_reached} never reached the endpoint, {unauth_errors} had a visit error)"),
+                  f"({unauth_not_reached} never reached the endpoint, {unauth_errors} had a visit error"
+                  + (f", statuses seen: {unauth_statuses}" if unauth_statuses else "") + ")"),
     }
 
     ab_not_reached = sum(1 for v in authorized_benign if not v["reached_endpoint"])
