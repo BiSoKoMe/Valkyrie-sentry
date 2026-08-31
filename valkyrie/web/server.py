@@ -683,7 +683,10 @@ def create_app(ctx: Optional[AppContext] = None):
                 # (via /api/debug/telemetry/fault) is the only thing that
                 # changes what this loop's tick() actually does.
                 while not stop.is_set():
-                    fic.tick()
+                    try:
+                        fic.tick()
+                    except BaseException:  # noqa: BLE001
+                        pass
                     stop.wait(1.0)
 
             threading.Thread(target=_fault_ticker, daemon=True,
@@ -1284,10 +1287,12 @@ def create_app(ctx: Optional[AppContext] = None):
 
         A synchronous route would need a free AnyIO worker merely to report
         that every worker is occupied. This route stays on the event loop and
-        only reads in-memory state (plus one cheap self-process read), so it
-        remains useful during contention.
+        only reads in-memory state, plus one self-process read - dispatched
+        via asyncio's own default executor (NOT anyio's worker pool, the one
+        that saturates), so it remains useful during contention without
+        actually running psutil's syscalls directly on the loop.
         """
-        engine_process = _self_process_stats()
+        engine_process = await asyncio.to_thread(_self_process_stats)
         collectors = {}
         for name in ("process_collector", "network_collector", "persistence_collector"):
             collector = getattr(state, name, None)

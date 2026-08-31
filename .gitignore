@@ -21,8 +21,8 @@ logs/
 service_stdout.log
 service_stderr.log
 
-# Tools (downloaded binaries, e.g. nssm.exe)
-tools/
+# Tools (downloaded binaries only - the scripts in tools/ are real source)
+tools/*.exe
 
 # Rust accelerator build artifacts (the crate's Cargo.lock IS tracked)
 rust/**/target/
