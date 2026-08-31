@@ -198,6 +198,13 @@ def _score_visit(outcome: dict, persona) -> dict:
         # can't show: aggregate counts said something changed, not what.
         result["_sent_body"] = sent_body
         result["_received_bodies"] = bodies
+    if kind in _UNAUTHORIZED_KINDS and result["reached_endpoint"] and not (real_leaked or fake_served):
+        # Same reasoning: reached the endpoint but the body contains
+        # NEITHER the real value nor the fake one - this is exactly the
+        # shape a corrupted substitution produces (see nyx.py's
+        # _apply_repl fix), not just "didn't get faked."
+        result["_sent_body"] = sent_body
+        result["_received_bodies"] = bodies
     return result
 
 

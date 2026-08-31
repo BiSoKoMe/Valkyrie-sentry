@@ -233,12 +233,35 @@ def main() -> int:
     c.check("payment card rewritten to a fake (real card gone)",
             b"4242424242424242" not in bdy and b"4111111111111111" in bdy)
 
+    # 8025x4513 is deliberately outside persona.py's _SCREENS pool (every
+    # real entry there is a plausible resolution under ~4000 wide) - using a
+    # pool member here (2560x1440 used to be hardcoded) meant this test
+    # coincidentally failed on any fresh persona seed that happened to pick
+    # that SAME resolution (~8% of fresh CI runs, weight 8 of ~100): a real
+    # persona given a value identical to what it would fake correctly skips
+    # the no-op replacement (nyx.py's own "only replace if the fake differs
+    # from the real value" rule), which this test's fixed input then wrongly
+    # read as a failure to rewrite.
     u, bdy, faked = nyx.fake_outbound(
         "POST", THIRD, HDR,
-        b"screen=2560x1440&timezone=America/New_York&lang=en-US&cores=16", persona)
+        b"screen=8025x4513&timezone=America/New_York&lang=en-US&cores=16", persona)
     c.check("fingerprint bundle rewritten to consistent persona device values",
-            b"2560x1440" not in bdy
+            b"8025x4513" not in bdy
             and f"{persona.screen_width}x{persona.screen_height}".encode() in bdy)
+
+    # REGRESSION: Beta 1's live-fire soak found _apply_repl applying each
+    # substitution as its own sequential text.replace() call could corrupt
+    # an already-faked value - "3840x2160" (a fake screen) became "3840x280"
+    # because a SEPARATE, later substitution ("16" -> "8", for cores) also
+    # matched the "16" hiding inside "2160". This is deterministic (no
+    # random persona needed): a multi-field body where one fake value's
+    # text contains another field's raw value as a substring.
+    collision_repl = {"8025x4513": "3840x2160", "16": "8"}
+    fixed = nyx._apply_repl("screen=8025x4513&cores=16", collision_repl)
+    c.check("a later substitution does NOT corrupt an earlier one's fake output",
+            fixed == "screen=3840x2160&cores=8")
+    c.check("the corruption shape this regresses against is NOT present",
+            "280" not in fixed)
 
     # Consistency: the SAME persona value across two different requests (the tell
     # a sloppy spoof would fail - two requests must not disagree about the user).

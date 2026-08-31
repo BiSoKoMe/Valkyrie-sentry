@@ -585,14 +585,37 @@ def _fake_for(category: str, raw: str, kind: str, persona):
 def _apply_repl(text: str, repl: dict) -> str:
     """Replace each raw value with its fake, in plain, URL-encoded, and
     JSON-safe forms - so the substitution lands whether the value sits in a
-    query string, a form body, or a JSON blob."""
+    query string, a form body, or a JSON blob.
+
+    Beta 1's live-fire soak found a real corruption bug here: this used to
+    apply each substitution as its own sequential `text = text.replace(...)`
+    call. When a request fakes MORE THAN ONE field at once (e.g. a device id
+    AND a fingerprint bundle in the same body - the normal shape of a real
+    browser beacon, not an edge case), one substitution's OUTPUT can contain
+    a substring that a LATER substitution's raw-value pattern matches,
+    corrupting an already-faked value: replacing "16" -> "8" for a cores
+    field, after a screen field was already faked to "3840x2160", turned
+    that into "3840x280" ("2160" contains "16"). A sustained run with real
+    multi-field bodies hit this repeatedly - the fake value stopped
+    appearing anywhere in the rewritten request at all. Fixed by doing every
+    substitution in ONE single regex pass instead of N sequential text
+    passes, so an already-substituted region is never rescanned by a later
+    pattern. Longest-raw-value-first, so a short raw value that happens to
+    be a substring of a longer one can never win the match ahead of it.
+    """
+    full_map: dict[str, str] = {}
     for raw, fake in repl.items():
-        if raw and raw in text:
-            text = text.replace(raw, fake)
+        if not raw:
+            continue
+        full_map[raw] = fake
         q = quote(raw, safe="")
-        if q != raw and q in text:
-            text = text.replace(q, quote(fake, safe=""))
-    return text
+        if q != raw:
+            full_map[q] = quote(fake, safe="")
+    if not full_map:
+        return text
+    pattern = re.compile(
+        "|".join(re.escape(k) for k in sorted(full_map, key=len, reverse=True)))
+    return pattern.sub(lambda m: full_map[m.group(0)], text)
 
 
 def fake_outbound(method, url, headers=None, body=None, persona=None,
