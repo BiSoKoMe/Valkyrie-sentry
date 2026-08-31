@@ -28,6 +28,23 @@ on:
         description: "soak mode only: duration in minutes"
         type: string
         default: "15"
+  # A brand-new workflow_dispatch-only workflow isn't discoverable by the
+  # API/CLI until it exists on the default branch OR one of its triggers has
+  # fired at least once - same reason nyx-live.yml carries this exact push
+  # trigger. Registers the workflow (runs as dry-run, the default) the
+  # moment this file lands on this branch; workflow_dispatch works normally
+  # after that, on any branch.
+  push:
+    branches: [feat/efficacy-etw-coverage]
+    paths:
+      - ".github/workflows/nyx-reliability.yml"
+      - "redteam/evaluation/nyx_reliability.py"
+      - "nyx_live/**"
+      - "valkyrie/store.py"
+      - "valkyrie/nyx.py"
+      - "valkyrie/nyx_graph.py"
+      - "valkyrie/tls_addon.py"
+      - "valkyrie/tls_inspector.py"
 
 jobs:
   plan:
@@ -43,15 +60,21 @@ jobs:
     steps:
       - id: plan
         shell: bash
+        # A push-triggered run (see the module comment on the `push:`
+        # trigger above) carries no `inputs` context at all - only a real
+        # workflow_dispatch with mode=soak gets the 3-run matrix.
         run: |
-          if [ "${{ inputs.mode }}" = "soak" ]; then
+          if [ "${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'dry-run' }}" = "soak" ]; then
             echo 'run_indices=[1,2,3]' >> "$GITHUB_OUTPUT"
           else
             echo 'run_indices=[1]' >> "$GITHUB_OUTPUT"
           fi
 
   run:
-    name: Beta 1 (${{ inputs.mode }}) run ${{ matrix.run_index }}
+    name: >-
+      Beta 1
+      (${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'dry-run' }})
+      run ${{ matrix.run_index }}
     needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -59,6 +82,12 @@ jobs:
       fail-fast: false
       matrix:
         run_index: ${{ fromJSON(needs.plan.outputs.run_indices) }}
+    env:
+      # Single source of truth for "what mode is this run" - every step
+      # below reads this instead of re-deriving the workflow_dispatch/push
+      # fallback each time.
+      NYX_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'dry-run' }}
+      NYX_MINUTES: ${{ github.event_name == 'workflow_dispatch' && inputs.minutes || '15' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -83,10 +112,10 @@ jobs:
           PYTHONUNBUFFERED: "1"
           VALKYRIE_ALLOW_EXPOSED_CA_KEY: "1"   # throwaway CI runner; lets the proxy start on Linux
         run: |
-          if [ "${{ inputs.mode }}" = "soak" ]; then
-            python redteam/evaluation/nyx_reliability.py --mode soak --minutes ${{ inputs.minutes }}
+          if [ "$NYX_MODE" = "soak" ]; then
+            python redteam/evaluation/nyx_reliability.py --mode soak --minutes "$NYX_MINUTES"
           else
-            python redteam/evaluation/nyx_reliability.py --mode ${{ inputs.mode }}
+            python redteam/evaluation/nyx_reliability.py --mode "$NYX_MODE"
           fi
 
       - name: Nyx baseline still holds (nyx_live_test.py + unit tests)
@@ -111,7 +140,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: nyx-reliability-${{ inputs.mode }}-run${{ matrix.run_index }}
+          name: nyx-reliability-${{ env.NYX_MODE }}-run${{ matrix.run_index }}
           path: |
             redteam/evaluation/results/nyx_reliability_*.json
             redteam/evaluation/results/nyx_reliability_*.jsonl
