@@ -793,3 +793,83 @@ direct "actually executing" signal) and `top_functions_inclusive`
 shared by multiple callers). Both rankings print directly in the CI log
 and land in the run's summary JSON (`pyspy_profile`), so a specific
 function gets named without needing to open a flamegraph.
+
+### Result: one function, 70.7% of idle CPU
+
+A 15-minute idle run with `--attach-pyspy` (90s sampling window at 100Hz,
+2280 samples, zero errors) named the hot function precisely, not "maybe X":
+
+```
+top_functions_leaf:
+  open_files (psutil/_pswindows.py:978)   1613 samples   70.7%
+  _loop (valkyrie/etw/framework.py:101)     88 samples    3.9%
+  isfile_strict (psutil/_common.py:417)     65 samples    2.9%
+  ...
+```
+
+The inclusive ranking traced the full call chain:
+`browser_cred_watch.py:218 (_loop)` → `poll_once` → `_scan` (line 157) →
+psutil's `open_files()`. `valkyrie/browser_cred_watch.py`'s
+`CredentialStoreWatch._scan()` iterated **every process on the host** and
+called `open_files()` - a genuinely expensive Windows syscall that walks
+the target's entire handle table - on each non-browser one, every 5
+seconds, forever, regardless of whether anything was happening.
+`ransomware_shield.py`'s own `open_files()` use (the only other call site
+in the codebase) did not appear in the profile at all - this is
+specifically `browser_cred_watch`.
+
+## Beta 0.5.9: the two-tier fix (identity cache + backstop, not interval widening or trust-based skipping)
+
+Two candidate fixes were explicitly rejected before implementing anything:
+widening the 5s poll interval (rejected - `open_files()` is a point-in-time
+snapshot; a tool that opens, reads, and closes the credential file between
+polls would not just be detected later, it could be missed entirely, and
+a longer interval makes that miss window bigger, not just slower) and
+narrowing to "trusted-looking" processes (rejected - a security boundary
+must never be "this process name looks safe," since that is exactly the
+blind spot a real attacker exploits).
+
+**The fix actually shipped**, in `valkyrie/browser_cred_watch.py`: identity-cache
+by `(pid, create_time)` (the same stable-instance identity `ProcessCollector`
+already uses). A process instance pays the expensive `open_files()` call
+the first time it's seen, then not again until a `backstop_interval`
+(default 60.0s - a first, measured-informed guess per the review, not
+picked from intuition alone, and revisited below against real data) has
+elapsed since its last inspection. This is neither of the rejected options:
+the cheap process-enumeration loop still runs in full every 5s, so a
+brand-new process is inspected on the very next poll after it starts -
+identical promptness to before for anything new - and every process
+instance is still eligible for inspection; nothing is exempted by name. A
+process whose inspection fails (e.g. access denied) is not permanently
+excluded either - the attempt is still recorded, deferring it to the same
+backstop cadence as a successful inspection, never silently retried every
+poll forever and never silently skipped forever.
+
+Six regression tests in `tests/test_browser_cred_watch.py` (`[7]`-`[11]`)
+pin exactly the required behaviors: a new process instance is still
+inspected immediately; the same `(pid, create_time)` does not pay
+`open_files()` again on the very next poll; PID reuse under a *different*
+`create_time` is treated as a new instance and inspected fresh; a
+long-lived instance eventually receives the backstop rescan; a failed
+inspection is recorded (not left permanently un-retried, not retried every
+cycle) and its instance still comes due on the same backstop cadence; and
+all pre-existing T1555.003 detection tests (`[1]`-`[6]`) stay green
+unchanged.
+
+**A longer-term architectural note, deliberately NOT pursued now:** the
+underlying limitation is asking every process whether it currently has a
+specific file open, rather than observing the file itself and identifying
+who touched it. Since Valkyrie already has ETW infrastructure, whether that
+sensor layer can expose the relevant file-I/O events directly - making this
+whole process-wide poll unnecessary - is worth investigating separately.
+That is a real architectural change, too large to make inside a reliability
+qualification, and is noted here as a future direction, not started.
+
+Next: rerun the identical 15-minute idle/benign/full profiling experiments
+with this fix in place and confirm idle CPU actually drops - the diagnosis
+predicts something close to a 70-point collapse if it is correct, not a
+modest improvement. Only after that, rerun the unchanged 3x25-minute
+qualification. A CPU drop alone does not prove the engine-unreachable issue
+is fixed - only the qualification's own independent runs stopping
+reproducing it, across the required number of runs, would establish that
+link.
