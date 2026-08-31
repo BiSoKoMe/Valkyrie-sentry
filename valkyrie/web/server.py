@@ -530,6 +530,51 @@ def _debug_fault_collector_enabled() -> bool:
     return os.environ.get(_DEBUG_FAULT_COLLECTOR_ENV) == "1"
 
 
+_SELF_PROC_HANDLE = None   # cached for process lifetime; see _self_process_stats()
+
+
+def _self_process_stats() -> dict:
+    """The engine's OWN CPU/memory footprint, for /api/telemetry/contention.
+
+    Platform Beta 0.5's investigation built this exact visibility (RSS,
+    thread count, CPU) into the external test harness to diagnose an engine
+    that had become unreachable, but the product itself had no way to see
+    its own resource footprint through its own API - only the harness could.
+    Promoted here as a genuine operational capability, distinct from the
+    harness's diagnostic-only tooling (profiling, phase summaries), which
+    stays external.
+
+    `cpu_percent()` is only meaningful measured repeatedly against the SAME
+    process handle (a fresh handle's first call is meaningless) - cached at
+    module scope for the life of this process, same reasoning as the
+    harness's `_ENGINE_PROC_HANDLES`. The first-ever call after startup reads
+    0.0 (non-blocking `interval=None` mode) and self-corrects on the next
+    poll; this route must never sleep to "prime" it, since that would block
+    the event loop.
+    """
+    global _SELF_PROC_HANDLE
+    try:
+        import psutil
+    except ImportError:
+        return {"available": False}
+    try:
+        if _SELF_PROC_HANDLE is None:
+            _SELF_PROC_HANDLE = psutil.Process(os.getpid())
+        p = _SELF_PROC_HANDLE
+        with p.oneshot():
+            mem = p.memory_info()
+            return {
+                "available": True,
+                "cpu_percent": p.cpu_percent(interval=None),
+                "rss_bytes": mem.rss,
+                "vms_bytes": mem.vms,
+                "num_threads": p.num_threads(),
+                "num_handles": p.num_handles() if hasattr(p, "num_handles") else None,
+            }
+    except Exception as exc:
+        return {"available": False, "error": repr(exc)}
+
+
 def _build_telemetry_watchdog():
     """Wire the three periodic collectors + the event loop's own heartbeat
     into one HEALTHY/DEGRADED reliability read (Platform Beta 0.5).
@@ -1239,8 +1284,10 @@ def create_app(ctx: Optional[AppContext] = None):
 
         A synchronous route would need a free AnyIO worker merely to report
         that every worker is occupied. This route stays on the event loop and
-        only reads in-memory state, so it remains useful during contention.
+        only reads in-memory state (plus one cheap self-process read), so it
+        remains useful during contention.
         """
+        engine_process = _self_process_stats()
         collectors = {}
         for name in ("process_collector", "network_collector", "persistence_collector"):
             collector = getattr(state, name, None)
@@ -1277,6 +1324,7 @@ def create_app(ctx: Optional[AppContext] = None):
                 for t in threading.enumerate()
             ],
             "collectors": collectors,
+            "engine_process": engine_process,
         }
 
     if _debug_fault_collector_enabled():

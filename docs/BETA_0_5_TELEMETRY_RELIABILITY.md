@@ -931,6 +931,58 @@ frozen baseline unchanged - on all three runs.
 made this possible: `emit_budget` bounding on `PersistenceCollector` and
 `ProcessCollector` (Beta 0.5.3/.4), and the identity-cached
 `CredentialStoreWatch._scan()` (Beta 0.5.9) that eliminated the dominant
-idle-CPU cost. Per the sequence set at the start of this work (Platform
-Alpha → Beta 0 → **Beta 0.5 ← closed here** → Beta 1/NYX → Beta 2/Aegis),
-development now proceeds to Platform Beta 1.
+idle-CPU cost.
+
+## Beta 0.5.10: closing audit - every fix landed in the product, not just the harness
+
+Before starting Beta 1, an explicit audit checked that every collector-level
+finding from this investigation had actually been applied consistently
+across the product, not left as a one-off on whichever collector happened
+to surface it first in profiling. `PersistenceCollector` and
+`ProcessCollector` had both received the `emit_budget` bounded-defer fix;
+`NetworkCollector` - the third of the three periodic collectors - had not,
+and still had the exact same wasted-syscall shape `ProcessCollector`'s
+`pr.exe()` bug had (`valkyrie/network_telemetry.py`):
+
+1. **`NetworkCollector.snapshot()`** deduped process name/path lookups only
+   *within* a single poll's connection table, not *across* polls - so a
+   long-lived connection's pid had its `proc.exe()` path re-resolved (a
+   real syscall) every 3 seconds, forever, for as long as the connection
+   stayed open. Fixed with the same `(pid, create_time)` identity cache
+   ProcessCollector uses, pruned each poll to drop instances no longer
+   present.
+2. **`NetworkCollector.poll_once()`**'s diff/score/emit loop had no
+   `emit_budget` at all - the same unbounded-synchronous-emit shape that
+   caused the original `PersistenceCollector`/`ProcessCollector` stalls
+   under `EdrStore` lock contention. Fixed with the identical
+   wall-clock-bounded, defer-to-next-poll pattern (constructor param
+   `emit_budget: float = 4.0`, `status()["truncated"]`).
+
+Both fixes verified with new regression tests in `tests/test_network_telemetry.py`
+(checks [9]/[9b]: exe() reused across polls for the same process instance,
+re-resolved fresh on `create_time` change; check [10]: a budget-limited
+cycle defers rather than drops a connection, and the deferral clears on the
+next poll) - all pre-existing checks in that file, plus
+`test_process_telemetry.py`, `test_endpoint_telemetry.py`, and
+`test_browser_cred_watch.py`, stayed green.
+
+Separately, `/api/telemetry/contention` (`valkyrie/web/server.py`) reported
+the event loop, the AnyIO worker pool, and every collector's own health -
+but had no way to report the *engine's own* CPU/RSS/thread footprint, even
+though that exact visibility (`_engine_process_stats()`) is what let this
+whole investigation find the idle-CPU and lock-contention findings in the
+first place. That instrumentation only ever existed in the external
+harness. Promoted a lightweight, product-side equivalent
+(`_self_process_stats()`): a single cached `psutil.Process` handle for the
+engine's own pid (reused for the process's lifetime, since `cpu_percent()`
+is only meaningful measured repeatedly against the same handle), read
+inline on the same async, contention-safe route - never sleeps to "prime"
+the first reading, so it can't block the event loop. New test:
+`tests/test_telemetry_contention_api.py` (8 checks, all passing) - the
+diagnostic-only tooling built for this investigation (profiling, py-spy,
+phase summaries) deliberately was **not** duplicated into the product; only
+the lasting operational capability was.
+
+Per the sequence set at the start of this work (Platform Alpha → Beta 0 →
+**Beta 0.5 ← closed here** → Beta 1/NYX → Beta 2/Aegis), development now
+proceeds to Platform Beta 1.

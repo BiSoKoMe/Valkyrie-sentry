@@ -166,7 +166,8 @@ class NetworkCollector:
     def __init__(self, emit: Callable[[TelemetryEvent], None],
                  ip_reputation: Optional[Callable[[str], bool]] = None,
                  interval: float = 3.0, emit_all: bool = False,
-                 baseline: Optional["NetworkBaseline"] = None) -> None:
+                 baseline: Optional["NetworkBaseline"] = None,
+                 emit_budget: float = 4.0) -> None:
         self._emit = emit
         self._rep = ip_reputation or (lambda _ip: False)
         self._interval = max(0.5, float(interval))
@@ -190,6 +191,18 @@ class NetworkCollector:
         # shape every per-connection swallow inside poll_once() itself
         # cannot hide.
         self.exception_count: int = 0
+        # Same shape as ProcessCollector/PersistenceCollector: bounds the
+        # diff/score/emit stage's wall-clock time so a slow or contended emit
+        # sink can't hold last_poll_completed_at hostage.
+        self._emit_budget = max(1.0, float(emit_budget))
+        self._truncated: list[str] = []
+        # Process-identity (pid, create_time) -> resolved exe path, reused
+        # across polls. A long-lived connection's pid is re-seen in every
+        # snapshot() (it must be, to diff correctly), but its exe() path
+        # cannot change for a live process instance - see ProcessCollector's
+        # identical pr.exe() fix (Beta 0.5) for the syscall this avoids
+        # repeating forever.
+        self._proc_path_cache: dict[tuple[int, float], str] = {}
         from .collector_diagnostics import PollDiagnostics
         self._diagnostics = PollDiagnostics()
 
@@ -207,6 +220,7 @@ class NetworkCollector:
             return out   # access denied / unsupported -> disabled, no raise
         names: dict[int, str] = {}
         paths: dict[int, str] = {}
+        seen_idents: set = set()
         for c in conns:
             try:
                 if not c.raddr or c.pid is None:
@@ -223,19 +237,43 @@ class NetworkCollector:
                     except Exception:
                         names[pid] = ""
                     try:
-                        # Best-effort: AccessDenied on many system processes
-                        # from a non-elevated context. Missing path just means
-                        # network_score treats actor_trusted as unknown (None),
-                        # never as untrusted - an access failure must not read
-                        # as a signal.
-                        paths[pid] = proc.exe() if proc is not None else ""
+                        create_time = round(proc.create_time(), 3) if proc is not None else 0.0
                     except Exception:
-                        paths[pid] = ""
+                        create_time = 0.0
+                    ident = (pid, create_time)
+                    seen_idents.add(ident)
+                    cached_path = self._proc_path_cache.get(ident)
+                    if cached_path is not None:
+                        # Same (pid, create_time) instance as a prior poll -
+                        # the executable path of a live process cannot
+                        # change, so skip the syscall entirely rather than
+                        # repeating it for every long-lived connection on
+                        # every poll (Beta 0.5: this was the same wasted-cost
+                        # shape as ProcessCollector's pr.exe() bug).
+                        paths[pid] = cached_path
+                    else:
+                        try:
+                            # Best-effort: AccessDenied on many system
+                            # processes from a non-elevated context. Missing
+                            # path just means network_score treats
+                            # actor_trusted as unknown (None), never as
+                            # untrusted - an access failure must not read as
+                            # a signal.
+                            paths[pid] = proc.exe() if proc is not None else ""
+                        except Exception:
+                            paths[pid] = ""
+                        self._proc_path_cache[ident] = paths[pid]
                 ci = ConnInfo(pid=pid, name=names.get(pid, ""), path=paths.get(pid, ""),
                               raddr_ip=c.raddr.ip, raddr_port=int(c.raddr.port))
                 out[ci.key()] = ci
             except Exception:
                 continue
+        # Drop cache entries for process instances no longer present, so a
+        # host with high process turnover doesn't grow this dict forever.
+        if len(self._proc_path_cache) > len(seen_idents):
+            for ident in list(self._proc_path_cache):
+                if ident not in seen_idents:
+                    del self._proc_path_cache[ident]
         return out
 
     def _score(self, ci: ConnInfo) -> Optional[dict]:
@@ -269,9 +307,14 @@ class NetworkCollector:
                 return 0
             with self._diagnostics.stage("diff_score_emit"):
                 fresh = diff_snapshots(self._last, new)
-                self._last = new
+                deadline = time.monotonic() + self._emit_budget
+                budget_spent = False
+                processed_keys: set = set()
                 emitted = 0
                 for ci in fresh:
+                    if budget_spent or time.monotonic() >= deadline:
+                        budget_spent = True
+                        continue
                     try:
                         blocked = bool(self._rep(ci.raddr_ip))
                     except Exception:
@@ -280,6 +323,7 @@ class NetworkCollector:
                         anomaly = self._score(ci)
                     except Exception:
                         anomaly = None
+                    processed_keys.add(ci.key())
                     if not blocked and anomaly is None and not self._emit_all:
                         continue
                     try:
@@ -287,6 +331,22 @@ class NetworkCollector:
                         emitted += 1
                     except Exception:
                         pass
+                if budget_spent:
+                    # Defer: keep any not-yet-scored fresh connection OUT of
+                    # the new baseline so the next poll's diff rediscovers
+                    # it, rather than a slow/contended score or emit sink
+                    # holding this whole cycle (and last_poll_completed_at)
+                    # hostage. Same pattern as ProcessCollector/
+                    # PersistenceCollector's emit_budget fix (Beta 0.5).
+                    next_last = dict(new)
+                    for ci in fresh:
+                        if ci.key() not in processed_keys:
+                            next_last.pop(ci.key(), None)
+                    self._last = next_last
+                    self._truncated = self._truncated + ["diff_score_emit"]
+                else:
+                    self._last = new
+                    self._truncated = []
             return emitted
         finally:
             self.last_poll_completed_at = time.time()
@@ -314,6 +374,7 @@ class NetworkCollector:
             "poll_interval_s": self._interval,
             "last_poll_completed_at": self.last_poll_completed_at,
             "exception_count": self.exception_count,
+            "truncated": list(self._truncated),
         } | self._diagnostics.status()
 
     def _loop(self) -> None:
