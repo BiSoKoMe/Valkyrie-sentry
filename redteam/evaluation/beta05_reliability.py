@@ -371,10 +371,23 @@ class Sampler:
         self._thread = threading.Thread(target=self._loop, daemon=True, name="beta05-sampler")
         self._thread.start()
 
+    # A join() timeout shorter than the worst case an in-flight _sample_once()
+    # can legitimately take is a real bug, not a safety margin: it lets the
+    # main thread read self.first_failure/self.samples while the background
+    # thread is still mid-write, silently losing the exact failure this
+    # class exists to capture (Beta 0.5.6 - a genuinely unreachable engine
+    # produced 4 sequential 5s _timed_get timeouts = ~20s, then
+    # _capture_failure's own /api/telemetry/contention call added another
+    # up to 5s before self.first_failure was actually assigned - a run's
+    # 10s join gave up first, and the reported "no failure" was wrong: the
+    # failure had already happened, it just hadn't finished being written
+    # down yet). 60s comfortably covers that worst case with real margin.
+    _STOP_JOIN_TIMEOUT_S = 60.0
+
     def stop(self) -> None:
         self._stop.set()
         if self._thread:
-            self._thread.join(timeout=10)
+            self._thread.join(timeout=self._STOP_JOIN_TIMEOUT_S)
 
     def _loop(self) -> None:
         with open(self._out_path, "a", encoding="utf-8") as fh:

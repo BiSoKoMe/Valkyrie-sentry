@@ -622,3 +622,67 @@ this fix in place, and keep reading the engine_resource_trend data on every
 attempt - if the engine-death shape does reproduce again, this same
 methodical stage-level attribution is exactly what should be pointed at it
 next, not a repeat of the same guess-and-patch loop.
+
+## Beta 0.5.7: a harness bug that silently discarded evidence, and a bigger, sharper finding underneath it
+
+A contention run with the `process_collector` fix in place (`33345065127`)
+ran the full 25 minutes and reported `overall: FAIL` with `first_failure:
+null` - an apparent contradiction (a failure was clearly scored, but the
+mode built specifically to capture failures said it found none). The
+downloaded JSONL resolved it: sample 683 shows all four polled endpoints
+(`/api/health`, `/api/telemetry/watchdog`, `/api/edr/causality/stats`,
+`/api/sensors/status`) timing out sequentially at 5s each (~20s total) -
+this **is** the engine-unreachable shape from Beta 0.5.5, and a
+`contention_failure` marker was correctly written to the file right after
+it. So the failure was real and was captured - it just wasn't *read*
+correctly.
+
+**Root cause, found precisely, not guessed:** `Sampler.stop()` called
+`self._thread.join(timeout=10)`. When the in-flight sample takes ~20s
+(the timeout chain above) plus `_capture_failure()`'s own extra
+`/api/telemetry/contention` call (up to another 5s), the 25-minute phase
+clock can run out and call `stop()` while that slow capture is still
+in-flight. The 10s join gave up before the background thread finished
+writing `self.first_failure`, so the main thread read the correct,
+still-default `None` - accurate at the exact instant it was read, but
+wrong by the time scoring ran a moment later. **This is a real bug: it
+would have silently under-reported real failures in exactly the runs this
+mode exists to characterize**, not just this one.
+
+**Fixed:** `_STOP_JOIN_TIMEOUT_S = 60.0` (measured worst case ~25s, this
+leaves real margin), plus two regression tests -
+`test_stop_join_timeout_covers_the_measured_worst_case` pins the constant
+itself (the behavioral test alone uses fast simulated delays and would pass
+even with the old, buggy value), and
+`test_stop_waits_for_an_in_flight_slow_failure_capture` proves `stop()`
+actually waits for in-flight work rather than a fixed duration.
+
+### The sharper finding: sustained high CPU, not a spike
+
+With the read bug fixed, the resource trend in that same run is worth its
+own read. RSS, handles, and threads all stayed flat and unremarkable for
+the entire run, including the 14 samples immediately before and during the
+failure - no leak, no climb toward a wall. **CPU did not.** Across all 684
+samples of the full run: **median 64%, over 80% on 284 samples (41.5%),
+over 50% on 385 (56%)** - of the *engine process alone*, not system-wide.
+This is not an anomalous spike correlated with the one failure; it is the
+engine's ordinary operating point on this runner class for most of a
+25-minute run doing real collector polling plus periodic ART-technique
+execution.
+
+That reframes the open question. The leading hypothesis is no longer
+"something occasionally goes wrong" - it's "the engine's baseline CPU
+footprint under active monitoring is high enough that a 2-vCPU host
+occasionally can't schedule it promptly enough to answer its own health
+check within a 5s client timeout." Whether that is a real product concern
+(most real desktops have more headroom than a 2-vCPU CI runner, but a
+security agent chronically consuming most of a core while idle-ish is still
+worth caring about) or primarily an artifact of this specific runner class
+is an open, undecided question - not yet resolved either way, and it is a
+different, larger question than any single collector bug fixed so far.
+Pursuing it (e.g. profiling which subsystem accounts for the CPU, or
+testing responsiveness specifically under CPU pressure rather than
+resource growth) is real work, not a quick patch, and is being surfaced
+for direction rather than decided unilaterally.
+
+Beta 0.5 remains **OPEN**.
