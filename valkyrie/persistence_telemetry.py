@@ -220,7 +220,8 @@ class PersistenceCollector:
     """Polls ASEP locations and emits a TelemetryEvent per newly-created entry."""
 
     def __init__(self, emit: Callable[[TelemetryEvent], None], interval: float = 15.0,
-                 snapshot_budget: float = 4.0, startup_grace: float = 5.0) -> None:
+                 snapshot_budget: float = 4.0, startup_grace: float = 5.0,
+                 emit_budget: float = 4.0) -> None:
         self._emit = emit
         self._interval = max(2.0, float(interval))
         self._last: Optional[dict] = None      # {activity: {identity: value}}
@@ -231,6 +232,22 @@ class PersistenceCollector:
         # snapshot() docstring). Truncated sections are recorded here.
         self._snapshot_budget = max(1.0, float(snapshot_budget))
         self._truncated: list[str] = []
+        # Wall-clock cap on poll_once()'s diff_normalize_emit stage -
+        # separate from _snapshot_budget because it bounds a DIFFERENT kind of
+        # cost. snapshot()'s budget bounds registry/task enumeration (CPU
+        # work); this bounds _emit_new(), which calls into the EDR engine's
+        # ingest_telemetry() and can block on EdrStore's shared write lock
+        # under concurrent load from other collectors. Measured live
+        # (2026-08-30 qualification soak, see docs/BETA_0_5_TELEMETRY_RELIABILITY.md
+        # "Beta 0.5.3"): one cycle spent 72.6s inside this exact stage while
+        # every OTHER subsystem (causality graph, sensors, event loop, API)
+        # kept advancing normally - not a GIL freeze, a lock-contention wait
+        # specific to this thread. A budget here bounds last_poll_completed_at
+        # staleness the same way snapshot_budget already bounds snapshot() -
+        # entries not yet emitted when the budget expires are deliberately
+        # left OUT of the new baseline so the next poll rediscovers and
+        # retries them, rather than being silently dropped.
+        self._emit_budget = max(1.0, float(emit_budget))
         # See ProcessCollector's identical field: updated at the end of every
         # poll_once() call so a reliability watchdog can tell "still making
         # progress" apart from "thread alive but stuck" -- exactly the
@@ -244,6 +261,8 @@ class PersistenceCollector:
         # (which cannot distinguish "quiet, nothing new" from "quietly
         # failing every cycle").
         self.exception_count: int = 0
+        from .collector_diagnostics import PollDiagnostics
+        self._diagnostics = PollDiagnostics()
         # Seconds to wait before the first baseline snapshot, keeping the engine's
         # startup + readiness window clear of the heavy enumeration.
         # 5s, not 45s. MEASURED, not guessed.
@@ -309,54 +328,59 @@ class PersistenceCollector:
 
         try:
             # Run / RunOnce / Winlogon values (cheap; always completes).
-            for hive, subkey, loc in _run_key_specs():
-                for name, data in _read_values(hive, subkey).items():
-                    snap[PERSIST_RUN_KEY][f"{loc}::{name}"] = data
-                    _tick()
+            with self._diagnostics.stage("run_keys"):
+                for hive, subkey, loc in _run_key_specs():
+                    for name, data in _read_values(hive, subkey).items():
+                        snap[PERSIST_RUN_KEY][f"{loc}::{name}"] = data
+                        _tick()
             # Services - enumerated INLINE (not via _subkeys) so the GIL yield
             # and the budget apply to the enumeration itself, which is a prime
             # suspect for the runaway. ImagePath is still read lazily on emit.
             if _WINREG:
+                stage = self._diagnostics.stage("services")
                 try:
-                    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _SERVICES_KEY) as k:
-                        i = 0
-                        while True:
-                            try:
-                                svc = winreg.EnumKey(k, i)
-                            except OSError:
-                                break
-                            snap[PERSIST_SERVICE][svc] = ""
-                            i += 1
-                            if _tick():
-                                truncated.append("services")
-                                break
+                    with stage:
+                        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _SERVICES_KEY) as k:
+                            i = 0
+                            while True:
+                                try:
+                                    svc = winreg.EnumKey(k, i)
+                                except OSError:
+                                    break
+                                snap[PERSIST_SERVICE][svc] = ""
+                                i += 1
+                                if _tick():
+                                    truncated.append("services")
+                                    break
                 except OSError:
                     pass
             # Scheduled tasks - file names under the Tasks tree (os.walk is
             # incremental, so the yield/budget bite per file).
-            if time.monotonic() < deadline and os.path.isdir(_TASKS_DIR):
-                stop = False
-                for root, _dirs, files in os.walk(_TASKS_DIR):
-                    for f in files:
-                        full = os.path.join(root, f)
-                        rel = os.path.relpath(full, _TASKS_DIR)
-                        snap[PERSIST_SCHEDULED_TASK][rel] = ""
-                        if _tick():
-                            truncated.append("scheduled_tasks")
-                            stop = True
+            with self._diagnostics.stage("scheduled_tasks"):
+                if time.monotonic() < deadline and os.path.isdir(_TASKS_DIR):
+                    stop = False
+                    for root, _dirs, files in os.walk(_TASKS_DIR):
+                        for f in files:
+                            full = os.path.join(root, f)
+                            rel = os.path.relpath(full, _TASKS_DIR)
+                            snap[PERSIST_SCHEDULED_TASK][rel] = ""
+                            if _tick():
+                                truncated.append("scheduled_tasks")
+                                stop = True
+                                break
+                        if stop:
                             break
-                    if stop:
-                        break
             # Startup folders - files (cheap).
-            for d in _startup_dirs():
-                try:
-                    for f in os.listdir(d):
-                        if f.lower() == "desktop.ini":
-                            continue
-                        snap[PERSIST_STARTUP_FOLDER][os.path.join(d, f)] = os.path.join(d, f)
-                        _tick()
-                except OSError:
-                    continue
+            with self._diagnostics.stage("startup_folders"):
+                for d in _startup_dirs():
+                    try:
+                        for f in os.listdir(d):
+                            if f.lower() == "desktop.ini":
+                                continue
+                            snap[PERSIST_STARTUP_FOLDER][os.path.join(d, f)] = os.path.join(d, f)
+                            _tick()
+                    except OSError:
+                        continue
         except Exception:
             pass
 
@@ -416,28 +440,51 @@ class PersistenceCollector:
             "poll_interval_s": self._interval,
             "last_poll_completed_at": self.last_poll_completed_at,
             "exception_count": self.exception_count,
+            # Non-empty means the most recent poll deferred some work rather
+            # than silently dropping or blocking on it - see snapshot()'s and
+            # poll_once()'s docstrings for which budget triggered it.
+            "truncated": list(self._truncated),
             # The honest headline: a caller that acts on this collector's
             # silence before the baseline exists is acting on nothing.
             "detects_before_baseline": False,
-        }
+        } | self._diagnostics.status()
 
     def poll_once(self) -> int:
+        self._diagnostics.poll_started()
         try:
             new = self.snapshot()
             if self._last is None:
                 self._last = new
                 return 0
-            count = 0
-            for activity, entries in new.items():
-                prev = self._last.get(activity, {})
-                for identity, value in entries.items():
-                    if identity not in prev:
-                        self._emit_new(activity, identity, value)
-                        count += 1
-            self._last = new
+            with self._diagnostics.stage("diff_normalize_emit"):
+                count = 0
+                deadline = time.monotonic() + self._emit_budget
+                budget_spent = False
+                next_last: dict = {}
+                for activity, entries in new.items():
+                    prev = self._last.get(activity, {})
+                    kept: dict = {}
+                    for identity, value in entries.items():
+                        if identity not in prev:
+                            if budget_spent or time.monotonic() >= deadline:
+                                # Defer: leave this identity OUT of the new
+                                # baseline so the next poll's diff rediscovers
+                                # it and gets another chance to emit, instead
+                                # of a slow/contended emit holding this whole
+                                # cycle (and last_poll_completed_at) hostage.
+                                budget_spent = True
+                                continue
+                            self._emit_new(activity, identity, value)
+                            count += 1
+                        kept[identity] = value
+                    next_last[activity] = kept
+                self._last = next_last
+                if budget_spent:
+                    self._truncated = self._truncated + ["diff_normalize_emit"]
             return count
         finally:
             self.last_poll_completed_at = time.time()
+            self._diagnostics.poll_completed()
 
     # -- lifecycle ----------------------------------------------------------
     def start(self) -> None:

@@ -145,6 +145,108 @@ def main() -> int:
     finally:
         NT._PSUTIL = real_flag
 
+    print("\n[9] snapshot() reuses a cached exe() path across polls for the "
+          "same (pid, create_time) - Beta 0.5 audit found NetworkCollector "
+          "had the same wasted-syscall shape as ProcessCollector's pr.exe() "
+          "bug (docs/BETA_0_5_TELEMETRY_RELIABILITY.md)")
+
+    class _FakeAddr2:
+        def __init__(self, ip, port):
+            self.ip = ip
+            self.port = port
+
+    class _FakeConn2:
+        def __init__(self, raddr, pid, status="ESTABLISHED"):
+            self.raddr = raddr
+            self.pid = pid
+            self.status = status
+
+    class _FakeProcess2:
+        def __init__(self, pid, create_time, path=r"C:\tools\curl.exe"):
+            self._pid = pid
+            self._create_time = create_time
+            self._path = path
+            self.exe_calls = 0
+
+        def name(self):
+            return "curl.exe"
+
+        def create_time(self):
+            return self._create_time
+
+        def exe(self):
+            self.exe_calls += 1
+            return self._path
+
+    _current9 = [_FakeProcess2(7777, 5000.0)]
+
+    class _FakePsutil2:
+        @staticmethod
+        def net_connections(kind="inet"):
+            return [_FakeConn2(_FakeAddr2("8.8.8.8", 443), 7777)]
+
+        @staticmethod
+        def Process(pid):
+            return _current9[0]
+
+    real_flag9 = NT._PSUTIL
+    real_psutil9 = NT.psutil if real_flag9 else None
+    NT.psutil = _FakePsutil2()
+    NT._PSUTIL = True
+    try:
+        col9 = NetworkCollector(emit=lambda e: None, ip_reputation=lambda ip: False)
+        col9.snapshot()
+        _check("first snapshot resolves exe() once", _current9[0].exe_calls == 1)
+        col9.snapshot()
+        _check("second snapshot for the SAME (pid, create_time) does not "
+               "call exe() again", _current9[0].exe_calls == 1)
+
+        print("  [9b] pid reuse with a DIFFERENT create_time is inspected fresh")
+        _current9[0] = _FakeProcess2(7777, 9999.0)
+        col9.snapshot()
+        _check("a new create_time under the same pid re-resolves exe()",
+               _current9[0].exe_calls == 1)
+    finally:
+        NT._PSUTIL = real_flag9
+        if real_psutil9 is not None:
+            NT.psutil = real_psutil9
+
+    print("\n[10] poll_once() emit_budget defers a not-yet-scored connection "
+          "to the next poll instead of losing it (same pattern as "
+          "ProcessCollector/PersistenceCollector's emit_budget fix)")
+    import time as _time
+
+    c1 = ConnInfo(21, "a.exe", "1.1.1.1", 80)
+    c2 = ConnInfo(22, "b.exe", "185.220.101.5", 443)   # the threat-intel IP
+    rep10 = lambda ip: ip == "185.220.101.5"
+    emitted10: list = []
+    col10 = NetworkCollector(emit=emitted10.append, ip_reputation=rep10, emit_budget=1.0)
+    seq10 = iter([{}, {c1.key(): c1, c2.key(): c2}])
+    col10.snapshot = lambda: next(seq10)   # type: ignore[assignment]
+    col10.poll_once()   # baseline (empty)
+
+    real_monotonic = _time.monotonic
+    _budget_returns = iter([0.0, 0.5])   # deadline=1.0; c1 checked at 0.5 (ok); c2's check exhausts the iterator
+    _time.monotonic = lambda: next(_budget_returns, 999.0)
+    try:
+        n10 = col10.poll_once()
+    finally:
+        _time.monotonic = real_monotonic
+    _check("budget-limited cycle does not score/emit the connection past "
+           "the deadline", n10 == 0)
+    _check("status reports the diff_score_emit stage as truncated",
+           "diff_score_emit" in col10.status()["truncated"])
+
+    seq10b = iter([{c1.key(): c1, c2.key(): c2}])
+    col10.snapshot = lambda: next(seq10b)   # type: ignore[assignment]
+    n10b = col10.poll_once()   # real time now - budget is not a constraint
+    _check("the deferred connection is rediscovered and scored on the next poll",
+           n10b == 1 and len(emitted10) == 1)
+    _check("emitted event is the deferred (threat-intel) connection",
+           emitted10 and emitted10[0].target["ip"] == "185.220.101.5")
+    _check("truncated clears once a cycle completes within budget",
+           col10.status()["truncated"] == [])
+
     print("\n" + "=" * 48)
     if _FAILURES:
         print(f"FAILED: {len(_FAILURES)} check(s)")

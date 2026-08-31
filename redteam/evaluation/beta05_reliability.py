@@ -21,6 +21,8 @@ Modes:
     dry-run     CI, ~5 minutes, validates the harness + artifact pipeline.
     fault-test  CI, boots with the debug fault collector, freezes it mid-run,
                 proves DEGRADED then real-recovery-to-HEALTHY.
+    contention  CI, same soak workload on one fresh runner, stopping at the
+                first API timeout or stale transition and dumping attribution.
     soak        CI, the real 20-30 minute qualification run.
 
 Usage:
@@ -38,6 +40,7 @@ import os
 import platform
 import shutil
 import socket
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -110,6 +113,16 @@ def _get(api_base: str, path: str, timeout: float = 8.0):
         return json.load(r)
 
 
+def _safe_get(api_base: str, path: str, timeout: float = 5.0) -> dict:
+    """Like _get, but never raises - a before/after snapshot read that fails
+    (the engine briefly or permanently unreachable, see Beta 0.5.5) must not
+    crash the whole harness and discard every sample already collected."""
+    try:
+        return _get(api_base, path, timeout=timeout)
+    except Exception:                              # noqa: BLE001
+        return {}
+
+
 def _post(api_base: str, path: str, timeout: float = 8.0):
     req = urllib.request.Request(f"{api_base}{path}", method="POST", data=b"")
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -127,14 +140,19 @@ def start_engine(extra_env: dict | None = None) -> tuple[subprocess.Popen, str, 
            "--web", "--web-port", str(port)]
     print(f"[ENGINE] starting: {' '.join(cmd)}")
     print(f"[ENGINE] isolated data dir: {data_dir}")
+    log_path = RESULTS_DIR / "beta05_engine.log"
+    log_fh = open(log_path, "w", encoding="utf-8")
     proc = subprocess.Popen(cmd, cwd=str(_ROOT), env=env,
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            stdout=log_fh, stderr=subprocess.STDOUT,
                             text=True, encoding="utf-8", errors="replace")
+    proc._beta05_log_fh = log_fh  # type: ignore[attr-defined]
+    proc._beta05_log_path = log_path  # type: ignore[attr-defined]
     api_base = f"http://127.0.0.1:{port}"
     deadline = time.time() + BOOT_TIMEOUT_S
     while time.time() < deadline:
         if proc.poll() is not None:
-            out = (proc.stdout.read() or "")[-4000:]
+            log_fh.flush()
+            out = log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
             raise RuntimeError(f"engine exited during startup:\n{out}")
         try:
             _get(api_base, "/api/health", timeout=3.0)
@@ -147,14 +165,18 @@ def start_engine(extra_env: dict | None = None) -> tuple[subprocess.Popen, str, 
 
 
 def stop_engine(proc: subprocess.Popen) -> str:
-    if proc.poll() is not None:
-        return proc.stdout.read() or ""
-    proc.terminate()
-    try:
-        return proc.communicate(timeout=15)[0] or ""
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        return proc.communicate()[0] or ""
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+    log_fh = getattr(proc, "_beta05_log_fh", None)
+    if log_fh:
+        log_fh.close()
+    path = getattr(proc, "_beta05_log_path", None)
+    return path.read_text(encoding="utf-8", errors="replace") if path else ""
 
 
 def wait_for_real_readiness(api_base: str, timeout_s: float = READY_TIMEOUT_S) -> dict:
@@ -167,7 +189,16 @@ def wait_for_real_readiness(api_base: str, timeout_s: float = READY_TIMEOUT_S) -
     while time.time() < deadline:
         try:
             last = _get(api_base, "/api/telemetry/watchdog", timeout=5.0)
-            if last.get("overall") == "HEALTHY":
+            sources = last.get("sources") or {}
+            real_sources_ready = bool(sources) and all(
+                src.get("available")
+                and (src.get("status") or {}).get("running") is not False
+                and float((src.get("status") or {}).get("last_poll_completed_at", 0) or 0) > 0
+                for name, src in sources.items()
+                if name != "debug_fault_collector"
+            )
+            loop_ready = bool((last.get("loop") or {}).get("beating"))
+            if last.get("overall") == "HEALTHY" and real_sources_ready and loop_ready:
                 print(f"[READY] watchdog reports HEALTHY: {last.get('sources', {}).keys()}")
                 return last
         except Exception as exc:                      # noqa: BLE001
@@ -192,16 +223,34 @@ def run_command(argv: tuple[str, ...]) -> None:
         print(f"    !! {exc}")
 
 
-def run_benign_activity(duration_s: float, gap_s: float = 3.0) -> None:
+def run_benign_activity(duration_s: float, gap_s: float = 3.0,
+                        stop_event: threading.Event | None = None) -> None:
     """Phase B / D / E's stimulus: ordinary process launches, harmless
     registry reads, and (via netstat) a look at real outbound connections -
     spaced out, never bursted."""
     deadline = time.time() + duration_s
     i = 0
     while time.time() < deadline:
+        if stop_event and stop_event.is_set():
+            return
         run_command(_BENIGN_COMMANDS[i % len(_BENIGN_COMMANDS)])
         i += 1
-        time.sleep(gap_s)
+        if stop_event:
+            stop_event.wait(gap_s)
+        else:
+            time.sleep(gap_s)
+
+
+# run_live_evaluation.ps1's OWN worst-case, not a guess: its readiness gate
+# alone (-ReadyTimeoutSeconds, default 420) tolerates gaps and can legitimately
+# take the full 420s before a single technique runs, plus up to
+# -DetectWindowSeconds (30) per technique for all 3 PHASE_C_TECHNIQUE_IDS. A
+# harness timeout shorter than that budget is a harness bug, not a reliability
+# finding - run 3 of the 2026-08-30 soak hit exactly this: killed at 300s while
+# still legitimately inside the script's own documented wait, discarding every
+# sample the run had collected because the RuntimeError below used to escape
+# uncaught. 600s leaves real margin over the 420 + 3*30 = 510s worst case.
+PHASE_C_TIMEOUT_S = 600
 
 
 def run_phase_c(api_base: str) -> bool:
@@ -221,15 +270,24 @@ def run_phase_c(api_base: str) -> bool:
            "-ApiBase", api_base, "-DetectWindowSeconds", "30", "-SkipDestructive"]
     print(f"[PHASE C] {' '.join(cmd)}")
     try:
-        result = subprocess.run(cmd, cwd=str(_ROOT), timeout=300,
+        result = subprocess.run(cmd, cwd=str(_ROOT), timeout=PHASE_C_TIMEOUT_S,
                                 capture_output=True, text=True,
                                 encoding="utf-8", errors="replace")
         print(result.stdout[-4000:])
         if result.returncode != 0:
             print(result.stderr[-2000:])
         return result.returncode == 0
-    except subprocess.TimeoutExpired:
-        print("[PHASE C] run_live_evaluation.ps1 timed out")
+    except subprocess.TimeoutExpired as exc:
+        # Print whatever the script had already written before the kill -
+        # without this, a real "stuck in its own readiness gate" vs. "hung
+        # mid-technique" distinction is unrecoverable after the fact (exactly
+        # what run 3 above lost).
+        print(f"[PHASE C] run_live_evaluation.ps1 timed out after "
+              f"{PHASE_C_TIMEOUT_S}s - partial output follows:")
+        if exc.stdout:
+            print(exc.stdout[-4000:])
+        if exc.stderr:
+            print(exc.stderr[-2000:])
         return False
 
 
@@ -244,13 +302,98 @@ class Transition:
     reasons: list = field(default_factory=list)
 
 
+# Reused psutil.Process handle per pid - psutil's cpu_percent() measures the
+# interval SINCE ITS OWN LAST CALL on that same Process object, so creating a
+# fresh Process() every sample would make every cpu_percent() reading
+# meaningless (always the instantaneous-since-process-start average). One
+# handle per pid across the whole run is required for this number to mean
+# anything sampled continuously.
+_ENGINE_PROC_HANDLES: dict[int, object] = {}
+
+
+def _engine_process_stats(pid: int | None) -> dict | None:
+    """Point-in-time resource snapshot of the engine process - memory,
+    handles, threads, CPU. Beta 0.5.5 found the engine process itself can go
+    completely unreachable mid-run; this exists to measure WHY (a resource
+    trending toward a wall) instead of guessing, on every sample rather than
+    only at the moment something already failed."""
+    if not pid:
+        return None
+    try:
+        import psutil
+    except ImportError:
+        return None
+    try:
+        proc = _ENGINE_PROC_HANDLES.get(pid)
+        if proc is None:
+            proc = psutil.Process(pid)
+            _ENGINE_PROC_HANDLES[pid] = proc
+        with proc.oneshot():
+            return {
+                "pid": proc.pid,
+                "cpu_percent": proc.cpu_percent(),
+                "rss": proc.memory_info().rss,
+                "vms": proc.memory_info().vms,
+                "threads": proc.num_threads(),
+                "handles": proc.num_handles() if hasattr(proc, "num_handles") else None,
+            }
+    except Exception as exc:                          # noqa: BLE001
+        # Includes psutil.NoSuchProcess - itself useful evidence: it means
+        # the process had ALREADY exited by the time this sample ran, not
+        # merely that it was slow to answer.
+        return {"error": repr(exc)}
+
+
+# 2026-08-31 review: engine cpu_percent() alone cannot distinguish "the
+# engine itself is expensive" from "the whole runner is out of headroom" -
+# psutil expresses process cpu_percent() relative to ONE logical CPU, so a
+# measured 64% median on a 2-vCPU runner is ~0.64 of one core, not 64% of
+# total capacity. System-wide (and per-core) CPU is the other half of that
+# comparison and was previously never captured. Primed once via
+# _prime_system_cpu() before real sampling begins, matching the same
+# since-last-call contract _engine_process_stats() already relies on.
+def _prime_system_cpu() -> None:
+    try:
+        import psutil
+        psutil.cpu_percent(interval=None)
+        psutil.cpu_percent(interval=None, percpu=True)
+    except ImportError:
+        pass
+
+
+def _cpu_hardware_info() -> dict:
+    try:
+        import psutil
+        return {
+            "logical_cpus": psutil.cpu_count(logical=True),
+            "physical_cpus": psutil.cpu_count(logical=False),
+        }
+    except ImportError:
+        return {"logical_cpus": None, "physical_cpus": None}
+
+
+def _system_cpu_stats() -> dict | None:
+    try:
+        import psutil
+    except ImportError:
+        return None
+    try:
+        return {
+            "system_cpu_percent": psutil.cpu_percent(interval=None),
+            "per_cpu_percent": psutil.cpu_percent(interval=None, percpu=True),
+        }
+    except Exception as exc:                           # noqa: BLE001
+        return {"error": repr(exc)}
+
+
 class Sampler:
     """Background thread sampling the running engine every SAMPLE_INTERVAL_S,
     independent of phase boundaries. Streams every sample to a JSONL file as
     it is taken (crash-proof, matching this project's Tier B convention) and
     keeps derived state a scoring pass reads afterward."""
 
-    def __init__(self, api_base: str, out_path: Path) -> None:
+    def __init__(self, api_base: str, out_path: Path, engine_pid: int | None = None,
+                 stop_on_failure: bool = False) -> None:
         self._api_base = api_base
         self._out_path = out_path
         self._stop = threading.Event()
@@ -262,15 +405,39 @@ class Sampler:
         self.health_successes = 0
         self._prev_overall: str | None = None
         self._prev_reasons: list = []
+        self._engine_pid = engine_pid
+        self._stop_on_failure = stop_on_failure
+        self.failure = threading.Event()
+        self.first_failure: dict | None = None
 
     def start(self) -> None:
+        # Prime both CPU measurements exactly once, in every mode, without
+        # needing every call site to remember to - psutil's cpu_percent()
+        # (system AND per-process) is meaningless on its own first call
+        # (compares against process/boot start, not a real interval).
+        _prime_system_cpu()
+        if self._engine_pid:
+            _engine_process_stats(self._engine_pid)
         self._thread = threading.Thread(target=self._loop, daemon=True, name="beta05-sampler")
         self._thread.start()
+
+    # A join() timeout shorter than the worst case an in-flight _sample_once()
+    # can legitimately take is a real bug, not a safety margin: it lets the
+    # main thread read self.first_failure/self.samples while the background
+    # thread is still mid-write, silently losing the exact failure this
+    # class exists to capture (Beta 0.5.6 - a genuinely unreachable engine
+    # produced 4 sequential 5s _timed_get timeouts = ~20s, then
+    # _capture_failure's own /api/telemetry/contention call added another
+    # up to 5s before self.first_failure was actually assigned - a run's
+    # 10s join gave up first, and the reported "no failure" was wrong: the
+    # failure had already happened, it just hadn't finished being written
+    # down yet). 60s comfortably covers that worst case with real margin.
+    _STOP_JOIN_TIMEOUT_S = 60.0
 
     def stop(self) -> None:
         self._stop.set()
         if self._thread:
-            self._thread.join(timeout=10)
+            self._thread.join(timeout=self._STOP_JOIN_TIMEOUT_S)
 
     def _loop(self) -> None:
         with open(self._out_path, "a", encoding="utf-8") as fh:
@@ -279,25 +446,110 @@ class Sampler:
                 self.samples.append(rec)
                 fh.write(json.dumps(rec, default=str) + "\n")
                 fh.flush()
+                if self._stop_on_failure and self._failure_reason(rec):
+                    self.first_failure = self._capture_failure(rec)
+                    fh.write(json.dumps({"contention_failure": self.first_failure}, default=str) + "\n")
+                    fh.flush()
+                    self.failure.set()
+                    return
                 self._stop.wait(SAMPLE_INTERVAL_S)
+
+    @staticmethod
+    def _failure_reason(rec: dict) -> str | None:
+        if not rec.get("health_ok"):
+            return "api_health_failure"
+        for name in ("watchdog", "causality", "sensors"):
+            request = (rec.get("requests") or {}).get(name) or {}
+            if not request.get("ok"):
+                return f"api_{name}_failure"
+        wd = rec.get("watchdog") or {}
+        if wd.get("overall") == "DEGRADED":
+            return "watchdog_degraded"
+        return None
+
+    def _capture_failure(self, rec: dict) -> dict:
+        result = {"detected_at": time.time(), "phase": self.current_phase,
+                  "reason": self._failure_reason(rec), "trigger_sample": rec}
+        try:
+            result["contention_endpoint"] = _get(
+                self._api_base, "/api/telemetry/contention", timeout=5.0)
+        except Exception as exc:
+            result["contention_endpoint_error"] = repr(exc)
+        # rec already carries a fresh engine_process reading from this same
+        # sample cycle (see _sample_once) - reuse it rather than taking a
+        # second, slightly later one.
+        result["engine_process"] = rec.get("engine_process")
+        return result
+
+    def _timed_get(self, label: str, path: str) -> tuple[object | None, dict]:
+        started_wall = time.time()
+        started = time.monotonic()
+        request = {"started_at": started_wall, "path": path}
+        try:
+            value = _get(self._api_base, path, timeout=5.0)
+            request.update(ok=True, ended_at=time.time(),
+                           duration_s=time.monotonic() - started)
+            return value, request
+        except Exception as exc:
+            request.update(ok=False, ended_at=time.time(),
+                           duration_s=time.monotonic() - started, error=repr(exc))
+            return None, request
 
     def _sample_once(self) -> dict:
         now = time.time()
         rec: dict = {"t": now, "phase": self.current_phase}
+        # Every sample, not only at failure time (Beta 0.5.5) - a resource
+        # trending toward a wall should be visible in a clean run's own
+        # data, not only reconstructable after the fact from one snapshot
+        # taken at the moment something already broke. system_cpu (2026-08-31
+        # review) is the other half of the comparison engine_process's own
+        # cpu_percent cannot make alone: psutil expresses process CPU
+        # relative to ONE logical CPU, so a measured engine median cannot by
+        # itself say whether the runner as a whole had headroom left.
+        rec["engine_process"] = _engine_process_stats(self._engine_pid)
+        rec["system_cpu"] = _system_cpu_stats()
 
-        t0 = time.monotonic()
+        rec["requests"] = {}
+        health, rec["requests"]["health"] = self._timed_get("health", "/api/health")
         try:
-            _get(self._api_base, "/api/health", timeout=5.0)
+            if health is None:
+                raise RuntimeError(rec["requests"]["health"].get("error"))
             rec["health_ok"] = True
-            rec["health_latency_s"] = time.monotonic() - t0
+            rec["health_latency_s"] = rec["requests"]["health"]["duration_s"]
             self.health_successes += 1
         except Exception as exc:                       # noqa: BLE001
             rec["health_ok"] = False
             rec["health_error"] = str(exc)
             self.health_failures += 1
 
+        if not rec["health_ok"]:
+            # Fail fast (2026-08-31 review, item 7): a dead health check
+            # almost always means the same listener serves every other
+            # endpoint too. Spending three more sequential 5s timeouts to
+            # prove that again is what inflated one failed sample from ~5s
+            # to ~20s in Beta 0.5.6/.7 - expensive enough that it was also
+            # what exposed the stop()/join race in the first place. This
+            # changes nothing about what gets SCORED: watchdog/causality/
+            # sensors already read as unavailable (None) on a real timeout;
+            # skipping the attempt only makes that same outcome cheaper to
+            # observe, not different. The qualification's own criteria
+            # (api_responsive, no_stale_while_healthy, etc.) are untouched.
+            skip = {"skipped": True, "reason": "health already failed this cycle"}
+            for name in ("watchdog", "causality", "sensors"):
+                rec["requests"][name] = dict(skip)
+            rec["watchdog"] = None
+            rec["watchdog_error"] = "skipped: health already failed"
+            rec["causality_stats"] = None
+            rec["causality_error"] = "skipped: health already failed"
+            rec["sensors_status"] = None
+            rec["sensors_error"] = "skipped: health already failed"
+            return rec
+
         try:
-            wd = _get(self._api_base, "/api/telemetry/watchdog", timeout=5.0)
+            wd, rec["requests"]["watchdog"] = self._timed_get(
+                "watchdog", "/api/telemetry/watchdog")
+            if wd is None:
+                raise RuntimeError(rec["requests"]["watchdog"].get("error"))
             rec["watchdog"] = wd
             overall = wd.get("overall")
             reasons = wd.get("degraded_reasons", [])
@@ -311,15 +563,17 @@ class Sampler:
             rec["watchdog"] = None
             rec["watchdog_error"] = str(exc)
 
-        try:
-            rec["causality_stats"] = _get(self._api_base, "/api/edr/causality/stats", timeout=5.0)
-        except Exception as exc:                         # noqa: BLE001
+        rec["causality_stats"], rec["requests"]["causality"] = self._timed_get(
+            "causality", "/api/edr/causality/stats")
+        if rec["causality_stats"] is None:
+            exc = rec["requests"]["causality"].get("error")
             rec["causality_stats"] = None
             rec["causality_error"] = str(exc)
 
-        try:
-            rec["sensors_status"] = _get(self._api_base, "/api/sensors/status", timeout=5.0)
-        except Exception as exc:                          # noqa: BLE001
+        rec["sensors_status"], rec["requests"]["sensors"] = self._timed_get(
+            "sensors", "/api/sensors/status")
+        if rec["sensors_status"] is None:
+            exc = rec["requests"]["sensors"].get("error")
             rec["sensors_status"] = None
             rec["sensors_error"] = str(exc)
 
@@ -344,8 +598,17 @@ def _independent_stale_bound(interval: float) -> float:
 def score(samples: list[dict], transitions: list[Transition],
          health_failures: int, health_successes: int,
          causality_before_c: int | None, causality_after_c: int | None,
-         mode: str) -> dict:
+         mode: str, phase_c_failures: list[str] | None = None,
+         engine_exit_code: int | None = None) -> dict:
     checks: dict[str, dict] = {}
+
+    # The engine process disappearing entirely is a distinct, more
+    # fundamental failure than any per-collector or per-request check can
+    # see on its own (Beta 0.5.5) - checked directly against the subprocess.
+    checks["engine_process_alive_throughout"] = {
+        "pass": engine_exit_code is None,
+        "detail": {"exit_code": engine_exit_code} if engine_exit_code is not None else {},
+    }
 
     # 1. Zero silent collector deaths.
     dead = []
@@ -399,13 +662,61 @@ def score(samples: list[dict], transitions: list[Transition],
         "detail": {"worst_drift_seconds": worst_stall, "stalls_over_5s": stalls[:10]},
     }
 
-    # 4. Every wired collector completes repeated polls throughout the run -
-    #    already covered by check 2's per-sample sweep, but report distinctly
-    #    since it is a separate predeclared criterion (per-sample coverage,
-    #    not just start/end).
+    # A soak has no deliberate fault injection. Any DEGRADED sample therefore
+    # means the watchdog observed a real reliability breach, even if the source
+    # later recovered and accumulated many distinct polls overall. Eventual
+    # recovery must not erase a minute-long persistence stall from the verdict.
+    unexpected_degraded = []
+    if mode != "fault-test":
+        for rec in samples:
+            wd = rec.get("watchdog") or {}
+            if wd.get("overall") == "DEGRADED":
+                unexpected_degraded.append(
+                    (rec["t"], rec.get("phase"), wd.get("degraded_reasons", [])))
+    checks["no_unexpected_degraded_intervals"] = {
+        "pass": len(unexpected_degraded) == 0,
+        "detail": unexpected_degraded[:20],
+    }
+
+    # 4. Every wired collector must actually exist and complete repeated polls.
+    #    "not_available" is not progress, and check 2 intentionally skips a
+    #    missing status, so derive this independently rather than aliasing it.
+    source_names = sorted({
+        name
+        for rec in samples
+        for name in (((rec.get("watchdog") or {}).get("sources") or {}).keys())
+        if name != "debug_fault_collector"
+    })
+    progress_detail = {}
+    collectors_advance = bool(source_names)
+    for name in source_names:
+        observations = [
+            ((rec.get("watchdog") or {}).get("sources") or {}).get(name) or {}
+            for rec in samples
+        ]
+        available = [src for src in observations if src.get("available")]
+        polls = {
+            float((src.get("status") or {}).get("last_poll_completed_at", 0) or 0)
+            for src in available
+            if float((src.get("status") or {}).get("last_poll_completed_at", 0) or 0) > 0
+        }
+        healthy = [src for src in observations if src.get("healthy")]
+        ok = (len(available) == len(observations)
+              and len(healthy) == len(observations)
+              and len(polls) >= 2)
+        collectors_advance = collectors_advance and ok
+        progress_detail[name] = {
+            "available_samples": len(available),
+            "total_samples": len(observations),
+            "healthy_samples": len(healthy),
+            "distinct_completed_polls": len(polls),
+            "pass": ok,
+        }
     checks["collectors_advance_throughout"] = {
-        "pass": checks["no_stale_while_healthy"]["pass"] and checks["no_silent_collector_deaths"]["pass"],
-        "detail": f"{len(samples)} samples evaluated",
+        "pass": (collectors_advance
+                 and checks["no_stale_while_healthy"]["pass"]
+                 and checks["no_silent_collector_deaths"]["pass"]),
+        "detail": progress_detail,
     }
 
     # 5. API stays responsive.
@@ -427,6 +738,16 @@ def score(samples: list[dict], transitions: list[Transition],
             "detail": "not measured this run (phase C skipped or counters unavailable)",
         }
 
+    # A Tier B subset invocation (phase C's own run, or its Phase E rerun)
+    # that fails or times out is a real finding, but it must be SCORED, not
+    # allowed to crash the harness and discard every sample already
+    # collected - run 3 of the 2026-08-30 soak lost its entire evidence
+    # trail to exactly this before this check existed.
+    checks["phase_c_technique_execution_completed"] = {
+        "pass": not phase_c_failures,
+        "detail": phase_c_failures or [],
+    }
+
     # 7. Fault-test only: a degraded-then-recovered pair was observed.
     if mode == "fault-test":
         has_degraded = any(t.kind == "degraded" for t in transitions)
@@ -437,7 +758,96 @@ def score(samples: list[dict], transitions: list[Transition],
         }
 
     overall_pass = all(c["pass"] for c in checks.values())
-    return {"overall": "PASS" if overall_pass else "FAIL", "checks": checks}
+    return {
+        "overall": "PASS" if overall_pass else "FAIL",
+        "checks": checks,
+        # Exploratory measurement, not yet a pass/fail gate (Beta 0.5.5) -
+        # no real-data-backed threshold exists yet for what "trending toward
+        # a wall" looks like for this engine on this runner class. Establish
+        # bounds from what this actually reports across real runs, the same
+        # way snapshot_budget/emit_budget were sized from measured numbers,
+        # not guessed ahead of any data.
+        "engine_resource_trend": _engine_resource_trend(samples),
+        # Per-phase CPU attribution (2026-08-31 review, item 2): a whole-run
+        # median hides WHERE the cost comes from. This project's own phases
+        # already isolate idle (A) from benign-only (B/D) from Tier-B-active
+        # (C/E) activity, so grouping by rec["phase"] gets that breakdown
+        # for free from a single run, without needing a separate experiment
+        # for each - though see run_profile() for the fully-isolated version
+        # (no prior-phase state, no phase-boundary confounds).
+        "phase_cpu_summary": _phase_cpu_summary(samples),
+        "cpu_hardware": _cpu_hardware_info(),
+    }
+
+
+def _percentile(vals: list[float], pct: float) -> float | None:
+    """Nearest-rank percentile - no dependency on Python 3.8+'s
+    statistics.quantiles edge-case behavior for small n, and well-defined
+    for pct=100 (the max) unlike some quantile implementations."""
+    if not vals:
+        return None
+    ordered = sorted(vals)
+    k = max(0, min(len(ordered) - 1, int(round(pct / 100.0 * (len(ordered) - 1)))))
+    return ordered[k]
+
+
+def _cpu_series_summary(vals: list[float]) -> dict | None:
+    if not vals:
+        return None
+    return {
+        "n": len(vals),
+        "median": statistics.median(vals),
+        "p95": _percentile(vals, 95),
+        "max": max(vals),
+        "pct_over_50": round(100.0 * sum(1 for v in vals if v > 50) / len(vals), 1),
+        "pct_over_80": round(100.0 * sum(1 for v in vals if v > 80) / len(vals), 1),
+    }
+
+
+def _phase_cpu_summary(samples: list[dict]) -> dict:
+    by_phase: dict[str, dict[str, list[float]]] = {}
+    for rec in samples:
+        phase = rec.get("phase") or "?"
+        bucket = by_phase.setdefault(phase, {"engine": [], "system": []})
+        ep = rec.get("engine_process")
+        if ep and "error" not in ep and ep.get("cpu_percent") is not None:
+            bucket["engine"].append(ep["cpu_percent"])
+        sc = rec.get("system_cpu")
+        if sc and "error" not in sc and sc.get("system_cpu_percent") is not None:
+            bucket["system"].append(sc["system_cpu_percent"])
+    return {
+        phase: {
+            "engine_cpu": _cpu_series_summary(v["engine"]),
+            "system_cpu": _cpu_series_summary(v["system"]),
+        }
+        for phase, v in sorted(by_phase.items())
+    }
+
+
+def _engine_resource_trend(samples: list[dict]) -> dict:
+    points = [rec["engine_process"] for rec in samples
+             if rec.get("engine_process") and "error" not in rec["engine_process"]]
+    errors = [rec["engine_process"]["error"] for rec in samples
+             if rec.get("engine_process") and "error" in rec["engine_process"]]
+    if not points:
+        return {"samples": 0, "errors": errors[:5]}
+
+    def _series(key: str) -> list[int]:
+        return [p[key] for p in points if p.get(key) is not None]
+
+    def _summary(key: str) -> dict | None:
+        vals = _series(key)
+        if not vals:
+            return None
+        return {"first": vals[0], "last": vals[-1], "min": min(vals), "max": max(vals)}
+
+    return {
+        "samples": len(points),
+        "errors": errors[:5],          # e.g. NoSuchProcess - itself evidence
+        "rss_bytes": _summary("rss"),
+        "handles": _summary("handles"),
+        "threads": _summary("threads"),
+    }
 
 
 # =============================================================================
@@ -465,7 +875,7 @@ def run_smoke() -> int:
         out = RESULTS_DIR / "beta05_smoke.jsonl"
         if out.exists():
             out.unlink()
-        sampler = Sampler(api_base, out)
+        sampler = Sampler(api_base, out, engine_pid=proc.pid)
         sampler.start()
         sampler.current_phase = "A"
         time.sleep(6)
@@ -494,31 +904,47 @@ def run_dry_run() -> int:
         out = RESULTS_DIR / "beta05_dryrun.jsonl"
         if out.exists():
             out.unlink()
-        sampler = Sampler(api_base, out)
+        sampler = Sampler(api_base, out, engine_pid=proc.pid)
         sampler.start()
 
-        sampler.current_phase = "A"
-        time.sleep(60)
+        before_c: dict = {}
+        after_c: dict = {}
+        phase_c_failures: list[str] = []
+        unhandled_exception: str | None = None
+        try:
+            sampler.current_phase = "A"
+            time.sleep(60)
 
-        sampler.current_phase = "B"
-        run_benign_activity(90)
+            sampler.current_phase = "B"
+            run_benign_activity(90)
 
-        before_c = _get(api_base, "/api/edr/causality/stats", timeout=5.0)
-        sampler.current_phase = "C"
-        run_phase_c(api_base)
-        time.sleep(20)
-        after_c = _get(api_base, "/api/edr/causality/stats", timeout=5.0)
+            before_c = _safe_get(api_base, "/api/edr/causality/stats")
+            sampler.current_phase = "C"
+            if not run_phase_c(api_base):
+                phase_c_failures.append("phase_c")
+            time.sleep(20)
+            after_c = _safe_get(api_base, "/api/edr/causality/stats")
 
-        sampler.current_phase = "D"
-        run_benign_activity(60)
+            sampler.current_phase = "D"
+            run_benign_activity(60)
+        except Exception as exc:                     # noqa: BLE001
+            unhandled_exception = f"{type(exc).__name__}: {exc}"
+            print(f"[run_dry_run] unhandled exception during phase execution, "
+                  f"scoring what was already collected: {unhandled_exception}")
 
         sampler.stop()
+        engine_exit_code = proc.poll()
         result = score(sampler.samples, sampler.transitions,
                        sampler.health_failures, sampler.health_successes,
-                       before_c.get("nodes"), after_c.get("nodes"), "dry-run")
+                       before_c.get("nodes"), after_c.get("nodes"), "dry-run",
+                       phase_c_failures=phase_c_failures,
+                       engine_exit_code=engine_exit_code)
         result["mode"] = "dry-run"
         result["evidence"] = False
         result["note"] = "Validates the harness itself, not reliability. Not a qualification pass/fail."
+        if unhandled_exception:
+            result["unhandled_exception"] = unhandled_exception
+            result["overall"] = "FAIL"
         _write_summary("dryrun", result)
         print(json.dumps(result, indent=2, default=str))
         return 0
@@ -538,7 +964,7 @@ def run_fault_test() -> int:
         out = RESULTS_DIR / "beta05_faulttest.jsonl"
         if out.exists():
             out.unlink()
-        sampler = Sampler(api_base, out)
+        sampler = Sampler(api_base, out, engine_pid=proc.pid)
         sampler.start()
         sampler.current_phase = "baseline"
         time.sleep(6)
@@ -585,18 +1011,36 @@ def run_fault_test() -> int:
         shutil.rmtree(data_dir, ignore_errors=True)
 
 
-def run_soak(minutes: float) -> int:
+def run_soak(minutes: float, contention: bool = False) -> int:
     print("=" * 70)
-    print(f"MODE: soak -- CI, {minutes:.0f}-minute qualification run")
+    mode = "contention" if contention else "soak"
+    print(f"MODE: {mode} -- CI, {minutes:.0f}-minute "
+          f"{'first-failure attribution' if contention else 'qualification run'}")
     print("=" * 70)
     proc, api_base, data_dir = start_engine()
     try:
         wait_for_real_readiness(api_base)
-        out = RESULTS_DIR / "beta05_soak.jsonl"
+        out = RESULTS_DIR / f"beta05_{mode}.jsonl"
         if out.exists():
             out.unlink()
-        sampler = Sampler(api_base, out)
+        sampler = Sampler(api_base, out, engine_pid=proc.pid,
+                          stop_on_failure=contention)
         sampler.start()
+        # A Tier B subset failure/timeout is a scored finding
+        # (phase_c_technique_execution_completed), never an uncaught
+        # exception - the whole point is to keep every sample already
+        # collected instead of discarding it (see PHASE_C_TIMEOUT_S's
+        # docstring for the run that motivated this).
+        phase_c_failures: list[str] = []
+        before_c: dict = {}
+        after_c: dict = {}
+        unhandled_exception: str | None = None
+
+        def pause(seconds: float) -> None:
+            if contention:
+                sampler.failure.wait(seconds)
+            else:
+                time.sleep(seconds)
 
         total_s = minutes * 60.0
         # Fixed A/B/C/D budgets per the predeclared spec; whatever remains
@@ -605,44 +1049,254 @@ def run_soak(minutes: float) -> int:
         a_s, b_s, c_settle_s, d_s = 150.0, 300.0, 300.0, 300.0
         e_s = max(0.0, total_s - (a_s + b_s + c_settle_s + d_s))
 
-        sampler.current_phase = "A"
-        time.sleep(a_s)
+        # EVERYTHING below is wrapped: an engine that becomes briefly or
+        # permanently unreachable mid-run (Beta 0.5.5 - a real, unexplained
+        # finding, not a harness bug) must never crash this script and
+        # discard every sample already collected. Whatever samples exist by
+        # the time anything raises still get scored.
+        try:
+            sampler.current_phase = "A"
+            pause(a_s)
 
-        sampler.current_phase = "B"
-        run_benign_activity(b_s)
+            sampler.current_phase = "B"
+            run_benign_activity(b_s, stop_event=sampler.failure if contention else None)
 
-        before_c = _get(api_base, "/api/edr/causality/stats", timeout=5.0)
-        sampler.current_phase = "C"
-        run_phase_c(api_base)
-        elapsed = min(60.0, c_settle_s)
-        time.sleep(elapsed)
-        run_benign_activity(max(0.0, c_settle_s - elapsed))
-        after_c = _get(api_base, "/api/edr/causality/stats", timeout=5.0)
+            if not (contention and sampler.failure.is_set()):
+                before_c = _safe_get(api_base, "/api/edr/causality/stats")
 
-        sampler.current_phase = "D"
-        run_benign_activity(d_s)
+            sampler.current_phase = "C"
+            if not sampler.failure.is_set() and not run_phase_c(api_base):
+                phase_c_failures.append("phase_c")
+            elapsed = min(60.0, c_settle_s)
+            pause(elapsed)
+            run_benign_activity(max(0.0, c_settle_s - elapsed),
+                                stop_event=sampler.failure if contention else None)
+            if not sampler.failure.is_set():
+                after_c = _safe_get(api_base, "/api/edr/causality/stats")
 
-        sampler.current_phase = "E"
-        e_deadline = time.time() + e_s
-        toggle = 0
-        while time.time() < e_deadline:
-            remaining = e_deadline - time.time()
-            if toggle % 3 == 2 and remaining > 60:
-                run_phase_c(api_base)
-            else:
-                run_benign_activity(min(90.0, max(1.0, remaining)))
-            toggle += 1
+            sampler.current_phase = "D"
+            run_benign_activity(d_s, stop_event=sampler.failure if contention else None)
+
+            sampler.current_phase = "E"
+            e_deadline = time.time() + e_s
+            toggle = 0
+            while time.time() < e_deadline and not sampler.failure.is_set():
+                remaining = e_deadline - time.time()
+                if toggle % 3 == 2 and remaining > 60:
+                    if not run_phase_c(api_base):
+                        phase_c_failures.append(f"phase_e_toggle_{toggle}")
+                else:
+                    run_benign_activity(min(90.0, max(1.0, remaining)),
+                                        stop_event=sampler.failure if contention else None)
+                toggle += 1
+        except Exception as exc:                    # noqa: BLE001
+            unhandled_exception = f"{type(exc).__name__}: {exc}"
+            print(f"[run_soak] unhandled exception during phase execution, "
+                  f"scoring what was already collected: {unhandled_exception}")
 
         sampler.stop()
+        # Beta 0.5.5: the engine process disappearing entirely (not just one
+        # collector or one API call) is a distinct, more fundamental failure
+        # than anything the per-collector checks can see - checked directly
+        # against the subprocess, not inferred from HTTP errors alone.
+        engine_exit_code = proc.poll()
         result = score(sampler.samples, sampler.transitions,
                        sampler.health_failures, sampler.health_successes,
-                       before_c.get("nodes"), after_c.get("nodes"), "soak")
-        result["mode"] = "soak"
+                       before_c.get("nodes"), after_c.get("nodes"), mode,
+                       phase_c_failures=phase_c_failures,
+                       engine_exit_code=engine_exit_code)
+        result["mode"] = mode
         result["minutes"] = minutes
         result["platform"] = platform.platform()
-        _write_summary("soak", result)
+        if unhandled_exception:
+            result["unhandled_exception"] = unhandled_exception
+            result["overall"] = "FAIL"
+        if contention:
+            result["first_failure"] = sampler.first_failure
+            result["experiment_completed_without_failure"] = not sampler.failure.is_set()
+        _write_summary(mode, result)
         print(json.dumps(result, indent=2, default=str))
+        # Finding and preserving the failure is a successful attribution run.
+        if contention:
+            return 0 if sampler.first_failure is not None else 1
         return 0 if result["overall"] == "PASS" else 1
+    finally:
+        stop_engine(proc)
+        shutil.rmtree(data_dir, ignore_errors=True)
+
+
+def _rank_pyspy_raw(path: Path, top_n: int = 20) -> dict:
+    """Parse py-spy's 'raw' (folded-stack) output: each line is
+    'func_a;func_b;func_c N', N being the sample count for that exact call
+    stack. Ranks functions two ways without needing a flamegraph viewer to
+    read the answer: `leaf` (function was on top of the stack - the most
+    direct "actually executing" signal) and `inclusive` (function appeared
+    ANYWHERE in a sampled stack - broader, catches a hot callee shared by
+    several callers). Both are printed so CI logs name the hot function(s)
+    directly, per the 2026-08-31 review's item 4 ("not 'maybe X' - name the
+    actual function")."""
+    if not path.exists():
+        return {"error": "profile output missing", "top_functions_leaf": [],
+                "top_functions_inclusive": []}
+    from collections import Counter
+    leaf_counts: Counter = Counter()
+    frame_counts: Counter = Counter()
+    total_samples = 0
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                stack_part, count_part = line.rsplit(" ", 1)
+                count = int(count_part)
+            except ValueError:
+                continue
+            total_samples += count
+            frames = [f for f in stack_part.split(";") if f]
+            if frames:
+                leaf_counts[frames[-1]] += count
+            for f in set(frames):    # once per stack, not once per stack depth
+                frame_counts[f] += count
+    except Exception as exc:                             # noqa: BLE001
+        return {"error": repr(exc), "top_functions_leaf": [], "top_functions_inclusive": []}
+    if total_samples == 0:
+        return {"error": "no samples parsed (empty or malformed profile)",
+                "top_functions_leaf": [], "top_functions_inclusive": []}
+
+    def _top(counter: "Counter") -> list[dict]:
+        return [{"function": f, "samples": c,
+                 "pct_of_samples": round(100.0 * c / total_samples, 1)}
+                for f, c in counter.most_common(top_n)]
+
+    return {
+        "total_samples": total_samples,
+        "top_functions_leaf": _top(leaf_counts),
+        "top_functions_inclusive": _top(frame_counts),
+    }
+
+
+def _run_pyspy_profile(pid: int, duration_s: float, out_path: Path) -> dict:
+    """Attach py-spy (a SAMPLING profiler - reads the target's call stack
+    from outside at a fixed rate, no bytecode instrumentation) to the
+    engine process for a bounded window. Deliberately not cProfile: this is
+    a timing/contention investigation, and an instrumenting profiler's own
+    overhead would contaminate exactly the measurement being taken. Never
+    raises: profiling is diagnostic-only and must not crash the experiment
+    that is measuring the thing being profiled."""
+    pyspy = shutil.which("py-spy")
+    if not pyspy:
+        return {"error": "py-spy not installed", "top_functions_leaf": [],
+                "top_functions_inclusive": []}
+    cmd = [pyspy, "record", "--pid", str(pid), "--duration", str(int(duration_s)),
+          "--rate", "100", "--format", "raw", "--output", str(out_path)]
+    print(f"[PROFILE] {' '.join(cmd)}")
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                timeout=duration_s + 30)
+        if result.stdout:
+            print(result.stdout[-2000:])
+        if result.returncode != 0:
+            return {"error": f"py-spy exited {result.returncode}: {result.stderr[-1500:]}",
+                    "top_functions_leaf": [], "top_functions_inclusive": []}
+    except Exception as exc:                             # noqa: BLE001
+        return {"error": repr(exc), "top_functions_leaf": [], "top_functions_inclusive": []}
+    return _rank_pyspy_raw(out_path)
+
+
+def run_profile(workload: str, minutes: float, attach_profiler: bool = False) -> int:
+    """2026-08-31 review, item 3: controlled CPU-attribution experiments -
+    ONE variable held constant for the whole run, so idle/benign/full costs
+    can be compared without the confounds a single mixed A-E run carries
+    (accumulated causality-graph state, phase-boundary timing, prior
+    phases' side effects). Diagnostic only - deliberately does NOT run
+    score()'s qualification checks (item 9: a profiling change must never
+    bleed into or weaken the actual pass/fail criteria).
+
+    workload:
+      idle   - no harness-generated activity at all beyond sampling itself
+      benign - the benign command loop only, run_phase_c() never called
+      full   - benign loop + periodic Tier B subset reruns, matching
+               run_soak()'s existing Phase E shape exactly (same toggle
+               cadence), so it is the direct comparison point for that
+               phase's own numbers from a real qualification run
+    """
+    if workload not in ("idle", "benign", "full"):
+        raise ValueError(f"unknown workload: {workload!r}")
+    print("=" * 70)
+    print(f"MODE: profile ({workload}) -- CI, {minutes:.0f}-minute controlled "
+          f"CPU-attribution experiment - NOT a qualification pass/fail")
+    print("=" * 70)
+    proc, api_base, data_dir = start_engine()
+    try:
+        wait_for_real_readiness(api_base)
+        out = RESULTS_DIR / f"beta05_profile_{workload}.jsonl"
+        if out.exists():
+            out.unlink()
+        sampler = Sampler(api_base, out, engine_pid=proc.pid)
+        sampler.start()
+        sampler.current_phase = f"profile_{workload}"
+
+        before = _safe_get(api_base, "/api/edr/causality/stats")
+        unhandled_exception: str | None = None
+        profile_result: dict | None = None
+        try:
+            deadline = time.time() + minutes * 60.0
+            if attach_profiler:
+                # A short settle window after readiness so the profile
+                # captures steady-state behavior, not startup - then sample
+                # for a meaningful chunk of what's left, capped so the
+                # profiler itself never dominates a short experiment's
+                # duration. Runs as one blocking step: the Sampler keeps
+                # recording CPU/health on its own background thread the
+                # whole time regardless, so nothing about the CPU
+                # comparison numbers is disturbed by profiling running
+                # concurrently with them.
+                time.sleep(min(20.0, max(0.0, deadline - time.time() - 30.0)))
+                duration_s = min(90.0, max(10.0, (deadline - time.time()) * 0.6))
+                raw_path = RESULTS_DIR / f"beta05_profile_{workload}_pyspy.raw"
+                profile_result = _run_pyspy_profile(proc.pid, duration_s, raw_path)
+            toggle = 0
+            while time.time() < deadline:
+                remaining = deadline - time.time()
+                if workload == "idle":
+                    time.sleep(min(5.0, max(0.1, remaining)))
+                elif workload == "benign":
+                    run_benign_activity(min(90.0, max(1.0, remaining)))
+                else:  # full - identical shape to run_soak()'s Phase E
+                    if toggle % 3 == 2 and remaining > 60:
+                        run_phase_c(api_base)
+                    else:
+                        run_benign_activity(min(90.0, max(1.0, remaining)))
+                toggle += 1
+        except Exception as exc:                        # noqa: BLE001
+            unhandled_exception = f"{type(exc).__name__}: {exc}"
+            print(f"[run_profile] unhandled exception, reporting what was "
+                  f"already collected: {unhandled_exception}")
+
+        sampler.stop()
+        after = _safe_get(api_base, "/api/edr/causality/stats")
+        engine_exit_code = proc.poll()
+
+        result = {
+            "mode": f"profile_{workload}",
+            "minutes": minutes,
+            "platform": platform.platform(),
+            "cpu_hardware": _cpu_hardware_info(),
+            "engine_exit_code": engine_exit_code,
+            "api_health_failures": sampler.health_failures,
+            "api_health_successes": sampler.health_successes,
+            "causality_nodes": {"before": before.get("nodes"), "after": after.get("nodes")},
+            "phase_cpu_summary": _phase_cpu_summary(sampler.samples),
+            "engine_resource_trend": _engine_resource_trend(sampler.samples),
+        }
+        if profile_result is not None:
+            result["pyspy_profile"] = profile_result
+        if unhandled_exception:
+            result["unhandled_exception"] = unhandled_exception
+        _write_summary(f"profile_{workload}", result)
+        print(json.dumps(result, indent=2, default=str))
+        return 0
     finally:
         stop_engine(proc)
         shutil.rmtree(data_dir, ignore_errors=True)
@@ -650,10 +1304,16 @@ def run_soak(minutes: float) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--mode", choices=["smoke", "dry-run", "fault-test", "soak"],
+    ap.add_argument("--mode",
+                    choices=["smoke", "dry-run", "fault-test", "contention", "soak", "profile"],
                     required=True)
     ap.add_argument("--minutes", type=float, default=25.0,
-                    help="soak mode only: total qualification duration in minutes")
+                    help="soak/contention/profile modes: total duration in minutes")
+    ap.add_argument("--workload", choices=["idle", "benign", "full"], default=None,
+                    help="profile mode only: which of the 3 controlled experiments to run")
+    ap.add_argument("--attach-pyspy", action="store_true",
+                    help="profile mode only: attach py-spy (a sampling profiler) to "
+                        "the engine for part of the run and rank hot functions")
     args = ap.parse_args()
 
     if args.mode == "smoke":
@@ -662,6 +1322,13 @@ def main() -> int:
         return run_dry_run()
     if args.mode == "fault-test":
         return run_fault_test()
+    if args.mode == "contention":
+        return run_soak(args.minutes, contention=True)
+    if args.mode == "profile":
+        if not args.workload:
+            print("profile mode requires --workload {idle,benign,full}", file=sys.stderr)
+            return 2
+        return run_profile(args.workload, args.minutes, attach_profiler=args.attach_pyspy)
     return run_soak(args.minutes)
 
 

@@ -28,6 +28,7 @@ def _check(label: str, ok: bool) -> None:
 
 def main() -> int:
     import tempfile
+    import time
     from valkyrie.browser_cred_watch import CredentialStoreWatch, credential_store_paths
     from valkyrie import telemetry as T
 
@@ -94,12 +95,17 @@ def main() -> int:
             self.path = path
 
     class _FakeProc:
-        def __init__(self, pid, name, files):
+        def __init__(self, pid, name, files, create_time=1000.0, raise_on_open=False):
             self.pid = pid
-            self.info = {"pid": pid, "name": name}
+            self.info = {"pid": pid, "name": name, "create_time": create_time}
             self._files = files
+            self._raise_on_open = raise_on_open
+            self.open_files_calls = 0
 
         def open_files(self):
+            self.open_files_calls += 1
+            if self._raise_on_open:
+                raise PermissionError("access denied (simulated)")
             return [_FakeFile(p) for p in self._files]
 
     target = r"c:\users\alice\appdata\local\google\chrome\user data\default\login data"
@@ -121,6 +127,75 @@ def main() -> int:
                    any(h["pid"] == 200 for h in hits))
             _check("a process with no matching open file is not flagged",
                    not any(h["pid"] == 300 for h in hits))
+        finally:
+            bcw.psutil.process_iter = orig_process_iter
+    else:
+        print("  SKIP (psutil not installed)")
+
+    print("\n[7]-[11] Identity-cached open_files() (Beta 0.5.9: a live profile "
+          "found this call was 70.7% of idle CPU - see "
+          "docs/BETA_0_5_TELEMETRY_RELIABILITY.md). Six required checks:")
+    if bcw._PSUTIL:
+        proc_a = _FakeProc(500, "suspicious.exe", [target.upper()], create_time=2000.0)
+
+        print("  [7] a newly-created non-browser process still gets inspected")
+        bcw.psutil.process_iter = lambda *a, **k: [proc_a]
+        try:
+            watch7 = CredentialStoreWatch(emit=lambda ev: None, backstop_interval=60.0)
+            watch7._paths_lower = {target}
+            hits7 = watch7._scan()
+            _check("first-ever scan inspects the new process",
+                   proc_a.open_files_calls == 1)
+            _check("and correctly flags it", any(h["pid"] == 500 for h in hits7))
+
+            print("  [8] the SAME (pid, create_time) does not pay open_files() "
+                  "again on the very next poll")
+            watch7._scan()
+            _check("second scan (well within backstop_interval) does NOT "
+                   "call open_files() again", proc_a.open_files_calls == 1)
+
+            print("  [9] PID reuse with a DIFFERENT create_time counts as a new process")
+            proc_a_reused = _FakeProc(500, "suspicious.exe", [target.upper()], create_time=9999.0)
+            bcw.psutil.process_iter = lambda *a, **k: [proc_a_reused]
+            watch7._scan()
+            _check("a different create_time under the same pid is inspected fresh",
+                   proc_a_reused.open_files_calls == 1)
+            _check("the OLD (pid, create_time) instance is not what got skipped - "
+                   "it simply no longer exists this scan",
+                   proc_a.open_files_calls == 1)
+
+            print("  [10] existing (long-lived) processes eventually receive "
+                  "the backstop scan")
+            bcw.psutil.process_iter = lambda *a, **k: [proc_a_reused]
+            # Simulate time passing well beyond the backstop interval,
+            # without a real sleep.
+            watch7._inspected_at[(500, 9999.0)] = time.time() - 61.0
+            watch7._scan()
+            _check("backstop interval elapsed -> inspected again",
+                   proc_a_reused.open_files_calls == 2)
+        finally:
+            bcw.psutil.process_iter = orig_process_iter
+
+        print("  [11] a process that fails inspection is not permanently "
+              "excluded - just deferred to the same backstop cadence")
+        proc_denied = _FakeProc(600, "locked.exe", [], create_time=3000.0,
+                                raise_on_open=True)
+        bcw.psutil.process_iter = lambda *a, **k: [proc_denied]
+        try:
+            watch11 = CredentialStoreWatch(emit=lambda ev: None, backstop_interval=60.0)
+            watch11._paths_lower = {target}
+            hits11 = watch11._scan()
+            _check("inspection failure does not raise out of _scan()", hits11 == [])
+            _check("open_files() was attempted once", proc_denied.open_files_calls == 1)
+            _check("the failed attempt IS recorded (not left None forever)",
+                   (600, 3000.0) in watch11._inspected_at)
+            watch11._scan()
+            _check("immediately after: not retried (deferred like a success would be)",
+                   proc_denied.open_files_calls == 1)
+            watch11._inspected_at[(600, 3000.0)] = time.time() - 61.0
+            watch11._scan()
+            _check("after the backstop interval: retried, not permanently poisoned",
+                   proc_denied.open_files_calls == 2)
         finally:
             bcw.psutil.process_iter = orig_process_iter
     else:

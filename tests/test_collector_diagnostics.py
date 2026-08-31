@@ -1,0 +1,119 @@
+import shutil
+
+from valkyrie.collector_diagnostics import PollDiagnostics
+from redteam.evaluation import beta05_reliability as reliability
+from redteam.evaluation.beta05_reliability import Sampler
+
+
+def test_poll_diagnostics_exposes_active_and_completed_stage():
+    diagnostics = PollDiagnostics()
+    diagnostics.poll_started()
+    with diagnostics.stage("scheduled_tasks"):
+        active = diagnostics.status()
+        assert active["current_stage"] == "scheduled_tasks"
+        assert active["poll_started_at"] > 0
+    diagnostics.poll_completed()
+    completed = diagnostics.status()
+    assert completed["current_stage"] is None
+    assert "scheduled_tasks" in completed["last_stage_durations_s"]
+    assert completed["longest_poll_duration_s"] >= completed["last_poll_duration_s"]
+
+
+def test_contention_mode_stops_on_any_api_failure_or_degraded():
+    clean = {
+        "health_ok": True,
+        "requests": {name: {"ok": True} for name in
+                     ("health", "watchdog", "causality", "sensors")},
+        "watchdog": {"overall": "HEALTHY"},
+    }
+    assert Sampler._failure_reason(clean) is None
+    timed_out = {**clean, "requests": {**clean["requests"],
+                 "causality": {"ok": False}}}
+    assert Sampler._failure_reason(timed_out) == "api_causality_failure"
+    degraded = {**clean, "watchdog": {"overall": "DEGRADED"}}
+    assert Sampler._failure_reason(degraded) == "watchdog_degraded"
+
+
+def test_stop_join_timeout_covers_the_measured_worst_case():
+    """The behavioral test below only simulates a fast (~0.5s) delay - far
+    under even the old, buggy 10s join() timeout - so it would pass either
+    way and can't by itself catch a regression back to a too-short value.
+    This pins the actual constant: the measured real-world worst case is 4
+    sequential 5s _timed_get calls (~20s) plus _capture_failure's own extra
+    HTTP call (up to another 5s) - comfortably under 30s, so anything
+    shorter than that is a regression back toward Beta 0.5.6's bug."""
+    assert Sampler._STOP_JOIN_TIMEOUT_S >= 30.0
+
+
+def test_stop_waits_for_an_in_flight_slow_failure_capture(tmp_path):
+    """Beta 0.5.6: a live contention run detected a real engine-unreachable
+    failure (4 sequential 5s API timeouts, ~20s total) but reported
+    first_failure=None anyway - the JSONL proved the failure record and its
+    capture marker both got written, so the failure genuinely happened and
+    was genuinely captured; stop()'s old 10s join() timeout just gave up
+    reading state before the background thread got there. This proves the
+    fix: stop() must not return (letting the caller read first_failure)
+    until an in-flight slow capture has actually finished, not merely until
+    some fixed duration has elapsed."""
+    import threading
+    import time as _time
+
+    sampler = Sampler("http://fake-unused", tmp_path / "out.jsonl", stop_on_failure=True)
+
+    capture_started = threading.Event()
+
+    def _slow_sample_once():
+        # Stands in for the real ~20s multi-timeout delay - fast in the
+        # test, but still long enough to prove stop() doesn't give up early.
+        _time.sleep(0.2)
+        return {"t": _time.time(), "phase": "E", "health_ok": False,
+               "requests": {n: {"ok": False} for n in
+                           ("health", "watchdog", "causality", "sensors")}}
+
+    def _slow_capture_failure(rec):
+        capture_started.set()
+        _time.sleep(0.3)   # stands in for _capture_failure's own extra HTTP call
+        return {"reason": "api_health_failure", "trigger_sample": rec}
+
+    sampler._sample_once = _slow_sample_once
+    sampler._capture_failure = _slow_capture_failure
+
+    sampler.start()
+    assert capture_started.wait(timeout=2.0), "capture never started"
+    # stop() is called WHILE _capture_failure is still sleeping - the exact
+    # in-flight-slow-work moment the real bug lost.
+    sampler.stop()
+
+    assert sampler.first_failure is not None, (
+        "stop() returned before the in-flight failure capture finished - "
+        "this is the exact race that made a real engine-unreachable event "
+        "report as first_failure=None"
+    )
+    assert sampler.first_failure["reason"] == "api_health_failure"
+    assert sampler.failure.is_set()
+
+
+def test_engine_output_is_not_an_undrained_pipe(monkeypatch, tmp_path):
+    """A full Windows stdout pipe can block API and collector writers."""
+    captured = {}
+
+    class FakeProcess:
+        pid = 123
+
+        def poll(self):
+            return None
+
+    def fake_popen(*args, **kwargs):
+        captured.update(kwargs)
+        return FakeProcess()
+
+    monkeypatch.setattr(reliability, "RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(reliability.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(reliability, "_get", lambda *_args, **_kwargs: {})
+    process, _api, _data = reliability.start_engine()
+    try:
+        assert captured["stdout"] is not reliability.subprocess.PIPE
+        assert getattr(captured["stdout"], "name", "").endswith("beta05_engine.log")
+    finally:
+        process._beta05_log_fh.close()
+        shutil.rmtree(_data, ignore_errors=True)

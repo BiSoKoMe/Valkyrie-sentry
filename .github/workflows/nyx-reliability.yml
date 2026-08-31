@@ -1,0 +1,148 @@
+name: Platform Beta 1 (Nyx reliability)
+
+# Answers a different question than Nyx Live (nyx-live.yml): not "does the
+# deception mechanism work" (nyx-live.yml already proves that, once, in
+# ~1 minute) but "does it keep working, correctly, under a long real
+# browsing session." See docs/BETA_1_NYX_RELIABILITY.md - that document is
+# the predeclared spec; redteam/evaluation/nyx_reliability.py implements
+# exactly what it says. Same "coverage vs. reliability" split as Platform
+# Beta 0.5, pointed at Nyx instead of the EDR telemetry pipeline.
+#
+# Manual trigger only. Modes:
+#   smoke     ~20s        - local-only sanity, NOT qualification evidence
+#   dry-run   ~2 minutes  - validates the harness end to end
+#   soak      configurable (default 15 min) - the real qualification run,
+#                           repeated on 3 independent fresh runners (matrix),
+#                           never one (same "shared CI can be transiently
+#                           slow" reasoning as Beta 0.5's own soak)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Which Beta 1 stage to run"
+        type: choice
+        options: [smoke, dry-run, soak]
+        default: dry-run
+      minutes:
+        description: "soak mode only: duration in minutes"
+        type: string
+        default: "15"
+  # A brand-new workflow_dispatch-only workflow isn't discoverable by the
+  # API/CLI until it exists on the default branch OR one of its triggers has
+  # fired at least once - same reason nyx-live.yml carries this exact push
+  # trigger. Registers the workflow (runs as dry-run, the default) the
+  # moment this file lands on this branch; workflow_dispatch works normally
+  # after that, on any branch.
+  push:
+    branches: [feat/efficacy-etw-coverage]
+    paths:
+      - ".github/workflows/nyx-reliability.yml"
+      - "redteam/evaluation/nyx_reliability.py"
+      - "nyx_live/**"
+      - "valkyrie/store.py"
+      - "valkyrie/nyx.py"
+      - "valkyrie/nyx_graph.py"
+      - "valkyrie/tls_addon.py"
+      - "valkyrie/tls_inspector.py"
+
+jobs:
+  plan:
+    # A job-level `if:` cannot see the `matrix` context (matrix expansion
+    # happens after that condition is evaluated), so the "only soak needs 3
+    # independent runs" choice has to be computed as a separate small job and
+    # fed into the real job's matrix via fromJSON - same pattern
+    # beta05-reliability.yml uses.
+    name: Plan run count
+    runs-on: ubuntu-latest
+    outputs:
+      run_indices: ${{ steps.plan.outputs.run_indices }}
+    steps:
+      - id: plan
+        shell: bash
+        # A push-triggered run (see the module comment on the `push:`
+        # trigger above) carries no `inputs` context at all - only a real
+        # workflow_dispatch with mode=soak gets the 3-run matrix.
+        run: |
+          if [ "${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'dry-run' }}" = "soak" ]; then
+            echo 'run_indices=[1,2,3]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'run_indices=[1]' >> "$GITHUB_OUTPUT"
+          fi
+
+  run:
+    name: >-
+      Beta 1
+      (${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'dry-run' }})
+      run ${{ matrix.run_index }}
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        run_index: ${{ fromJSON(needs.plan.outputs.run_indices) }}
+    env:
+      # Single source of truth for "what mode is this run" - every step
+      # below reads this instead of re-deriving the workflow_dispatch/push
+      # fallback each time.
+      NYX_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'dry-run' }}
+      NYX_MINUTES: ${{ github.event_name == 'workflow_dispatch' && inputs.minutes || '15' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Valkyrie + mitmproxy + Playwright
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements_modular.txt
+          python -m pip install mitmproxy playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Resolve the test hostnames to loopback
+        run: echo "127.0.0.1 firstparty.test tracker.test tracker2.test" | sudo tee -a /etc/hosts
+
+      - name: "Run Platform Beta 1 (Nyx reliability)"
+        env:
+          PYTHONUNBUFFERED: "1"
+          VALKYRIE_ALLOW_EXPOSED_CA_KEY: "1"   # throwaway CI runner; lets the proxy start on Linux
+        run: |
+          if [ "$NYX_MODE" = "soak" ]; then
+            python redteam/evaluation/nyx_reliability.py --mode soak --minutes "$NYX_MINUTES"
+          else
+            python redteam/evaluation/nyx_reliability.py --mode "$NYX_MODE"
+          fi
+
+      - name: Nyx baseline still holds (nyx_live_test.py + unit tests)
+        if: always()
+        run: |
+          # GitHub Actions' default bash runs with `-e`, which aborts the
+          # step at the FIRST failing command - defeating the point of
+          # running both regardless and reporting on both. Disable it for
+          # the two invocations, then let the final `test` be what actually
+          # sets this step's exit code.
+          set +e
+          python nyx_live/nyx_live_test.py
+          nyx_live=$?
+          python tests/test_nyx.py
+          unit=$?
+          set -e
+          echo "nyx_live_test.py exit=$nyx_live, test_nyx.py exit=$unit"
+          test "$nyx_live" -eq 0 -a "$unit" -eq 0
+
+      - name: Upload Beta 1 evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: nyx-reliability-${{ env.NYX_MODE }}-run${{ matrix.run_index }}
+          path: |
+            redteam/evaluation/results/nyx_reliability_*.json
+            redteam/evaluation/results/nyx_reliability_*.jsonl
+          if-no-files-found: warn
+          retention-days: 30

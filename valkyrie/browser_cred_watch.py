@@ -121,7 +121,8 @@ class CredentialStoreWatch:
 
     def __init__(self, emit: Callable[[TelemetryEvent], None],
                  interval: float = 5.0, cooldown: float = 300.0,
-                 paths: Optional[Iterable[Path]] = None) -> None:
+                 paths: Optional[Iterable[Path]] = None,
+                 backstop_interval: float = 60.0) -> None:
         self._emit = emit
         self._interval = max(1.0, float(interval))
         self._cooldown = max(0.0, float(cooldown))
@@ -130,6 +131,28 @@ class CredentialStoreWatch:
         self._last_seen: dict[tuple, float] = {}   # (pid, path) -> last-emitted ts
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        # Beta 0.5.9 (docs/BETA_0_5_TELEMETRY_RELIABILITY.md): a live py-spy
+        # profile found _scan()'s open_files() call - a genuinely expensive
+        # Windows syscall, it walks the target process's whole handle table -
+        # accounted for 70.7% of the engine's IDLE CPU, because it ran for
+        # EVERY process on the host, every 5s poll, forever, not just
+        # newly-appeared ones. Identity-cached now by (pid, create_time): a
+        # process instance pays the expensive check the first time it's
+        # seen, then not again until `backstop_interval` has elapsed - never
+        # permanently exempted (a long-lived process still gets rescanned
+        # periodically) and never skipped by trusting its name (every
+        # instance is still inspected at least once, and again on the same
+        # backstop cadence as anything else). This is NOT a poll-interval
+        # widening (the cheap enumeration below still runs every 5s, so a
+        # brand-new process is inspected on the very next poll after it
+        # starts) and NOT a trusted-process allowlist.
+        self._inspected_at: dict[tuple[int, float], float] = {}
+        # A first, measured-informed guess (not picked from intuition alone),
+        # to be revisited against real idle/benign/full profiling data the
+        # same way emit_budget/snapshot_budget were sized from measurements
+        # rather than fixed ahead of any - see the doc for the before/after
+        # numbers this value was validated against.
+        self._backstop_interval = max(5.0, float(backstop_interval))
 
     def available(self) -> bool:
         return os.name == "nt" and _PSUTIL
@@ -143,23 +166,54 @@ class CredentialStoreWatch:
     def _scan(self) -> list[dict]:
         """Return [{pid, name, path}] for every CURRENT non-browser, non-self
         process holding a handle open to a known credential-store path. Never
-        raises: per-process access errors are skipped."""
+        raises: per-process access errors are skipped.
+
+        Identity-cached (Beta 0.5.9, see __init__): the expensive
+        open_files() call only runs for a process instance the first time
+        it's seen, or once backstop_interval has elapsed since its last
+        inspection. The cheap process enumeration below still runs in full
+        every call, so a newly-appeared process is inspected on the very
+        next poll after it starts - identical detection promptness to
+        before for anything new; only an already-inspected, still-running
+        instance skips the expensive part until its backstop comes due.
+        """
         hits: list[dict] = []
         if not _PSUTIL or not self._paths_lower:
             return hits
         from .trust import is_self
-        for p in psutil.process_iter(["pid", "name"]):
+        now = time.time()
+        live_idents: set[tuple[int, float]] = set()
+        for p in psutil.process_iter(["pid", "name", "create_time"]):
             try:
                 name = (p.info.get("name") or "")
                 lname = name.lower()
                 if lname in _BROWSER_PROCS or is_self(lname, ""):
                     continue
-                for f in p.open_files():
-                    fp = str(f.path).lower()
-                    if fp in self._paths_lower:
-                        hits.append({"pid": p.pid, "name": name, "path": f.path})
+                pid = int(p.info.get("pid") or 0)
+                create_time = round(float(p.info.get("create_time") or 0.0), 3)
+                ident = (pid, create_time)
+                live_idents.add(ident)
+                last_inspected = self._inspected_at.get(ident)
+                if last_inspected is not None and (now - last_inspected) < self._backstop_interval:
+                    continue   # inspected recently enough - skip the expensive call
+                try:
+                    for f in p.open_files():
+                        fp = str(f.path).lower()
+                        if fp in self._paths_lower:
+                            hits.append({"pid": p.pid, "name": name, "path": f.path})
+                except (psutil.Error, OSError):
+                    pass   # inspection failed (e.g. access denied) - still
+                           # record the attempt below, so this instance is
+                           # NOT permanently excluded, just deferred to the
+                           # same backstop cadence as everything else.
+                self._inspected_at[ident] = now
             except (psutil.Error, OSError):
                 continue
+        # Drop idents for processes that no longer exist, so this dict does
+        # not grow unbounded over a long-running engine.
+        for ident in list(self._inspected_at):
+            if ident not in live_idents:
+                del self._inspected_at[ident]
         return hits
 
     # -- poll ----------------------------------------------------------------

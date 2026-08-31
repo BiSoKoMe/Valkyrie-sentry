@@ -25,6 +25,7 @@ All three are now fixed and asserted here.
 
 from __future__ import annotations
 
+import queue
 import sys
 import tempfile
 import time
@@ -125,6 +126,39 @@ def main() -> int:
     finally:
         try:
             store.stop()
+        except Exception:
+            pass
+
+    # --- queue_stats() must count drops, not hide them (Beta 1/Nyx audit:
+    # sustained real load found log()'s "drop under extreme load rather
+    # than block" comment was true but silent - no counter existed) ---
+    print("\n[6] queue_stats() counts events log() had to drop, instead of "
+          "hiding the drop the way a bare `except queue.Full: pass` does")
+    store2 = Store(db_path=tmp / "t2.db")
+    # Swap in a maxsize=1 queue BEFORE start(), so nothing drains it yet -
+    # every log() past the first is a deterministic queue.Full, not a race
+    # against how fast the writer thread happens to be scheduled.
+    store2._queue = queue.Queue(maxsize=1)
+    try:
+        before = store2.queue_stats()
+        c.check("a fresh store reports zero dropped events",
+                before["dropped"] == 0 and before["maxsize"] == 1)
+        store2.log(_event("fill.test"))            # occupies the only slot
+        for i in range(5):
+            store2.log(_event(f"burst-{i}.test"))   # writer not running yet -> must drop
+        after = store2.queue_stats()
+        c.check(f"log() past a full queue is COUNTED, not silently "
+                f"swallowed ({after['dropped']} dropped)", after["dropped"] >= 5)
+        c.check("depth never exceeds the configured maxsize",
+                after["depth"] <= after["maxsize"])
+
+        store2.start()   # now let it drain - the store must still work afterward
+        time.sleep(0.8)
+        c.check("the store still writes normally after recovering from a "
+                "full queue", store2.stats().get("total_24h", 0) >= 1)
+    finally:
+        try:
+            store2.stop()
         except Exception:
             pass
 

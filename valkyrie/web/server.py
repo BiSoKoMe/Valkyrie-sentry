@@ -530,6 +530,51 @@ def _debug_fault_collector_enabled() -> bool:
     return os.environ.get(_DEBUG_FAULT_COLLECTOR_ENV) == "1"
 
 
+_SELF_PROC_HANDLE = None   # cached for process lifetime; see _self_process_stats()
+
+
+def _self_process_stats() -> dict:
+    """The engine's OWN CPU/memory footprint, for /api/telemetry/contention.
+
+    Platform Beta 0.5's investigation built this exact visibility (RSS,
+    thread count, CPU) into the external test harness to diagnose an engine
+    that had become unreachable, but the product itself had no way to see
+    its own resource footprint through its own API - only the harness could.
+    Promoted here as a genuine operational capability, distinct from the
+    harness's diagnostic-only tooling (profiling, phase summaries), which
+    stays external.
+
+    `cpu_percent()` is only meaningful measured repeatedly against the SAME
+    process handle (a fresh handle's first call is meaningless) - cached at
+    module scope for the life of this process, same reasoning as the
+    harness's `_ENGINE_PROC_HANDLES`. The first-ever call after startup reads
+    0.0 (non-blocking `interval=None` mode) and self-corrects on the next
+    poll; this route must never sleep to "prime" it, since that would block
+    the event loop.
+    """
+    global _SELF_PROC_HANDLE
+    try:
+        import psutil
+    except ImportError:
+        return {"available": False}
+    try:
+        if _SELF_PROC_HANDLE is None:
+            _SELF_PROC_HANDLE = psutil.Process(os.getpid())
+        p = _SELF_PROC_HANDLE
+        with p.oneshot():
+            mem = p.memory_info()
+            return {
+                "available": True,
+                "cpu_percent": p.cpu_percent(interval=None),
+                "rss_bytes": mem.rss,
+                "vms_bytes": mem.vms,
+                "num_threads": p.num_threads(),
+                "num_handles": p.num_handles() if hasattr(p, "num_handles") else None,
+            }
+    except Exception as exc:
+        return {"available": False, "error": repr(exc)}
+
+
 def _build_telemetry_watchdog():
     """Wire the three periodic collectors + the event loop's own heartbeat
     into one HEALTHY/DEGRADED reliability read (Platform Beta 0.5).
@@ -547,19 +592,20 @@ def _build_telemetry_watchdog():
         loop_status_fn=(state.loop_heartbeat.status if state.loop_heartbeat else None),
     )
 
-    def _wire(name: str, collector, default_interval: float) -> None:
-        if collector is None:
-            wd.add_source(name, lambda: None, default_interval)
-            return
-        try:
-            interval = float(collector.status().get("poll_interval_s", default_interval))
-        except Exception:
-            interval = default_interval
-        wd.add_source(name, collector.status, interval)
+    def _wire(name: str, state_attr: str, default_interval: float) -> None:
+        # The web server binds before endpoint collectors are constructed, then
+        # the composition root attaches them to the SAME AppContext later. Do
+        # not capture the startup-time value here: that permanently wired None
+        # and made a live collector look "not_available" for the whole run.
+        def _dynamic_status():
+            collector = getattr(state, state_attr, None)
+            return collector.status() if collector is not None else None
 
-    _wire("process_collector", state.process_collector, 2.0)
-    _wire("network_collector", state.network_collector, 3.0)
-    _wire("persistence_collector", state.persistence_collector, 15.0)
+        wd.add_source(name, _dynamic_status, default_interval)
+
+    _wire("process_collector", "process_collector", 2.0)
+    _wire("network_collector", "network_collector", 3.0)
+    _wire("persistence_collector", "persistence_collector", 15.0)
     if state.debug_fault_collector is not None:
         fic = state.debug_fault_collector
         wd.add_source("debug_fault_collector", fic.status, fic.poll_interval_s)
@@ -1231,6 +1277,55 @@ def create_app(ctx: Optional[AppContext] = None):
             return JSONResponse(
                 {"error": "telemetry watchdog not initialized"}, status_code=503)
         return wd.status()
+
+    @app.get("/api/telemetry/contention")
+    async def telemetry_contention_status():
+        """Beta 0.5.1 attribution snapshot, intentionally async.
+
+        A synchronous route would need a free AnyIO worker merely to report
+        that every worker is occupied. This route stays on the event loop and
+        only reads in-memory state (plus one cheap self-process read), so it
+        remains useful during contention.
+        """
+        engine_process = _self_process_stats()
+        collectors = {}
+        for name in ("process_collector", "network_collector", "persistence_collector"):
+            collector = getattr(state, name, None)
+            if collector is not None:
+                try:
+                    collectors[name] = collector.status()
+                except Exception as exc:  # diagnostics must not hide other data
+                    collectors[name] = {"status_error": repr(exc)}
+
+        worker_pool: dict = {}
+        try:
+            import anyio
+            limiter = anyio.to_thread.current_default_thread_limiter()
+            worker_pool = {
+                "borrowed_tokens": limiter.borrowed_tokens,
+                "total_tokens": limiter.total_tokens,
+            }
+            stats = limiter.statistics()
+            worker_pool.update({
+                "tasks_waiting": stats.tasks_waiting,
+                "borrowers": len(stats.borrowers),
+            })
+        except Exception as exc:
+            worker_pool = {"error": repr(exc)}
+
+        heartbeat = getattr(state, "loop_heartbeat", None)
+        return {
+            "timestamp": time.time(),
+            "loop": heartbeat.status() if heartbeat is not None else None,
+            "worker_pool": worker_pool,
+            "threads": [
+                {"name": t.name, "ident": t.ident, "native_id": t.native_id,
+                 "daemon": t.daemon, "alive": t.is_alive()}
+                for t in threading.enumerate()
+            ],
+            "collectors": collectors,
+            "engine_process": engine_process,
+        }
 
     if _debug_fault_collector_enabled():
         # This route ONLY exists in the app's route table when

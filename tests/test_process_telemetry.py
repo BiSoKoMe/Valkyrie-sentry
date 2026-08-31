@@ -201,6 +201,77 @@ def main() -> int:
     _check("emitted a TelemetryEvent for pid 3",
            emitted[0].category == T.CAT_PROCESS and emitted[0].actor_pid == 3)
 
+    print("\n[5b] diff_enrich_emit budget (Beta 0.5.3: the SAME EdrStore-"
+          "lock-contention shape found in PersistenceCollector, applied to "
+          "ProcessCollector - see docs/BETA_0_5_TELEMETRY_RELIABILITY.md)")
+    import time
+    emitted3: list = []
+    col3 = ProcessCollector(emit=emitted3.append, emit_budget=1.0)
+    _check("emit_budget floored at 1.0", col3._emit_budget == 1.0)
+    d = ProcInfo(pid=4, name="d", create_time=4.0)
+    baseline3 = {a.key(): a, b.key(): b}
+    cycle3 = {a.key(): a, b.key(): b, c.key(): c, d.key(): d}   # c, d both new
+    col3._last = baseline3
+    col3.snapshot = lambda: cycle3             # type: ignore[assignment]
+
+    real_emit = col3._emit
+    def _slow_emit(ev):
+        real_emit(ev)
+        if ev.actor_pid == c.pid:
+            time.sleep(1.1)   # simulates a contended/slow ingest_telemetry()
+    col3._emit = _slow_emit
+    n3 = col3.poll_once()
+    _check("exactly one emit before the budget tripped", n3 == 1)
+    _check("the emitted one is c, not d",
+           len(emitted3) == 1 and emitted3[0].actor_pid == c.pid)
+    _check("status() reports the truncation", "diff_enrich_emit" in col3.status()["truncated"])
+    _check("deferred process (d) is NOT folded into the new baseline",
+           d.key() not in col3._last)
+    _check("emitted process (c) IS folded into the new baseline", c.key() in col3._last)
+
+    col3._emit = real_emit
+    emitted3.clear()
+    col3.snapshot = lambda: cycle3              # type: ignore[assignment]
+    n4 = col3.poll_once()
+    _check("the deferred process is emitted on the very next poll",
+           n4 == 1 and emitted3[0].actor_pid == d.pid)
+    _check("truncated clears once a cycle completes without truncation",
+           col3.status()["truncated"] == [])
+
+    print("\n[5c] snapshot() reuses an already-known process's path instead "
+          "of re-querying it (Beta 0.5.5/.6: a live contention run measured "
+          "this exact call - pr.exe() for every running process, every "
+          "poll - taking ~3.8s under load and pushing the collector past "
+          "its own stale bound; see docs/BETA_0_5_TELEMETRY_RELIABILITY.md)")
+    import os
+    import psutil as _psutil_mod
+    call_count = {"n": 0}
+    real_exe = _psutil_mod.Process.exe
+    def _counting_exe(self):
+        call_count["n"] += 1
+        return real_exe(self)
+    col4 = ProcessCollector(emit=lambda ev: None)
+    me = os.getpid()
+    first = col4.snapshot()
+    my_key = next((k for k in first if k[0] == me), None)
+    if my_key is None:
+        print("  SKIP (this test process's own pid not visible via psutil "
+              "in this sandbox)")
+    else:
+        col4._last = first   # simulate this WAS the prior poll's baseline
+        _psutil_mod.Process.exe = _counting_exe
+        try:
+            second = col4.snapshot()
+        finally:
+            _psutil_mod.Process.exe = real_exe
+        _check("already-known process's path is byte-identical across polls "
+               "(reused, not merely equal by coincidence)",
+               second[my_key].path == first[my_key].path and first[my_key].path != "")
+        _check("pr.exe() was NOT called again for the already-known pid "
+               "(the exact fix: was O(all running processes) every cycle, "
+               "now O(new processes) only)",
+               call_count["n"] < len(first))
+
     print("\n[5] A raising emitter never breaks collection")
     def _boom(_ev):
         raise RuntimeError("bad sink")

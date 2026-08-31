@@ -122,6 +122,12 @@ $Catalog = (Get-Content $CatalogJson -Raw | ConvertFrom-Json)
 $CatalogVersion = $Catalog.catalog_version
 $Techniques = $Catalog.techniques
 if ($OnlyIds.Count -gt 0) {
+    # Native callers (Python subprocess, cmd.exe, workflow tools) cannot pass a
+    # PowerShell string[] the same way an in-process pwsh expression can. Accept
+    # comma-separated values as well as a real array so a scoped run never
+    # silently treats "id-a,id-b" as one nonexistent technique id.
+    $OnlyIds = @($OnlyIds | ForEach-Object { $_ -split ',' } |
+        ForEach-Object { $_.Trim() } | Where-Object { $_ })
     $Techniques = @($Techniques | Where-Object { $OnlyIds -contains $_.id })
     Info "OnlyIds filter active: running $($Techniques.Count) of $($Catalog.techniques.Count) catalog techniques ($($OnlyIds -join ', '))"
     if ($Techniques.Count -eq 0) { throw "No catalog technique matched -OnlyIds $($OnlyIds -join ', ')" }

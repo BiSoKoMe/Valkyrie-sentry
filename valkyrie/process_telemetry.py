@@ -493,7 +493,7 @@ class ProcessCollector:
     """
 
     def __init__(self, emit: Callable[[TelemetryEvent], None],
-                 interval: float = 2.0) -> None:
+                 interval: float = 2.0, emit_budget: float = 4.0) -> None:
         self._emit = emit
         self._base_interval = max(0.25, float(interval))
         self._interval = self._base_interval
@@ -513,6 +513,16 @@ class ProcessCollector:
         # failure shape every per-item swallow inside poll_once() itself
         # cannot hide.
         self.exception_count: int = 0
+        from .collector_diagnostics import PollDiagnostics
+        self._diagnostics = PollDiagnostics()
+        # See PersistenceCollector's identical field (docs/BETA_0_5_TELEMETRY_RELIABILITY.md
+        # "Beta 0.5.3"): bounds the emit loop's wall-clock time so a slow/
+        # contended ingest_telemetry() call (EdrStore's shared write lock
+        # under concurrent load) cannot hold last_poll_completed_at hostage.
+        # Entries not yet emitted when the budget expires are deferred to
+        # the next poll's diff rather than dropped.
+        self._emit_budget = max(1.0, float(emit_budget))
+        self._truncated: list[str] = []
 
     def available(self) -> bool:
         return _PSUTIL
@@ -548,6 +558,18 @@ class ProcessCollector:
 
         Never raises: per-process access errors are skipped, and an absent psutil
         yields an empty snapshot (collector effectively disabled).
+
+        COST-BOUNDED (Beta 0.5.5/.6, docs/BETA_0_5_TELEMETRY_RELIABILITY.md):
+        a live contention run measured this method's process_metadata stage
+        taking ~3.8s under Phase C/E load, pushing the collector's whole poll
+        cycle past its own stale bound (8s) while the engine's own resources
+        stayed completely normal - ruling out resource exhaustion and
+        pointing at real per-cycle cost instead. The cause: pr.exe() was
+        called for EVERY currently-running process on EVERY poll, not only
+        newly-appeared ones - O(all processes on the host), every 2 seconds,
+        for a value (the executable path) that cannot change for a pid that
+        was already seen. Reusing the prior poll's path for an already-known
+        process instance turns this into O(new processes) instead.
         """
         out: dict = {}
         if not _PSUTIL:
@@ -555,35 +577,41 @@ class ProcessCollector:
         # Cache pid -> name to resolve parent names cheaply.
         names: dict[int, str] = {}
         try:
-            procs = list(psutil.process_iter(["pid", "name", "ppid", "create_time"]))
+            with self._diagnostics.stage("process_iter"):
+                procs = list(psutil.process_iter(["pid", "name", "ppid", "create_time"]))
         except Exception:
             return out
-        for pr in procs:
-            try:
-                names[pr.info.get("pid", 0)] = (pr.info.get("name") or "")
-            except Exception:
-                pass
-        for pr in procs:
-            try:
-                info = pr.info
-                pid = int(info.get("pid", 0) or 0)
-                ppid = int(info.get("ppid", 0) or 0)
-                path = ""
+        known = self._last or {}
+        with self._diagnostics.stage("process_metadata"):
+            for pr in procs:
                 try:
-                    path = pr.exe() or ""
+                    names[pr.info.get("pid", 0)] = (pr.info.get("name") or "")
                 except Exception:
-                    path = ""
-                pi = ProcInfo(
-                    pid=pid,
-                    name=info.get("name") or "",
-                    path=path,
-                    ppid=ppid,
-                    parent_name=names.get(ppid, ""),
-                    create_time=float(info.get("create_time") or 0.0),
-                )
-                out[pi.key()] = pi
-            except Exception:
-                continue
+                    pass
+            for pr in procs:
+                try:
+                    info = pr.info
+                    pid = int(info.get("pid", 0) or 0)
+                    ppid = int(info.get("ppid", 0) or 0)
+                    create_time = float(info.get("create_time") or 0.0)
+                    prior = known.get((pid, round(create_time, 3)))
+                    if prior is not None:
+                        # Same (pid, create_time) instance as last poll - the
+                        # executable path of a live process cannot change, so
+                        # skip the syscall entirely rather than repeating it
+                        # for a process we already looked up.
+                        path = prior.path
+                    else:
+                        try:
+                            path = pr.exe() or ""
+                        except Exception:
+                            path = ""
+                    pi = ProcInfo(pid=pid, name=info.get("name") or "", path=path,
+                                  ppid=ppid, parent_name=names.get(ppid, ""),
+                                  create_time=create_time)
+                    out[pi.key()] = pi
+                except Exception:
+                    continue
         return out
 
     def _enrich(self, pi: "ProcInfo", pid_index: dict) -> "ProcInfo":
@@ -615,25 +643,50 @@ class ProcessCollector:
 
         On the very first call it only seeds the baseline (returns 0).
         """
+        self._diagnostics.poll_started()
         try:
             new = self.snapshot()
             if self._last is None:
                 self._last = new
                 return 0
-            fresh = diff_snapshots(self._last, new)
-            self._last = new
-            pid_index = {info.pid: info for info in new.values()}
-            for pi in fresh:
-                try:
-                    self._emit(self._enrich(pi, pid_index).to_event())
-                except Exception:
-                    pass   # a bad emitter must never stop collection
-            return len(fresh)
+            with self._diagnostics.stage("diff_enrich_emit"):
+                fresh = diff_snapshots(self._last, new)
+                pid_index = {info.pid: info for info in new.values()}
+                deadline = time.monotonic() + self._emit_budget
+                budget_spent = False
+                emitted_keys: set = set()
+                for pi in fresh:
+                    if budget_spent or time.monotonic() >= deadline:
+                        budget_spent = True
+                        continue
+                    try:
+                        self._emit(self._enrich(pi, pid_index).to_event())
+                    except Exception:
+                        pass
+                    emitted_keys.add(pi.key())
+                if budget_spent:
+                    # Defer: keep any not-yet-emitted fresh process OUT of the
+                    # new baseline so the next poll's diff rediscovers it,
+                    # rather than a slow/contended emit holding this whole
+                    # cycle (and last_poll_completed_at) hostage. Everything
+                    # else in `new` (unchanged + already-emitted processes,
+                    # and any that exited) still becomes the new baseline.
+                    next_last = dict(new)
+                    for pi in fresh:
+                        if pi.key() not in emitted_keys:
+                            next_last.pop(pi.key(), None)
+                    self._last = next_last
+                    self._truncated = self._truncated + ["diff_enrich_emit"]
+                else:
+                    self._last = new
+                    self._truncated = []
+            return len(emitted_keys)
         finally:
             # Recorded even on an early return or an exception path above, so
             # "no recent poll" only ever means "the thread stopped running,"
             # never "it happened to find nothing this cycle."
             self.last_poll_completed_at = time.time()
+            self._diagnostics.poll_completed()
 
     def start(self) -> None:
         if self._running or not _PSUTIL:
@@ -657,7 +710,8 @@ class ProcessCollector:
             "poll_interval_s": self._interval,
             "last_poll_completed_at": self.last_poll_completed_at,
             "exception_count": self.exception_count,
-        }
+            "truncated": list(self._truncated),
+        } | self._diagnostics.status()
 
     def _loop(self) -> None:
         while self._running:
