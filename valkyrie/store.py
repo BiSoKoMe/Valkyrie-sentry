@@ -108,6 +108,12 @@ class Store:
         # Rows the writer could not persist. A gap in the audit trail must be
         # countable, not invisible.
         self._write_errors = 0
+        # Events log() dropped because the queue was full - same "must be
+        # countable, not invisible" reasoning as _write_errors, but for the
+        # enqueue side rather than the write side. Under sustained high
+        # volume this is otherwise a silent gap: log() only ever returns
+        # None, so a caller has no way to know a drop happened without this.
+        self._dropped_events = 0
         # Set when a performance index could not be created (read-only or
         # locked database). Non-fatal, but never silent - see
         # _init_optional_indexes.
@@ -149,7 +155,18 @@ class Store:
         try:
             self._queue.put_nowait(event)
         except queue.Full:
-            pass    # drop under extreme load rather than block
+            self._dropped_events += 1    # drop under extreme load rather than block
+
+    def queue_stats(self) -> dict:
+        """In-memory enqueue-side health: current backlog depth and how many
+        events log() has ever had to drop because the queue was full. Cheap
+        (no DB query) - safe to sample frequently during a sustained-load
+        soak, unlike stats() which scans the events table."""
+        return {
+            "depth": self._queue.qsize(),
+            "maxsize": self._queue.maxsize,
+            "dropped": self._dropped_events,
+        }
 
     def subscribe(self, callback: Callable[[dict], None]) -> None:
         """Register callback(event_dict) called after each committed event."""

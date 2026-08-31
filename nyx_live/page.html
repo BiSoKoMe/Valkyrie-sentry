@@ -30,7 +30,14 @@ function hash(s) { let h = 0; for (let i = 0; i < s.length; i++) { h = (h * 31 +
   window.__canvasHash = ch;
   document.getElementById('canvas-fp').textContent = 'CANVAS:' + ch;
 
-  const tracker = new URLSearchParams(location.search).get('tracker') || '';
+  const params = new URLSearchParams(location.search);
+  const tracker = params.get('tracker') || '';
+  // Opt-in, additive: when absent, behavior is byte-for-byte what it always
+  // was (the 'adid=' field is included). When present, the beacon carries
+  // NO personal data at all - the "third party, nothing to fake" case
+  // (nyx_scorecard.py's 'benign' category), replayed through a real browser
+  // instead of only a synthetic string.
+  const noPersonal = params.get('nopersonal') === '1';
   // A proper UUID-v4 string, generated without crypto.randomUUID (which needs a
   // secure context that plain HTTP is not) so it matches Nyx's real detection.
   function uuid() {
@@ -42,11 +49,15 @@ function hash(s) { let h = 0; for (let i = 0; i < s.length; i++) { h = (h * 31 +
   const id = uuid();
   window.__beaconId = id;
   if (!tracker) { document.getElementById('beacon-status').textContent = 'BEACON:no-tracker'; return; }
-  const body = 'adid=' + id
-    + '&screen=' + screen.width + 'x' + screen.height
+  const body = (noPersonal ? '' : 'adid=' + id + '&')
+    + 'screen=' + screen.width + 'x' + screen.height
     + '&timezone=' + (Intl.DateTimeFormat().resolvedOptions().timeZone || 'x')
     + '&lang=' + navigator.language
     + '&cores=' + (navigator.hardwareConcurrency || 0);
+  // Exposed so a harness driving this page can compare what it INTENDED to
+  // send against what the tracker endpoint actually received, without
+  // needing to reconstruct this string independently.
+  window.__beaconBody = body;
   // Beacon to a NON-tracker path (/api/ingest) so it reaches Nyx's act layer
   // rather than being blocked at the tracker-beacon-path rule (which /collect,
   // /track, /pixel etc. correctly are). This measures the FAKING, not blocking.
