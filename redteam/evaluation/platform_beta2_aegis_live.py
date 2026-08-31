@@ -95,6 +95,23 @@ class _EdrCapture:
 
 
 def _find_subject_pid(events: list) -> int | None:
+    """The real Nyx privacy observation's pid is ground truth for "which
+    process this chain is about" - it was resolved by the real ADR-0057
+    `pid_for_local_port()` attribution against the real OS connection
+    table at the moment of the real beacon, not guessed. A name-match over
+    "process" events is a poor substitute: a real Chromium launch is
+    MULTI-PROCESS (a main browser process plus separate renderer/GPU/
+    network-service child processes on Linux), and the child that actually
+    owns the outbound socket Nyx observed is often not the first
+    chrome-shaped process event to appear."""
+    for e in events:
+        if e.category == "privacy" and e.actor_pid:
+            return e.actor_pid
+    # Fallback (no privacy event captured at all) - the network event's own
+    # pid is the next-best ground truth for "who owned the connection."
+    for e in events:
+        if e.category == "network" and e.actor_pid:
+            return e.actor_pid
     for e in events:
         if e.category == "process" and any(
                 h in (e.actor_name or "").lower() for h in _BROWSER_NAME_HINTS):
@@ -195,6 +212,10 @@ def run() -> dict:
         "ok": False,
         "browser_error": browser_error,
         "total_events_captured": len(all_events),
+        "all_events_debug": [
+            {"category": e.category, "actor_pid": e.actor_pid, "actor_name": e.actor_name}
+            for e in all_events
+        ],
         "events_by_category": {},
     }
     for e in all_events:

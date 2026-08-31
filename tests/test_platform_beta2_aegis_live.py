@@ -104,8 +104,11 @@ def main() -> int:
     _check("other checks still evaluated (not short-circuited)",
            scored6["checks"]["destination_observation_derived"]["pass"] is True)
 
-    print("\n[9] _find_subject_pid() - identifies the browser-like process, "
-          "ignores everything else")
+    print("\n[9] _find_subject_pid() - prefers the real Nyx privacy "
+          "observation's pid (ADR 0057's real attribution) over guessing "
+          "from a process name - a real Chromium launch is multi-process, "
+          "so the first chrome-shaped process event is often the WRONG "
+          "child (not the one that actually owned the connection)")
     class _Ev:
         def __init__(self, category, actor_name, actor_pid):
             self.category = category
@@ -113,14 +116,34 @@ def main() -> int:
             self.actor_pid = actor_pid
 
     events = [
-        _Ev("process", "explorer.exe", 100),
-        _Ev("process", "headless_shell", 4242),
-        _Ev("network", "headless_shell", 4242),
+        _Ev("process", "chrome", 100),           # main browser process
+        _Ev("process", "chrome", 4242),          # the network-service child
+        _Ev("network", "chrome", 4242),
+        _Ev("privacy", "chrome", 4242),          # the real attributed pid
     ]
     pid = m._find_subject_pid(events)
-    _check("finds the chromium/headless_shell pid, not an unrelated process",
+    _check("prefers the privacy event's pid over the first process-name match",
            pid == 4242)
-    _check("returns None when nothing browser-shaped was captured",
+
+    print("  [9b] falls back to the network event's pid when no privacy "
+          "event was captured (NetworkCollector, unlike a userland poller "
+          "watching a snapshot, still resolved a real pid)")
+    events_no_privacy = [
+        _Ev("process", "chrome", 100),
+        _Ev("network", "chrome", 4242),
+    ]
+    _check("falls back to the network event's pid",
+           m._find_subject_pid(events_no_privacy) == 4242)
+
+    print("  [9c] falls back to a name match only when neither privacy nor "
+          "network events exist at all")
+    events_process_only = [
+        _Ev("process", "explorer.exe", 100),
+        _Ev("process", "headless_shell", 4242),
+    ]
+    _check("falls back to a chrome/chromium/headless_shell name match",
+           m._find_subject_pid(events_process_only) == 4242)
+    _check("returns None when nothing browser-shaped was captured at all",
            m._find_subject_pid([_Ev("process", "svchost.exe", 1)]) is None)
 
     print("\n" + "=" * 52)
