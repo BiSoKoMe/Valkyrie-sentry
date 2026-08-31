@@ -11,9 +11,11 @@ components in-process, the same shape `nyx_reliability.py` and
 
 ## Qualification status
 
-**OPEN.** This document is the predeclared spec. `redteam/evaluation/
-platform_beta2_aegis_live.py` implements exactly what it says. Findings get
-appended below only as real CI runs surface them.
+**QUALIFIED — 2026-08-31.** The live-fire run passed every predeclared
+check on real, live-captured data. See "Beta 2: QUALIFIED" near the end of
+this document for the full evidence trail and the two harness bugs found
+and fixed along the way (both in the harness, not in Aegis/Valkyrie/NYX
+themselves).
 
 ## Research question
 
@@ -104,4 +106,67 @@ different (real) inputs.
 ## Sequence
 
 Platform Alpha (the fabricated-chain proof, locked) → Beta 0 → Beta 0.5
-(QUALIFIED+audited) → Beta 1/NYX (QUALIFIED) → **Beta 2/Aegis (here)**.
+(QUALIFIED+audited) → Beta 1/NYX (QUALIFIED) → **Beta 2/Aegis (here) ←
+CLOSED**.
+
+## Beta 2.1: two harness bugs, found and fixed - neither in Aegis/Valkyrie/NYX
+
+**First attempt**: captured 9 real events (7 process, 2 privacy, 0
+network) but built a process-only chain (`subject_event_count=1`).
+`_find_subject_pid()` picked the first chrome-shaped `process` event by
+name, but a real Chromium launch is multi-process on Linux (a main
+browser process plus separate renderer/GPU/network-service child
+processes) - the pid that actually owned the connection Nyx observed was a
+different child than the one the name-match heuristic happened to find
+first. Separately, `NetworkCollector` caught zero connections - expected,
+not a bug: a userland snapshot poller can legitimately miss a connection
+that opens and closes faster than its poll interval, which this harness's
+sub-second beacon round-trip usually does (the same honest limitation this
+project's own network_telemetry.py module docstring already states).
+Fixed by treating the real Nyx privacy event's pid as ground truth (it was
+genuinely resolved against the real OS connection table via ADR 0057's
+`pid_for_local_port()` at the moment of the real beacon), falling back to
+a network event's pid, then the name-match heuristic only if neither
+exists.
+
+**Second attempt**: crashed with `AttributeError: 'dict' object has no
+attribute 'to_dict'` - `evaluate_pair()` (`aegis_exposure.py:269`) already
+converts each hypothesis decision to a plain dict before returning, exactly
+matching how `platform_alpha_evidence_story.py`'s own usage already
+(correctly) never calls `.to_dict()` on them; my code added a redundant,
+incorrect call. Fixed by removing it.
+
+## Beta 2: QUALIFIED — 2026-08-31
+
+**Third attempt: PASS**, on real, live-captured data (3 subject events: 1
+process + 2 privacy - the network collector legitimately missed the
+sub-second connection, and the two real Nyx privacy observations carried
+the chain instead). All 7 predeclared checks green, zero `[!]` lines
+anywhere in the log, the Platform Alpha frozen-baseline regression (15
+tests) unaffected:
+
+- `real_chain_captured`: 3 real events for one real subject pid.
+- `chain_spans_process_and_network_or_privacy`: process + privacy.
+- `destination_observation_derived`: **2x DESTINATION, plus TIMING,
+  FREQUENCY, and SEQUENCE** - richer than the fabricated Platform Alpha
+  scenario, because two real privacy observations for the same subject
+  (>=2 network-visible events) triggered `translate_session`'s
+  timing/frequency/sequence derivation that a single-event chain can't.
+- `unavailable_categories_never_fabricated`: VOLUME/DIRECTION/IDENTITY/
+  SESSION never appeared.
+- `non_network_events_produce_zero_observations`: held.
+- `provenance_survives`: every observation traced to a real event id
+  (`evt:70bbc273...` from the real process collector,
+  `nyx_d93be54d...`/`nyx_5ed73d96...` from Nyx's own real event ids).
+- `no_observe_errors`: zero.
+
+**Beta 2 is genuinely done, not declared done.** Both bugs found during
+this stage were in the NEW harness itself, not in Aegis, Valkyrie, or NYX -
+the translation boundary Platform Alpha already proved over a fabricated
+chain held up over a real one on the very first run where the harness
+correctly identified the real subject. This is a smaller, more contained
+proof than Beta 0.5/Beta 1 (a one-shot integration check of pure
+translation logic, not a sustained-load reliability soak - there is no
+long-running mechanism here to stress under duration), matching the scope
+`docs/AEGIS_PLATFORM_BRIDGE.md` itself asked for: proof over real events,
+nothing more.
