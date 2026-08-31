@@ -266,8 +266,11 @@ def run() -> dict:
         "non_network_events_produced_zero_observations": non_network_observation_count == 0,
         "fused_decision_hypothesis": (arch_results[-1].hypothesis.to_dict()
                                       if arch_results else None),
+        # aegis["decisions"] values are already plain dicts (matching
+        # platform_alpha_evidence_story.py's own usage of the identical
+        # evaluate_pair() return shape - no .to_dict() call there either).
         "aegis_inference_hypotheses": (
-            {hyp: dec.to_dict() for hyp, dec in aegis["decisions"].items()} if aegis else {}),
+            {hyp: dec for hyp, dec in aegis["decisions"].items()} if aegis else {}),
         "provenance_all_trace_to_real_event_ids": all(
             bool(o.provenance) for o in exposure_observations) if exposure_observations else True,
         "real_event_ids": [e.event_id for e in canonical_events],
