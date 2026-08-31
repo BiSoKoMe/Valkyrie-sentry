@@ -2,12 +2,12 @@
 
 ## Qualification status
 
-**OPEN, not yet run.** This document is the predeclared spec, written
-*before* the real soak runs, same discipline as
-`docs/BETA_0_5_TELEMETRY_RELIABILITY.md`. `redteam/evaluation/nyx_reliability.py`
-implements exactly what this document says; if they disagree, the code has
-a bug. Findings sections ("Beta 1.N: ...") get appended below only as real
-CI runs actually surface them — nothing below "## Sequence" is written yet.
+**QUALIFIED — 2026-08-31.** The 3x15-minute soak passed 3/3 on independent
+fresh GitHub Actions runners, every predeclared criterion green on all
+three (~2,488 total visits combined, zero failures anywhere in any log).
+See "Beta 1: QUALIFIED" near the end of this document for the full
+evidence trail — two real product bugs were found and fixed along the way,
+not smoothed over.
 
 ## What this qualifies, and what it does not
 
@@ -119,3 +119,95 @@ alone" principle behind every prior qualification in this project.
 Platform Alpha (locked) → Beta 0 (startup deafness, resolved) → Beta 0.5
 (telemetry reliability, QUALIFIED + audited) → **Beta 1 (Nyx reliability,
 here)** → Beta 2 (Aegis). Do not start Beta 2 until this closes.
+
+## Beta 1.1: harness bugs (not Nyx) - a flawed test scenario, and CI contention
+
+Before the harness was trustworthy, two non-Nyx issues had to be fixed:
+
+1. The `benign-no-personal-data` visit's `nopersonal=1` body still carried
+   screen/timezone/lang/cores fields. `nyx.py`'s fingerprint detector
+   correctly treats each of those as an individually fake-able field
+   (`_personal_values()`), independent of `inspect_outbound`'s own "3+
+   signals" bundling threshold used only for the OBSERVE-side alert - so
+   this was a real fingerprint disclosure by Nyx's own definition, not a
+   benign one, and Nyx was correctly faking it. Fixed by sending a
+   genuinely inert body (`event=pageview&ts=...`) for this visit kind.
+2. Running the already-proven `nyx_live_test.py` immediately after this
+   job's own resource-heavy dry-run/soak, on the same shared 2-vCPU
+   runner, caused it to intermittently time out - reproduced 3/3 times in
+   this job, then passed cleanly every time it was dispatched in
+   isolation. Removed from this job; `nyx-live.yml` already runs
+   independently on the same trigger paths.
+
+## Beta 1.2: the card detector's Luhn-only gate
+
+The first fully clean dry-run (2 min) still showed a small, reproducible
+`authorized_benign_flows_unaltered` miss (2-4 of ~55 benign visits per
+run). Traced to `nyx.py`'s payment-card detector: gated on a Luhn checksum
+alone, on the documented assumption that Luhn was a precise-enough
+boundary. It is not - Luhn's check digit is a mod-10 property, so an
+arbitrary 13-19 digit number (here: a millisecond timestamp) has roughly a
+1-in-10 chance of coincidentally passing it, and got faked into a card
+number. Fixed by requiring Luhn AND (a card-shaped key name OR real
+card-style grouping), matching the same contextual-gating philosophy every
+other category already used. 4 new regression tests; all pre-existing
+checks stayed green.
+
+## Beta 1.3: the real finding - `_apply_repl` could corrupt a fake value
+
+With the dry-run fully clean, the first real 3x15-minute soak failed
+3/3 - EVERY unauthorized visit failed to be correctly deceived for the
+whole run (some attempts showed 0% reaching the endpoint at all; others
+showed 100% reaching but 0% carrying either the real or the fake value).
+Root cause: `_apply_repl` applied each `(raw, fake)` substitution as its
+own sequential `text.replace()` call. A real browser beacon normally fakes
+MORE than one field per request (a device id AND a fingerprint bundle
+together) - not an edge case. When it does, one substitution's OUTPUT can
+contain a substring a LATER substitution's raw-value pattern matches,
+corrupting an already-faked value: replacing `"16"->"8"` (cores) after a
+screen field was already faked to `"3840x2160"` turned it into
+`"3840x280"` (`"2160"` contains `"16"`). `self_test()` never caught this
+because its 5 synthetic cases each exercise exactly one category in
+isolation - never the multi-field shape a real request actually has.
+
+Fixed by doing every substitution in ONE single regex pass (longest-raw-
+value-first) instead of N sequential text passes, so an already-
+substituted region can never be rescanned by a later pattern. Verified
+0/3000 failures across random personas with a realistic multi-field body
+(reproducible before the fix). A second, unrelated, already-latent ~8%
+flake was found and fixed in the same pass: `test_nyx.py`'s own
+fingerprint-bundle test hardcoded `"2560x1440"` as input, which happens to
+be one of `persona.py`'s own weighted screen choices (weight 8 of ~100) -
+a fresh CI persona seed matching it exactly would correctly skip the
+now-redundant replacement, which the test wrongly read as a failure.
+
+## Beta 1: QUALIFIED — 2026-08-31
+
+**The real 3x15-minute soak, rerun with both fixes in place: 3/3 PASS.**
+Every predeclared criterion green on all three independent runs:
+
+| | Run 1 | Run 2 | Run 3 |
+|---|---:|---:|---:|
+| Total visits | 824 | 838 | 826 |
+| Unauthorized visits deceived | 412/412 | 420/420 | 414/414 |
+| Real-value leaks | 0 | 0 | 0 |
+| Authorized/benign altered | 0/412 | 0/418 | 0/412 |
+| Persona drift | 0/412 | 0/420 | 0/414 |
+| self_test() drift | 0/31 | 0/31 | 0/31 |
+| Proxy downtime samples | 0/452 | 0/452 | 0/452 |
+| Process crashes | 0 | 0 | 0 |
+
+Zero `[!]` (failing check) lines anywhere in any of the three full logs.
+~2,488 total visits combined, zero real-value leaks, 100% deception rate,
+zero false alterations of authorized or benign traffic.
+
+**Beta 1 is genuinely done, not declared done.** The two real product
+fixes that made this possible: the card detector's context-gating
+(Beta 1.2) and `_apply_repl`'s single-pass substitution fix (Beta 1.3) -
+the second one specifically a bug no prior test (scorecard, self_test(),
+nyx_live_test.py) had ever caught, because none of them exercised a real
+request faking more than one field at once, repeatedly, the way a
+sustained real browsing session actually does. Per the sequence set at
+the start of this work (Platform Alpha → Beta 0 → Beta 0.5 → **Beta 1 ←
+closed here** → Beta 2/Aegis), development now proceeds to Platform
+Beta 2.
