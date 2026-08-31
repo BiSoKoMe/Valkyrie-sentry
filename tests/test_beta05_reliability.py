@@ -333,6 +333,44 @@ def main() -> int:
         rec2 = s2._sample_once()
         _check("all four endpoints attempted when health succeeds", calls2["n"] == 4)
 
+    print("\n[23] _rank_pyspy_raw parses py-spy's folded-stack ('raw') "
+          "format and ranks hot functions two ways (2026-08-31 review, "
+          "item 4: name the actual function, not 'maybe X')")
+    from redteam.evaluation.beta05_reliability import _rank_pyspy_raw
+    import tempfile as _tempfile2
+    from pathlib import Path as _Path2
+    with _tempfile2.TemporaryDirectory() as _td3:
+        raw = _Path2(_td3) / "profile.raw"
+        # Synthetic folded stacks: main;loop;poll_collector appears often
+        # (the "hot" leaf), main;loop;idle appears less.
+        raw.write_text(
+            "main;loop;poll_collector 50\n"
+            "main;loop;poll_collector 30\n"
+            "main;loop;idle 5\n"
+            "main;other;poll_collector 10\n",
+            encoding="utf-8",
+        )
+        ranked = _rank_pyspy_raw(raw)
+        _check("total samples summed correctly", ranked["total_samples"] == 95)
+        leaf_top = ranked["top_functions_leaf"][0]
+        _check("poll_collector is the top LEAF function (80/95 samples)",
+               leaf_top["function"] == "poll_collector" and leaf_top["samples"] == 90)
+        inclusive_names = [f["function"] for f in ranked["top_functions_inclusive"]]
+        _check("'main' appears in the inclusive ranking (present in every stack)",
+               "main" in inclusive_names)
+        main_entry = next(f for f in ranked["top_functions_inclusive"] if f["function"] == "main")
+        _check("'main' inclusive count covers all samples (95)", main_entry["samples"] == 95)
+
+    print("\n[24] _rank_pyspy_raw degrades honestly on a missing/empty profile")
+    missing = _rank_pyspy_raw(_Path2(_td3) / "does_not_exist.raw")
+    _check("missing file -> explicit error, not a crash", "error" in missing)
+    with _tempfile2.TemporaryDirectory() as _td4:
+        empty = _Path2(_td4) / "empty.raw"
+        empty.write_text("", encoding="utf-8")
+        empty_result = _rank_pyspy_raw(empty)
+        _check("empty file -> explicit 'no samples' error, not a false zero",
+               "error" in empty_result)
+
     print("\n" + "=" * 48)
     if _FAILURES:
         print(f"FAILED: {len(_FAILURES)} check(s)")

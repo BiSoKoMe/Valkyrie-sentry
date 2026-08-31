@@ -36,6 +36,10 @@ on:
         type: choice
         options: [idle, benign, full]
         default: full
+      attach_profiler:
+        description: "profile mode only: attach py-spy (a sampling profiler) and rank hot functions"
+        type: boolean
+        default: false
 
 jobs:
   plan:
@@ -85,6 +89,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements_modular.txt
           python -m pip install pytest
+          if ("${{ inputs.attach_profiler }}" -eq "true") {
+            python -m pip install py-spy
+          }
 
       - name: Provision (Sysmon + PS logging + Invoke-AtomicRedTeam)
         shell: pwsh
@@ -97,7 +104,9 @@ jobs:
         run: |
           $mode = "${{ inputs.mode }}"
           if ($mode -eq "profile") {
-            python redteam\evaluation\beta05_reliability.py --mode $mode --minutes ${{ inputs.minutes }} --workload ${{ inputs.workload }}
+            $pyspyArgs = @()
+            if ("${{ inputs.attach_profiler }}" -eq "true") { $pyspyArgs = @("--attach-pyspy") }
+            python redteam\evaluation\beta05_reliability.py --mode $mode --minutes ${{ inputs.minutes }} --workload ${{ inputs.workload }} @pyspyArgs
           } elseif ($mode -eq "soak" -or $mode -eq "contention") {
             python redteam\evaluation\beta05_reliability.py --mode $mode --minutes ${{ inputs.minutes }}
           } else {
@@ -127,5 +136,6 @@ jobs:
             redteam/evaluation/results/beta05_*.json
             redteam/evaluation/results/beta05_*.jsonl
             redteam/evaluation/results/beta05_*.log
+            redteam/evaluation/results/beta05_*.raw
           if-no-files-found: warn
           retention-days: 30

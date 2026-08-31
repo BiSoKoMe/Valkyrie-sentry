@@ -754,3 +754,42 @@ starts until attribution is real, not guessed. Plan, in strict order:
 Next: run the sanity dry-run, then the three `profile` experiments (`idle`,
 `benign`, `full`), and read the actual phase/workload CPU numbers before
 deciding anything.
+
+### Result: idle is the expensive state, not event volume
+
+Three 15-minute runs, one runner each, `windows-latest` (12 logical / 6
+physical CPUs - a locally-run sanity check used a 12-core dev machine, but
+these three numbers are from real disposable CI runners):
+
+| Workload | Engine CPU median | p95 | max | %>50 | %>80 | System CPU median |
+|---|---|---|---|---|---|---|
+| idle   | 48.9% | 93.4 | 98.6  | 49.6% | 39.7% | 28.3% |
+| benign | 46.9% | 94.2 | 99.4  | 47.5% | 41.5% | 28.8% |
+| full   | 61.2% | 94.6 | 102.3 | 55.7% | 42.8% | 30.0% |
+
+Idle and benign are statistically indistinguishable (46.9% vs. 48.9% -
+within run-to-run noise). Full adds a real but modest increment on top
+(+~12 points median), with almost no change in the %>80 tail. System-wide
+CPU stayed moderate throughout (~28-30% median) - the runner was never
+close to globally saturated.
+
+Per the predeclared decision tree: **Phase A (idle) CPU is high → this is
+a baseline subsystem cost, not an event-volume/ingestion story.** The
+engine spends most of its CPU doing something expensive continuously,
+regardless of whether anything is happening around it. Item 4 (profiling)
+is now justified by this data, specifically targeting the idle state.
+
+### Profiling (item 4): attaching py-spy to the idle engine
+
+`run_profile(..., attach_profiler=True)` / `--attach-pyspy` attaches
+py-spy (a sampling profiler - reads the target's call stack from outside
+at a fixed rate; deliberately not `cProfile`, whose instrumentation
+overhead would contaminate a timing/contention investigation) to the
+engine process for a bounded window during the idle experiment, then
+`_rank_pyspy_raw()` parses the folded-stack output and ranks functions two
+ways: `top_functions_leaf` (function was on top of the stack - the most
+direct "actually executing" signal) and `top_functions_inclusive`
+(function appeared anywhere in a sampled stack - catches a hot callee
+shared by multiple callers). Both rankings print directly in the CI log
+and land in the run's summary JSON (`pyspy_profile`), so a specific
+function gets named without needing to open a flamegraph.

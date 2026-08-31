@@ -1125,7 +1125,86 @@ def run_soak(minutes: float, contention: bool = False) -> int:
         shutil.rmtree(data_dir, ignore_errors=True)
 
 
-def run_profile(workload: str, minutes: float) -> int:
+def _rank_pyspy_raw(path: Path, top_n: int = 20) -> dict:
+    """Parse py-spy's 'raw' (folded-stack) output: each line is
+    'func_a;func_b;func_c N', N being the sample count for that exact call
+    stack. Ranks functions two ways without needing a flamegraph viewer to
+    read the answer: `leaf` (function was on top of the stack - the most
+    direct "actually executing" signal) and `inclusive` (function appeared
+    ANYWHERE in a sampled stack - broader, catches a hot callee shared by
+    several callers). Both are printed so CI logs name the hot function(s)
+    directly, per the 2026-08-31 review's item 4 ("not 'maybe X' - name the
+    actual function")."""
+    if not path.exists():
+        return {"error": "profile output missing", "top_functions_leaf": [],
+                "top_functions_inclusive": []}
+    from collections import Counter
+    leaf_counts: Counter = Counter()
+    frame_counts: Counter = Counter()
+    total_samples = 0
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                stack_part, count_part = line.rsplit(" ", 1)
+                count = int(count_part)
+            except ValueError:
+                continue
+            total_samples += count
+            frames = [f for f in stack_part.split(";") if f]
+            if frames:
+                leaf_counts[frames[-1]] += count
+            for f in set(frames):    # once per stack, not once per stack depth
+                frame_counts[f] += count
+    except Exception as exc:                             # noqa: BLE001
+        return {"error": repr(exc), "top_functions_leaf": [], "top_functions_inclusive": []}
+    if total_samples == 0:
+        return {"error": "no samples parsed (empty or malformed profile)",
+                "top_functions_leaf": [], "top_functions_inclusive": []}
+
+    def _top(counter: "Counter") -> list[dict]:
+        return [{"function": f, "samples": c,
+                 "pct_of_samples": round(100.0 * c / total_samples, 1)}
+                for f, c in counter.most_common(top_n)]
+
+    return {
+        "total_samples": total_samples,
+        "top_functions_leaf": _top(leaf_counts),
+        "top_functions_inclusive": _top(frame_counts),
+    }
+
+
+def _run_pyspy_profile(pid: int, duration_s: float, out_path: Path) -> dict:
+    """Attach py-spy (a SAMPLING profiler - reads the target's call stack
+    from outside at a fixed rate, no bytecode instrumentation) to the
+    engine process for a bounded window. Deliberately not cProfile: this is
+    a timing/contention investigation, and an instrumenting profiler's own
+    overhead would contaminate exactly the measurement being taken. Never
+    raises: profiling is diagnostic-only and must not crash the experiment
+    that is measuring the thing being profiled."""
+    pyspy = shutil.which("py-spy")
+    if not pyspy:
+        return {"error": "py-spy not installed", "top_functions_leaf": [],
+                "top_functions_inclusive": []}
+    cmd = [pyspy, "record", "--pid", str(pid), "--duration", str(int(duration_s)),
+          "--rate", "100", "--format", "raw", "--output", str(out_path)]
+    print(f"[PROFILE] {' '.join(cmd)}")
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                timeout=duration_s + 30)
+        if result.stdout:
+            print(result.stdout[-2000:])
+        if result.returncode != 0:
+            return {"error": f"py-spy exited {result.returncode}: {result.stderr[-1500:]}",
+                    "top_functions_leaf": [], "top_functions_inclusive": []}
+    except Exception as exc:                             # noqa: BLE001
+        return {"error": repr(exc), "top_functions_leaf": [], "top_functions_inclusive": []}
+    return _rank_pyspy_raw(out_path)
+
+
+def run_profile(workload: str, minutes: float, attach_profiler: bool = False) -> int:
     """2026-08-31 review, item 3: controlled CPU-attribution experiments -
     ONE variable held constant for the whole run, so idle/benign/full costs
     can be compared without the confounds a single mixed A-E run carries
@@ -1160,8 +1239,23 @@ def run_profile(workload: str, minutes: float) -> int:
 
         before = _safe_get(api_base, "/api/edr/causality/stats")
         unhandled_exception: str | None = None
+        profile_result: dict | None = None
         try:
             deadline = time.time() + minutes * 60.0
+            if attach_profiler:
+                # A short settle window after readiness so the profile
+                # captures steady-state behavior, not startup - then sample
+                # for a meaningful chunk of what's left, capped so the
+                # profiler itself never dominates a short experiment's
+                # duration. Runs as one blocking step: the Sampler keeps
+                # recording CPU/health on its own background thread the
+                # whole time regardless, so nothing about the CPU
+                # comparison numbers is disturbed by profiling running
+                # concurrently with them.
+                time.sleep(min(20.0, max(0.0, deadline - time.time() - 30.0)))
+                duration_s = min(90.0, max(10.0, (deadline - time.time()) * 0.6))
+                raw_path = RESULTS_DIR / f"beta05_profile_{workload}_pyspy.raw"
+                profile_result = _run_pyspy_profile(proc.pid, duration_s, raw_path)
             toggle = 0
             while time.time() < deadline:
                 remaining = deadline - time.time()
@@ -1196,6 +1290,8 @@ def run_profile(workload: str, minutes: float) -> int:
             "phase_cpu_summary": _phase_cpu_summary(sampler.samples),
             "engine_resource_trend": _engine_resource_trend(sampler.samples),
         }
+        if profile_result is not None:
+            result["pyspy_profile"] = profile_result
         if unhandled_exception:
             result["unhandled_exception"] = unhandled_exception
         _write_summary(f"profile_{workload}", result)
@@ -1215,6 +1311,9 @@ def main() -> int:
                     help="soak/contention/profile modes: total duration in minutes")
     ap.add_argument("--workload", choices=["idle", "benign", "full"], default=None,
                     help="profile mode only: which of the 3 controlled experiments to run")
+    ap.add_argument("--attach-pyspy", action="store_true",
+                    help="profile mode only: attach py-spy (a sampling profiler) to "
+                        "the engine for part of the run and rank hot functions")
     args = ap.parse_args()
 
     if args.mode == "smoke":
@@ -1229,7 +1328,7 @@ def main() -> int:
         if not args.workload:
             print("profile mode requires --workload {idle,benign,full}", file=sys.stderr)
             return 2
-        return run_profile(args.workload, args.minutes)
+        return run_profile(args.workload, args.minutes, attach_profiler=args.attach_pyspy)
     return run_soak(args.minutes)
 
 
