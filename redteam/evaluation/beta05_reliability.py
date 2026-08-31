@@ -301,6 +301,48 @@ class Transition:
     reasons: list = field(default_factory=list)
 
 
+# Reused psutil.Process handle per pid - psutil's cpu_percent() measures the
+# interval SINCE ITS OWN LAST CALL on that same Process object, so creating a
+# fresh Process() every sample would make every cpu_percent() reading
+# meaningless (always the instantaneous-since-process-start average). One
+# handle per pid across the whole run is required for this number to mean
+# anything sampled continuously.
+_ENGINE_PROC_HANDLES: dict[int, object] = {}
+
+
+def _engine_process_stats(pid: int | None) -> dict | None:
+    """Point-in-time resource snapshot of the engine process - memory,
+    handles, threads, CPU. Beta 0.5.5 found the engine process itself can go
+    completely unreachable mid-run; this exists to measure WHY (a resource
+    trending toward a wall) instead of guessing, on every sample rather than
+    only at the moment something already failed."""
+    if not pid:
+        return None
+    try:
+        import psutil
+    except ImportError:
+        return None
+    try:
+        proc = _ENGINE_PROC_HANDLES.get(pid)
+        if proc is None:
+            proc = psutil.Process(pid)
+            _ENGINE_PROC_HANDLES[pid] = proc
+        with proc.oneshot():
+            return {
+                "pid": proc.pid,
+                "cpu_percent": proc.cpu_percent(),
+                "rss": proc.memory_info().rss,
+                "vms": proc.memory_info().vms,
+                "threads": proc.num_threads(),
+                "handles": proc.num_handles() if hasattr(proc, "num_handles") else None,
+            }
+    except Exception as exc:                          # noqa: BLE001
+        # Includes psutil.NoSuchProcess - itself useful evidence: it means
+        # the process had ALREADY exited by the time this sample ran, not
+        # merely that it was slow to answer.
+        return {"error": repr(exc)}
+
+
 class Sampler:
     """Background thread sampling the running engine every SAMPLE_INTERVAL_S,
     independent of phase boundaries. Streams every sample to a JSONL file as
@@ -370,19 +412,10 @@ class Sampler:
                 self._api_base, "/api/telemetry/contention", timeout=5.0)
         except Exception as exc:
             result["contention_endpoint_error"] = repr(exc)
-        if self._engine_pid:
-            try:
-                import psutil
-                proc = psutil.Process(self._engine_pid)
-                with proc.oneshot():
-                    result["engine_process"] = {
-                        "pid": proc.pid, "cpu_percent": proc.cpu_percent(),
-                        "rss": proc.memory_info().rss, "vms": proc.memory_info().vms,
-                        "threads": proc.num_threads(),
-                        "handles": proc.num_handles() if hasattr(proc, "num_handles") else None,
-                    }
-            except Exception as exc:
-                result["engine_process_error"] = repr(exc)
+        # rec already carries a fresh engine_process reading from this same
+        # sample cycle (see _sample_once) - reuse it rather than taking a
+        # second, slightly later one.
+        result["engine_process"] = rec.get("engine_process")
         return result
 
     def _timed_get(self, label: str, path: str) -> tuple[object | None, dict]:
@@ -402,6 +435,11 @@ class Sampler:
     def _sample_once(self) -> dict:
         now = time.time()
         rec: dict = {"t": now, "phase": self.current_phase}
+        # Every sample, not only at failure time (Beta 0.5.5) - a resource
+        # trending toward a wall should be visible in a clean run's own
+        # data, not only reconstructable after the fact from one snapshot
+        # taken at the moment something already broke.
+        rec["engine_process"] = _engine_process_stats(self._engine_pid)
 
         rec["requests"] = {}
         health, rec["requests"]["health"] = self._timed_get("health", "/api/health")
@@ -629,7 +667,43 @@ def score(samples: list[dict], transitions: list[Transition],
         }
 
     overall_pass = all(c["pass"] for c in checks.values())
-    return {"overall": "PASS" if overall_pass else "FAIL", "checks": checks}
+    return {
+        "overall": "PASS" if overall_pass else "FAIL",
+        "checks": checks,
+        # Exploratory measurement, not yet a pass/fail gate (Beta 0.5.5) -
+        # no real-data-backed threshold exists yet for what "trending toward
+        # a wall" looks like for this engine on this runner class. Establish
+        # bounds from what this actually reports across real runs, the same
+        # way snapshot_budget/emit_budget were sized from measured numbers,
+        # not guessed ahead of any data.
+        "engine_resource_trend": _engine_resource_trend(samples),
+    }
+
+
+def _engine_resource_trend(samples: list[dict]) -> dict:
+    points = [rec["engine_process"] for rec in samples
+             if rec.get("engine_process") and "error" not in rec["engine_process"]]
+    errors = [rec["engine_process"]["error"] for rec in samples
+             if rec.get("engine_process") and "error" in rec["engine_process"]]
+    if not points:
+        return {"samples": 0, "errors": errors[:5]}
+
+    def _series(key: str) -> list[int]:
+        return [p[key] for p in points if p.get(key) is not None]
+
+    def _summary(key: str) -> dict | None:
+        vals = _series(key)
+        if not vals:
+            return None
+        return {"first": vals[0], "last": vals[-1], "min": min(vals), "max": max(vals)}
+
+    return {
+        "samples": len(points),
+        "errors": errors[:5],          # e.g. NoSuchProcess - itself evidence
+        "rss_bytes": _summary("rss"),
+        "handles": _summary("handles"),
+        "threads": _summary("threads"),
+    }
 
 
 # =============================================================================
@@ -657,7 +731,7 @@ def run_smoke() -> int:
         out = RESULTS_DIR / "beta05_smoke.jsonl"
         if out.exists():
             out.unlink()
-        sampler = Sampler(api_base, out)
+        sampler = Sampler(api_base, out, engine_pid=proc.pid)
         sampler.start()
         sampler.current_phase = "A"
         time.sleep(6)
@@ -686,7 +760,7 @@ def run_dry_run() -> int:
         out = RESULTS_DIR / "beta05_dryrun.jsonl"
         if out.exists():
             out.unlink()
-        sampler = Sampler(api_base, out)
+        sampler = Sampler(api_base, out, engine_pid=proc.pid)
         sampler.start()
 
         before_c: dict = {}
@@ -746,7 +820,7 @@ def run_fault_test() -> int:
         out = RESULTS_DIR / "beta05_faulttest.jsonl"
         if out.exists():
             out.unlink()
-        sampler = Sampler(api_base, out)
+        sampler = Sampler(api_base, out, engine_pid=proc.pid)
         sampler.start()
         sampler.current_phase = "baseline"
         time.sleep(6)

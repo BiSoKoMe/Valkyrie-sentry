@@ -2,9 +2,11 @@
 
 ## Qualification status
 
-**OPEN — tracked, not blocking. Do not freeze this baseline as a PASS.**
-Development has moved on to Platform Beta 1 (NYX); see "Decision, 2026-08-30"
-near the end of this document for why, and what would bring work back here.
+**OPEN. No next milestone starts until this is fixed and proven.** An
+engine-process-disappearing finding (see "Beta 0.5.5" below) is not yet
+root-caused; continuous resource instrumentation was added specifically to
+stop guessing at it (see "Reversed, 2026-08-30" near the end of this
+document) and the investigation is active, not deferred.
 
 Corrected CI qualification on 2026-08-30:
 
@@ -525,24 +527,44 @@ kind of single-run result this project's own methodology (union-across-runs,
 `docs/LIVE_FIRE_EVALUATION.md`) already treats as weak evidence on its own.
 It is recorded as inconclusive, not as a clean bill of health.
 
-## Decision, 2026-08-30: close this qualification round, track the finding, proceed to NYX
+## Reversed, 2026-08-30: no next step until this is actually fixed and proven
 
-Two real, well-evidenced collector bugs were found and durably fixed this
-round (persistence and process collector staleness, both traced to a precise
-code stage via `PollDiagnostics` and confirmed gone in live CI runs). The
-engine-process-disappearing finding is real, but unattributed, intermittent,
-and did not reproduce in a dedicated attempt to capture it directly. Rather
-than continue an open-ended series of ~25-55 minute CI cycles chasing an
-intermittent, unconfirmed root cause, this is being tracked as a known,
-documented open risk (see "Beta 0.5.5" above) rather than block on it
-indefinitely.
+The "track it, move to NYX" call above was rejected: this qualification's
+whole discipline is "we only move on if we fix and prove it," and an
+unattributed engine-death finding does not meet that bar just because CI
+cycles are expensive. Continuing the investigation, not deferring it.
 
-Per the sequence set at the start of this work (Platform Alpha → Beta 0 →
-Beta 0.5 → Beta 1/NYX → Beta 2/Aegis), development now proceeds to **Platform
-Beta 1 (NYX)**. This is not the same as declaring Beta 0.5 fully passed - the
-qualification's own predeclared criteria (see above) are not all met, and
-this document stays open rather than being marked frozen/closed. If the
-engine-death class resurfaces (in a future Beta 0.5 revisit, or as a real
-symptom reported from an actual deployment rather than only a CI runner),
-that is the trigger to resume this investigation with fresh evidence, not a
-signal that it was ever fully closed.
+### Continuous engine-resource instrumentation (measure before guessing again)
+
+One dedicated `--mode contention` attempt not reproducing the failure is
+weak evidence either way - and guessing at the cause (resource exhaustion)
+without measuring it would repeat the exact mistake this project's own
+methodology exists to prevent ("measure before mitigate, falsify don't
+rationalize"). Rather than keep re-running the same blind experiment, the
+harness now captures the engine process's own resource usage - RSS, virtual
+memory, thread count, handle count, CPU - on **every sample**, not only at
+the moment a failure is detected. A clean run now produces a full resource
+timeline (does anything trend toward a wall even when nothing fails?); a
+run that does hit the engine-death shape now has the complete lead-up, not
+one snapshot taken after the fact.
+
+Implementation: `_engine_process_stats(pid)` (one cached `psutil.Process`
+handle per pid across the whole run, since `cpu_percent()` only means
+anything measured against its own last call on the same handle) is now
+called from `Sampler._sample_once()` every `SAMPLE_INTERVAL_S`, and
+`_capture_failure()` reuses that same per-cycle reading instead of taking
+its own separate one. `score()`'s output always includes
+`engine_resource_trend` (first/last/min/max for rss/handles/threads across
+the run, plus any process-read errors like `NoSuchProcess` verbatim - itself
+evidence the process had already exited, not merely gone quiet). This is
+deliberately **not yet a pass/fail gate** - there is no measured threshold
+for what "trending toward a wall" looks like for this engine on this runner
+class yet, and inventing one before seeing real numbers would be exactly
+the guessing this instrumentation exists to replace. Bounds get set from
+what real runs actually show, the same way `snapshot_budget`/`emit_budget`
+were sized from measured numbers rather than picked ahead of any data.
+Covered by `tests/test_beta05_reliability.py` checks `[14]`-`[17]`.
+
+Next: rerun contention mode (and/or the full soak) with this instrumentation
+active, and read the actual resource trend - whether or not the engine-death
+shape reproduces this time - before deciding what, if anything, needs fixing.

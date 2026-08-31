@@ -207,6 +207,50 @@ def main() -> int:
            result15["checks"]["engine_process_alive_throughout"]["detail"] == {"exit_code": 1})
     _check("overall FAILS", result15["overall"] == "FAIL")
 
+    print("\n[14] engine_resource_trend (Beta 0.5.5): summarizes first/last/"
+          "min/max across real samples, exploratory only - not yet a "
+          "pass/fail gate since no measured threshold exists")
+    from redteam.evaluation.beta05_reliability import _engine_resource_trend
+    samples_with_trend = [
+        {"engine_process": {"pid": 1, "rss": 100, "handles": 50, "threads": 10}},
+        {"engine_process": {"pid": 1, "rss": 150, "handles": 55, "threads": 10}},
+        {"engine_process": {"pid": 1, "rss": 90, "handles": 60, "threads": 11}},
+    ]
+    trend = _engine_resource_trend(samples_with_trend)
+    _check("rss first/last/min/max computed correctly",
+           trend["rss_bytes"] == {"first": 100, "last": 90, "min": 90, "max": 150})
+    _check("handles trend computed correctly",
+           trend["handles"] == {"first": 50, "last": 60, "min": 50, "max": 60})
+    _check("sample count matches", trend["samples"] == 3)
+
+    print("\n[15] engine_resource_trend surfaces process errors (e.g. "
+          "NoSuchProcess) as evidence rather than hiding them")
+    samples_with_error = [
+        {"engine_process": {"pid": 1, "rss": 100, "handles": 50, "threads": 10}},
+        {"engine_process": {"error": "NoSuchProcess(pid=1)"}},
+    ]
+    trend2 = _engine_resource_trend(samples_with_error)
+    _check("only the real point counts toward samples", trend2["samples"] == 1)
+    _check("the error is surfaced, not swallowed",
+           trend2["errors"] == ["NoSuchProcess(pid=1)"])
+
+    print("\n[16] no engine_process data at all (e.g. psutil unavailable) "
+          "-> reports zero samples, never crashes")
+    trend3 = _engine_resource_trend([{"engine_process": None}, {}])
+    _check("zero samples, no crash", trend3 == {"samples": 0, "errors": []})
+
+    print("\n[17] score() always includes engine_resource_trend, non-gating")
+    samples_clean = [
+        _sample(100.0, "A", "HEALTHY", {"process_collector": src(99.0)}),
+        _sample(102.0, "A", "HEALTHY", {"process_collector": src(101.5)}),
+    ]
+    result16 = score(samples_clean, [], health_failures=0, health_successes=1,
+                     causality_before_c=None, causality_after_c=None, mode="soak")
+    _check("engine_resource_trend key present", "engine_resource_trend" in result16)
+    _check("engine_resource_trend does not itself gate a run that is "
+           "otherwise clean (no engine_process data collected here)",
+           result16["overall"] == "PASS")
+
     print("\n" + "=" * 48)
     if _FAILURES:
         print(f"FAILED: {len(_FAILURES)} check(s)")
