@@ -251,6 +251,88 @@ def main() -> int:
            "otherwise clean (no engine_process data collected here)",
            result16["overall"] == "PASS")
 
+    print("\n[18] _percentile / _cpu_series_summary (2026-08-31 review, item 1/2: "
+          "system-wide + per-phase CPU attribution, exploratory only)")
+    from redteam.evaluation.beta05_reliability import (
+        _percentile, _cpu_series_summary, _phase_cpu_summary)
+    _check("p50 of 1..10 is a middle value", _percentile(list(range(1, 11)), 50) in (5, 6))
+    _check("p100 is the max", _percentile([3.0, 9.0, 1.0], 100) == 9.0)
+    _check("empty series -> None", _percentile([], 95) is None)
+
+    summary = _cpu_series_summary([10, 20, 30, 90, 95])
+    _check("n counted correctly", summary["n"] == 5)
+    _check("pct_over_50 counts only the two over 50", summary["pct_over_50"] == 40.0)
+    _check("pct_over_80 counts only the two over 80", summary["pct_over_80"] == 40.0)
+    _check("max is the true max", summary["max"] == 95)
+    _check("empty series -> None, not a crash", _cpu_series_summary([]) is None)
+
+    print("\n[19] _phase_cpu_summary groups by phase, not the whole run "
+          "(the whole point: a single median hides WHERE the cost is)")
+    samples_multi_phase = [
+        {"phase": "A", "engine_process": {"cpu_percent": 5.0}, "system_cpu": {"system_cpu_percent": 8.0}},
+        {"phase": "A", "engine_process": {"cpu_percent": 6.0}, "system_cpu": {"system_cpu_percent": 9.0}},
+        {"phase": "E", "engine_process": {"cpu_percent": 90.0}, "system_cpu": {"system_cpu_percent": 95.0}},
+        {"phase": "E", "engine_process": {"cpu_percent": 88.0}, "system_cpu": {"system_cpu_percent": 92.0}},
+    ]
+    phases = _phase_cpu_summary(samples_multi_phase)
+    _check("both phases present", set(phases.keys()) == {"A", "E"})
+    _check("phase A's engine CPU is low", phases["A"]["engine_cpu"]["median"] < 10)
+    _check("phase E's engine CPU is high - the actual diagnostic signal",
+           phases["E"]["engine_cpu"]["median"] > 80)
+    _check("a sample with an engine_process error is excluded, not counted as 0%",
+           _phase_cpu_summary([{"phase": "X", "engine_process": {"error": "boom"},
+                                "system_cpu": None}])["X"]["engine_cpu"] is None)
+
+    print("\n[20] score() always includes phase_cpu_summary and cpu_hardware")
+    result17 = score(samples_multi_phase, [], health_failures=0, health_successes=4,
+                     causality_before_c=None, causality_after_c=None, mode="soak")
+    _check("phase_cpu_summary present", "phase_cpu_summary" in result17)
+    _check("cpu_hardware present with real values",
+           result17["cpu_hardware"]["logical_cpus"] is not None)
+
+    print("\n[21] Sampler._sample_once fails fast after a health failure "
+          "(2026-08-31 review, item 7): watchdog/causality/sensors are "
+          "SKIPPED, not attempted, once health already failed this cycle - "
+          "same scored outcome (all read as unavailable), a fraction of "
+          "the wall-clock cost")
+    import tempfile as _tempfile
+    from pathlib import Path as _Path
+    from redteam.evaluation.beta05_reliability import Sampler
+    with _tempfile.TemporaryDirectory() as _td:
+        s = Sampler("http://fake-unused", _Path(_td) / "out.jsonl")
+        calls = {"n": 0}
+        def _fake_timed_get(label, path):
+            calls["n"] += 1
+            if label == "health":
+                return None, {"ok": False, "error": "TimeoutError"}
+            return {"x": 1}, {"ok": True}
+        s._timed_get = _fake_timed_get
+        rec = s._sample_once()
+        _check("health call attempted", calls["n"] == 1)
+        _check("watchdog/causality/sensors NOT attempted after health failed",
+               rec["requests"]["watchdog"].get("skipped") is True
+               and rec["requests"]["causality"].get("skipped") is True
+               and rec["requests"]["sensors"].get("skipped") is True)
+        _check("watchdog/causality/sensors still read as unavailable (None) - "
+               "identical scored outcome to a real timeout",
+               rec["watchdog"] is None and rec["causality_stats"] is None
+               and rec["sensors_status"] is None)
+        _check("health failure still correctly counted",
+               rec["health_ok"] is False and s.health_failures == 1)
+
+    print("\n[22] ...and when health succeeds, all four calls still happen normally")
+    with _tempfile.TemporaryDirectory() as _td2:
+        s2 = Sampler("http://fake-unused", _Path(_td2) / "out.jsonl")
+        calls2 = {"n": 0}
+        def _fake_timed_get2(label, path):
+            calls2["n"] += 1
+            if label == "watchdog":
+                return {"overall": "HEALTHY", "sources": {}}, {"ok": True, "duration_s": 0.01}
+            return {"x": 1}, {"ok": True, "duration_s": 0.01}
+        s2._timed_get = _fake_timed_get2
+        rec2 = s2._sample_once()
+        _check("all four endpoints attempted when health succeeds", calls2["n"] == 4)
+
     print("\n" + "=" * 48)
     if _FAILURES:
         print(f"FAILED: {len(_FAILURES)} check(s)")

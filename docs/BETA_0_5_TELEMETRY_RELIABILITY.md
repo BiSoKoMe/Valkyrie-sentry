@@ -686,3 +686,71 @@ resource growth) is real work, not a quick patch, and is being surfaced
 for direction rather than decided unilaterally.
 
 Beta 0.5 remains **OPEN**.
+
+## Beta 0.5.8: CPU attribution plan (predeclared before running)
+
+Per review of Beta 0.5.7's CPU finding: `psutil.Process.cpu_percent()` is
+expressed relative to **one logical CPU**, so a measured 64% median on a
+2-vCPU runner is ~0.64 of one core, not 64% of total machine capacity - high
+for an endpoint agent, but not yet proof the runner was globally saturated,
+since only the engine's own process CPU was ever measured. No optimization
+starts until attribution is real, not guessed. Plan, in strict order:
+
+1. **Measure engine vs. system CPU separately, not engine alone.**
+   `_system_cpu_stats()` now captures `psutil.cpu_percent(interval=None)`
+   (system-wide) and the same per-core, primed once via `_prime_system_cpu()`
+   before real sampling begins (`Sampler.start()`) - the same
+   since-last-call contract `_engine_process_stats()` already relied on.
+   `_cpu_hardware_info()` records logical/physical CPU counts once per run.
+2. **Per-phase CPU summaries, not one whole-run median.** `_phase_cpu_summary()`
+   groups every sample by its recorded phase and reports median/p95/max/
+   %>50/%>80 for both engine and system CPU per phase - phase A (idle) vs.
+   B/D (benign) vs. C/E (Tier-B-active) from a single run, for free.
+3. **Three controlled, single-variable experiments** (`run_profile()`,
+   `--mode profile --workload {idle,benign,full}`): idle (sampling only),
+   benign (the command loop, `run_phase_c` never called), full (benign +
+   periodic Tier B subset reruns, identical shape to `run_soak()`'s Phase
+   E). Each holds every other variable constant (same engine flags, same
+   runner class, same sampling) for its whole duration, avoiding the
+   confounds a single mixed A-E run carries (accumulated causality-graph
+   state, phase-boundary timing). Deliberately does NOT run `score()`'s
+   qualification checks - diagnostic only, per item 9 below.
+7. **Fail-fast sampling** (numbered per the review that specified it):
+   `_sample_once()` now skips the watchdog/causality/sensors calls entirely
+   once `/api/health` has already failed that cycle, rather than spending
+   three more sequential 5s timeouts to learn the same dead-listener fact
+   again. This changes NOTHING about what gets scored (those sources still
+   read as unavailable, identical to a real timeout) - it only makes a
+   failed sample cheaper to observe, which is what made Beta 0.5.6/.7's
+   failure expensive enough to also expose the `stop()`/`join` race.
+
+**Deferred, explicitly conditional on what 1-3 show:**
+4. Profiling (a sampling profiler, not `cProfile`, to avoid instrumentation
+   overhead contaminating a timing/contention investigation) - only if the
+   "full" experiment is dramatically hotter than "idle"/"benign".
+5. Optimizing the per-event reasoning path (leading suspect, not yet
+   confirmed) - only after profiling names the actual hot function(s).
+   `EdrStore`'s shared lock (Beta 0.5.6's other open follow-up) stays
+   untouched until profiling actually implicates it.
+6. Event backlog/rate counters (queue depth, oldest-pending-event age,
+   correlation evaluations/sec) - `/api/sensors/status`'s existing
+   submitted/emitted/dropped/restarts counters plus per-sample causality
+   node counts already give derivable rates without new Valkyrie code;
+   whether that is enough or a real backlog-depth metric is needed inside
+   Valkyrie itself is a decision for after the phase/experiment data is in.
+
+**Held for the whole investigation, not just this step:**
+9. The API failure timeout stays 5s and the qualification's own criteria
+   (every `/api/health` sample must succeed) are unchanged. Widening a
+   timeout, loosening a stale bound, or thinning the workload to manufacture
+   a green run would be exactly the failure mode this whole document exists
+   to prevent.
+10. Exit condition for the CPU investigation: idle/benign/full CPU numbers
+    (engine and system) reported for at least one run each, attribution
+    named with evidence (not "maybe X"), and - if anything gets changed -
+    the original 3x25-minute qualification re-passing unchanged with the
+    targeted function's CPU contribution measurably down.
+
+Next: run the sanity dry-run, then the three `profile` experiments (`idle`,
+`benign`, `full`), and read the actual phase/workload CPU numbers before
+deciding anything.

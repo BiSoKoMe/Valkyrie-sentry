@@ -14,6 +14,10 @@ name: Platform Beta 0.5 (telemetry reliability)
 #   contention  <=25 min    - one-run, stop-on-first-failure attribution
 #   soak        20-30 min   - the real qualification run, repeated on 3
 #                             independent fresh runners (matrix), never one
+#   profile     <=25 min    - 2026-08-31 CPU-attribution review: one isolated
+#                             workload (idle/benign/full, see --workload) for
+#                             the WHOLE run, no phase progression - diagnostic
+#                             only, never a qualification pass/fail
 
 on:
   workflow_dispatch:
@@ -21,12 +25,17 @@ on:
       mode:
         description: "Which Beta 0.5 stage to run"
         type: choice
-        options: [dry-run, fault-test, contention, soak]
+        options: [dry-run, fault-test, contention, soak, profile]
         default: dry-run
       minutes:
-        description: "soak/contention maximum duration in minutes"
+        description: "soak/contention/profile maximum duration in minutes"
         type: string
         default: "25"
+      workload:
+        description: "profile mode only: which controlled experiment to run"
+        type: choice
+        options: [idle, benign, full]
+        default: full
 
 jobs:
   plan:
@@ -87,7 +96,9 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: |
           $mode = "${{ inputs.mode }}"
-          if ($mode -eq "soak" -or $mode -eq "contention") {
+          if ($mode -eq "profile") {
+            python redteam\evaluation\beta05_reliability.py --mode $mode --minutes ${{ inputs.minutes }} --workload ${{ inputs.workload }}
+          } elseif ($mode -eq "soak" -or $mode -eq "contention") {
             python redteam\evaluation\beta05_reliability.py --mode $mode --minutes ${{ inputs.minutes }}
           } else {
             python redteam\evaluation\beta05_reliability.py --mode $mode
@@ -111,7 +122,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: beta05-${{ inputs.mode }}-run${{ matrix.run_index }}
+          name: beta05-${{ inputs.mode }}${{ inputs.mode == 'profile' && format('-{0}', inputs.workload) || '' }}-run${{ matrix.run_index }}
           path: |
             redteam/evaluation/results/beta05_*.json
             redteam/evaluation/results/beta05_*.jsonl

@@ -40,6 +40,7 @@ import os
 import platform
 import shutil
 import socket
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -343,6 +344,48 @@ def _engine_process_stats(pid: int | None) -> dict | None:
         return {"error": repr(exc)}
 
 
+# 2026-08-31 review: engine cpu_percent() alone cannot distinguish "the
+# engine itself is expensive" from "the whole runner is out of headroom" -
+# psutil expresses process cpu_percent() relative to ONE logical CPU, so a
+# measured 64% median on a 2-vCPU runner is ~0.64 of one core, not 64% of
+# total capacity. System-wide (and per-core) CPU is the other half of that
+# comparison and was previously never captured. Primed once via
+# _prime_system_cpu() before real sampling begins, matching the same
+# since-last-call contract _engine_process_stats() already relies on.
+def _prime_system_cpu() -> None:
+    try:
+        import psutil
+        psutil.cpu_percent(interval=None)
+        psutil.cpu_percent(interval=None, percpu=True)
+    except ImportError:
+        pass
+
+
+def _cpu_hardware_info() -> dict:
+    try:
+        import psutil
+        return {
+            "logical_cpus": psutil.cpu_count(logical=True),
+            "physical_cpus": psutil.cpu_count(logical=False),
+        }
+    except ImportError:
+        return {"logical_cpus": None, "physical_cpus": None}
+
+
+def _system_cpu_stats() -> dict | None:
+    try:
+        import psutil
+    except ImportError:
+        return None
+    try:
+        return {
+            "system_cpu_percent": psutil.cpu_percent(interval=None),
+            "per_cpu_percent": psutil.cpu_percent(interval=None, percpu=True),
+        }
+    except Exception as exc:                           # noqa: BLE001
+        return {"error": repr(exc)}
+
+
 class Sampler:
     """Background thread sampling the running engine every SAMPLE_INTERVAL_S,
     independent of phase boundaries. Streams every sample to a JSONL file as
@@ -368,6 +411,13 @@ class Sampler:
         self.first_failure: dict | None = None
 
     def start(self) -> None:
+        # Prime both CPU measurements exactly once, in every mode, without
+        # needing every call site to remember to - psutil's cpu_percent()
+        # (system AND per-process) is meaningless on its own first call
+        # (compares against process/boot start, not a real interval).
+        _prime_system_cpu()
+        if self._engine_pid:
+            _engine_process_stats(self._engine_pid)
         self._thread = threading.Thread(target=self._loop, daemon=True, name="beta05-sampler")
         self._thread.start()
 
@@ -451,8 +501,13 @@ class Sampler:
         # Every sample, not only at failure time (Beta 0.5.5) - a resource
         # trending toward a wall should be visible in a clean run's own
         # data, not only reconstructable after the fact from one snapshot
-        # taken at the moment something already broke.
+        # taken at the moment something already broke. system_cpu (2026-08-31
+        # review) is the other half of the comparison engine_process's own
+        # cpu_percent cannot make alone: psutil expresses process CPU
+        # relative to ONE logical CPU, so a measured engine median cannot by
+        # itself say whether the runner as a whole had headroom left.
         rec["engine_process"] = _engine_process_stats(self._engine_pid)
+        rec["system_cpu"] = _system_cpu_stats()
 
         rec["requests"] = {}
         health, rec["requests"]["health"] = self._timed_get("health", "/api/health")
@@ -466,6 +521,29 @@ class Sampler:
             rec["health_ok"] = False
             rec["health_error"] = str(exc)
             self.health_failures += 1
+
+        if not rec["health_ok"]:
+            # Fail fast (2026-08-31 review, item 7): a dead health check
+            # almost always means the same listener serves every other
+            # endpoint too. Spending three more sequential 5s timeouts to
+            # prove that again is what inflated one failed sample from ~5s
+            # to ~20s in Beta 0.5.6/.7 - expensive enough that it was also
+            # what exposed the stop()/join race in the first place. This
+            # changes nothing about what gets SCORED: watchdog/causality/
+            # sensors already read as unavailable (None) on a real timeout;
+            # skipping the attempt only makes that same outcome cheaper to
+            # observe, not different. The qualification's own criteria
+            # (api_responsive, no_stale_while_healthy, etc.) are untouched.
+            skip = {"skipped": True, "reason": "health already failed this cycle"}
+            for name in ("watchdog", "causality", "sensors"):
+                rec["requests"][name] = dict(skip)
+            rec["watchdog"] = None
+            rec["watchdog_error"] = "skipped: health already failed"
+            rec["causality_stats"] = None
+            rec["causality_error"] = "skipped: health already failed"
+            rec["sensors_status"] = None
+            rec["sensors_error"] = "skipped: health already failed"
+            return rec
 
         try:
             wd, rec["requests"]["watchdog"] = self._timed_get(
@@ -690,6 +768,59 @@ def score(samples: list[dict], transitions: list[Transition],
         # way snapshot_budget/emit_budget were sized from measured numbers,
         # not guessed ahead of any data.
         "engine_resource_trend": _engine_resource_trend(samples),
+        # Per-phase CPU attribution (2026-08-31 review, item 2): a whole-run
+        # median hides WHERE the cost comes from. This project's own phases
+        # already isolate idle (A) from benign-only (B/D) from Tier-B-active
+        # (C/E) activity, so grouping by rec["phase"] gets that breakdown
+        # for free from a single run, without needing a separate experiment
+        # for each - though see run_profile() for the fully-isolated version
+        # (no prior-phase state, no phase-boundary confounds).
+        "phase_cpu_summary": _phase_cpu_summary(samples),
+        "cpu_hardware": _cpu_hardware_info(),
+    }
+
+
+def _percentile(vals: list[float], pct: float) -> float | None:
+    """Nearest-rank percentile - no dependency on Python 3.8+'s
+    statistics.quantiles edge-case behavior for small n, and well-defined
+    for pct=100 (the max) unlike some quantile implementations."""
+    if not vals:
+        return None
+    ordered = sorted(vals)
+    k = max(0, min(len(ordered) - 1, int(round(pct / 100.0 * (len(ordered) - 1)))))
+    return ordered[k]
+
+
+def _cpu_series_summary(vals: list[float]) -> dict | None:
+    if not vals:
+        return None
+    return {
+        "n": len(vals),
+        "median": statistics.median(vals),
+        "p95": _percentile(vals, 95),
+        "max": max(vals),
+        "pct_over_50": round(100.0 * sum(1 for v in vals if v > 50) / len(vals), 1),
+        "pct_over_80": round(100.0 * sum(1 for v in vals if v > 80) / len(vals), 1),
+    }
+
+
+def _phase_cpu_summary(samples: list[dict]) -> dict:
+    by_phase: dict[str, dict[str, list[float]]] = {}
+    for rec in samples:
+        phase = rec.get("phase") or "?"
+        bucket = by_phase.setdefault(phase, {"engine": [], "system": []})
+        ep = rec.get("engine_process")
+        if ep and "error" not in ep and ep.get("cpu_percent") is not None:
+            bucket["engine"].append(ep["cpu_percent"])
+        sc = rec.get("system_cpu")
+        if sc and "error" not in sc and sc.get("system_cpu_percent") is not None:
+            bucket["system"].append(sc["system_cpu_percent"])
+    return {
+        phase: {
+            "engine_cpu": _cpu_series_summary(v["engine"]),
+            "system_cpu": _cpu_series_summary(v["system"]),
+        }
+        for phase, v in sorted(by_phase.items())
     }
 
 
@@ -994,12 +1125,96 @@ def run_soak(minutes: float, contention: bool = False) -> int:
         shutil.rmtree(data_dir, ignore_errors=True)
 
 
+def run_profile(workload: str, minutes: float) -> int:
+    """2026-08-31 review, item 3: controlled CPU-attribution experiments -
+    ONE variable held constant for the whole run, so idle/benign/full costs
+    can be compared without the confounds a single mixed A-E run carries
+    (accumulated causality-graph state, phase-boundary timing, prior
+    phases' side effects). Diagnostic only - deliberately does NOT run
+    score()'s qualification checks (item 9: a profiling change must never
+    bleed into or weaken the actual pass/fail criteria).
+
+    workload:
+      idle   - no harness-generated activity at all beyond sampling itself
+      benign - the benign command loop only, run_phase_c() never called
+      full   - benign loop + periodic Tier B subset reruns, matching
+               run_soak()'s existing Phase E shape exactly (same toggle
+               cadence), so it is the direct comparison point for that
+               phase's own numbers from a real qualification run
+    """
+    if workload not in ("idle", "benign", "full"):
+        raise ValueError(f"unknown workload: {workload!r}")
+    print("=" * 70)
+    print(f"MODE: profile ({workload}) -- CI, {minutes:.0f}-minute controlled "
+          f"CPU-attribution experiment - NOT a qualification pass/fail")
+    print("=" * 70)
+    proc, api_base, data_dir = start_engine()
+    try:
+        wait_for_real_readiness(api_base)
+        out = RESULTS_DIR / f"beta05_profile_{workload}.jsonl"
+        if out.exists():
+            out.unlink()
+        sampler = Sampler(api_base, out, engine_pid=proc.pid)
+        sampler.start()
+        sampler.current_phase = f"profile_{workload}"
+
+        before = _safe_get(api_base, "/api/edr/causality/stats")
+        unhandled_exception: str | None = None
+        try:
+            deadline = time.time() + minutes * 60.0
+            toggle = 0
+            while time.time() < deadline:
+                remaining = deadline - time.time()
+                if workload == "idle":
+                    time.sleep(min(5.0, max(0.1, remaining)))
+                elif workload == "benign":
+                    run_benign_activity(min(90.0, max(1.0, remaining)))
+                else:  # full - identical shape to run_soak()'s Phase E
+                    if toggle % 3 == 2 and remaining > 60:
+                        run_phase_c(api_base)
+                    else:
+                        run_benign_activity(min(90.0, max(1.0, remaining)))
+                toggle += 1
+        except Exception as exc:                        # noqa: BLE001
+            unhandled_exception = f"{type(exc).__name__}: {exc}"
+            print(f"[run_profile] unhandled exception, reporting what was "
+                  f"already collected: {unhandled_exception}")
+
+        sampler.stop()
+        after = _safe_get(api_base, "/api/edr/causality/stats")
+        engine_exit_code = proc.poll()
+
+        result = {
+            "mode": f"profile_{workload}",
+            "minutes": minutes,
+            "platform": platform.platform(),
+            "cpu_hardware": _cpu_hardware_info(),
+            "engine_exit_code": engine_exit_code,
+            "api_health_failures": sampler.health_failures,
+            "api_health_successes": sampler.health_successes,
+            "causality_nodes": {"before": before.get("nodes"), "after": after.get("nodes")},
+            "phase_cpu_summary": _phase_cpu_summary(sampler.samples),
+            "engine_resource_trend": _engine_resource_trend(sampler.samples),
+        }
+        if unhandled_exception:
+            result["unhandled_exception"] = unhandled_exception
+        _write_summary(f"profile_{workload}", result)
+        print(json.dumps(result, indent=2, default=str))
+        return 0
+    finally:
+        stop_engine(proc)
+        shutil.rmtree(data_dir, ignore_errors=True)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--mode", choices=["smoke", "dry-run", "fault-test", "contention", "soak"],
+    ap.add_argument("--mode",
+                    choices=["smoke", "dry-run", "fault-test", "contention", "soak", "profile"],
                     required=True)
     ap.add_argument("--minutes", type=float, default=25.0,
-                    help="soak mode only: total qualification duration in minutes")
+                    help="soak/contention/profile modes: total duration in minutes")
+    ap.add_argument("--workload", choices=["idle", "benign", "full"], default=None,
+                    help="profile mode only: which of the 3 controlled experiments to run")
     args = ap.parse_args()
 
     if args.mode == "smoke":
@@ -1010,6 +1225,11 @@ def main() -> int:
         return run_fault_test()
     if args.mode == "contention":
         return run_soak(args.minutes, contention=True)
+    if args.mode == "profile":
+        if not args.workload:
+            print("profile mode requires --workload {idle,benign,full}", file=sys.stderr)
+            return 2
+        return run_profile(args.workload, args.minutes)
     return run_soak(args.minutes)
 
 
