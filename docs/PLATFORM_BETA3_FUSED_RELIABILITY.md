@@ -2,10 +2,12 @@
 
 ## Qualification status
 
-**OPEN, not yet run.** Predeclared spec, written before the real runs.
-`redteam/evaluation/platform_beta3_fused_reliability.py` implements
-exactly what this document says. Findings get appended below only as real
-CI runs surface them.
+**QUALIFIED — 2026-08-31.** The real 10-minute soak passed clean on the
+first attempt: 285 of 285 real visits resolved a real subject, produced a
+chain, derived a real DESTINATION observation, never fabricated an
+unavailable category, and showed zero cross-visit contamination across
+285 real subjects sharing one `DetectionArchitectureV2` instance. See
+"Beta 3: QUALIFIED" near the end of this document.
 
 ## What this qualifies, and what it does not
 
@@ -71,4 +73,34 @@ CPU-trend measurement).
 ## Sequence
 
 Platform Alpha → Beta 0 → Beta 0.5 (QUALIFIED+audited) → Beta 1/NYX
-(QUALIFIED) → Beta 2/Aegis (QUALIFIED) → **Beta 3 (here)**.
+(QUALIFIED) → Beta 2/Aegis (QUALIFIED) → **Beta 3 (here) ← CLOSED**.
+
+## Beta 3: QUALIFIED — 2026-08-31
+
+**Dry-run (2 min, 57 visits): PASS, first attempt, every check green.**
+**Real soak (10 min, 285 visits): PASS, first attempt, every check green:**
+
+- `most_visits_resolved_a_real_subject`: 285/285.
+- `resolved_visits_produced_a_chain`: 285/285.
+- `destination_derived_across_most_visits`: 285/285 (not just "most" - all).
+- `unavailable_categories_never_fabricated_any_visit`: 285/285.
+- `no_cross_visit_contamination`: **285/285** - the property this stage
+  exists to prove. 285 real, sequential subjects shared ONE
+  `DetectionArchitectureV2` instance over a real 10-minute run, and not
+  one observation from any visit ever traced to a different visit's event
+  ids.
+- `no_observe_errors_any_visit`: 0 across the whole run.
+- `no_process_crash`: held.
+
+Platform Alpha's frozen baseline (15 tests) unaffected.
+
+**Beta 3 is genuinely done, not declared done.** No harness bugs this
+time - Beta 2's hard-won lessons (privacy-event-pid-as-ground-truth,
+NetworkCollector's honest "can miss a fast connection" limitation, the
+`evaluate_pair()` return shape) transferred directly, and the one NEW
+property this stage was built to test - one shared engine instance never
+confusing one real subject's evidence for another's, at real volume, over
+real sustained time - held cleanly on the first attempt at both scales.
+This is the strongest evidence yet that the reasoning architecture (EDR +
+NYX + Aegis, fused) is structurally sound under real, sustained,
+multi-subject load, not just a single hand-picked one-shot scenario.
