@@ -167,7 +167,7 @@ def _score_visit(outcome: dict, persona) -> dict:
     real_leaked = bool(real_id) and any(real_id in b for b in bodies)
     fake_served = any(persona.advertising_id in b for b in bodies)
     unaltered = bool(sent_body) and any(b == sent_body for b in bodies)
-    return {
+    result = {
         "kind": kind,
         "reached_endpoint": len(bodies) > 0,
         "real_leaked": real_leaked,
@@ -175,6 +175,13 @@ def _score_visit(outcome: dict, persona) -> dict:
         "unaltered": unaltered,
         "error": outcome.get("error"),
     }
+    if kind in _AUTHORIZED_BENIGN_KINDS and not unaltered:
+        # Only captured on a mismatch, to keep the common-case log lean -
+        # this is exactly the raw diff a "0 never reached, 0 errors" count
+        # can't show: aggregate counts said something changed, not what.
+        result["_sent_body"] = sent_body
+        result["_received_bodies"] = bodies
+    return result
 
 
 # ----------------------------------------------------------------------
