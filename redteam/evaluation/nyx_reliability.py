@@ -333,22 +333,29 @@ def score(visit_log: list[dict], samples: list[dict], self_tests: list[dict],
         "detail": f"{not_running} of {len(samples)} sample(s) with proxy not running",
     }
 
+    unauth_not_reached = sum(1 for v in unauthorized if not v["reached_endpoint"])
+    unauth_errors = sum(1 for v in unauthorized if v.get("error"))
     leaked = sum(1 for v in unauthorized if v["real_leaked"])
     checks["zero_real_value_leaks"] = {
         "pass": bool(unauthorized) and leaked == 0,
-        "detail": f"{leaked} of {len(unauthorized)} unauthorized visit(s) leaked the real value",
+        "detail": (f"{leaked} of {len(unauthorized)} unauthorized visit(s) leaked the real value "
+                  f"({unauth_not_reached} never reached the endpoint, {unauth_errors} had a visit error)"),
     }
 
     deceived = sum(1 for v in unauthorized if v["fake_served"] and v["reached_endpoint"])
     checks["every_unauthorized_visit_deceived"] = {
         "pass": bool(unauthorized) and deceived == len(unauthorized),
-        "detail": f"{deceived} of {len(unauthorized)} unauthorized visit(s) deceived",
+        "detail": (f"{deceived} of {len(unauthorized)} unauthorized visit(s) deceived "
+                  f"({unauth_not_reached} never reached the endpoint, {unauth_errors} had a visit error)"),
     }
 
+    ab_not_reached = sum(1 for v in authorized_benign if not v["reached_endpoint"])
+    ab_errors = sum(1 for v in authorized_benign if v.get("error"))
     unaltered = sum(1 for v in authorized_benign if v["unaltered"])
     checks["authorized_benign_flows_unaltered"] = {
         "pass": bool(authorized_benign) and unaltered == len(authorized_benign),
-        "detail": f"{unaltered} of {len(authorized_benign)} authorized/benign visit(s) left unaltered",
+        "detail": (f"{unaltered} of {len(authorized_benign)} authorized/benign visit(s) left unaltered "
+                  f"({ab_not_reached} never reached the endpoint, {ab_errors} had a visit error)"),
     }
 
     # Persona consistency: every DECEIVED unauthorized visit must show the
@@ -444,10 +451,16 @@ def _run(minutes: float, label: str, evidence: bool) -> int:
     time.sleep(1.0)
 
     persona = current_persona()
-    out_jsonl = RESULTS_DIR / f"nyx_reliability_{label}_{time.strftime('%Y%m%d_%H%M%S')}.jsonl"
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    out_jsonl = RESULTS_DIR / f"nyx_reliability_{label}_{ts}.jsonl"
     sampler = Sampler(insp, store, out_jsonl)
     sampler.start()
 
+    # Per-visit outcomes, streamed immediately (crash-proof, same convention
+    # as the Sampler's own JSONL) - score() only sees pass/fail booleans, so
+    # this is what lets a failure actually be diagnosed (which kind, did it
+    # even reach the endpoint, what error) instead of just counted.
+    visits_jsonl = RESULTS_DIR / f"nyx_reliability_{label}_visits_{ts}.jsonl"
     visit_log: list[dict] = []
     run_error: str | None = None
 
@@ -466,7 +479,7 @@ def _run(minutes: float, label: str, evidence: bool) -> int:
     kinds_cycle = itertools.cycle(VISIT_KINDS)
 
     try:
-        with sync_playwright() as p:
+        with sync_playwright() as p, open(visits_jsonl, "a", encoding="utf-8") as vfh:
             browser = p.chromium.launch(args=["--no-sandbox"])
             ctx = browser.new_context(
                 proxy={"server": f"http://127.0.0.1:{PROXY_PORT}"},
@@ -474,8 +487,14 @@ def _run(minutes: float, label: str, evidence: bool) -> int:
             try:
                 while time.monotonic() < end_at:
                     kind = next(kinds_cycle)
+                    t0 = time.monotonic()
                     outcome = _do_visit(ctx, kind)
-                    visit_log.append(_score_visit(outcome, persona))
+                    scored = _score_visit(outcome, persona)
+                    scored["elapsed_s"] = round(time.monotonic() - t0, 3)
+                    scored["n_received"] = len(outcome["received"])
+                    visit_log.append(scored)
+                    vfh.write(json.dumps(scored, default=str) + "\n")
+                    vfh.flush()
                     time.sleep(VISIT_PACING_S)
             finally:
                 ctx.close()
