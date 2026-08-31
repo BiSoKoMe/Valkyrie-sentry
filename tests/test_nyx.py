@@ -105,10 +105,40 @@ def main() -> int:
     one_fp = nyx.inspect_outbound("POST", THIRD, HDR, b"lang=en-US")
     c.check("a single surface is not a fingerprint bundle", nyx.CAT_FINGERPRINT not in _cats(one_fp))
 
-    # A random 16-digit id is not a card - Luhn is the precision boundary.
+    # A random 16-digit id is not a card - Luhn is A precision boundary.
     non_luhn = nyx.inspect_outbound("POST", THIRD, HDR, b"session=1234567890123456")
     c.check("a non-Luhn 16-digit id is NOT flagged as a card",
             nyx.CAT_FINANCIAL not in _cats(non_luhn))
+
+    # Beta 1's live-fire soak found Luhn ALONE is not precise enough: an
+    # arbitrary 13-19 digit number (a timestamp, an order id, a session
+    # counter) has roughly a 1-in-10 chance of coincidentally passing the
+    # Luhn checksum, since it is only a mod-10 property. A real run hit
+    # this: a plain `ts=<millisecond-timestamp>` field with no card-shaped
+    # context got faked into a card number. Card detection now also
+    # requires a card-shaped key OR real card-style grouping - matching
+    # every other category here (_ID_KEY, _LAT_KEY, _FP_CORES, ...), none
+    # of which ever accepted a bare value shape alone either.
+    luhn_valid_ts = 1788154881436
+    while not nyx._luhn_ok(str(luhn_valid_ts)):
+        luhn_valid_ts += 1
+    coincidental = nyx.inspect_outbound(
+        "POST", THIRD, HDR, f"event=pageview&ts={luhn_valid_ts}".encode())
+    c.check("a Luhn-valid but NOT card-shaped timestamp is NOT flagged as a card",
+            nyx.CAT_FINANCIAL not in _cats(coincidental))
+    unrelated_key = nyx.inspect_outbound(
+        "POST", THIRD, HDR, f"x={luhn_valid_ts}".encode())
+    c.check("the same Luhn-valid number under an unrelated key is still NOT flagged",
+            nyx.CAT_FINANCIAL not in _cats(unrelated_key))
+    # But a real card is still caught: under a card-shaped key...
+    card_key = nyx.inspect_outbound("POST", THIRD, HDR, b"card_number=4242424242424242")
+    c.check("a Luhn-valid number under a card-shaped key IS still flagged",
+            nyx.CAT_FINANCIAL in _cats(card_key))
+    # ...or with real card-style grouping, even with no clear key at all.
+    grouped = nyx.inspect_outbound(
+        "POST", THIRD, HDR, b"note=card is 4242-4242-4242-4242 thanks")
+    c.check("Luhn-valid digits with real card-style grouping ARE still flagged",
+            nyx.CAT_FINANCIAL in _cats(grouped))
 
     # A short functional cookie is not a tracking id.
     func_cook = nyx.inspect_outbound("GET", THIRD, {"Referer": FP, "Cookie": "lang=en; theme=dark; s=1"})

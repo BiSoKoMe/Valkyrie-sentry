@@ -116,10 +116,27 @@ _EMAIL = re.compile(r"[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]{1,255}\.[A-Za-z]{2,
 _PHONE = re.compile(r"(?<!\d)\+\d{9,15}(?!\d)")   # E.164 only (leading + required)
 
 # A payment-card-shaped run of 13-19 digits, optionally split by spaces/dashes.
-# Card detection is gated on a LUHN check (below), so a random 16-digit session
-# id or order number does NOT trip it - Luhn is the precision boundary that
-# separates "a card number" from "sixteen digits".
+# Card detection used to be gated on a LUHN check alone, on the assumption
+# that Luhn was a precise-enough boundary to separate "a card number" from
+# "sixteen digits" (Beta 1's live-fire soak measured this assumption and
+# found it false: Luhn's check digit is a mod-10 property, so an arbitrary
+# 13-19 digit number - a millisecond timestamp, an order id, a session
+# counter - has roughly a 1-in-10 chance of coincidentally passing it. A
+# sustained real run hit that coincidence repeatedly: a plain
+# `ts=<timestamp>` field with no card-shaped context at all was faked into
+# a card number multiple times in one run). Every OTHER category here
+# (_ID_KEY, _LAT_KEY, _FP_CORES, ...) already gates on some contextual
+# shape, not a bare value test alone - card detection was the one
+# exception. Now requires Luhn AND (a card-shaped key name OR real
+# card-style grouping in the raw text), matching that same precision
+# philosophy.
 _CARD = re.compile(r"(?<![\d.])(?:\d[ -]?){12,18}\d(?![\d.])")
+_CARD_KEY = re.compile(r"(card|\bcc\b|\bpan\b|payment|cardnum)", re.I)
+# Real card-style grouping - digits in blocks of 4 joined by a space or dash
+# (4242-4242-4242-4242 / 4242 4242 4242 4242), the shape a human or a form
+# actually formats a card number in when there is no key name to judge by
+# (pasted into free text, or present in a URL).
+_CARD_GROUPED = re.compile(r"(?<![\d.])(?:\d{4}[ -]){2,4}\d{1,4}(?![\d.])")
 
 
 def _luhn_ok(number: str) -> bool:
@@ -137,8 +154,13 @@ def _luhn_ok(number: str) -> bool:
     return total % 10 == 0
 
 
-def _find_card(blob: str) -> str | None:
-    for m in _CARD.finditer(blob):
+def _find_card(pairs: list[tuple[str, str]], blob: str) -> str | None:
+    for k, v in pairs:
+        if _CARD_KEY.search(k):
+            for m in _CARD.finditer(v):
+                if _luhn_ok(m.group(0)):
+                    return m.group(0)
+    for m in _CARD_GROUPED.finditer(blob):
         if _luhn_ok(m.group(0)):
             return m.group(0)
     return None
@@ -412,8 +434,9 @@ def inspect_outbound(method: str, url: str, headers=None, body=None,
     if signals >= 3:
         add(CAT_FINGERPRINT, f"{signals} surfaces")
 
-    # 5) Payment card - a Luhn-valid card number crossing to a third party.
-    card = _find_card(blob)
+    # 5) Payment card - a Luhn-valid card number crossing to a third party,
+    #    under a card-shaped key or with real card-style grouping.
+    card = _find_card(pairs, blob)
     if card:
         add(CAT_FINANCIAL, card)
 
@@ -503,7 +526,7 @@ def _personal_values(url, headers, body, first_party_origin=None):
         if ph:
             found.append((CAT_CONTACT, "phone", ph.group(0)))
     # payment card
-    card = _find_card(blob)
+    card = _find_card(pairs, blob)
     if card:
         found.append((CAT_FINANCIAL, "card", card))
     # fingerprint bundle -> rewrite each recognised device field to a persona
