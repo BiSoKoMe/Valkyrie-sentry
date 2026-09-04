@@ -293,6 +293,42 @@ This log is updated as the milestone continues; treat any coverage
 percentage above as a floor as of the commit it cites, not a permanent
 ceiling.
 
+## Per-run variance: a single full battery is NOT a measurement
+
+Measured 2026-09-04, comparing three full-battery runs of the same catalog
+against the same engine:
+
+| Run | Date | `[DETECT]` | `[MISS]` |
+|---|---|---|---|
+| `33436292312` | 2026-08-31 | **63** | 64 |
+| `33408786391` | 2026-08-31 | **32** | 95 |
+| `33828591735` | 2026-09-04 | **14** | 113 |
+
+That is a 4.5x spread across runs of the same battery. In the 2026-09-04 run
+the engine detected normally for roughly the first 14 techniques — with
+latency climbing through them (2.09s → 5.53s → 7.94s) — and then returned
+`[MISS]` for essentially everything afterwards, starting at `cred-sam-dump`.
+Sysmon was still `Running` and its log still readable at the end of the job,
+so this is the engine's own ingest/processing pipeline stalling, not the
+sensor dying: the same failure class as the startup deafness root-caused in
+`a13000b`, appearing mid-run instead of at startup.
+
+**Two consequences, stated plainly:**
+
+1. **A single run's count is not a coverage number and must never be quoted
+   as one.** The 2026-09-04 run's 14/126 is not evidence that coverage
+   regressed; it is evidence that that run went deaf.
+2. **The authoritative 55/73 union is assembled across 26 runs that each go
+   deaf at a different point.** Every technique in it was genuinely detected
+   in some real run, so the union is legitimate — but it is a union over
+   partially-deaf runs, not 26 confirmations of the same result. Anyone
+   reading 55/73 as "a full battery detects 55 of 73" would be reading it
+   wrong.
+
+This per-run deafness is the largest known reliability problem on the
+detection side and is **not fixed**. It is recorded here rather than smoothed
+over because the union number's own credibility depends on it being known.
+
 ## What this evaluation does not claim
 
 - Comprehensive coverage of the full ATT&CK matrix — 73 in-scope techniques
