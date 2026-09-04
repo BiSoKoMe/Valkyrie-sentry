@@ -485,6 +485,60 @@ def test_benchmarks():
     assert len(got) == M
 
 
+def test_channel_reader_drains_a_burst_in_one_poll_not_256_at_a_time():
+    """REGRESSION: the mid-run deafness in docs/LIVE_FIRE_EVALUATION.md.
+
+    read_new() was bounded ONLY by max_events=256. SysmonSensor polls every
+    1.5s over a channel that includes EID 11 (FileCreate) and 12/13/14
+    (registry), so that is a hard ceiling of ~170 events/sec: any burst above
+    it makes the bookmark fall behind, and draining only 256 per poll means it
+    never catches up. Detection latency then climbs monotonically (measured:
+    2.09s -> 7.94s in run 33828591735) until it passes the harness's 30s
+    window and every technique reads MISS - while Sysmon stays Running and its
+    log readable, because nothing is lost, only ever later.
+
+    The bound is now wall-clock first, so a burst is absorbed in ONE poll.
+    Asserted against the API contract rather than a live channel, so it runs
+    everywhere: a fake reader records the bounds read_new() was given.
+    """
+    from valkyrie.etw.wineventlog import ChannelReader
+    import inspect
+
+    sig = inspect.signature(ChannelReader.read_new)
+    # The old signature was read_new(self, max_events=256) - a 256-event cap is
+    # exactly what produced the never-catches-up backlog.
+    assert sig.parameters["max_events"].default >= 4096, (
+        "max_events default is back to a small cap; a burst will meter out "
+        "over many polls and the reader will fall permanently behind")
+    assert "budget_seconds" in sig.parameters, (
+        "read_new lost its wall-clock bound; a fixed event cap alone is what "
+        "caused the mid-run deafness")
+    assert sig.parameters["budget_seconds"].default > 0
+
+    # Falling behind must never be silent: the reader reports which bound
+    # stopped it, and Sensor.health() surfaces that.
+    r = ChannelReader("Nonexistent-Channel", (1,))
+    assert hasattr(r, "last_read_truncated") and r.last_read_truncated == ""
+    assert hasattr(r, "last_read_count")
+
+
+def test_sensor_health_reports_falling_behind():
+    """A sensor that is 'running' with no errors while its channel backs up is
+    the exact shape that made the deafness invisible. health() must say so."""
+    from valkyrie.etw.sysmon import SysmonSensor
+
+    s = SysmonSensor()
+    s._reader.last_read_truncated = "budget"
+    s._reader.last_read_count = 8192
+    h = s.health()
+    assert h["behind"] is True, "health() hides that the reader could not catch up"
+    assert h["read_truncated"] == "budget"
+    assert h["read_count"] == 8192
+
+    s._reader.last_read_truncated = ""
+    assert s.health()["behind"] is False
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     passed = 0

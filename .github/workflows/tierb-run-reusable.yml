@@ -149,6 +149,37 @@ jobs:
             $filterArgs.OnlyTactic = $tactics
             Write-Host "[cfg] OnlyTactic filter: $($tactics -join ', ')"
           }
+          # ---- Mid-run health sampler -------------------------------------
+          # /api/telemetry/contention was only ever read AFTER the battery,
+          # which cannot catch a stall while it is happening. Full batteries
+          # scored 39, 23 and 14 of the same 73 techniques with identical rule
+          # content (docs/LIVE_FIRE_EVALUATION.md, "Per-run variance"): the
+          # 14-run detected normally for ~14 techniques with latency climbing
+          # 2.09s -> 7.94s, then returned MISS for everything after, while
+          # Sysmon stayed Running and readable. That is the engine's own
+          # pipeline stalling mid-run, and nothing was sampling it while it
+          # happened. This does - every 15s, on a background job, so the next
+          # deaf run says WHEN it went deaf and what was saturated.
+          # Diagnostics only: it reads, never writes, and must never fail the job.
+          $sampler = Start-Job -ScriptBlock {
+            while ($true) {
+              $t = (Get-Date).ToUniversalTime().ToString("HH:mm:ss")
+              try {
+                $c = Invoke-RestMethod "http://127.0.0.1:8090/api/telemetry/contention" -TimeoutSec 8
+                $loop = if ($c.loop) { "stalled=$($c.loop.stalled) max_lag=$($c.loop.max_lag_seconds)" } else { "loop=n/a" }
+                $wp = "borrowed=$($c.worker_pool.borrowed_tokens)/$($c.worker_pool.total_tokens) waiting=$($c.worker_pool.tasks_waiting)"
+                $rss = [math]::Round(($c.engine_process.rss_bytes / 1MB), 1)
+                $cols = ($c.collectors.PSObject.Properties | ForEach-Object {
+                  "$($_.Name.Replace('_collector','')):trunc=$($_.Value.truncated)"
+                }) -join " "
+                "[health $t] $loop | $wp | rss=${rss}MB | $cols"
+              } catch {
+                "[health $t] UNREACHABLE ($($_.Exception.Message))"
+              }
+              Start-Sleep -Seconds 15
+            }
+          }
+
           try {
             $evalOk = $false
             foreach ($attempt in 1..2) {
@@ -163,6 +194,16 @@ jobs:
               if (-not $p) { Write-Host "Engine would not come back; giving up."; break }
             }
             if (-not $evalOk) { Write-Host "Tier B battery did not complete after 2 attempts." }
+
+            "==== ENGINE HEALTH TIMELINE (sampled every 15s DURING the battery) ====" | Tee-Object tierb_transcript.log -Append
+            "Cross-reference the timestamps against the [eval] lines above: the sample where" | Tee-Object tierb_transcript.log -Append
+            "loop stalls / the worker pool saturates is where detection stops." | Tee-Object tierb_transcript.log -Append
+            try {
+              Stop-Job $sampler -ErrorAction SilentlyContinue
+              (Receive-Job $sampler -ErrorAction SilentlyContinue) | Tee-Object tierb_transcript.log -Append
+              Remove-Job $sampler -Force -ErrorAction SilentlyContinue
+            } catch { "ERR health sampler: $($_.Exception.Message)" | Tee-Object tierb_transcript.log -Append }
+
             "==== /api/sensors/status (backpressure/dedup drop evidence) ====" | Tee-Object tierb_transcript.log -Append
             try {
               $ss = Invoke-RestMethod "http://127.0.0.1:8090/api/sensors/status" -TimeoutSec 30

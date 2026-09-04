@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 import xml.etree.ElementTree as ET
 from typing import Optional
 
@@ -170,6 +171,10 @@ class ChannelReader:
         self._last_record: Optional[int] = None
         id_clause = " or ".join(f"EventID={i}" for i in self.event_ids) or "EventID>0"
         self._id_clause = id_clause
+        # Diagnostics for the drain loop: "" when it caught up, else which bound
+        # stopped it ("budget" / "max_events"). Falling behind must be visible.
+        self.last_read_truncated: str = ""
+        self.last_read_count: int = 0
 
     def available(self) -> bool:
         # The channel must actually exist. EvtOpenChannelConfig returns NULL for
@@ -202,12 +207,40 @@ class ChannelReader:
             _wevtapi.EvtClose(h)
         return rid
 
-    def read_new(self, max_events: int = 256) -> list[str]:
+    def read_new(self, max_events: int = 8192,
+                 budget_seconds: float = 2.0) -> list[str]:
+        """Drain records newer than the bookmark, bounded by WALL CLOCK first.
+
+        This used to be bounded only by ``max_events=256``. With SysmonSensor
+        polling every 1.5s that is a hard ceiling of ~170 events/sec, and the
+        Sysmon channel it subscribes to includes EID 11 (FileCreate) and 12/13/14
+        (registry) - the chattiest events Windows produces. Any burst above that
+        rate makes the bookmark fall behind, and because each poll drains only
+        256 it never catches up: the backlog grows monotonically and every
+        detection arrives later than the last.
+
+        That is the mid-run "deafness" behind docs/LIVE_FIRE_EVALUATION.md's
+        per-run variance (39 / 23 / 14 of the same 73 techniques). Its signature
+        is exactly what a growing queue produces: detection latency climbing
+        (2.09s -> 5.53s -> 7.94s in run 33828591735) until it passes the
+        harness's 30s window, after which everything reads MISS - while Sysmon
+        itself stays Running and its log readable, because nothing was ever
+        lost, only ever further behind.
+
+        Now the drain continues until it is genuinely caught up, or the budget
+        expires - so a burst is absorbed in one poll instead of being metered
+        out 256 at a time. ``max_events`` remains as a hard backstop against a
+        pathological flood. ``last_read_truncated`` records which bound stopped
+        it, so falling behind can never again be silent.
+        """
+        self.last_read_truncated = ""
+        self.last_read_count = 0
         if not _WEVT_OK:
             return []
         if self._last_record is None:
             self._last_record = self._newest_record()      # baseline, emit nothing
             return []
+        deadline = time.monotonic() + max(0.1, float(budget_seconds))
         query = (f"*[System[({self._id_clause}) and "
                  f"(EventRecordID>{self._last_record})]]")
         h = _wevtapi.EvtQuery(
@@ -218,6 +251,13 @@ class ChannelReader:
         out: list[str] = []
         try:
             while len(out) < max_events:
+                if time.monotonic() >= deadline:
+                    # Still more to read, but this poll has spent its budget.
+                    # The bookmark has advanced over everything already
+                    # returned, so the remainder is picked up next poll - the
+                    # backlog is reported, never silently carried.
+                    self.last_read_truncated = "budget"
+                    break
                 handles = (wintypes.HANDLE * 16)()
                 returned = wintypes.DWORD(0)
                 if not _wevtapi.EvtNext(h, 16, handles, 1000, 0, ctypes.byref(returned)):
@@ -232,6 +272,9 @@ class ChannelReader:
                         rid = record_id_of(xml)
                         if rid > self._last_record:
                             self._last_record = rid
+            else:
+                self.last_read_truncated = "max_events"
         finally:
             _wevtapi.EvtClose(h)
+        self.last_read_count = len(out)
         return out
