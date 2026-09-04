@@ -41,8 +41,6 @@ from valkyrie import secure_file as sf
 
 
 def main() -> int:
-    c = Checks("secret hygiene", expect_min=10)
-
     # Sections [2]-[4] below read or write Windows ACLs through PowerShell's
     # Get-Acl/Set-Acl. Some Windows hosts - GitHub's windows-latest runner among
     # them - cannot auto-load Microsoft.PowerShell.Security, so those checks fail
@@ -57,6 +55,13 @@ def main() -> int:
             probe = Path(probe_dir) / "probe.bin"
             probe.write_bytes(b"probe")
             _sids, acl_err = sf.access_sids(probe)
+
+    # expect_min guards against a check silently disappearing, so it has to be
+    # told when three of them are legitimately skipped - otherwise the very
+    # guard that protects coverage reports a failure for honest absence. The
+    # floor stays 10 wherever ACLs work, and only drops where they provably
+    # do not.
+    c = Checks("secret hygiene", expect_min=8 if acl_err else 10)
 
     # --- The registry itself ---
     print("\n[1] the secret registry covers what it should")
