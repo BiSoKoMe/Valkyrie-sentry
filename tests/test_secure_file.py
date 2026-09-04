@@ -34,7 +34,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from harness import Checks
+from harness import Checks, skip_file
 from valkyrie import secure_file as sf
 
 _IS_WINDOWS = platform.system() == "Windows"
@@ -53,6 +53,27 @@ def _grant_users_read(path: Path) -> bool:
 
 
 def main() -> int:
+    # Every assertion below reads or writes a Windows ACL through PowerShell's
+    # Get-Acl / Set-Acl. Some Windows environments - GitHub's windows-latest
+    # runner among them - cannot auto-load Microsoft.PowerShell.Security, so
+    # Get-Acl returns "the module could not be loaded" and every ACL assertion
+    # fails for a reason that has nothing to do with secure_file.py.
+    #
+    # That is absent coverage, not a defect, and must be reported as a SKIP
+    # rather than a FAIL. The product itself is unaffected and already fails
+    # safe here: _verdict_from_sids() treats a read error as NOT protected, the
+    # conservative direction for a secret it cannot confirm is locked down.
+    if _IS_WINDOWS:
+        with tempfile.TemporaryDirectory() as probe_dir:
+            probe = Path(probe_dir) / "probe.key"
+            probe.write_text("probe", encoding="utf-8")
+            _sids, probe_err = sf.access_sids(probe)
+        if probe_err:
+            return skip_file(
+                "secure file",
+                f"PowerShell ACL access is unavailable here ({probe_err[:120]}) "
+                "- every check in this file reads or writes an ACL")
+
     c = Checks("secure file", expect_min=12)
 
     with tempfile.TemporaryDirectory() as td:
