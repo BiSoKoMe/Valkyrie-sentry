@@ -50,6 +50,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from harness import EXIT_SKIP, parse_result_line   # noqa: E402
 
+# This runner forces UTF-8 in its CHILDREN (see _run_one) but for a long time
+# not in ITSELF, and it prints a box-drawing character in the failure prefix
+# ("        | " uses U+2502). On a Windows CI runner stdout defaults to cp1252,
+# so the first FAIL the runner tried to REPORT killed the runner with
+# UnicodeEncodeError - the suite died while printing the news, and the job
+# failed for a reason that had nothing to do with any test. Found the moment a
+# windows-latest job was added. errors="replace" so an odd byte in a child's
+# output can degrade a character but never again abort the run.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 _TESTS_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _TESTS_DIR.parent
 
