@@ -1454,13 +1454,16 @@ BREADTH_EXPANSION = [
 # checking the REAL ART command string against the REAL match conditions -
 # never guessed, following this file's own established discipline.
 #
-# THREE GENUINE MISLABELING FINDINGS surfaced by this exercise (not hidden):
-# a test can hit a real, firing rule whose OWN technique label differs from
-# the ID under test. Per this file's `known_mismatch` contract, none of these
-# are credited as a correct detection of the tested technique - the classifier
+# GENUINE MISLABELING FINDINGS surfaced by this exercise (not hidden): a test
+# can hit a real, firing rule whose OWN technique label differs from the ID
+# under test. Per this file's `known_mismatch` contract, none of these are
+# credited as a correct detection of the tested technique - the classifier
 # fires, but on the wrong ATT&CK ID:
-#   - cred-lsa-secrets (T1003.004) fires `reg-save-hive`, labeled T1003.002
-#     (SAM) - the rule matches HKLM\SECURITY too but never updated its own tag.
+#   - FIXED 2026-08-31: cred-lsa-secrets (T1003.004) used to fire
+#     `reg-save-hive`, labeled T1003.002 (SAM), because that one rule matched
+#     HKLM\SAM/SYSTEM/SECURITY under a single tag. Split into a dedicated
+#     `reg-save-hive-lsa-secrets` rule - see that Technique entry below for
+#     the live re-verification status.
 #   - collect-stage-download (T1074.001) fires `ps-download-cradle-exec`,
 #     labeled T1105 (Ingress Tool Transfer) - a PowerShell download-to-disk
 #     looks identical to the classifier regardless of staging vs. transfer intent.
@@ -1490,19 +1493,25 @@ EXPANSION_ROUND2 = [
                       "for the underlying reg.exe command it just re-runs "
                       "with -s)",
         destructive=False, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
-        detector_path="valkyrie/behavioral_rules.py: reg-save-hive rule "
-                       "(cmd_all=('save',), cmd_any includes 'hklm\\security')",
+        detector_path="valkyrie/behavioral_rules.py: reg-save-hive-lsa-secrets "
+                       "rule (cmd_all=('save',), cmd_any=('hklm\\security',)) "
+                       "- split from reg-save-hive 2026-08-31 so this hive "
+                       "gets its own T1003.004 label instead of borrowing "
+                       "reg-save-hive's T1003.002",
         predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
         probe="ioa_rule", probe_input={
             "image": "reg.exe", "parent": "cmd.exe",
             "cmdline": r"reg.exe save hklm\security C:\Users\Public\secrets /y",
             "path": ""},
-        known_mismatch="T1003.002 — Security Account Manager",
-        notes="reg-save-hive matches ANY of hklm\\sam / hklm\\system / "
-              "hklm\\security but is tagged only T1003.002 (SAM). Firing on "
-              "the SECURITY hive is a real detection of credential theft, "
-              "just under the wrong specific ATT&CK id - see the file-level "
-              "note above.",
+        notes="Fixed 2026-08-31: reg-save-hive used to match ANY of hklm\\sam "
+              "/ hklm\\system / hklm\\security but tag them all T1003.002 "
+              "(SAM). Split into two rules - a real reg.exe save targets "
+              "exactly one hive path per invocation, so this is not an "
+              "overlapping guess. Offline-verified via test_behavioral_rules.py "
+              "(new reg-save-hive-lsa-secrets case); live Tier B "
+              "re-verification pending - expect this to fire as T1003.004 "
+              "directly (known_mismatch removed) on the next live run, not "
+              "as T1003.002.",
     ),
     Technique(
         id="collect-clipboard", technique_id="T1115",
@@ -1840,29 +1849,29 @@ EXPANSION_ROUND2 = [
         art_test_ref="T1552.002 Test #1 (reg query HKLM/HKCU /f password "
                       "/t REG_SZ /s)",
         destructive=False, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
-        detector_path="no dedicated rule for registry credential-hunting; "
-                       "the command shape (reg.exe + 'query', non-mutating) "
-                       "only reaches process_telemetry.py's generic T1012 "
-                       "branch -> 'reconnaissance-burst' IOA",
+        detector_path="valkyrie/behavioral_rules.py: cred-registry-password-hunt "
+                       "rule (added 2026-08-31; images=('reg.exe',), "
+                       "cmd_all=('query','/f'), cmd_any2=password-like "
+                       "keywords) - fires standalone now, no longer needs "
+                       "the recon_burst co-occurring partners below",
         predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
-        probe="recon_burst", probe_input={
-            "image": "reg.exe",
+        probe="ioa_rule", probe_input={
+            "image": "reg.exe", "parent": "cmd.exe",
             "cmdline": "reg.exe query HKLM /f password /t REG_SZ /s",
-            "co_occurring": [("systeminfo.exe", "systeminfo.exe"),
-                             ("tasklist.exe", "tasklist.exe /v")]},
-        known_mismatch="T1012 — Query Registry",
-        notes="Same class of finding as disc-network-share/collect-stage-"
-              "download: a generic classifier catches the SHAPE (reg query, "
-              "read-only) but has no signal for the SPECIFIC intent "
-              "(hunting for the literal word 'password'). A rule keying on "
-              "'/f password' or similar would be a real, narrow, low-FP-risk "
-              "improvement candidate for the adversarial phase. CORRECTED "
-              "burst partners: the first draft paired this with cmdkey.exe "
-              "and whoami /priv, neither of which feeds classify_discovery's "
-              "technique-diversity count, so the burst never completed in "
-              "verification - replaced with genuine discovery-tactic "
-              "partners (systeminfo/tasklist) matching the working pattern "
-              "used by every other recon_burst entry in this file.",
+            "path": ""},
+        notes="Fixed 2026-08-31: previously only reached process_telemetry.py's "
+              "generic T1012 (Query Registry) branch via the recon_burst "
+              "mechanism - the command shape (reg query, read-only) has no "
+              "signal for the SPECIFIC intent (hunting for the literal word "
+              "'password') without a dedicated rule. Added "
+              "cred-registry-password-hunt, same cmd_all + cmd_any2 shape as "
+              "the existing cred-hunt-files rule (T1552.001): a find-verb "
+              "ANDed with a secret keyword, so an ordinary 'reg query <key> "
+              "/v <name>' (no /f, no keyword) stays clear - see "
+              "test_behavioral_rules.py's new benign control. Offline-"
+              "verified; live Tier B re-verification pending - expect this "
+              "to fire standalone as T1552.002 directly (known_mismatch "
+              "removed) rather than needing burst correlation.",
     ),
 ]
 
@@ -2276,36 +2285,34 @@ EXPANSION_ROUND2B = [
                       "/domain)",
         destructive=False, live_vm_safe=True, delivery=DELIVERY_REALTIME_ETW,
         detector_path="process_telemetry.py's net.exe branch: 'net group' "
-                       "(without /add) returns T1087.002, not a T1069.002 "
-                       "label - there is no dedicated domain-GROUPS "
-                       "discovery label anywhere, only domain-ACCOUNTS",
+                       "(without /add) now returns T1069.002 directly - fixed "
+                       "2026-08-31, same bug class as the earlier T1069.001 "
+                       "'net localgroup' fix",
         predicted_tier_b="DETECT", source_confidence=SOURCE_CONFIRMED,
         probe="recon_burst", probe_input={
             "image": "net.exe",
             "cmdline": 'net group "domain admins" /domain',
             "co_occurring": [("systeminfo.exe", "systeminfo.exe"),
                              ("tasklist.exe", "tasklist.exe /v")]},
-        known_mismatch="T1087.002 — Account Discovery: Domain Account",
-        notes="'net group' is MITRE's own documented example for T1069.002 "
-              "(domain GROUP membership, e.g. 'Domain Admins'), but the "
-              "code's net.exe branch returns T1087.002 (domain ACCOUNT "
-              "discovery) for any non-/add 'net group' invocation, with no "
-              "way to distinguish a group-name argument (groups) from no "
-              "argument (would enumerate all groups) from this branch's "
-              "logic. A precise fix would need to also recognize a group "
-              "argument shape to route to a real T1069.002 label - deferred "
-              "to the adversarial phase. CORRECTED cmdline: the check is a "
-              "literal two-word substring match on 'net group' (unlike the "
-              "single-word 'view' check that covers the T1018 branch), so "
-              "'net.exe group ...' (the form this entry originally used) "
-              "does not match at all - only the bare 'net group ...' form "
-              "does, which is also the exact form ART's own atomic uses. "
-              "Confirmed live via replay_harness.py after the first draft "
-              "surfaced a real MISMATCH between predicted and actual. "
-              "Whether Valkyrie's classifier should be robust to a "
-              "'net.exe' vs 'net' prefix difference at all is a separate, "
-              "real robustness question worth raising in the adversarial "
-              "phase - a trivial .exe suffix should not be an evasion knob.",
+        notes="FIXED 2026-08-31: 'net group' is MITRE's own documented "
+              "example for T1069.002 (domain GROUP membership, e.g. 'Domain "
+              "Admins'), but the code's net.exe branch returned T1087.002 "
+              "(domain ACCOUNT discovery) for any non-/add 'net group' "
+              "invocation - there was no dedicated domain-GROUPS discovery "
+              "label anywhere. Unlike the deferred fix this note used to "
+              "describe, no group-argument disambiguation turned out to be "
+              "needed: 'net group' itself (bare, or with a specific group "
+              "name) is ALWAYS about groups, never accounts, so the branch's "
+              "return value was simply wrong for every case, not just some. "
+              "CORRECTED cmdline note (unchanged from the prior finding): the "
+              "check is a literal two-word substring match on 'net group' "
+              "(unlike the single-word 'view' check that covers the T1018 "
+              "branch), so 'net.exe group ...' does not match at all - only "
+              "the bare 'net group ...' form does, which is also the exact "
+              "form ART's own atomic uses. Offline-verified via "
+              "test_process_telemetry.py's new T1069.002 cases; live Tier B "
+              "re-verification pending - expect this to fire as T1069.002 "
+              "directly (known_mismatch removed) on the next live run.",
     ),
     Technique(
         id="disc-file-dir-ps", technique_id="T1083",

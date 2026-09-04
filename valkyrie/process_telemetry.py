@@ -254,10 +254,15 @@ def _discovery_cmdline_technique(n: str, candidates: tuple) -> str:
             return "T1018 — Remote System Discovery"
         add_present = any("/add" in c for c in candidates)
         if any("net group" in c for c in candidates) and not add_present:
-            # 'net group' enumerates DOMAIN groups ("domain admins", "enterprise
-            # admins") - a domain-account discovery distinct from local 'net
-            # user'/'net localgroup'. /add is group creation, handled elsewhere.
-            return "T1087.002 — Account Discovery: Domain Account"
+            # 'net group' enumerates DOMAIN GROUPS ("domain admins", "enterprise
+            # admins") - Permission Groups Discovery (T1069.002), not Account
+            # Discovery. A live-fire evaluation found this mislabeled T1087.002
+            # (Domain Account) - the same bug class already fixed for 'net
+            # localgroup' below (T1069.001, not T1087.001): MITRE's own
+            # example command for T1069.002 is exactly
+            # 'net group "domain admins" /domain'. /add is group creation,
+            # handled elsewhere.
+            return "T1069.002 — Permission Groups Discovery: Domain Groups"
         if any("net localgroup" in c for c in candidates) and not add_present:
             # 'net localgroup' (bare, or with a group name such as
             # 'administrators') enumerates LOCAL GROUP membership - MITRE's

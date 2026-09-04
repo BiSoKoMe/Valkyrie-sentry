@@ -84,7 +84,7 @@ _DECOY_LABELS = ("decoy", "canary", "honeytoken", "honey_credential", "honeyfile
 _COMPROMISE_LABELS = (
     "lsass", "credential_access", "credential", "injection", "remote_thread",
     "lolbin", "persistence", "shadow_delete", "ransomware", "process_tampering",
-    "web_shell", "amsi_bypass", "defender_tamper", "sam_dump",
+    "web_shell", "amsi_bypass", "defender_tamper", "sam_dump", "lsa_secrets_dump",
 )
 _METADATA_LABELS = (
     "tracker", "telemetry", "analytics", "advertising", "beacon_telemetry",

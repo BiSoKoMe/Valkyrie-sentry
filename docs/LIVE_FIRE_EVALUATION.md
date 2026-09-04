@@ -242,10 +242,39 @@ engine, then folded into the full-battery union above):**
 | #7 (tool-check bug) | `privesc-dll-searchorder-amsi` T1574.001 | Now genuinely attempted and genuinely missed (no rule exists for this technique) — correctly reclassified from a masked harness bug to an honest, confirmed gap |
 | #8 (7 generalization gaps) | `disc-net-connections-ps` T1049, `disc-service-net-start`/`disc-service-discovery-ps`/`disc-scheduled-tasks-query` T1007, `disc-security-software-cim` T1518.001, `disc-software-installed` T1518, `disc-password-policy` T1201 | All 7 **`[DETECT]`** live, run `33039444502`, `-OnlyIds` targeted. 3 of the 7 (`disc-net-connections-ps`, `disc-service-net-start`, `disc-security-software-cim`) also reported `fp=1` — `run_live_evaluation.ps1`'s own documented caveat applies: at the CI default `-SettleSeconds 0`, an incident legitimately caused by technique N can land during technique N+1's window and get miscounted against N+1 purely by adjacency, "NOT evidence Valkyrie fires on legitimate activity" (see the script's own header comment, ~line 929). This is the same known attribution-window artifact already documented for running multiple recon-burst techniques back-to-back, not a new false-positive bug; a from-scratch re-run with `-SettleSeconds 5+` would isolate it cleanly but was not performed this pass. |
 
-All eight fixes are folded into the 55/73 (75.3%) union above — this is not
-a pending number, it is the current authoritative result. This log is
-updated as the milestone continues; treat any coverage percentage above as a
-floor as of the commit it cites, not a permanent ceiling.
+9. **Three of the six confirmed mislabeling findings closed (2026-08-31)** —
+   `cred-lsa-secrets` (T1003.004), `cred-registry-password-hunt` (T1552.002),
+   and `disc-domain-groups` (T1069.002) all used to fire under a different,
+   wrong ATT&CK id (see "Real, confirmed mislabeling" in the gap table
+   above, and `redteam/evaluation/catalog.py`'s per-entry notes for the full
+   detail on each). Fixed by reading the exact matching logic and correcting
+   or adding the smallest rule that fixes it: `reg-save-hive` split into two
+   rules so HKLM\SECURITY gets its own T1003.004 tag instead of borrowing
+   HKLM\SAM's T1003.002; a new `cred-registry-password-hunt` rule
+   (`reg.exe query ... /f <password-like keyword>`) added, same
+   verb-ANDed-with-keyword shape as the existing `cred-hunt-files` rule; and
+   `process_telemetry.py`'s `net group` branch corrected from T1087.002
+   (Account Discovery) to T1069.002 (Permission Groups Discovery) — the same
+   bug class as the earlier `net localgroup` / T1069.001 fix, just never
+   done for the domain-groups sibling. **Offline-verified only** (new cases
+   added to `test_behavioral_rules.py` and `test_process_telemetry.py`) —
+   live Tier B re-verification has NOT been run yet; treat these three as
+   "expected fixed, not yet proven" until a live `-OnlyIds` re-run confirms
+   it, the same standard every other fix in this log was held to before
+   being folded into the union number below. The remaining three mislabeling
+   findings (`collect-stage-download`, `disc-network-share`/
+   `disc-network-shares-smb`, `evasion-masquerade-lsass`) and
+   `evasion-file-delete` were deliberately left alone — the catalog's own
+   comments flag those as potentially acceptable overlap between adjacent
+   ATT&CK sub-techniques rather than a clear-cut bug, which needs live
+   evidence to decide, not a guess.
+
+All eight fixes through #8 are folded into the 55/73 (75.3%) union above —
+that number is not pending, it is the current authoritative result. Fix #9
+is NOT yet folded in (no live run has confirmed it) — expect 55/73 to move
+only after that re-run. This log is updated as the milestone continues;
+treat any coverage percentage above as a floor as of the commit it cites,
+not a permanent ceiling.
 
 ## What this evaluation does not claim
 
