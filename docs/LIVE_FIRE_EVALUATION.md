@@ -358,17 +358,50 @@ Fixed by bounding the drain on wall clock (2s) with `max_events` raised to
 8192 as a backstop, so a burst is absorbed in one poll. `Sensor.health()` now
 reports `behind` so this can never be silent again.
 
-**Still open:** whether 14/73 is simply the low tail of
-an already-wide distribution (39 and 23 were both measured before any change
-in this session) or whether something made it worse. The detection changes on
-this branch only ADD rules and relabel techniques, which cannot suppress
-detection of unrelated techniques, so the mechanism would have to be the
-pipeline rather than rule content — but that is reasoning, not evidence.
-Resolving it needs repeated full runs on the current commit.
+**CONFIRMED BY A/B, 2026-09-04.** Eight full batteries, same catalog, same
+configuration (`skip_destructive=true`, network layer off), scored by
+technique with `redteam/evaluation/score_ci_run.py`:
 
-This per-run deafness is the largest known reliability problem on the
-detection side and is **not fixed**. It is recorded here rather than smoothed
-over because the union number's own credibility depends on it being known.
+| | Runs | Values | Range | Mean |
+|---|---|---|---|---|
+| Before `3d5670a` | 5 | 14, 23, 32, 38, 39 | **25** | 29.2 |
+| After `3d5670a` | 3 | 34, 35, 35 | **1** | 34.7 |
+
+The variance collapses from a 25-point spread to 1 point. That is the result
+the diagnosis predicts and the strongest evidence for it: rule content is
+identical across all eight runs, so a 25-point swing could only ever have come
+from timing — and a rate-limited reader falls behind by an amount that depends
+on how bursty that particular run happened to be. Remove the rate limit and
+the measurement becomes reproducible.
+
+**What this did NOT do: raise the ceiling.** 35 is below the best pre-fix run
+(39). The fix bought consistency, not capability — every run now lands where a
+lucky run always could have. Anyone reading this as a coverage improvement is
+reading it wrong.
+
+**On the denominator.** All 73 scored techniques were genuinely attempted: the
+17 destructive atomics are skipped before evaluation and receive no verdict at
+all, so they are already outside the 73 rather than counted as misses. But
+35/73 is still NOT a publishable detection rate — inside those 73 sit the 4 C2
+techniques that are `NOT_TESTED` with the network layer off, plus the
+tool-absent entries (msbuild, rar, ntdsutil are not present on a stock runner).
+The evaluation's own log says it plainly: "'no incident' is NOT 'missed' … do
+NOT compute a detection rate from this list." `evidence.py` /
+`union_coverage.py` remain the only things that may produce one.
+
+**Answered:** the earlier question here — whether 14/73 was the low tail of an
+already-wide distribution or a fresh regression — is settled by the pre-fix
+column above. 14 sits inside a distribution that already ranged 14–39 before
+any change in that session, so it was the low tail. It was never evidence that
+coverage regressed, which is exactly why a single run must never be read as a
+coverage number.
+
+The per-run deafness itself is **fixed** (`3d5670a`) and confirmed by the A/B.
+What remains open is narrower and worth stating: three post-fix runs is a small
+sample, and a 1-point spread could still widen under a heavier or slower
+runner. The `SENSORS-BEHIND` line now printed in every run's health timeline is
+the thing to watch — if it ever appears, the reader is falling behind again and
+that run's number is not trustworthy.
 
 ## What this evaluation does not claim
 
