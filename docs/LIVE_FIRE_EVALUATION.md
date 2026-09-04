@@ -337,7 +337,28 @@ sensor dying: the same failure class as the startup deafness root-caused in
    73." It is the envelope of many partial runs, and the gap between 39 and
    55 is a measure of how much the deafness costs, not of extra coverage.
 
-**Open question, not yet answered:** whether 14/73 is simply the low tail of
+**ROOT CAUSE FOUND (2026-09-04), fixed in `3d5670a`.**
+`ChannelReader.read_new()` was bounded only by `max_events=256`, and
+`SysmonSensor` polls it every 1.5s over a channel subscribed to EIDs
+`(1,3,6,7,8,10,11,12,13,14,25)` — including EID 11 (FileCreate) and 12/13/14
+(registry). That is a hard ceiling of **~170 events/sec**. A battery exceeds
+it in bursts, and draining only 256 per poll means the reader never catches
+up: the backlog grows monotonically, so each detection lands later than the
+last until it falls outside the harness's 30s window.
+
+The decisive evidence that this is starvation and not overflow: the deaf run
+reported **`sensor_dropped_backpressure: 0` and `sensor_dropped_dedup: 0`**.
+Nothing was discarded anywhere in Valkyrie — the events were still sitting in
+the Windows channel, unread. That is also why it stayed invisible: the
+bookmark advances over whatever it does read, so Sysmon stays Running, its
+log stays readable, and sensor health shows no errors while the engine goes
+progressively deaf.
+
+Fixed by bounding the drain on wall clock (2s) with `max_events` raised to
+8192 as a backstop, so a burst is absorbed in one poll. `Sensor.health()` now
+reports `behind` so this can never be silent again.
+
+**Still open:** whether 14/73 is simply the low tail of
 an already-wide distribution (39 and 23 were both measured before any change
 in this session) or whether something made it worse. The detection changes on
 this branch only ADD rules and relabel techniques, which cannot suppress
