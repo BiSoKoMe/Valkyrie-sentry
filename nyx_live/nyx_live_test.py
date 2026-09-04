@@ -26,6 +26,11 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+# Same value as tests/harness.py's EXIT_SKIP, spelled out here rather than
+# imported because this file deliberately does not depend on the unit-test
+# harness. "The run could not measure Nyx", distinct from both pass and fail.
+EXIT_INCONCLUSIVE = 77
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import valkyrie.config as cfg
@@ -84,6 +89,7 @@ def main() -> int:
     persona = current_persona()
     real_ids: list[str] = []
     canvas: dict[str, int] = {}
+    beacon_status: dict[str, str] = {}
 
     try:
         from playwright.sync_api import sync_playwright
@@ -111,6 +117,14 @@ def main() -> int:
                 bid = page.evaluate("window.__beaconId")
                 if bid:
                     real_ids.append(str(bid))
+                # The wait above deliberately accepts 'err' and 'no-tracker' as
+                # terminal states, so reaching here does NOT mean the beacon was
+                # sent. Record which it was: a fetch that threw delivers nothing
+                # to the tracker, and judging Nyx on a beacon that never left is
+                # how this test previously both passed and failed for reasons
+                # that had nothing to do with Nyx.
+                beacon_status[origin] = str(page.evaluate(
+                    "document.getElementById('beacon-status').textContent") or "")
                 ctx.close()
             browser.close()
     except Exception as e:
@@ -176,7 +190,38 @@ def main() -> int:
               f"observe_error={nyx_diag.get('observe_error', '?')}")
         if nyx_diag.get("last_error"):
             print("  last error:", nyx_diag["last_error"])
-    ok = caught and (not real_leaked) and fake_served
+
+    # ---- Delivery vs. protection: never conflate the two -------------------
+    # Beacon delivery on a CI runner is genuinely unreliable - observed runs
+    # where 0, 1 and 2 of the 2 beacons reached the endpoint, with Nyx behaving
+    # identically and correctly in every one (act_attempted == act_succeeded ==
+    # 2, zero errors). The old verdict read delivery as if it were protection,
+    # in BOTH directions:
+    #   * 1 beacon arrived, faked      -> real_leaked False -> "PASS", though
+    #     the missing beacon was never checked at all (run 33830012440)
+    #   * 0 beacons arrived            -> fake_served False -> "FAIL", blamed
+    #     on Nyx when Nyx had faked both correctly (run 33830018183)
+    # So: positive evidence of a leak always wins - a real id reaching the
+    # tracker is a real failure no matter what else went wrong. Absence of
+    # evidence with incomplete delivery is INCONCLUSIVE, not a pass. This is
+    # the evidence-librarian rule the EDR side already follows: an
+    # infrastructure failure is N/A, never a score.
+    sent_origins = [o for o, s in beacon_status.items() if "sent" in s]
+    undelivered = len(sent_origins) - len(tracker_bodies)
+    print("beacon status per origin:", beacon_status or "(not recorded)")
+
+    if real_leaked:
+        print("RESULT: FAIL — a real browser id reached the tracker")
+        return 1
+    if not beacon_status or undelivered > 0 or not sent_origins:
+        print(f"RESULT: INCONCLUSIVE — {len(tracker_bodies)} of "
+              f"{len(sent_origins) or len(beacon_status) or '?'} sent beacon(s) "
+              "reached the endpoint; Nyx cannot be judged on a beacon that "
+              "never left. This is an infrastructure result, NOT a Nyx verdict "
+              "and NOT a pass.")
+        return EXIT_INCONCLUSIVE
+
+    ok = caught and fake_served
     print("RESULT:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 

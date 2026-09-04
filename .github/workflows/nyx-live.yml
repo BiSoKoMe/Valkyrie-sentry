@@ -39,4 +39,22 @@ jobs:
         env:
           PYTHONUNBUFFERED: "1"
           VALKYRIE_ALLOW_EXPOSED_CA_KEY: "1"   # throwaway CI runner; lets the proxy start on Linux
-        run: python nyx_live/nyx_live_test.py
+        # Exit 77 = INCONCLUSIVE: the beacons did not reach the tracker endpoint,
+        # so this run could not measure Nyx at all. Beacon delivery on a hosted
+        # runner is genuinely unreliable (runs observed delivering 0, 1 and 2 of
+        # 2 while Nyx behaved identically and correctly in every one), and the
+        # test used to read that as a Nyx verdict in both directions - a silent
+        # pass when a beacon vanished, a red job when Nyx had done its job
+        # perfectly. Surfaced as a warning, never as a pass: an inconclusive run
+        # is absent evidence, so do not treat a green job here as proof until a
+        # run reports PASS with full delivery.
+        run: |
+          set +e
+          python nyx_live/nyx_live_test.py
+          rc=$?
+          set -e
+          if [ "$rc" = "77" ]; then
+            echo "::warning title=Nyx live INCONCLUSIVE::Beacons never reached the tracker endpoint - this run measured nothing about Nyx. Re-run to get a verdict."
+            exit 0
+          fi
+          exit $rc
