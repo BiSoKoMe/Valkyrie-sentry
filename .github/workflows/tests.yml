@@ -60,6 +60,45 @@ jobs:
       - name: Run unit test suite
         run: python tests/run_tests.py
 
+  unit-windows:
+    # Valkyrie is a Windows endpoint product: Sysmon/ETW, the registry, Windows
+    # ACLs, %SystemDrive%\Users, WinDefend. The ubuntu jobs above have never been
+    # able to exercise any of that, so a large block of tests has been failing
+    # there on platform semantics rather than on defects, and the suite's true
+    # state on its OWN platform has never been measured. This job measures it.
+    #
+    # Reported separately and NOT gating yet (continue-on-error): the first runs
+    # are a measurement, not a promise. Turning this red-by-default before the
+    # real Windows baseline is known would just add a second permanently-red job
+    # to a repo that already has one. Flip continue-on-error off once it is green.
+    #
+    # windows-latest is disposable and destroyed after the job, which is what
+    # makes it safe to run the firewall/DNS-touching tests here at all - the
+    # same property Tier B relies on. Never run this suite against a real host.
+    name: Unit tests (Windows, Python 3.11) [measurement]
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements_modular.txt
+          python -m pip install cryptography httpx pytest
+
+      - name: Syntax / import gate
+        run: python -m compileall -q valkyrie
+
+      - name: Run unit test suite
+        run: python tests/run_tests.py
+
   accel:
     name: Native accelerator (Rust) + suite
     runs-on: ubuntu-latest
