@@ -298,13 +298,23 @@ ceiling.
 Measured 2026-09-04, comparing three full-battery runs of the same catalog
 against the same engine:
 
-| Run | Date | `[DETECT]` | `[MISS]` |
-|---|---|---|---|
-| `33436292312` | 2026-08-31 | **63** | 64 |
-| `33408786391` | 2026-08-31 | **32** | 95 |
-| `33828591735` | 2026-09-04 | **14** | 113 |
+| Run | Date | `[DETECT]` | `[MISS]` | of |
+|---|---|---|---|---|
+| `33436292312` | 2026-08-31 | **39** | 34 | 73 |
+| `33408786391` | 2026-08-31 | **23** | 50 | 73 |
+| `33828591735` | 2026-09-04 | **14** | 59 | 73 |
 
-That is a 4.5x spread across runs of the same battery. In the 2026-09-04 run
+**Count these by deduplicating on technique id, not by `grep -c`.** The
+harness Tee's its output, so verdict lines appear more than once in
+`gh run view --log` — a raw grep of the same three runs returns 63/32/14,
+which is wrong and flattering to the first two. Each run evaluates exactly 73
+unique techniques; pair each `[eval] -- <id>` with the verdict line that
+follows it and dedupe (no technique in any of these three runs reported two
+different verdicts).
+
+That is still a ~2.8x spread across runs of the same battery, and **no single
+run has ever reached the 55/73 union.** The best full run on record is 39/73.
+In the 2026-09-04 run
 the engine detected normally for roughly the first 14 techniques — with
 latency climbing through them (2.09s → 5.53s → 7.94s) — and then returned
 `[MISS]` for essentially everything afterwards, starting at `cred-sam-dump`.
@@ -316,14 +326,24 @@ sensor dying: the same failure class as the startup deafness root-caused in
 **Two consequences, stated plainly:**
 
 1. **A single run's count is not a coverage number and must never be quoted
-   as one.** The 2026-09-04 run's 14/126 is not evidence that coverage
-   regressed; it is evidence that that run went deaf.
+   as one.** The 2026-09-04 run's 14/73 is not evidence that coverage
+   regressed; it is evidence that that run went deaf. (It is also not yet
+   evidence that it did *not* regress — see the open question below.)
 2. **The authoritative 55/73 union is assembled across 26 runs that each go
-   deaf at a different point.** Every technique in it was genuinely detected
-   in some real run, so the union is legitimate — but it is a union over
-   partially-deaf runs, not 26 confirmations of the same result. Anyone
-   reading 55/73 as "a full battery detects 55 of 73" would be reading it
-   wrong.
+   deaf at a different point, and no single run has ever scored near it.**
+   Every technique in it was genuinely detected in some real run, so the
+   union is legitimate — but the best single full battery on record is
+   **39/73**, so 55/73 must never be read as "a full battery detects 55 of
+   73." It is the envelope of many partial runs, and the gap between 39 and
+   55 is a measure of how much the deafness costs, not of extra coverage.
+
+**Open question, not yet answered:** whether 14/73 is simply the low tail of
+an already-wide distribution (39 and 23 were both measured before any change
+in this session) or whether something made it worse. The detection changes on
+this branch only ADD rules and relabel techniques, which cannot suppress
+detection of unrelated techniques, so the mechanism would have to be the
+pipeline rather than rule content — but that is reasoning, not evidence.
+Resolving it needs repeated full runs on the current commit.
 
 This per-run deafness is the largest known reliability problem on the
 detection side and is **not fixed**. It is recorded here rather than smoothed
