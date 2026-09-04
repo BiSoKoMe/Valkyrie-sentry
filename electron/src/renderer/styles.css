@@ -436,6 +436,11 @@ html, body {
 .feed-row .fdot.allow { background: var(--text-3); }
 .feed-row .fname { color: var(--text-0); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .feed-row .fmeta { color: var(--text-3); font-size: 11px; font-family: var(--font-mono); }
+/* Two-line name cell, for rows whose point needs a sentence to land (the Aegis
+   hypotheses). The single-line .fname above clips with ellipsis, which would
+   silently swallow exactly the explanation that makes the row mean anything. */
+.feed-row .fname.stack { white-space: normal; overflow: visible; }
+.feed-row .fname .fsub { display: block; color: var(--text-3); font-size: 11px; margin-top: 3px; }
 @keyframes rowIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 /* Rows carried over from the previous poll must not replay their entry
    animation — only genuinely new events animate in. */

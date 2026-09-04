@@ -377,6 +377,7 @@ const NAV_GROUPS = [
   ['Detect', [
     ['threats',      'Detections',          'alert',      { count: 'flagged', crit: true }],
     ['nyx',          'Nyx Data Guard',      'brain'],
+    ['aegis',        'Aegis Reasoning',     'target'],
     ['hunting',      'Threat Hunting',      'search'],
     ['intelligence', 'Intelligence',        'brain'],
   ]],
@@ -1013,6 +1014,166 @@ PAGES.nyx = {
       feed.appendChild(el('div', 'feed-row',
         `<span class="fdot ${acting ? 'allow' : 'flag'}"></span><span class="fname">${escapeHtml(l.sentence)}</span>
          <span class="fmeta">${escapeHtml(l.host || '')}</span>`));
+    });
+  },
+};
+
+/* ---- Aegis: the exposure-inference reasoning layer -------------------
+   Aegis has been wired into the live engine since the Beta 2/3 platform work
+   and answers on /api/aegis/status + /api/aegis/ledger, but it had no surface
+   in the app at all - the third component was doing its job invisibly.
+
+   The question this page answers is Aegis's actual question, in plain words:
+   given only what left this machine, what could a watcher REASON about you?
+   That is a different question from Nyx's ("what personal data crossed?") and
+   from Detections' ("what attacked this host?"), which is why it gets its own
+   page rather than a card on either.
+
+   Reasoning-only is stated on the page, not just in the docstring: Aegis
+   cannot raise an incident and cannot authorize enforcement (engine.py's
+   aegis_status(), and the tested separation invariant behind it). A privacy
+   tool that overstated its own authority would be exactly the kind of thing
+   this project refuses to ship. */
+
+// The 5 canonical hypotheses, in the order evaluate_pair() reaches them.
+// Labels are plain language; the ATT&CK-style id stays visible in mono so the
+// page never hides which hypothesis it is actually reporting.
+const AEGIS_HYPOTHESES = [
+  ['DESTINATION_DISCLOSURE',     'Who you talked to',      'A watcher can tell which service you contacted.'],
+  ['ACTIVITY_CLASSIFICATION',    'What you were doing',    'A watcher can classify the kind of activity, not just that traffic happened.'],
+  ['CROSS_SESSION_LINKABILITY',  'You, across sessions',   'Today’s activity can be tied back to an earlier session.'],
+  ['FLOW_LINKAGE',               'Two connections, one person', 'Separate connections can be joined as belonging to the same person.'],
+  ['USER_LINKABILITY',           'It’s identifiably you',  'The traffic can be attached to a specific identity, not just a consistent stranger.'],
+];
+
+PAGES.aegis = {
+  render() {
+    $('page').innerHTML = `
+      <div class="headline-block" id="aegisHeadline">
+        <div class="hl-top">What could be inferred about you</div>
+        <div class="hl-main" id="aegisHeadlineMain">Reasoning…</div>
+        <div class="hl-sub" id="aegisHeadlineSub"></div>
+      </div>
+      <div class="page-intro">Aegis reasons over what already left this machine and asks what a watcher
+      could <em>work out</em> from it — not whether any single request was malicious. An inference is
+      shown as <b>established</b> only when the evidence Aegis holds actually supports it.
+      <b>Aegis is a reasoning layer: it never raises an alert, blocks traffic, or changes what Valkyrie
+      or Nyx decide.</b></div>
+      ${sectionHead('What a watcher could infer', 'Each inference, and whether Aegis can currently establish it')}
+      <div class="feed" id="aegisHyps"><div class="empty">Evaluating…</div></div>
+      ${sectionHead('Reasoning activity', 'Live · updates every 5s')}
+      <div class="grid">
+        ${statCard('aegis_established', 'Inferences Established', 'target')}
+        ${statCard('aegis_obs', 'Exposure Observations', 'network', 'accent-blue')}
+        ${statCard('aegis_subjects', 'Subjects Reasoned Over', 'devices', 'accent-blue')}
+        ${statCard('aegis_entries', 'Ledger Entries', 'activity', 'accent-green')}
+      </div>
+      ${sectionHead('What Aegis observed', 'The raw exposure categories behind the reasoning above')}
+      <div class="feed" id="aegisObs"><div class="empty">Waiting for Aegis…</div></div>`;
+  },
+  interval: 5000,
+  async poll() {
+    const hypBox = $('aegisHyps'); if (!hypBox) return;
+    const [status, ledger] = await Promise.all([
+      safe(() => V.api.get('/api/aegis/status'), null),
+      safe(() => V.api.get('/api/aegis/ledger?limit=50'), null),
+    ]);
+    const up = !!status && !status.error;
+    // The API distinguishes "EDR still starting" from "EDR unavailable" via a
+    // `starting` flag. That window is 30-60s on a cold start, and reporting it
+    // as "not running - start protection" would be telling the user something
+    // false about their own protection, and inviting a pointless action.
+    const starting = !!status && !!status.starting;
+    const entries = (ledger && Array.isArray(ledger.entries)) ? ledger.entries : [];
+
+    // Newest entry carries the current reasoning state; the rest give volume.
+    const latest = entries.length ? entries[entries.length - 1] : null;
+    const decisions = (latest && latest.inference_hypotheses) || {};
+    const established = AEGIS_HYPOTHESES.filter(
+      ([id]) => decisions[id] && decisions[id].action === 'alert').length;
+    const allObs = entries.reduce(
+      (n, e) => n + ((e.exposure_observations || []).length), 0);
+    const subjects = new Set(entries.map((e) => e.instance_id).filter(Boolean)).size;
+
+    animateNumber($('card-aegis_established'), statVal(up && !!latest, established));
+    animateNumber($('card-aegis_obs'),         statVal(up, allObs));
+    animateNumber($('card-aegis_subjects'),    statVal(up, subjects));
+    animateNumber($('card-aegis_entries'),     statVal(up, status ? status.ledger_entries : 0));
+
+    // ---- Headline ----
+    const hlMain = $('aegisHeadlineMain'), hlSub = $('aegisHeadlineSub');
+    if (hlMain) {
+      if (starting) {
+        hlMain.textContent = 'Aegis is starting…';
+        if (hlSub) hlSub.textContent = 'The detection engine is still coming up.';
+      } else if (!up) {
+        hlMain.textContent = 'Aegis is not running';
+        if (hlSub) hlSub.textContent = 'Start protection to begin reasoning about exposure.';
+      } else if (!latest) {
+        hlMain.textContent = 'Nothing to reason about yet';
+        if (hlSub) hlSub.textContent = 'Aegis reasons over traffic as it leaves — nothing has crossed yet.';
+      } else {
+        hlMain.textContent = established === 0
+          ? 'Nothing could be inferred about you'
+          : `${established} of ${AEGIS_HYPOTHESES.length} inferences could be made about you`;
+        if (hlSub) hlSub.textContent = established === 0
+          ? 'From what Aegis has seen leave, a watcher could not establish any of the five.'
+          : 'Based on what Aegis has seen leave this machine.';
+      }
+    }
+
+    // ---- The five hypotheses ----
+    hypBox.innerHTML = '';
+    if (starting) {
+      hypBox.innerHTML = stateBlock('empty', 'Aegis is starting',
+        'The detection engine is still coming up — reasoning begins once it is ready.');
+    } else if (!up) {
+      hypBox.innerHTML = stateBlock('offline', 'Aegis unavailable',
+        'The engine is not running, so nothing is being reasoned about.');
+    } else if (!latest) {
+      hypBox.innerHTML = stateBlock('empty', 'No reasoning yet',
+        'Aegis evaluates once traffic has actually left this machine.');
+    } else {
+      AEGIS_HYPOTHESES.forEach(([id, label, plain]) => {
+        const d = decisions[id];
+        const on = !!d && d.action === 'alert';
+        // 'flag' (not 'block'): an established inference is a privacy finding
+        // to understand, never an attack to contain - Aegis cannot contain.
+        const conf = d && typeof d.confidence === 'number'
+          ? ` · confidence ${d.confidence.toFixed(2)}` : '';
+        hypBox.appendChild(el('div', 'feed-row',
+          `<span class="fdot ${on ? 'flag' : 'allow'}"></span>
+           <span class="fname stack">${escapeHtml(label)} — ${escapeHtml(on ? 'established' : 'not established')}
+             <span class="fsub">${escapeHtml(plain)}</span></span>
+           <span class="fmeta mono">${escapeHtml(id)}${escapeHtml(conf)}</span>`));
+      });
+    }
+
+    // ---- Raw observations behind it ----
+    const obsBox = $('aegisObs'); if (!obsBox) return;
+    const obs = [];
+    for (let i = entries.length - 1; i >= 0 && obs.length < 25; i--) {
+      (entries[i].exposure_observations || []).forEach((o) => {
+        if (obs.length < 25) obs.push(o);
+      });
+    }
+    obsBox.innerHTML = '';
+    if (!obs.length) {
+      obsBox.innerHTML = stateBlock(up ? 'empty' : 'offline',
+        up ? 'No exposure observations yet' : 'Aegis unavailable',
+        up ? 'Nothing observable has crossed to a third party yet.' : '');
+      return;
+    }
+    obs.forEach((o) => {
+      // precision < 1 is a REAL result, not a rounding artifact: Aegis 1A found
+      // bucketing degrades a category's precision without removing the category.
+      const prec = typeof o.precision === 'number' ? o.precision : 1;
+      const degraded = prec < 1;
+      obsBox.appendChild(el('div', 'feed-row',
+        `<span class="fdot ${degraded ? 'allow' : 'flag'}"></span>
+         <span class="fname">${escapeHtml(String(o.category || 'unknown'))} observable
+           at ${escapeHtml(String(o.observation_point || 'unknown'))}</span>
+         <span class="fmeta mono">precision ${prec.toFixed(2)}${degraded ? ' (degraded)' : ''}</span>`));
     });
   },
 };
