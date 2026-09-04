@@ -292,6 +292,37 @@ async function runSplashNormal() {
   state.engineUp = ready;
   await sleep(500);
   finishSplash(stopParticles);
+  if (!ready) await handleIncompleteInstall(boot);
+}
+
+// main.js's boot handler already detects an incomplete install (setup's
+// register-tasks.ps1 never ran, or failed) and deliberately skips its own
+// auto-recovery in that case rather than risk running a dev-checkout script
+// against an installed layout - see engine.js's installationGaps(). That
+// signal reached this far (it's on the resolved boot() result) but nothing
+// read it, so the user was left on the generic "Engine unreachable -
+// retrying" posture line forever, for a condition that retrying can never
+// fix. Surface it specifically, through the same error dialog (with its
+// already-wired Repair button) used elsewhere for actionable engine errors.
+async function handleIncompleteInstall(bootPromise) {
+  const res = await bootPromise.catch(() => null);
+  const gaps = res && Array.isArray(res.installationGaps) ? res.installationGaps : [];
+  if (!gaps.length || !V) return;
+  const { response } = await V.errorDialog(
+    'Installation incomplete',
+    `Valkyrie is missing required setup component(s): ${gaps.join(', ')}. ` +
+    'This usually means setup was interrupted, blocked by another security ' +
+    'tool, or run without administrator rights.'
+  );
+  if (response === 1) {           // "Repair"
+    const r = await safe(() => V.repair(), { restored: false, ready: false });
+    toast(r.ready ? 'Repair complete - protection is back online.'
+                  : 'Repair attempted - restart Valkyrie if this keeps happening.',
+          r.ready ? 'ok' : 'error');
+    if (r.ready) state.engineUp = true;
+  } else if (response === 2) {    // "View Logs"
+    await V.openLogs();
+  }
 }
 
 // First install / upgrade / repair - a deliberate "Preparing Valkyrie" sequence
