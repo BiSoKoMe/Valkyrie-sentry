@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Valkyrie test runner.
 
-The individual ``tests/test_*.py`` files are standalone scripts that exit 0 on
-success and non-zero on failure.  This runner discovers them, separates the
-CI-safe *unit* tests from the *integration* tests that require live external
-state (a running Valkyrie instance, an Unbound resolver, a positional CLI
-argument), runs the requested set as subprocesses, and reports a single
-aggregate pass/fail with a non-zero exit code if anything failed.
+Most ``tests/test_*.py`` files are standalone scripts that exit 0 on success and
+non-zero on failure; a minority are pytest-style (module-level ``def test_*``,
+no ``__main__`` guard) and are handed to pytest instead - see ``_is_pytest_style``.
+This runner discovers them, separates the CI-safe *unit* tests from the
+*integration* tests that require live external state (a running Valkyrie
+instance, an Unbound resolver, a positional CLI argument), runs the requested
+set as subprocesses, and reports a single aggregate pass/fail with a non-zero
+exit code if anything failed.
 
 It replaces the ad-hoc "run each file by hand" workflow and is what CI invokes.
 
@@ -68,6 +70,27 @@ _ACCEPTS_QUICK = {
 }
 
 
+# Most test files here are standalone scripts (a main() plus a __main__ guard).
+# A minority - the whole Aegis reasoning layer and the Platform Alpha baseline -
+# are pytest-style instead: module-level `def test_*` functions with bare
+# asserts and no __main__ guard. Executing one of those as a script imports the
+# module, defines the functions, calls none of them, and exits 0 in silence.
+# The VOID guard below correctly refused to call that a pass, but the effect was
+# that 10 files' worth of real, passing assertions never ran in CI at all - Aegis
+# was wired into the live engine with its unit tests reporting VOID the whole
+# time. Detect the style and hand those files to pytest, which is what they were
+# always written for.
+_PYTEST_STYLE = re.compile(r"^def test_", re.M)
+
+
+def _is_pytest_style(path: Path) -> bool:
+    try:
+        src = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return _PYTEST_STYLE.search(src) is not None and "__main__" not in src
+
+
 def _discover() -> list[Path]:
     return sorted(p for p in _TESTS_DIR.glob("test_*.py"))
 
@@ -86,6 +109,31 @@ OUTCOME_PASS    = "pass"
 OUTCOME_FAIL    = "fail"
 OUTCOME_SKIP    = "skip"
 OUTCOME_VACUOUS = "vacuous"
+
+
+# pytest's own summary line, e.g. "37 passed in 1.30s" / "2 failed, 35 passed".
+_PYTEST_PASSED = re.compile(r"(\d+) passed")
+
+# pytest exit code 5 = "no tests were collected". For a file we routed to pytest
+# *because* it looked like it had tests, that means the tests vanished or stopped
+# being collectable - absent coverage, so VOID, not a pass and not a hard error.
+_PYTEST_EXIT_NO_TESTS = 5
+
+
+def _classify_pytest(returncode: int, out: str) -> tuple[str, str]:
+    """Map a pytest-run file to (outcome, note)."""
+    if returncode == _PYTEST_EXIT_NO_TESTS:
+        return (OUTCOME_VACUOUS, "pytest collected no tests from this file")
+    if "No module named pytest" in out:
+        # Loud and specific: this is an environment gap, not a code defect, but
+        # it still means these assertions did not run, so it stays a failure.
+        return (OUTCOME_FAIL, "pytest is not installed - `pip install pytest`")
+    if returncode != 0:
+        return (OUTCOME_FAIL, "")
+    m = _PYTEST_PASSED.search(out)
+    if not m or m.group(1) == "0":
+        return (OUTCOME_VACUOUS, "pytest exited 0 but reported no passing tests")
+    return (OUTCOME_PASS, f"{m.group(1)} pytest tests")
 
 
 def _classify(returncode: int, out: str) -> tuple[str, str]:
@@ -114,9 +162,13 @@ def _classify(returncode: int, out: str) -> tuple[str, str]:
 
 def _run_one(path: Path, timeout: int) -> tuple[str, float, str, str]:
     """Run one test file as a subprocess. Returns (outcome, seconds, note, output)."""
-    cmd = [sys.executable, str(path)]
-    if path.name in _ACCEPTS_QUICK:
-        cmd.append("--quick")
+    pytest_style = _is_pytest_style(path)
+    if pytest_style:
+        cmd = [sys.executable, "-m", "pytest", str(path), "-q"]
+    else:
+        cmd = [sys.executable, str(path)]
+        if path.name in _ACCEPTS_QUICK:
+            cmd.append("--quick")
     # Force UTF-8 in the child. Windows consoles default to cp1252, and these
     # tests print arrows and box-drawing characters - without this, 7 suites die
     # with UnicodeEncodeError partway through and report a failure that has
@@ -135,7 +187,8 @@ def _run_one(path: Path, timeout: int) -> tuple[str, float, str, str]:
                 f"TIMEOUT after {timeout}s", "")
     elapsed = time.monotonic() - start
     combined = proc.stdout + proc.stderr
-    outcome, note = _classify(proc.returncode, combined)
+    outcome, note = (_classify_pytest(proc.returncode, combined) if pytest_style
+                     else _classify(proc.returncode, combined))
     if outcome in (OUTCOME_PASS, OUTCOME_SKIP):
         return (outcome, elapsed, note, "")
     # Full output, not just a tail: these files print one line per check, so
