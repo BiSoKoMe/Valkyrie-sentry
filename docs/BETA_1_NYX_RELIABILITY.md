@@ -9,6 +9,29 @@ See "Beta 1: QUALIFIED" near the end of this document for the full
 evidence trail — two real product bugs were found and fixed along the way,
 not smoothed over.
 
+> **A THIRD bug of the same family surfaced later — 2026-09-03 — and this
+> qualification did not catch it.** `nyx-live` leaked a real browser device
+> id to the tracker, intermittently. Root cause: `fake_outbound()` applied
+> its substitution map to the whole URL, so a beacon carrying `cores=8` put
+> `"8" -> "4"` in the map and rewrote the tracker's **port**
+> (`tracker.test:8111` → `:4111`). When the mangled port left 0-65535,
+> mitmproxy's URL setter raised, the url/body/header rewrites shared one
+> `try` block, and the body rewrite — where the real id was — never ran. The
+> request went out RAW.
+>
+> Beta 1 fixed substitution-vs-*substitution*; this was
+> substitution-vs-*URL structure*, which that fix never covered. **The soak
+> could not have caught it**: it drives one origin on a fixed port and the
+> collision needs a fingerprint value whose digits match the port's, so the
+> bug is invisible unless the port happens to collide.
+>
+> The same single cause also produced what looked like unrelated CI
+> flakiness — runs where 0 or 1 of 2 beacons "never arrived" were beacons
+> sent to a valid-but-wrong port. Fixed in `_apply_repl_url()` plus
+> independent per-part rewrites; verified 6/6 clean live runs with full
+> delivery. See the commit for the full trail. Treat the 3/3 result below as
+> real but **not** as evidence that this class of bug is exhausted.
+
 ## What this qualifies, and what it does not
 
 Nyx (`valkyrie/nyx.py` + `nyx_graph.py` + `tls_addon.py`/`tls_inspector.py`,
