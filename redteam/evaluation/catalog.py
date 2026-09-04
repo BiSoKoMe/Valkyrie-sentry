@@ -1508,10 +1508,10 @@ EXPANSION_ROUND2 = [
               "(SAM). Split into two rules - a real reg.exe save targets "
               "exactly one hive path per invocation, so this is not an "
               "overlapping guess. Offline-verified via test_behavioral_rules.py "
-              "(new reg-save-hive-lsa-secrets case); live Tier B "
-              "re-verification pending - expect this to fire as T1003.004 "
-              "directly (known_mismatch removed) on the next live run, not "
-              "as T1003.002.",
+              "(new reg-save-hive-lsa-secrets case). LIVE-VERIFIED 2026-09-03, "
+              "run 33828610247: [DETECT] fp=0 latency=2.18s, and the incident "
+              "carries INCIDENT-TECH T1003.004 - the correct id, no longer "
+              "borrowing T1003.002. known_mismatch removed.",
     ),
     Technique(
         id="collect-clipboard", technique_id="T1115",
@@ -1868,10 +1868,11 @@ EXPANSION_ROUND2 = [
               "the existing cred-hunt-files rule (T1552.001): a find-verb "
               "ANDed with a secret keyword, so an ordinary 'reg query <key> "
               "/v <name>' (no /f, no keyword) stays clear - see "
-              "test_behavioral_rules.py's new benign control. Offline-"
-              "verified; live Tier B re-verification pending - expect this "
-              "to fire standalone as T1552.002 directly (known_mismatch "
-              "removed) rather than needing burst correlation.",
+              "test_behavioral_rules.py's new benign control. LIVE-VERIFIED "
+              "2026-09-03, run 33828610247: [DETECT] fp=0 latency=2.13s, "
+              "firing standalone with INCIDENT-TECH T1552.002 - no longer "
+              "falling through to generic T1012 and no longer needing burst "
+              "correlation. known_mismatch removed.",
     ),
 ]
 

@@ -256,12 +256,20 @@ engine, then folded into the full-battery union above):**
    `process_telemetry.py`'s `net group` branch corrected from T1087.002
    (Account Discovery) to T1069.002 (Permission Groups Discovery) — the same
    bug class as the earlier `net localgroup` / T1069.001 fix, just never
-   done for the domain-groups sibling. **Offline-verified only** (new cases
-   added to `test_behavioral_rules.py` and `test_process_telemetry.py`) —
-   live Tier B re-verification has NOT been run yet; treat these three as
-   "expected fixed, not yet proven" until a live `-OnlyIds` re-run confirms
-   it, the same standard every other fix in this log was held to before
-   being folded into the union number below. The remaining three mislabeling
+   done for the domain-groups sibling. **LIVE-VERIFIED 2026-09-03, run
+   `33828610247`** (`-OnlyIds cred-lsa-secrets,cred-registry-password-hunt,
+   disc-domain-groups`, `-SkipDestructive`). All three came back
+   **`[DETECT]` with `fp=0`** — `cred-lsa-secrets` latency 2.18s,
+   `cred-registry-password-hunt` 2.13s, `disc-domain-groups` 8.33s — and,
+   the point of the fix, the incidents carry the **correct** ATT&CK ids:
+   `db_coverage.py` reports `INCIDENT-TECH: T1003.004`, `T1552.002` and
+   `T1069.002`, not the T1003.002 / T1012 / T1087.002 they used to borrow.
+   `known_mismatch` is therefore removed for all three in `catalog.py`.
+   (Superseded text, kept so the standard is visible: this entry previously
+   read "offline-verified only … treat these three as expected fixed, not
+   yet proven" until a live `-OnlyIds` re-run confirmed
+   it — the same standard every other fix in this log was held to before
+   being folded into the union number below.) The remaining three mislabeling
    findings (`collect-stage-download`, `disc-network-share`/
    `disc-network-shares-smb`, `evasion-masquerade-lsass`) and
    `evasion-file-delete` were deliberately left alone — the catalog's own
@@ -270,11 +278,20 @@ engine, then folded into the full-battery union above):**
    evidence to decide, not a guess.
 
 All eight fixes through #8 are folded into the 55/73 (75.3%) union above —
-that number is not pending, it is the current authoritative result. Fix #9
-is NOT yet folded in (no live run has confirmed it) — expect 55/73 to move
-only after that re-run. This log is updated as the milestone continues;
-treat any coverage percentage above as a floor as of the commit it cites,
-not a permanent ceiling.
+that number is not pending, it is the current authoritative result.
+
+Fix #9 is now **live-verified** (run `33828610247`, above) but is **not yet
+folded into the union number**, and the distinction is deliberate: the
+targeted `-OnlyIds` run proves those three techniques detect under the right
+ids, it does not recompute the union. The union is what `union_coverage.py` /
+the evidence librarian (`evidence.py`) produce from a full battery, and that
+is the only thing allowed to move 55/73 — not arithmetic performed by hand
+on top of a targeted run. Until a full-battery run is scored, 55/73 stands
+as written.
+
+This log is updated as the milestone continues; treat any coverage
+percentage above as a floor as of the commit it cites, not a permanent
+ceiling.
 
 ## What this evaluation does not claim
 

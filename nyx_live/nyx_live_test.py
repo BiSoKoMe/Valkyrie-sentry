@@ -117,6 +117,12 @@ def main() -> int:
         print("NYX-LIVE: browser drive error:", e)
 
     time.sleep(2.0)                        # let the store's async writer drain
+    # Read the addon's Nyx diagnostics BEFORE stopping the inspector - after
+    # stop() the addon reference is gone. Without these, a leak shows up only
+    # as "one beacon was faked and one was not", which cannot distinguish a
+    # request Nyx never observed from one whose rewrite threw: both produce
+    # identical event counts (see tls_addon.ValkyrieAddon.nyx_diag).
+    nyx_diag = dict(getattr(getattr(insp, "_addon", None), "nyx_diag", {}) or {})
     try:
         insp.stop()
     except Exception:
@@ -155,6 +161,21 @@ def main() -> int:
     print("real browser id LEAKED to tracker:", real_leaked, "(want False)")
     print("FAKE persona id served to tracker:", fake_served, "(want True)")
     print("farble canvas differs per origin:", cross_origin_differs, canvas)
+    print("nyx addon diagnostics:", nyx_diag or "(unavailable)")
+    if real_leaked:
+        # Name the mechanism instead of leaving the reader to infer it. These
+        # three counters are mutually exclusive explanations for a raw request
+        # reaching the tracker, and exactly one of them should be non-zero.
+        print("  LEAK ANALYSIS —",
+              f"observe_calls={nyx_diag.get('observe_calls', '?')},",
+              f"observed_with_findings={nyx_diag.get('observed_with_findings', '?')},",
+              f"act_attempted={nyx_diag.get('act_attempted', '?')},",
+              f"act_succeeded={nyx_diag.get('act_succeeded', '?')},",
+              f"act_rewrite_error={nyx_diag.get('act_rewrite_error', '?')},",
+              f"emit_skipped_no_pid={nyx_diag.get('emit_skipped_no_pid', '?')},",
+              f"observe_error={nyx_diag.get('observe_error', '?')}")
+        if nyx_diag.get("last_error"):
+            print("  last error:", nyx_diag["last_error"])
     ok = caught and (not real_leaked) and fake_served
     print("RESULT:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
