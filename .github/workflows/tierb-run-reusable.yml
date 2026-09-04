@@ -166,13 +166,34 @@ jobs:
               $t = (Get-Date).ToUniversalTime().ToString("HH:mm:ss")
               try {
                 $c = Invoke-RestMethod "http://127.0.0.1:8090/api/telemetry/contention" -TimeoutSec 8
-                $loop = if ($c.loop) { "stalled=$($c.loop.stalled) max_lag=$($c.loop.max_lag_seconds)" } else { "loop=n/a" }
+                # Field names are LoopHeartbeat.status()'s own (telemetry_watchdog.py):
+                # beating / stale / worst_drift_seconds. An earlier version of this
+                # sampler guessed "stalled"/"max_lag_seconds" and printed blanks -
+                # an instrument that silently reports nothing is worse than none.
+                $loop = if ($c.loop) {
+                  "beating=$($c.loop.beating) stale=$($c.loop.stale) worst_drift=$($c.loop.worst_drift_seconds)"
+                } else { "loop=n/a" }
                 $wp = "borrowed=$($c.worker_pool.borrowed_tokens)/$($c.worker_pool.total_tokens) waiting=$($c.worker_pool.tasks_waiting)"
                 $rss = [math]::Round(($c.engine_process.rss_bytes / 1MB), 1)
                 $cols = ($c.collectors.PSObject.Properties | ForEach-Object {
                   "$($_.Name.Replace('_collector','')):trunc=$($_.Value.truncated)"
                 }) -join " "
-                "[health $t] $loop | $wp | rss=${rss}MB | $cols"
+                # THE signal this sampler exists for: an ETW channel reader that
+                # cannot drain as fast as events arrive. /api/telemetry/contention
+                # only covers the POLL-based collectors, so the Sysmon/PowerShell/
+                # WMI readers - where the 256-per-poll deafness lived - are only
+                # visible via sensors/status. Without this the timeline could not
+                # see the very thing it was added to catch.
+                $sens = ""
+                try {
+                  $ss = Invoke-RestMethod "http://127.0.0.1:8090/api/sensors/status" -TimeoutSec 8
+                  $behind = @($ss.sensors | Where-Object { $_.behind }) | ForEach-Object {
+                    "$($_.name)(behind:$($_.read_truncated),n=$($_.read_count))"
+                  }
+                  $sens = if ($behind) { "SENSORS-BEHIND: $($behind -join ' ')" } else { "sensors=keeping-up" }
+                  $sens += " drops=bp:$($ss.dropped_backpressure)/dedup:$($ss.dropped_dedup) qd=$($ss.queue_depth)"
+                } catch { $sens = "sensors=unreadable" }
+                "[health $t] $loop | $wp | rss=${rss}MB | $cols | $sens"
               } catch {
                 "[health $t] UNREACHABLE ($($_.Exception.Message))"
               }
