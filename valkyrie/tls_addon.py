@@ -177,6 +177,7 @@ class ValkyrieAddon:
             "act_attempted": 0,          # NYX_ACT on and something to fake
             "act_succeeded": 0,          # rewrite applied, nyx_fake logged
             "act_rewrite_error": 0,      # rewrite threw -> request went out RAW
+            "act_url_error": 0,          # url rewrite threw; body/headers still done
             "observe_error": 0,          # _nyx_observe itself threw
             "last_error": "",
         }
@@ -382,8 +383,20 @@ class ValkyrieAddon:
                 if faked:
                     self._diag_bump("act_attempted")
                     try:
+                        # Each rewrite is applied INDEPENDENTLY. These used to
+                        # share one try block, so a failure in the first
+                        # abandoned the rest - and run 33830249645 proved how
+                        # that fails: the url setter raised on a corrupted port,
+                        # the body rewrite never ran, and the real device id in
+                        # the BODY went out untouched. A url that cannot be
+                        # rewritten is no reason to also surrender the body.
+                        # Partial deception beats none; the counters record it.
                         if new_url != url:
-                            req.url = new_url
+                            try:
+                                req.url = new_url
+                            except Exception as exc:
+                                self._diag_bump("act_url_error")
+                                self._diag_note(f"act_url: {exc!r}")
                         if new_body is not None and new_body != body:
                             req.set_content(new_body if isinstance(new_body, bytes)
                                             else str(new_body).encode("utf-8"))

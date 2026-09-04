@@ -37,7 +37,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from urllib.parse import parse_qsl, quote, urlsplit
+from urllib.parse import parse_qsl, quote, urlsplit, urlunsplit
 
 from .dns_tunnel import registrable_base
 
@@ -618,6 +618,46 @@ def _apply_repl(text: str, repl: dict) -> str:
     return pattern.sub(lambda m: full_map[m.group(0)], text)
 
 
+def _apply_repl_url(url: str, repl: dict) -> str:
+    """Apply substitutions to a URL WITHOUT ever touching its authority.
+
+    Beta 1 fixed substitution-vs-SUBSTITUTION collisions in _apply_repl (see
+    above). This fixes substitution-vs-STRUCTURE, which that pass did not
+    cover: a raw personal value can be short enough to match the URL's own
+    syntax. A real browser beacon carries `cores=8`, so the substitution map
+    contains the single character "8" -> "4", and rewriting the whole URL
+    turned `http://tracker.test:8111/api/ingest` into
+    `http://tracker.test:4111/...` - a different port.
+
+    That is not cosmetic. A 2026-09-03 nyx-live run (33830249645) hit a
+    variant where the corrupted port fell outside 0-65535, mitmproxy raised
+    ValueError('Port out of range 0-65535') from the `req.url = ...` setter,
+    the whole rewrite was abandoned, and the request went out RAW - the real
+    device id reached the tracker. Intermittent by nature: it only fires when
+    a fingerprint value happens to collide with the digits of the port, which
+    is why the same code passed five runs and failed the sixth.
+
+    Personal data in a URL lives in the path, query or fragment - never in
+    scheme://host:port - so the authority is reassembled untouched and only
+    the parts that can legitimately carry a value are rewritten.
+    """
+    if not repl:
+        return url
+    try:
+        parts = urlsplit(url)
+    except Exception:
+        return url
+    if not parts.netloc:            # relative/opaque: no authority to protect
+        return _apply_repl(url, repl)
+    return urlunsplit((
+        parts.scheme,
+        parts.netloc,               # deliberately NOT substituted
+        _apply_repl(parts.path, repl) if parts.path else parts.path,
+        _apply_repl(parts.query, repl) if parts.query else parts.query,
+        _apply_repl(parts.fragment, repl) if parts.fragment else parts.fragment,
+    ))
+
+
 def fake_outbound(method, url, headers=None, body=None, persona=None,
                   first_party_origin=None):
     """ACT on one outbound request: overwrite third-party personal data with
@@ -643,7 +683,7 @@ def fake_outbound(method, url, headers=None, body=None, persona=None,
     if not repl:
         return url, body, []
 
-    new_url = _apply_repl(url, repl)
+    new_url = _apply_repl_url(url, repl)
     new_body = body
     if body is not None:
         if isinstance(body, bytes):

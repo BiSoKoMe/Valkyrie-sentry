@@ -263,6 +263,33 @@ def main() -> int:
     c.check("the corruption shape this regresses against is NOT present",
             "280" not in fixed)
 
+    # REGRESSION: substitution vs. URL STRUCTURE, the sibling of the collision
+    # above and a genuine privacy failure rather than a cosmetic one. A real
+    # beacon carries cores=8, so the map holds the single character "8", and
+    # rewriting the WHOLE url turned http://tracker.test:8111/api/ingest into
+    # port 4111. nyx-live run 33830249645 hit the variant where the mangled
+    # port left 0-65535 entirely: mitmproxy's url setter raised ValueError,
+    # the rewrite was abandoned, and the beacon went out RAW carrying the real
+    # device id. The authority must never be substituted.
+    port_url = "http://tracker.test:8111/api/ingest"
+    kept = nyx._apply_repl_url(port_url, {"8": "4", "1280x720": "1920x1080"})
+    c.check("url authority (host:port) is NEVER rewritten by a substitution",
+            kept == port_url)
+    c.check("the port-corruption shape this regresses against is NOT present",
+            ":4111" not in kept)
+    # ...while a value genuinely sitting in the query still gets faked.
+    q_url = "http://tracker.test:8111/px?adid=550e8400-e29b-41d4-a716-446655440000"
+    q_fixed = nyx._apply_repl_url(q_url, {"550e8400-e29b-41d4-a716-446655440000": "FAKEID"})
+    c.check("a personal value in the QUERY is still substituted",
+            "FAKEID" in q_fixed and "tracker.test:8111" in q_fixed)
+    # End-to-end through the real entry point, with the exact live-run body.
+    live_body = (b"adid=2c5de9c1-fe35-4758-9474-904aa3b0cd68&screen=1280x720"
+                 b"&timezone=UTC&lang=en-US&cores=8")
+    lu, lb, lfaked = nyx.fake_outbound("POST", port_url, HDR, live_body)
+    c.check("fake_outbound leaves the tracker url's port intact", lu == port_url)
+    c.check("fake_outbound still removes the real device id from the body",
+            b"2c5de9c1-fe35-4758-9474-904aa3b0cd68" not in (lb or live_body))
+
     # Consistency: the SAME persona value across two different requests (the tell
     # a sloppy spoof would fail - two requests must not disagree about the user).
     _, b1, _ = nyx.fake_outbound("POST", THIRD, HDR, b"adid=550e8400-e29b-41d4-a716-446655440000", persona)
