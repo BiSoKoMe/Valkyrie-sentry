@@ -103,6 +103,11 @@ def _get_ready(url: str, tries: int = 30, delay: float = 2.0,
 
 
 def main() -> int:
+    if os.environ.get("VALKYRIE_DISPOSABLE_TEST_HOST") != "1":
+        return skip_file(
+            "real engine boot",
+            "requires a disposable host: startup includes DNS recovery and user-profile tripwires",
+        )
     c = Checks("capability delivery (real boot, not a mock)", expect_min=15)
 
     port = _free_port()

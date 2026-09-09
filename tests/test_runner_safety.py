@@ -33,3 +33,16 @@ def test_coverage_does_not_hide_failing_assertions(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.subprocess, "run", lambda *a, **kw:
                         SimpleNamespace(returncode=1, stdout="1 failed", stderr=""))
     assert runner._run_one(source, 30, coverage=True)[0] == runner.OUTCOME_FAIL
+
+
+def test_direct_engine_boot_tests_require_a_disposable_host(monkeypatch):
+    from tests import test_capability_delivery, test_startup_smoke
+
+    monkeypatch.delenv("VALKYRIE_DISPOSABLE_TEST_HOST", raising=False)
+
+    def unexpected_launch(*args, **kwargs):
+        raise AssertionError("a workstation test must not launch the real engine")
+
+    monkeypatch.setattr(runner.subprocess, "Popen", unexpected_launch)
+    assert test_startup_smoke.main() == runner.EXIT_SKIP
+    assert test_capability_delivery.main() == runner.EXIT_SKIP
