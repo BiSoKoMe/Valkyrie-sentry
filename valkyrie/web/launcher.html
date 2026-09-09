@@ -116,20 +116,22 @@
   </div>
 
 <script>
-// The dashboard port. Overridable via the URL hash: launcher.html#<token>@<port>
+// The dashboard port. Overridable via the URL hash: launcher.html#<port>
 const DEFAULT_PORT = 8090;
 
-// launcher.bat opens this page with the control token in the hash so the
-// Stop/Restart buttons can authenticate to the loopback-only control API:
-//   launcher.html#<token>            or   launcher.html#<token>@<port>
+// This page can no longer drive Restart/Stop itself: the control API requires
+// the credential as a header (X-Valkyrie-Token), and a `mode: 'no-cors'` POST
+// from a file:// page cannot set custom headers — only a same-origin page (the
+// served dashboard) or the Electron app, which reads the protected credential
+// file directly, can authenticate a mutation. launcher.bat previously passed a
+// token through this hash for that purpose; it no longer does.
 function parseHash() {
   const raw = (location.hash || '').replace(/^#/, '');
-  let token = raw, port = DEFAULT_PORT;
   const at = raw.lastIndexOf('@');
-  if (at !== -1) { token = raw.slice(0, at); port = parseInt(raw.slice(at + 1), 10) || DEFAULT_PORT; }
-  return { token, port };
+  const port = parseInt(at !== -1 ? raw.slice(at + 1) : raw, 10);
+  return { port: Number.isFinite(port) && port > 0 ? port : DEFAULT_PORT };
 }
-const { token: TOKEN, port: PORT } = parseHash();
+const { port: PORT } = parseHash();
 const BASE = `http://127.0.0.1:${PORT}`;
 
 const $status = document.getElementById('status');
@@ -172,23 +174,13 @@ async function refresh() {
   render();
 }
 
-// Control POSTs are sent no-cors with the token as a query param; the server
-// validates the token + loopback peer, so we don't need to read the response.
-function control(path) {
-  return fetch(`${BASE}${path}?token=${encodeURIComponent(TOKEN)}`, {
-    method: 'POST', mode: 'no-cors', cache: 'no-store',
-  });
-}
-
 $open.addEventListener('click', () => window.open(BASE, '_blank'));
 
-$start.addEventListener('click', async () => {
+$start.addEventListener('click', () => {
   if (running) {
-    // Already up → restart through the control API.
-    if (!TOKEN) { setNote('Open this page via launcher.bat to enable Restart.', true); return; }
-    setNote('Restarting… the dashboard will come back in a few seconds.');
-    await control('/api/system/restart');
-    setTimeout(refresh, 6000);
+    // This page cannot authenticate Restart itself (see the note above) —
+    // point at the surface that can.
+    setNote('Restart from the Valkyrie app, or from the dashboard at ' + BASE + '.', true);
   } else {
     // A browser cannot launch an elevated process. Point the user at the
     // real one-click starter, which requests Administrator via UAC.
@@ -197,13 +189,9 @@ $start.addEventListener('click', async () => {
   }
 });
 
-$stop.addEventListener('click', async () => {
+$stop.addEventListener('click', () => {
   if (!running) return;
-  if (!TOKEN) { setNote('Open this page via launcher.bat to enable Stop.', true); return; }
-  if (!confirm('Stop Valkyrie protection? Your DNS will revert to normal.')) return;
-  setNote('Stopping protection…');
-  await control('/api/system/shutdown');
-  setTimeout(refresh, 4000);
+  setNote('Stop from the Valkyrie app, or from the dashboard at ' + BASE + '.', true);
 });
 
 refresh();

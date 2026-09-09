@@ -104,9 +104,22 @@ class Sensor:
         pass
 
     def health(self) -> dict:
-        return {"name": self.name, "running": self.is_running(),
-                "emitted": self.emitted, "errors": self.errors,
-                "last_error": self.last_error}
+        out = {"name": self.name, "running": self.is_running(),
+               "emitted": self.emitted, "errors": self.errors,
+               "last_error": self.last_error}
+        # A channel-backed sensor that cannot drain its channel as fast as
+        # events arrive is the mid-run deafness in docs/LIVE_FIRE_EVALUATION.md:
+        # it stays "running" with no errors while falling further behind every
+        # poll, so detections arrive late and eventually outside the window.
+        # Surfacing the drain bound here makes that legible in
+        # /api/sensors/status instead of being invisible until the numbers
+        # look wrong.
+        reader = getattr(self, "_reader", None)
+        if reader is not None and hasattr(reader, "last_read_truncated"):
+            out["read_truncated"] = reader.last_read_truncated
+            out["read_count"] = reader.last_read_count
+            out["behind"] = bool(reader.last_read_truncated)
+        return out
 
 
 class SensorManager:

@@ -122,6 +122,23 @@ class LoopHeartbeat:
         }
 
 
+# A frozen event loop cannot fix itself: everything that would notice or act
+# runs ON that same loop. This function is what the SELF-HEAL THREAD (a plain
+# Python thread, not a coroutine) polls instead - it keeps making progress
+# even while the asyncio loop is completely wedged, which is the one thing
+# that makes recovery possible at all here. 60s is twelve times the 8s bounded
+# stall budget the persistence-collector fix operates under (see this
+# module's docstring), so ordinary worst-case jitter can never trip it - only
+# a genuine freeze can. The actual recovery action (a hard process exit, so
+# NSSM's AppExit=Restart brings up a clean instance) lives at the call site,
+# not here, because killing the process is not something a unit test should
+# ever be able to accidentally trigger by importing this module.
+def loop_is_alive(loop_heartbeat: Optional["LoopHeartbeat"], stale_after: float = 60.0) -> bool:
+    if loop_heartbeat is None:
+        return True   # web server hasn't finished starting yet - nothing to judge
+    return bool(loop_heartbeat.status(stale_after=stale_after)["beating"])
+
+
 class FaultInjectableTestCollector:
     """TEST-ONLY double for one real periodic collector, used to prove the
     watchdog actually catches the failure class it exists for: a source that

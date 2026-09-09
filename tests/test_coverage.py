@@ -19,7 +19,7 @@ from harness import Checks   # noqa: E402
 
 from valkyrie.control_taxonomy import CONTROLS               # noqa: E402
 from valkyrie.coverage import (                               # noqa: E402
-    ABSENT, DEGRADED, EFFECTIVE, STATES, CoverageContext, check_all,
+    ABSENT, DEGRADED, EFFECTIVE, STATES, UNKNOWN, CoverageContext, check_all,
     summarize,
 )
 
@@ -186,6 +186,41 @@ def test_summarize_fraction_and_gaps() -> None:
             and all(g.state != EFFECTIVE for g in s.gaps))
 
 
+def test_tls_inspector_probe() -> None:
+    print("\n[8b] tls_inspector reports OFF as absent, never 'cannot confirm'")
+    # This control decides whether NYX can read HTTPS request bodies at all -
+    # i.e. whether the privacy engine can see very nearly all real traffic. It
+    # used to fall through to the generic "module present and importable, but
+    # no independent liveness probe is wired -- cannot confirm it is actually
+    # running" verdict while the engine already had the authoritative answer
+    # (/api/stats' tls_inspection_active reads the same singleton). "Cannot
+    # confirm" and "definitively off" are different claims to show someone
+    # deciding whether their traffic is protected.
+    from valkyrie.coverage import CoverageContext, _check_tls_inspector
+
+    off = _check_tls_inspector(CoverageContext())
+    c.check("no inspector wired -> ABSENT (not degraded/unknown)",
+            off.state == ABSENT)
+    c.check("and the detail says it is off, not that we could not check",
+            "not enabled" in off.detail and "cannot confirm" not in off.detail.lower())
+
+    class _Running:
+        def is_running(self): return True
+
+    class _Stopped:
+        def is_running(self): return False
+
+    class _Raises:
+        def is_running(self): raise RuntimeError("probe blew up")
+
+    c.check("running inspector -> EFFECTIVE",
+            _check_tls_inspector(CoverageContext(tls_inspector=_Running())).state == EFFECTIVE)
+    c.check("present but stopped -> ABSENT, not EFFECTIVE just for existing",
+            _check_tls_inspector(CoverageContext(tls_inspector=_Stopped())).state == ABSENT)
+    c.check("a raising liveness check -> UNKNOWN, never a silent pass",
+            _check_tls_inspector(CoverageContext(tls_inspector=_Raises())).state == UNKNOWN)
+
+
 def test_api_endpoint() -> None:
     print("\n[9] GET /api/controls/coverage")
     try:
@@ -218,8 +253,13 @@ def test_api_endpoint() -> None:
     c.check("gaps are structured with name/category/state/detail",
             bool(body["gaps"]) and
             {"name", "category", "state", "detail"} <= set(body["gaps"][0].keys()))
+    # An unauthenticated POST to ANY /api/* path is refused before routing
+    # even runs (the blanket local-credential mutation gate in web/server.py),
+    # so this now arrives as 403, not the plain "method not supported" 405 a
+    # route-less POST used to produce - a STRONGER guarantee than the one
+    # this check originally pinned, not a weaker one (see test_deception_status_api.py).
     c.check("no POST route exists (read-only monitoring surface)",
-            client.post("/api/controls/coverage").status_code == 405)
+            client.post("/api/controls/coverage").status_code in (403, 405))
 
     resp2 = client.get("/api/controls/taxonomy")
     c.check("GET /api/controls/taxonomy (item 2) -> 200",
@@ -241,6 +281,7 @@ def main() -> int:
     test_broken_probe_does_not_crash_the_pass()
     test_live_context_upgrades_firewall_and_sensor_tamper()
     test_summarize_fraction_and_gaps()
+    test_tls_inspector_probe()
     test_api_endpoint()
     return c.finish()
 

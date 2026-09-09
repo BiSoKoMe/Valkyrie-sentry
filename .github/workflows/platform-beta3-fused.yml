@@ -1,0 +1,79 @@
+name: Platform Beta 3 (fused pipeline reliability)
+
+# Beta 2 (platform-beta2-aegis.yml) proved the CanonicalEvent ->
+# ExposureObservation bridge over ONE real causal chain - a property a
+# single subject cannot exercise at all: does ONE long-lived
+# DetectionArchitectureV2 instance (the real engine's actual lifetime
+# shape) keep MANY real subjects' evidence isolated from each other over a
+# sustained run? This is that proof.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Which Beta 3 stage to run"
+        type: choice
+        options: [dry-run, soak]
+        default: dry-run
+      minutes:
+        description: "soak mode only: duration in minutes"
+        type: string
+        default: "10"
+  push:
+    branches: [feat/efficacy-etw-coverage]
+    paths:
+      - ".github/workflows/platform-beta3-fused.yml"
+      - "redteam/evaluation/platform_beta3_fused_reliability.py"
+      - "valkyrie/aegis_bridge.py"
+      - "valkyrie/aegis_exposure.py"
+      - "valkyrie/edr/detection_v2.py"
+      - "valkyrie/process_telemetry.py"
+      - "valkyrie/network_telemetry.py"
+      - "valkyrie/tls_addon.py"
+      - "valkyrie/tls_inspector.py"
+      - "nyx_live/**"
+
+jobs:
+  beta3-fused:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      BETA3_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'dry-run' }}
+      BETA3_MINUTES: ${{ github.event_name == 'workflow_dispatch' && inputs.minutes || '10' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Valkyrie + mitmproxy + Playwright
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements_modular.txt
+          python -m pip install mitmproxy playwright
+          python -m playwright install --with-deps chromium
+      - name: Resolve the test hostnames to loopback
+        run: echo "127.0.0.1 firstparty.test tracker.test" | sudo tee -a /etc/hosts
+      - name: "Run Platform Beta 3 (fused pipeline reliability)"
+        env:
+          PYTHONUNBUFFERED: "1"
+          VALKYRIE_ALLOW_EXPOSED_CA_KEY: "1"
+        run: |
+          if [ "$BETA3_MODE" = "soak" ]; then
+            python redteam/evaluation/platform_beta3_fused_reliability.py --mode soak --minutes "$BETA3_MINUTES"
+          else
+            python redteam/evaluation/platform_beta3_fused_reliability.py --mode dry-run
+          fi
+      - name: Platform Alpha frozen baseline (no reasoning-layer regression)
+        if: always()
+        run: |
+          python -m pip install pytest
+          python -m pytest tests/test_platform_alpha_baseline.py tests/test_platform_alpha_evidence_story.py -q
+      - name: Upload Beta 3 evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: beta3-fused-${{ env.BETA3_MODE }}
+          path: redteam/evaluation/results/beta3_fused_*.json
+          if-no-files-found: warn
+          retention-days: 30

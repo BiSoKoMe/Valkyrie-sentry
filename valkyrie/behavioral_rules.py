@@ -336,7 +336,17 @@ RULES: tuple = (
          cmd_all=("lsass",), cmd_any=("procdump", "-ma ")),
     Rule("reg-save-hive", "T1003.002 — Security Account Manager", SEV_HIGH,
          "sam_dump", "Registry SAM/SYSTEM hive saved (credential theft)",
-         images=("reg.exe",), cmd_all=("save",), cmd_any=("hklm\\sam", "hklm\\system", "hklm\\security")),
+         images=("reg.exe",), cmd_all=("save",), cmd_any=("hklm\\sam", "hklm\\system")),
+    # Split from the rule above (2026-08-31): HKLM\SECURITY is the LSA Secrets
+    # hive, a distinct sub-technique (T1003.004) from SAM/SYSTEM (T1003.002) -
+    # a live-fire evaluation found this always fired tagged T1003.002 even when
+    # SECURITY was the only hive saved (see docs/LIVE_FIRE_EVALUATION.md,
+    # cred-lsa-secrets). A real reg.exe save targets exactly one hive path per
+    # invocation, so these two rules are mutually exclusive in practice, not
+    # overlapping guesses.
+    Rule("reg-save-hive-lsa-secrets", "T1003.004 — LSA Secrets", SEV_HIGH,
+         "lsa_secrets_dump", "Registry SECURITY hive saved (LSA secrets credential theft)",
+         images=("reg.exe",), cmd_all=("save",), cmd_any=("hklm\\security",)),
     Rule("ntdsutil-ifm", "T1003.003 — NTDS", SEV_HIGH,
          "ntds_dump", "ntdsutil IFM export (domain credential theft)",
          images=("ntdsutil.exe",), cmd_any=("ifm", "create full")),
@@ -928,6 +938,20 @@ RULES: tuple = (
          cmd_any=("findstr /s", "findstr /is", "findstr /si", "select-string",
                   "-recurse -include", "gci -recurse", "get-childitem -recurse"),
          cmd_any2=("password", "passwd", "pwd=", "credential", "secret",
+                   "apikey", "api_key", "connectionstring")),
+    # Credential access - hunting secrets IN THE REGISTRY: a live-fire evaluation
+    # found `reg.exe query ... /f password ...` only ever reached the generic
+    # T1012 (Query Registry) discovery branch, since the command SHAPE (a
+    # read-only query) is indistinguishable from ordinary registry reads
+    # without a keyword signal (see docs/LIVE_FIRE_EVALUATION.md,
+    # cred-registry-password-hunt). Same cmd_all + cmd_any2 shape as
+    # cred-hunt-files above: the recursive find-verb ANDed with a secret
+    # keyword, so an ordinary `reg query <key> /v <name>` (no /f, no keyword)
+    # stays clear.
+    Rule("cred-registry-password-hunt", "T1552.002 — Unsecured Credentials in Registry", SEV_MEDIUM,
+         "cred_registry_hunt", "Registry recursively searched for password/credential strings",
+         images=("reg.exe",), cmd_all=("query", "/f"),
+         cmd_any2=("password", "passwd", "credential", "secret",
                    "apikey", "api_key", "connectionstring")),
     # Credential access - enumerating stored Windows credentials. Weak on its own
     # (admins use it), so LOW: feeds sequence correlation, doesn't auto-block.

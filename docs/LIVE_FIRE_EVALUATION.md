@@ -242,10 +242,166 @@ engine, then folded into the full-battery union above):**
 | #7 (tool-check bug) | `privesc-dll-searchorder-amsi` T1574.001 | Now genuinely attempted and genuinely missed (no rule exists for this technique) — correctly reclassified from a masked harness bug to an honest, confirmed gap |
 | #8 (7 generalization gaps) | `disc-net-connections-ps` T1049, `disc-service-net-start`/`disc-service-discovery-ps`/`disc-scheduled-tasks-query` T1007, `disc-security-software-cim` T1518.001, `disc-software-installed` T1518, `disc-password-policy` T1201 | All 7 **`[DETECT]`** live, run `33039444502`, `-OnlyIds` targeted. 3 of the 7 (`disc-net-connections-ps`, `disc-service-net-start`, `disc-security-software-cim`) also reported `fp=1` — `run_live_evaluation.ps1`'s own documented caveat applies: at the CI default `-SettleSeconds 0`, an incident legitimately caused by technique N can land during technique N+1's window and get miscounted against N+1 purely by adjacency, "NOT evidence Valkyrie fires on legitimate activity" (see the script's own header comment, ~line 929). This is the same known attribution-window artifact already documented for running multiple recon-burst techniques back-to-back, not a new false-positive bug; a from-scratch re-run with `-SettleSeconds 5+` would isolate it cleanly but was not performed this pass. |
 
-All eight fixes are folded into the 55/73 (75.3%) union above — this is not
-a pending number, it is the current authoritative result. This log is
-updated as the milestone continues; treat any coverage percentage above as a
-floor as of the commit it cites, not a permanent ceiling.
+9. **Three of the six confirmed mislabeling findings closed (2026-08-31)** —
+   `cred-lsa-secrets` (T1003.004), `cred-registry-password-hunt` (T1552.002),
+   and `disc-domain-groups` (T1069.002) all used to fire under a different,
+   wrong ATT&CK id (see "Real, confirmed mislabeling" in the gap table
+   above, and `redteam/evaluation/catalog.py`'s per-entry notes for the full
+   detail on each). Fixed by reading the exact matching logic and correcting
+   or adding the smallest rule that fixes it: `reg-save-hive` split into two
+   rules so HKLM\SECURITY gets its own T1003.004 tag instead of borrowing
+   HKLM\SAM's T1003.002; a new `cred-registry-password-hunt` rule
+   (`reg.exe query ... /f <password-like keyword>`) added, same
+   verb-ANDed-with-keyword shape as the existing `cred-hunt-files` rule; and
+   `process_telemetry.py`'s `net group` branch corrected from T1087.002
+   (Account Discovery) to T1069.002 (Permission Groups Discovery) — the same
+   bug class as the earlier `net localgroup` / T1069.001 fix, just never
+   done for the domain-groups sibling. **LIVE-VERIFIED 2026-09-03, run
+   `33828610247`** (`-OnlyIds cred-lsa-secrets,cred-registry-password-hunt,
+   disc-domain-groups`, `-SkipDestructive`). All three came back
+   **`[DETECT]` with `fp=0`** — `cred-lsa-secrets` latency 2.18s,
+   `cred-registry-password-hunt` 2.13s, `disc-domain-groups` 8.33s — and,
+   the point of the fix, the incidents carry the **correct** ATT&CK ids:
+   `db_coverage.py` reports `INCIDENT-TECH: T1003.004`, `T1552.002` and
+   `T1069.002`, not the T1003.002 / T1012 / T1087.002 they used to borrow.
+   `known_mismatch` is therefore removed for all three in `catalog.py`.
+   (Superseded text, kept so the standard is visible: this entry previously
+   read "offline-verified only … treat these three as expected fixed, not
+   yet proven" until a live `-OnlyIds` re-run confirmed
+   it — the same standard every other fix in this log was held to before
+   being folded into the union number below.) The remaining three mislabeling
+   findings (`collect-stage-download`, `disc-network-share`/
+   `disc-network-shares-smb`, `evasion-masquerade-lsass`) and
+   `evasion-file-delete` were deliberately left alone — the catalog's own
+   comments flag those as potentially acceptable overlap between adjacent
+   ATT&CK sub-techniques rather than a clear-cut bug, which needs live
+   evidence to decide, not a guess.
+
+All eight fixes through #8 are folded into the 55/73 (75.3%) union above —
+that number is not pending, it is the current authoritative result.
+
+Fix #9 is now **live-verified** (run `33828610247`, above) but is **not yet
+folded into the union number**, and the distinction is deliberate: the
+targeted `-OnlyIds` run proves those three techniques detect under the right
+ids, it does not recompute the union. The union is what `union_coverage.py` /
+the evidence librarian (`evidence.py`) produce from a full battery, and that
+is the only thing allowed to move 55/73 — not arithmetic performed by hand
+on top of a targeted run. Until a full-battery run is scored, 55/73 stands
+as written.
+
+This log is updated as the milestone continues; treat any coverage
+percentage above as a floor as of the commit it cites, not a permanent
+ceiling.
+
+## Per-run variance: a single full battery is NOT a measurement
+
+Measured 2026-09-04, comparing three full-battery runs of the same catalog
+against the same engine:
+
+| Run | Date | `[DETECT]` | `[MISS]` | of |
+|---|---|---|---|---|
+| `33436292312` | 2026-08-31 | **39** | 34 | 73 |
+| `33408786391` | 2026-08-31 | **23** | 50 | 73 |
+| `33828591735` | 2026-09-04 | **14** | 59 | 73 |
+
+**Count these by deduplicating on technique id, not by `grep -c`.** The
+harness Tee's its output, so verdict lines appear more than once in
+`gh run view --log` — a raw grep of the same three runs returns 63/32/14,
+which is wrong and flattering to the first two. Each run evaluates exactly 73
+unique techniques; pair each `[eval] -- <id>` with the verdict line that
+follows it and dedupe (no technique in any of these three runs reported two
+different verdicts).
+
+That is still a ~2.8x spread across runs of the same battery, and **no single
+run has ever reached the 55/73 union.** The best full run on record is 39/73.
+In the 2026-09-04 run
+the engine detected normally for roughly the first 14 techniques — with
+latency climbing through them (2.09s → 5.53s → 7.94s) — and then returned
+`[MISS]` for essentially everything afterwards, starting at `cred-sam-dump`.
+Sysmon was still `Running` and its log still readable at the end of the job,
+so this is the engine's own ingest/processing pipeline stalling, not the
+sensor dying: the same failure class as the startup deafness root-caused in
+`a13000b`, appearing mid-run instead of at startup.
+
+**Two consequences, stated plainly:**
+
+1. **A single run's count is not a coverage number and must never be quoted
+   as one.** The 2026-09-04 run's 14/73 is not evidence that coverage
+   regressed; it is evidence that that run went deaf. (It is also not yet
+   evidence that it did *not* regress — see the open question below.)
+2. **The authoritative 55/73 union is assembled across 26 runs that each go
+   deaf at a different point, and no single run has ever scored near it.**
+   Every technique in it was genuinely detected in some real run, so the
+   union is legitimate — but the best single full battery on record is
+   **39/73**, so 55/73 must never be read as "a full battery detects 55 of
+   73." It is the envelope of many partial runs, and the gap between 39 and
+   55 is a measure of how much the deafness costs, not of extra coverage.
+
+**ROOT CAUSE FOUND (2026-09-04), fixed in `3d5670a`.**
+`ChannelReader.read_new()` was bounded only by `max_events=256`, and
+`SysmonSensor` polls it every 1.5s over a channel subscribed to EIDs
+`(1,3,6,7,8,10,11,12,13,14,25)` — including EID 11 (FileCreate) and 12/13/14
+(registry). That is a hard ceiling of **~170 events/sec**. A battery exceeds
+it in bursts, and draining only 256 per poll means the reader never catches
+up: the backlog grows monotonically, so each detection lands later than the
+last until it falls outside the harness's 30s window.
+
+The decisive evidence that this is starvation and not overflow: the deaf run
+reported **`sensor_dropped_backpressure: 0` and `sensor_dropped_dedup: 0`**.
+Nothing was discarded anywhere in Valkyrie — the events were still sitting in
+the Windows channel, unread. That is also why it stayed invisible: the
+bookmark advances over whatever it does read, so Sysmon stays Running, its
+log stays readable, and sensor health shows no errors while the engine goes
+progressively deaf.
+
+Fixed by bounding the drain on wall clock (2s) with `max_events` raised to
+8192 as a backstop, so a burst is absorbed in one poll. `Sensor.health()` now
+reports `behind` so this can never be silent again.
+
+**CONFIRMED BY A/B, 2026-09-04.** Eight full batteries, same catalog, same
+configuration (`skip_destructive=true`, network layer off), scored by
+technique with `redteam/evaluation/score_ci_run.py`:
+
+| | Runs | Values | Range | Mean |
+|---|---|---|---|---|
+| Before `3d5670a` | 5 | 14, 23, 32, 38, 39 | **25** | 29.2 |
+| After `3d5670a` | 3 | 34, 35, 35 | **1** | 34.7 |
+
+The variance collapses from a 25-point spread to 1 point. That is the result
+the diagnosis predicts and the strongest evidence for it: rule content is
+identical across all eight runs, so a 25-point swing could only ever have come
+from timing — and a rate-limited reader falls behind by an amount that depends
+on how bursty that particular run happened to be. Remove the rate limit and
+the measurement becomes reproducible.
+
+**What this did NOT do: raise the ceiling.** 35 is below the best pre-fix run
+(39). The fix bought consistency, not capability — every run now lands where a
+lucky run always could have. Anyone reading this as a coverage improvement is
+reading it wrong.
+
+**On the denominator.** All 73 scored techniques were genuinely attempted: the
+17 destructive atomics are skipped before evaluation and receive no verdict at
+all, so they are already outside the 73 rather than counted as misses. But
+35/73 is still NOT a publishable detection rate — inside those 73 sit the 4 C2
+techniques that are `NOT_TESTED` with the network layer off, plus the
+tool-absent entries (msbuild, rar, ntdsutil are not present on a stock runner).
+The evaluation's own log says it plainly: "'no incident' is NOT 'missed' … do
+NOT compute a detection rate from this list." `evidence.py` /
+`union_coverage.py` remain the only things that may produce one.
+
+**Answered:** the earlier question here — whether 14/73 was the low tail of an
+already-wide distribution or a fresh regression — is settled by the pre-fix
+column above. 14 sits inside a distribution that already ranged 14–39 before
+any change in that session, so it was the low tail. It was never evidence that
+coverage regressed, which is exactly why a single run must never be read as a
+coverage number.
+
+The per-run deafness itself is **fixed** (`3d5670a`) and confirmed by the A/B.
+What remains open is narrower and worth stating: three post-fix runs is a small
+sample, and a 1-point spread could still widen under a heavier or slower
+runner. The `SENSORS-BEHIND` line now printed in every run's health timeline is
+the thing to watch — if it ever appears, the reader is falling behind again and
+that run's number is not trustworthy.
 
 ## What this evaluation does not claim
 

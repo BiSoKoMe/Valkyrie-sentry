@@ -236,6 +236,25 @@ def main() -> int:
     _check("truncation is reported when the bound is hit",
            g.subgraph(40, max_nodes=1)["truncated"] is True)
 
+    # A tree whose true size lands EXACTLY on max_nodes must not be reported
+    # as truncated - that would tell an analyst evidence is missing when the
+    # chain is actually complete. The bug this regresses: `len(tree) >=
+    # max_nodes` after the walk cannot distinguish "stopped exactly at the
+    # boundary, nothing more exists" from "stopped at the boundary with more
+    # tree beyond it" - both end with a tree of exactly max_nodes.
+    gt = CausalityGraph()
+    gt.observe_process(500, "root.exe", create_time=500.0, ts=500.0)
+    gt.observe_process(501, "child.exe", ppid=500, create_time=501.0, ts=501.0)
+    exact = gt.subgraph(500, max_nodes=1)
+    _check("a tree exactly at max_nodes reports its real size",
+           len(exact["tree"]) == 1)
+    _check("a tree exactly at max_nodes is NOT reported truncated",
+           exact["truncated"] is False)
+    gt.observe_process(502, "grandchild.exe", ppid=501, create_time=502.0, ts=502.0)
+    over = gt.subgraph(500, max_nodes=1)
+    _check("one real node beyond the cap IS reported truncated",
+           over["truncated"] is True)
+
     # ------------------------------------------------------------------
     print("\n[8] Bounds and eviction")
     gb = CausalityGraph(max_nodes=64)

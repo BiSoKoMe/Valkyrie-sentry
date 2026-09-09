@@ -37,7 +37,7 @@ Defense in layers, without breaking the same-machine experience:
    applies the same rule explicitly: a non-loopback subscriber must supply
    `?token=...`; otherwise the socket is closed with code 1008.
 4. **Loud warning** at startup when bound off-loopback, naming the exposure and
-   where the token lives (`data/control_token.txt`).
+   where the token lives (`data/control/token`).
 
 Control/EDR POSTs keep their stricter loopback+Origin+token guards on top.
 

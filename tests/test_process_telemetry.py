@@ -71,6 +71,21 @@ def main() -> int:
     _, dlabels, _, tech = classify_discovery("net.exe", "net localgroup")
     _check("bare net localgroup (no group name) -> T1069.001 too",
            "T1069.001" in tech)
+    # Same bug class, domain-groups variant (fixed 2026-08-31): 'net group'
+    # enumerates DOMAIN groups (Permission Groups Discovery, T1069.002), not
+    # domain ACCOUNTS - MITRE's own example command for T1069.002 is exactly
+    # 'net group "domain admins" /domain'.
+    _, dlabels, _, tech = classify_discovery("net.exe", 'net group "domain admins" /domain')
+    _check('net group "domain admins" /domain -> T1069.002, not T1087.002',
+           "T1069.002" in tech and "T1087.002" not in tech)
+    _, dlabels, _, tech = classify_discovery("net.exe", "net group")
+    _check("bare net group (no group name) -> T1069.002 too",
+           "T1069.002" in tech)
+    _, dlabels, _, tech = classify_discovery(
+        "net.exe", "net group \"evilgroup\" newmember /add /domain")
+    _check("net group ... /add is NOT labeled discovery "
+           "(real group-membership change, not enumeration)",
+           tech == "" and dlabels == [])
     _, dlabels, _, tech = classify_discovery(
         "net.exe", "net localgroup administrators evilcorp /add")
     _check("net localgroup ... /add is NOT labeled discovery "
@@ -100,6 +115,10 @@ def main() -> int:
     _check("caret-escaped 'net localgroup administrators' still -> T1069.001 "
            "(inherited for free: same de-obfuscated candidates tuple as its siblings)",
            "T1069.001" in tech)
+    _, _, _, tech = classify_discovery("net.exe", 'net g^roup "domain admins" /domain')
+    _check("caret-escaped 'net group \"domain admins\" /domain' still -> T1069.002 "
+           "(inherited for free, same mechanism as T1069.001 above)",
+           "T1069.002" in tech)
     _, _, _, tech = classify_discovery("net.exe", 'net u"s"er')
     _check("token-split-quote 'net user' still -> T1087.001", "T1087.001" in tech)
     _, _, _, tech = classify_discovery("nltest.exe", "nltest /dcl^ist:corp")

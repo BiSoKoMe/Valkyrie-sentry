@@ -89,6 +89,7 @@ class CoverageContext:
     sensor_manager: Optional[object] = None            # valkyrie.etw.framework.SensorManager
     component_registry: Optional[object] = None        # valkyrie.components.ComponentRegistry
     responder_registry: Optional[object] = None        # valkyrie.edr.plugins.PluginRegistry
+    tls_inspector: Optional[object] = None             # valkyrie.tls_inspector.TLSInspector
 
 
 def _module_importable(module_path: str) -> tuple[bool, str]:
@@ -147,6 +148,42 @@ def _check_sysmon() -> CoverageResult:
                               f"collecting, but not configured for {names}")
     return CoverageResult("etw_sysmon", "detective", EFFECTIVE,
                           env.detail or "collecting all required event types")
+
+
+def _check_tls_inspector(ctx: CoverageContext) -> CoverageResult:
+    """TLS inspection is the difference between NYX reading request bodies and
+    NYX being structurally blind to them.
+
+    This control used to fall through to the generic "module present and
+    importable, but no independent liveness probe is wired -- cannot confirm it
+    is actually running" line, while the engine had an authoritative answer the
+    whole time (``/api/stats`` reports ``tls_inspection_active`` straight off
+    the same singleton). "Cannot confirm" and "definitively switched off" are
+    very different claims to put in front of someone deciding whether their
+    traffic is being protected, and this control in particular decides whether
+    the privacy engine can see HTTPS at all -- which is very nearly all real
+    traffic. Off is not a degraded version of on; report it as ABSENT.
+    """
+    if ctx.tls_inspector is None:
+        return CoverageResult(
+            "tls_inspector", "preventive", ABSENT,
+            "TLS inspection is not enabled (opt-in): request bodies inside "
+            "HTTPS are not inspected, so NYX cannot see or rewrite personal "
+            "data in encrypted traffic")
+    running = getattr(ctx.tls_inspector, "is_running", None)
+    if callable(running):
+        try:
+            if not running():
+                return CoverageResult(
+                    "tls_inspector", "preventive", ABSENT,
+                    "TLS inspector present but not running: HTTPS bodies are "
+                    "not being inspected")
+        except Exception as exc:                       # noqa: BLE001
+            return CoverageResult("tls_inspector", "preventive", UNKNOWN,
+                                  f"TLS inspector liveness check failed: {exc}")
+    return CoverageResult("tls_inspector", "preventive", EFFECTIVE,
+                          "TLS inspection active: HTTPS request bodies are "
+                          "inspected")
 
 
 def _check_decoys(ctx: CoverageContext) -> CoverageResult:
@@ -297,6 +334,14 @@ def _check_etw_sensor(control_name: str, sensor_name: str,
 # absent: it would have to be inferred from ransomware_shield, and a proxy
 # reported as a direct measurement is exactly the dishonesty being removed.
 _COMPONENT_BACKED = {
+    # dns_interceptor was itself missing from ComponentRegistry until
+    # 2026-09-07 (it existed only in the unrelated SelfHealing watchdog list) -
+    # every control here that could have used it was stuck reporting the
+    # generic "no independent liveness probe is wired" line for a component
+    # that, in reality, was reporting a real health() the whole time. This is
+    # the product's single most fundamental control; it should be the last
+    # one still reporting "can't confirm" once its registry entry exists.
+    "dns_sinkhole":          "dns_interceptor",
     "blocklist":             "blocklist",
     "threat_intel":          "threat_intel",
     "process_telemetry":     "process_collector",
@@ -398,6 +443,7 @@ def _check_sensor_tamper(ctx: CoverageContext) -> Optional[CoverageResult]:
 # stay independent.
 _STANDALONE_CHECKS = {
     "etw_sysmon": lambda ctx: _check_sysmon(),
+    "tls_inspector": _check_tls_inspector,
     "decoys": _check_decoys,
     "secure_file": lambda ctx: _check_secure_file(),
     "user_rules": lambda ctx: _check_user_rules(),

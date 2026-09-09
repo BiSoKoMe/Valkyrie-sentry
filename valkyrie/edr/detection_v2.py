@@ -460,6 +460,16 @@ class DetectionArchitectureV2:
     def ledger(self, limit: int = 100) -> list[dict]:
         return [item.to_dict() for item in list(self._ledger)[-max(0, int(limit)):]]
 
+    def events_for_subject(self, instance_id: str) -> tuple[CanonicalEvent, ...]:
+        """Real CanonicalEvents observed so far for one subject, oldest
+        first - what a session-level consumer (Platform Beta 2/3's Aegis
+        wiring) needs to derive facts across more than one event, without
+        re-deriving normalization itself. Bounded by the same ledger this
+        reads from (MAX_LEDGER_ENTRIES); read-only, does not affect
+        observe()'s own behavior."""
+        return tuple(r.event for r in self._ledger
+                    if r.event.subject.instance_id == instance_id)
+
     def status(self) -> dict:
         return {
             "mode": "shadow",

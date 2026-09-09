@@ -147,6 +147,18 @@ if ($Unpacked) {
                 foreach ($pat in $forbiddenFilePatterns) {
                     if ($leaf -match $pat) { $script:violations.Add("[app.asar] forbidden file type: $leaf") }
                 }
+                # asar entries are flat path strings, so the plain-stage
+                # forbiddenDirs walk (line ~94) never sees them - a live
+                # secret such as data/control/token would only be caught here,
+                # and only by checking every path segment, not the leaf name
+                # (the credential's own filename, "token", is too generic to
+                # blocklist by itself without flagging unrelated files).
+                foreach ($seg in ($entry -split '[\\/]')) {
+                    if ($forbiddenDirs -contains $seg) {
+                        $script:violations.Add("[app.asar] forbidden path segment '$seg': $entry")
+                        break
+                    }
+                }
             }
         } else {
             $script:warnings.Add("could not locate asar.cmd ($asarTool) - app.asar contents were only binary-needle-scanned, not checked by filename")

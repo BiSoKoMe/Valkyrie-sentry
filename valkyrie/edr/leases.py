@@ -177,6 +177,8 @@ class LeaseRegistry:
 
     def _save(self) -> None:
         payload = {"version": 1, "leases": [asdict(v) for v in self._leases.values()]}
+        fd = None
+        tmp = None
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             # Atomic replace: a crash mid-write must never leave a truncated
@@ -184,10 +186,22 @@ class LeaseRegistry:
             # leases than really exist -- i.e. as stranded enforcement.
             fd, tmp = tempfile.mkstemp(dir=str(self._path.parent), suffix=".tmp")
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fd = None
                 json.dump(payload, fh, indent=1)
             os.replace(tmp, self._path)
-        except OSError:
-            pass
+            tmp = None
+        except (OSError, TypeError, ValueError) as exc:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            if tmp is not None:
+                try:
+                    Path(tmp).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise LeaseError("could not persist enforcement lease state") from exc
 
     # ------------------------------------------------------------- grant ---
     def grant(self, action: str, target: str, *, ttl_s: float = DEFAULT_TTL_S,
@@ -226,8 +240,13 @@ class LeaseRegistry:
                 reverse_action=rev.reverse_action or "", granted_at=n,
                 expires_at=n + ttl_s, renewals=0, reason=reason,
             )
-            self._leases[_key(action, target)] = lease
-            self._save()
+            key = _key(action, target)
+            self._leases[key] = lease
+            try:
+                self._save()
+            except Exception:
+                self._leases.pop(key, None)
+                raise
             return lease
 
     # ------------------------------------------------------------- renew ---
@@ -241,8 +260,13 @@ class LeaseRegistry:
             expires_at=now + ttl_s, renewals=lease.renewals + 1,
             reason=lease.reason,
         )
-        self._leases[_key(lease.action, lease.target)] = renewed
-        self._save()
+        key = _key(lease.action, lease.target)
+        self._leases[key] = renewed
+        try:
+            self._save()
+        except Exception:
+            self._leases[key] = lease
+            raise
         return renewed
 
     def renew(self, action: str, target: str, *, ttl_s: float = DEFAULT_TTL_S,
@@ -283,7 +307,11 @@ class LeaseRegistry:
             for k, v in list(self._leases.items()):
                 if v.lease_id == lease_id:
                     del self._leases[k]
-                    self._save()
+                    try:
+                        self._save()
+                    except Exception:
+                        self._leases[k] = v
+                        raise
                     return True
             return False
 

@@ -132,6 +132,7 @@ def _do_visit(ctx, kind: str) -> dict:
     before_n = len(RECEIVED)
     beacon_id = None
     beacon_body = None
+    beacon_status = None
     error = None
     page = ctx.new_page()
     try:
@@ -141,6 +142,14 @@ def _do_visit(ctx, kind: str) -> dict:
             "/sent|err|no-tracker/.test("
             "document.getElementById('beacon-status').textContent)",
             timeout=10000)
+        # "err" is an ACCEPTED terminal state above (matches nyx_live_test.py's
+        # own wait condition) - it means the wait didn't time out, not that
+        # the beacon succeeded. Capture the actual text so a client-side
+        # fetch failure (a real one, or a false "success" from wait_for_
+        # function's own regex) is distinguishable from a genuine send,
+        # instead of only inferring it from the endpoint never being reached.
+        beacon_status = page.evaluate(
+            "document.getElementById('beacon-status').textContent")
         beacon_id = page.evaluate("window.__beaconId")
         beacon_body = page.evaluate("window.__beaconBody")
     except Exception as exc:                              # noqa: BLE001
@@ -154,6 +163,7 @@ def _do_visit(ctx, kind: str) -> dict:
         "kind": kind,
         "beacon_id": beacon_id,
         "beacon_body": beacon_body,
+        "beacon_status": beacon_status,
         "received": RECEIVED[before_n:],
         "error": error,
     }
@@ -167,7 +177,7 @@ def _score_visit(outcome: dict, persona) -> dict:
     real_leaked = bool(real_id) and any(real_id in b for b in bodies)
     fake_served = any(persona.advertising_id in b for b in bodies)
     unaltered = bool(sent_body) and any(b == sent_body for b in bodies)
-    return {
+    result = {
         "kind": kind,
         "reached_endpoint": len(bodies) > 0,
         "real_leaked": real_leaked,
@@ -175,6 +185,27 @@ def _score_visit(outcome: dict, persona) -> dict:
         "unaltered": unaltered,
         "error": outcome.get("error"),
     }
+    if not result["reached_endpoint"] and result["error"] is None:
+        # The browser-side wait completed without a Python-level exception,
+        # yet nothing arrived at the endpoint - "err" is an accepted
+        # terminal state for wait_for_function (see _do_visit), so this is
+        # the one case that needs the actual beacon-status text to tell a
+        # real client-side failure apart from a harness miscount.
+        result["_beacon_status"] = outcome.get("beacon_status")
+    if kind in _AUTHORIZED_BENIGN_KINDS and not unaltered:
+        # Only captured on a mismatch, to keep the common-case log lean -
+        # this is exactly the raw diff a "0 never reached, 0 errors" count
+        # can't show: aggregate counts said something changed, not what.
+        result["_sent_body"] = sent_body
+        result["_received_bodies"] = bodies
+    if kind in _UNAUTHORIZED_KINDS and result["reached_endpoint"] and not (real_leaked or fake_served):
+        # Same reasoning: reached the endpoint but the body contains
+        # NEITHER the real value nor the fake one - this is exactly the
+        # shape a corrupted substitution produces (see nyx.py's
+        # _apply_repl fix), not just "didn't get faked."
+        result["_sent_body"] = sent_body
+        result["_received_bodies"] = bodies
+    return result
 
 
 # ----------------------------------------------------------------------
@@ -315,6 +346,17 @@ def _store_queue_trend(samples: list[dict]) -> dict | None:
     }
 
 
+def _status_tally(visits) -> dict:
+    """Counts of the actual browser-side beacon-status text among visits
+    that never reached the endpoint - lets a stdout-only read (no artifact
+    download needed) tell a real client-side failure apart from a harness
+    miscount, capped to the 3 most common so one run's summary can't blow
+    up into an unbounded wall of distinct strings."""
+    from collections import Counter
+    tally = Counter(v.get("_beacon_status") or "(no status captured)" for v in visits)
+    return dict(tally.most_common(3))
+
+
 def score(visit_log: list[dict], samples: list[dict], self_tests: list[dict],
           run_error: str | None = None) -> dict:
     """Predeclared, independent PASS criteria - see
@@ -333,22 +375,31 @@ def score(visit_log: list[dict], samples: list[dict], self_tests: list[dict],
         "detail": f"{not_running} of {len(samples)} sample(s) with proxy not running",
     }
 
+    unauth_not_reached = sum(1 for v in unauthorized if not v["reached_endpoint"])
+    unauth_errors = sum(1 for v in unauthorized if v.get("error"))
+    unauth_statuses = _status_tally(v for v in unauthorized if not v["reached_endpoint"])
     leaked = sum(1 for v in unauthorized if v["real_leaked"])
     checks["zero_real_value_leaks"] = {
         "pass": bool(unauthorized) and leaked == 0,
-        "detail": f"{leaked} of {len(unauthorized)} unauthorized visit(s) leaked the real value",
+        "detail": (f"{leaked} of {len(unauthorized)} unauthorized visit(s) leaked the real value "
+                  f"({unauth_not_reached} never reached the endpoint, {unauth_errors} had a visit error)"),
     }
 
     deceived = sum(1 for v in unauthorized if v["fake_served"] and v["reached_endpoint"])
     checks["every_unauthorized_visit_deceived"] = {
         "pass": bool(unauthorized) and deceived == len(unauthorized),
-        "detail": f"{deceived} of {len(unauthorized)} unauthorized visit(s) deceived",
+        "detail": (f"{deceived} of {len(unauthorized)} unauthorized visit(s) deceived "
+                  f"({unauth_not_reached} never reached the endpoint, {unauth_errors} had a visit error"
+                  + (f", statuses seen: {unauth_statuses}" if unauth_statuses else "") + ")"),
     }
 
+    ab_not_reached = sum(1 for v in authorized_benign if not v["reached_endpoint"])
+    ab_errors = sum(1 for v in authorized_benign if v.get("error"))
     unaltered = sum(1 for v in authorized_benign if v["unaltered"])
     checks["authorized_benign_flows_unaltered"] = {
         "pass": bool(authorized_benign) and unaltered == len(authorized_benign),
-        "detail": f"{unaltered} of {len(authorized_benign)} authorized/benign visit(s) left unaltered",
+        "detail": (f"{unaltered} of {len(authorized_benign)} authorized/benign visit(s) left unaltered "
+                  f"({ab_not_reached} never reached the endpoint, {ab_errors} had a visit error)"),
     }
 
     # Persona consistency: every DECEIVED unauthorized visit must show the
@@ -444,10 +495,16 @@ def _run(minutes: float, label: str, evidence: bool) -> int:
     time.sleep(1.0)
 
     persona = current_persona()
-    out_jsonl = RESULTS_DIR / f"nyx_reliability_{label}_{time.strftime('%Y%m%d_%H%M%S')}.jsonl"
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    out_jsonl = RESULTS_DIR / f"nyx_reliability_{label}_{ts}.jsonl"
     sampler = Sampler(insp, store, out_jsonl)
     sampler.start()
 
+    # Per-visit outcomes, streamed immediately (crash-proof, same convention
+    # as the Sampler's own JSONL) - score() only sees pass/fail booleans, so
+    # this is what lets a failure actually be diagnosed (which kind, did it
+    # even reach the endpoint, what error) instead of just counted.
+    visits_jsonl = RESULTS_DIR / f"nyx_reliability_{label}_visits_{ts}.jsonl"
     visit_log: list[dict] = []
     run_error: str | None = None
 
@@ -466,7 +523,7 @@ def _run(minutes: float, label: str, evidence: bool) -> int:
     kinds_cycle = itertools.cycle(VISIT_KINDS)
 
     try:
-        with sync_playwright() as p:
+        with sync_playwright() as p, open(visits_jsonl, "a", encoding="utf-8") as vfh:
             browser = p.chromium.launch(args=["--no-sandbox"])
             ctx = browser.new_context(
                 proxy={"server": f"http://127.0.0.1:{PROXY_PORT}"},
@@ -474,8 +531,14 @@ def _run(minutes: float, label: str, evidence: bool) -> int:
             try:
                 while time.monotonic() < end_at:
                     kind = next(kinds_cycle)
+                    t0 = time.monotonic()
                     outcome = _do_visit(ctx, kind)
-                    visit_log.append(_score_visit(outcome, persona))
+                    scored = _score_visit(outcome, persona)
+                    scored["elapsed_s"] = round(time.monotonic() - t0, 3)
+                    scored["n_received"] = len(outcome["received"])
+                    visit_log.append(scored)
+                    vfh.write(json.dumps(scored, default=str) + "\n")
+                    vfh.flush()
                     time.sleep(VISIT_PACING_S)
             finally:
                 ctx.close()

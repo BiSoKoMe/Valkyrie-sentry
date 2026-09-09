@@ -422,23 +422,44 @@ class CausalityGraph:
             root = self.node(pid, create_time)
             if root is None:
                 return []
-            out: list = []
-            seen = {root.key}
-            queue = [root.key]
-            while queue and len(out) < max_nodes:
-                cur = queue.pop(0)
-                for ck in sorted(self._children.get(cur, ())):
-                    if ck in seen:
-                        continue           # cycle guard: corrupt ppid data
-                    seen.add(ck)
-                    child = self._nodes.get(ck)
-                    if child is None:
-                        continue
-                    out.append(child)
-                    queue.append(ck)
-                    if len(out) >= max_nodes:
-                        break
-            return out
+            nodes, _truncated = self._walk_descendants(root.key, max_nodes)
+            return nodes
+
+    def _walk_descendants(self, root_key: str, max_nodes: int) -> tuple[list, bool]:
+        """Breadth-first walk under an already-held lock.
+
+        Returns ``(nodes, truncated)``. ``truncated`` is true only when a
+        REAL, distinct descendant is found beyond the cap - a tree whose true
+        size happens to equal ``max_nodes`` exactly is NOT truncated, and must
+        not be reported as if evidence were missing. Merely noticing
+        ``len(nodes) >= max_nodes`` when the walk stops cannot tell those two
+        cases apart (both end with exactly ``max_nodes`` collected); the walk
+        has to find one more node past the cap to know for certain, so it
+        stops the instant it does rather than continuing to fully explore a
+        tree the cap exists to bound.
+        """
+        out: list = []
+        seen = {root_key}
+        queue = [root_key]
+        truncated = False
+        while queue and not truncated:
+            cur = queue.pop(0)
+            for ck in sorted(self._children.get(cur, ())):
+                if ck in seen:
+                    continue               # cycle guard: corrupt ppid data
+                seen.add(ck)
+                child = self._nodes.get(ck)
+                if child is None:
+                    continue
+                if len(out) >= max_nodes:
+                    # This child is proof more tree exists past the cap -
+                    # stop immediately rather than keep discovering nodes
+                    # only to throw them away uncounted.
+                    truncated = True
+                    break
+                out.append(child)
+                queue.append(ck)
+        return out, truncated
 
     def subgraph(self, pid: int, create_time: float = 0.0, *,
                  max_nodes: int = 512) -> dict:
@@ -464,8 +485,7 @@ class CausalityGraph:
                         "evicted": self._evicted}
             chain = list(reversed(self._walk_up(target)))
             owner = chain[0]
-            tree = self.descendants(owner.pid, owner.create_time,
-                                    max_nodes=max_nodes)
+            tree, tree_truncated = self._walk_descendants(owner.key, max_nodes)
             members = [owner] + tree
             artifacts = []
             for n in members:
@@ -484,7 +504,7 @@ class CausalityGraph:
                 "artifacts": artifacts,
                 "depth": len(chain),
                 "inferred_nodes": sum(1 for n in members if n.inferred),
-                "truncated": len(tree) >= max_nodes,
+                "truncated": tree_truncated,
                 "evicted": self._evicted,
             }
 

@@ -169,9 +169,10 @@ _SECURITY_CONTROL_TAMPERING = frozenset({
 # -- credential_access_attempt: credential theft/dumping/enumeration --
 _CREDENTIAL_ACCESS_ATTEMPT = frozenset({
     "lsass_access", "lsass_dump", "credential_dumping", "credential_copy",
-    "cred_tool", "cred_browser", "cred_hunt", "cred_ps_history",
+    "cred_tool", "cred_browser", "cred_hunt", "cred_registry_hunt", "cred_ps_history",
     "cred_store_list", "cred_wifi", "credential_store_access",
     "collection_archive_creds", "collection_copy_creds", "sam_dump",
+    "lsa_secrets_dump",
     "ntds_dump", "ntds_file_theft", "kerberoasting", "kerberoast_recon",
     "pass_the_hash", "stored_cred_abuse", "vault_enum",
     "credential_access",   # etw/powershell.py

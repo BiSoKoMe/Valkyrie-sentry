@@ -25,6 +25,7 @@ const { app, BrowserWindow, ipcMain, shell, dialog, Tray, Menu, nativeImage } = 
 const path = require('path');
 const engine = require('./engine');
 const lifecycle = require('./lifecycle');
+const { guardIpc, apiPath, postArguments } = require('./ipc_security');
 const { decideBootAction, PROTECTION_INTENT, BOOT_ACTION } = require('./protection_state');
 
 const isDev = process.argv.includes('--dev');
@@ -172,6 +173,7 @@ function stopPolling() {
 // IPC surface (mirrors preload.js). Renderer requests; main acts.
 // ---------------------------------------------------------------------------
 function registerIpc() {
+  const ipcMain = guardIpc(require('electron').ipcMain, () => win);
   ipcMain.handle('engine:status', async () => ({ up: await engine.isUp() }));
 
   ipcMain.handle('engine:start', async () => {
@@ -183,10 +185,20 @@ function registerIpc() {
     lifecycle.setProtectionIntent(PROTECTION_INTENT.ENABLED);
     const r = await engine.start();
     const ready = await engine.waitUntilReady((up, i) => {
-      if (win) win.webContents.send('engine:progress', { up, attempt: i });
+      if (win) win.webContents.send('engine:progress', { up, attempt: i, phase: 'engine' });
     });
-    if (ready) startPolling();
-    return { ...r, ready };
+    if (!ready) return { ...r, ready, armed: false };
+    startPolling();
+    // The engine being reachable only proves the (normally already-running)
+    // service answered a ping - it says nothing about whether DNS actually
+    // got armed, which happens via an independent scheduled task this IPC
+    // call never otherwise waits on. See waitUntilArmed's own comment for
+    // the exact failure this closes: without it, the UI reported success the
+    // instant the engine responded while arming was still silently retrying.
+    const armed = await engine.waitUntilArmed((isArmed, i) => {
+      if (win) win.webContents.send('engine:progress', { up: isArmed, attempt: i, phase: 'arming' });
+    });
+    return { ...r, ready, armed };
   });
 
   ipcMain.handle('engine:stop', async () => {
@@ -328,20 +340,23 @@ function registerIpc() {
 
   // Generic, allowlisted API bridge so any page can read live data (and run the
   // few token-gated control actions) without the renderer ever touching HTTP.
+  //
+  // This explicit 4000 used to override engine.apiGet's own (already-raised)
+  // default entirely, silently undoing that fix for every real call through
+  // this channel - which is most of them, since this is the generic bridge
+  // every panel's poll goes through. Matched to engine.js's 12000 default
+  // (safely above the persistence collector's documented 8s worst-case stall)
+  // rather than left to drift again.
   ipcMain.handle('api:get', (_e, p) =>
-    typeof p === 'string' && p.startsWith('/api/')
-      ? engine.apiGet(p, 4000)
-      : Promise.reject(new Error('blocked')));
+    engine.apiGet(apiPath(p), 12000));
   // Same allowlist as api:get, for the handful of endpoints that
   // intentionally return plain text (e.g. ?format=md reports) instead of JSON.
   ipcMain.handle('api:getText', (_e, p) =>
-    typeof p === 'string' && p.startsWith('/api/')
-      ? engine.apiGetText(p, 4000)
-      : Promise.reject(new Error('blocked')));
-  ipcMain.handle('api:post', (_e, { path: p, body }) =>
-    typeof p === 'string' && p.startsWith('/api/')
-      ? engine.apiPost(p, body)
-      : Promise.reject(new Error('blocked')));
+    engine.apiGetText(apiPath(p), 12000));
+  ipcMain.handle('api:post', (_e, value) => {
+    const { pathname, body } = postArguments(value);
+    return engine.apiPost(pathname, body);
+  });
 
   // Window controls for the custom title bar.
   ipcMain.on('window:minimize', () => win && win.minimize());

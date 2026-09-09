@@ -90,6 +90,26 @@ def main() -> int:
     st3 = lh3.status(now=old_beat_at + 30.0, stale_after=5.0)
     _check("no beat for 30s against a 5s stale bound -> stale", st3["stale"] is True)
 
+    print("\n[9b] loop_is_alive: the process-restart decision (Reliability hardening)")
+    from valkyrie.telemetry_watchdog import loop_is_alive
+    _check("no heartbeat wired yet (web server still starting) reads alive",
+           loop_is_alive(None) is True)
+    lh_fresh = LoopHeartbeat()
+    lh_fresh.beat(drift=0.0)
+    _check("a heartbeat that just beat reads alive", loop_is_alive(lh_fresh) is True)
+    lh_ok_but_slow = LoopHeartbeat()
+    lh_ok_but_slow.last_beat_at = __import__("time").time() - 8.0
+    _check("an 8s gap - the collector fix's own bounded stall budget - "
+           "must NOT trip the 60s restart threshold",
+           loop_is_alive(lh_ok_but_slow) is True)
+    lh_frozen = LoopHeartbeat()
+    lh_frozen.last_beat_at = __import__("time").time() - 61.0
+    _check("a 61s gap - past the 60s threshold - reads not-alive",
+           loop_is_alive(lh_frozen) is False)
+    lh_never = LoopHeartbeat()
+    _check("never beaten at all (last_beat_at=0) also reads not-alive",
+           loop_is_alive(lh_never) is False)
+
     print("\n[10] TelemetryWatchdog: all sources healthy, no loop wired -> HEALTHY")
     wd = TelemetryWatchdog(started_at=0.0, startup_grace=60.0)
     wd.add_source("process", lambda: {"running": True, "last_poll_completed_at": 95.0}, 2.0)

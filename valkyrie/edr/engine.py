@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import deque
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
@@ -155,6 +156,18 @@ class EdrEngine:
         # or authorize enforcement. This lets the shared evidence architecture
         # be measured before it is trusted with response authority.
         self._detection_v2 = DetectionArchitectureV2()
+        # Platform Beta 2/3 (docs/PLATFORM_BETA2_AEGIS_LIVE.md,
+        # docs/PLATFORM_BETA3_FUSED_RELIABILITY.md) proved
+        # aegis_bridge.translate_session -> aegis_exposure.evaluate_pair
+        # holds up over real, sustained, multi-subject traffic through this
+        # exact detection_v2 ledger - this wires that proven pipeline into
+        # the live engine so it is actually computed, not only exercised by
+        # a test harness. Same one-directional relationship as before:
+        # Aegis is fed BY the canonical event stream and never feeds
+        # anything back into detection_v2/hypothesis/nyx's own reasoning
+        # (test_negative_valkyrie_and_nyx_modules_do_not_import_aegis
+        # checks those three modules specifically, not this orchestrator).
+        self._aegis_ledger: deque = deque(maxlen=512)
         self._v2_stop = threading.Event()
         self._v2_worker: Optional[threading.Thread] = None
         self._running = False
@@ -270,6 +283,37 @@ class EdrEngine:
             # established detection and response pipeline.
             architecture_v2 = None
 
+        # Aegis exposure/inference reasoning, over the SAME real canonical
+        # event this cycle already produced - never the other way around.
+        # Same shadow-mode guarantee as architecture_v2 above: this can only
+        # ever fail closed (silently absent), never interrupt or alter the
+        # established pipeline's own return value.
+        if architecture_v2 is not None:
+            try:
+                # Lazy, in-method import (same convention as decoy_hit
+                # above) - not a module-level one. aegis_exposure.py itself
+                # imports valkyrie.edr.hypothesis, so a top-level import
+                # here creates a real circular import at module load time
+                # (edr/__init__.py -> engine.py -> aegis_bridge ->
+                # aegis_exposure -> edr.hypothesis -> edr package, still
+                # mid-init). Deferred to call time, every module involved
+                # is already fully loaded.
+                from ..aegis_bridge import translate_session
+                from ..aegis_exposure import evaluate_pair
+                instance_id = architecture_v2.event.subject.instance_id
+                subject_events = self._detection_v2.events_for_subject(instance_id)
+                observations = translate_session(subject_events)
+                if observations:
+                    aegis = evaluate_pair(observations, instance_id)
+                    self._aegis_ledger.append({
+                        "instance_id": instance_id,
+                        "timestamp": time.time(),
+                        "exposure_observations": [o.to_dict() for o in observations],
+                        "inference_hypotheses": aegis["decisions"],
+                    })
+            except Exception:
+                pass
+
         severity = str(d.get("severity", "info"))
         action = str(d.get("action", ""))
 
@@ -377,6 +421,13 @@ class EdrEngine:
                      "activity": d.get("activity", ""),
                      "ppid": ppid, "parent_name": parent_name,
                      "parent_chain": list(fields.get("parent_chain") or []),
+                     # The sensor's own observed process-start time, when it
+                     # captured one (process_telemetry, sysmon). Carried so a
+                     # later kill_process response can pin PID+create_time
+                     # together (response.py refuses a bare, possibly-reused
+                     # PID for a real termination) instead of losing this the
+                     # moment the raw event becomes a Detection.
+                     "process_create_time": float(fields.get("create_time") or 0.0),
                      # Every ATT&CK technique this one event matched, not just the
                      # top pick surfaced in `technique`. A single action can be
                      # several techniques at once; keep them all on the detection
@@ -697,6 +748,24 @@ class EdrEngine:
         """Drain bounded async-work candidates for a background scheduler."""
         return [event.to_dict() for event in self._detection_v2.drain_analytics(budget)]
 
+    def aegis_status(self) -> dict:
+        """Read-only status for the Aegis exposure/inference reasoning
+        layer (docs/AEGIS_PLATFORM_BRIDGE.md, docs/PLATFORM_BETA2_AEGIS_LIVE.md,
+        docs/PLATFORM_BETA3_FUSED_RELIABILITY.md) - reasoning-only, same
+        shadow-mode guarantee as detection_v2_status(): cannot originate an
+        incident or authorize enforcement."""
+        return {
+            "mode": "reasoning-only",
+            "ledger_entries": len(self._aegis_ledger),
+        }
+
+    def aegis_ledger(self, limit: int = 100) -> list[dict]:
+        """Recent Aegis exposure observations + inference hypotheses,
+        newest last. Read-only; never merges into Valkyrie's or NYX's own
+        verdict (that separation is a tested invariant, not a convention -
+        see test_no_global_verdict_field_exists_anywhere_in_the_report)."""
+        return list(self._aegis_ledger)[-max(0, int(limit)):]
+
     def _enrich_causality(self, det: Detection) -> None:
         """Record the detection on its process node and stamp the CGO on it.
 
@@ -1014,6 +1083,9 @@ class EdrEngine:
 
     def subscribe(self, cb: Callable[[dict], None]) -> None:
         self._bus.subscribe(cb)
+
+    def delivery_status(self) -> dict:
+        return self._bus.stats()
 
     def unsubscribe(self, cb: Callable[[dict], None]) -> None:
         self._bus.unsubscribe(cb)

@@ -203,10 +203,11 @@ def test_end_to_end_mttd_mttr() -> None:
     class _Intel:
         def __init__(self):
             self.blocked = set()
-        def remember_block(self, d, r=""):
+        def apply_response_block(self, d, expires_at):
             self.blocked.add(d)
-        def remember_good(self, d, r=""):
-            pass
+            return True
+        def release_response_block(self, d):
+            self.blocked.discard(d)
 
     engine = EdrEngine(store, intelligence=_Intel())
     engine.start()
@@ -293,8 +294,10 @@ def test_api_endpoint() -> None:
                 and {"n", "total", "median_seconds", "p95_seconds"} <= set(body["mttd"].keys()))
         c.check("no incidents yet -> n=0, not an error",
                 body["mttd"]["n"] == 0 and body["mttr"]["n"] == 0)
+        metric_routes = [route for route in app2.routes
+                         if getattr(route, "path", "") == "/api/edr/metrics/mttd-mttr"]
         c.check("no POST route exists (read-only monitoring surface)",
-                client2.post("/api/edr/metrics/mttd-mttr").status_code == 405)
+                len(metric_routes) == 1 and "POST" not in metric_routes[0].methods)
         engine.stop()
         store.stop()
     finally:

@@ -39,6 +39,7 @@ WHAT "PROPERLY" MEANS HERE
 
 from __future__ import annotations
 
+import base64
 import os
 import platform
 import stat
@@ -166,23 +167,27 @@ def harden(path: Path, *, is_dir: bool = False) -> tuple[bool, str]:
 def access_sids(path: Path) -> tuple[set[str], str]:
     """SIDs that currently hold any access to *path* (Windows only).
 
-    Read back through PowerShell and translated to raw SIDs, because
-    `icacls` prints localised display names that cannot be compared reliably
-    across locales.
+    Read the native .NET ACL and return raw SIDs. This avoids the Get-Acl
+    cmdlet because Microsoft.PowerShell.Security is unavailable on some
+    Windows runner and recovery environments.
     """
     if not _IS_WINDOWS:
         return set(), "not windows"
+    encoded_path = base64.b64encode(str(path).encode("utf-8")).decode("ascii")
     script = (
         "$ErrorActionPreference='Stop';"
-        f"$a=(Get-Acl -LiteralPath '{path}').Access;"
-        "$a | ForEach-Object { try {"
-        "$_.IdentityReference.Translate("
-        "[System.Security.Principal.SecurityIdentifier]).Value"
-        "} catch { $_.IdentityReference.Value } }"
+        f"$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_path}'));"
+        "$attr=[IO.File]::GetAttributes($p);"
+        "if(($attr -band [IO.FileAttributes]::Directory) -ne 0){"
+        "$acl=[IO.Directory]::GetAccessControl($p)}else{"
+        "$acl=[IO.File]::GetAccessControl($p)};"
+        "$acl.GetAccessRules($true,$true,"
+        "[Security.Principal.SecurityIdentifier])|ForEach-Object{"
+        "$_.IdentityReference.Value}"
     )
     code, out = _run([_POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", script])
     if code != 0:
-        return set(), f"Get-Acl failed: {out.strip()[:200]}"
+        return set(), f"ACL read failed: {out.strip()[:200]}"
     return {ln.strip() for ln in out.splitlines() if ln.strip()}, ""
 
 
@@ -257,7 +262,7 @@ def known_secrets() -> list[tuple[str, Path]]:
         ("TLS CA private key", C.TLS_CA_KEY_PATH),
         ("mitmproxy CA directory", C.TLS_MITMPROXY_CONF_DIR),
         ("MAC install key", C.MAC_KEY_PATH),
-        ("API control token", C.DATA_DIR / "control_token.txt"),
+        ("API control token", C.DATA_DIR / "control" / "token"),
         ("browser-context bridge token", C.DATA_DIR / "browser_context_token.txt"),
         # KEPT DELIBERATELY after the ADR 0044 freeze, even though core no
         # longer creates these. An upgrader who ran an older build still has a
@@ -281,7 +286,7 @@ def _access_sids_batch(paths: list[Path]) -> dict[str, tuple[set[str], str]]:
 
     The per-file `access_sids()` spawns one PowerShell process each; auditing
     ~10 secrets that way cost ~6s (measured) and dominated the coverage
-    refresh. One batched Get-Acl pass is the same read, ~10x fewer subprocess
+    refresh. One batched native ACL pass is the same read, ~10x fewer subprocess
     launches. Returns {str(path): (sids, err)}; any path the batch could not
     read back is marked unread so its verdict stays conservative (not
     protected), exactly as a single-file read error would.
@@ -290,18 +295,20 @@ def _access_sids_batch(paths: list[Path]) -> dict[str, tuple[set[str], str]]:
     if not _IS_WINDOWS or not paths:
         return {str(p): (set(), "") for p in paths}
 
-    def _q(s: object) -> str:                      # PowerShell single-quote escaping
-        return "'" + str(s).replace("'", "''") + "'"
-
-    arr = ",".join(_q(p) for p in paths)
+    encoded_paths = base64.b64encode(
+        "\n".join(str(p) for p in paths).encode("utf-8")).decode("ascii")
     script = (
         "$ErrorActionPreference='SilentlyContinue';"
-        f"$ps=@({arr});"
+        f"$raw=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_paths}'));"
+        "$ps=$raw -split \"`n\";"
         "foreach($p in $ps){'###P###'+$p;"
-        "try{(Get-Acl -LiteralPath $p).Access|ForEach-Object{"
-        "try{$_.IdentityReference.Translate("
-        "[System.Security.Principal.SecurityIdentifier]).Value}"
-        "catch{$_.IdentityReference.Value}}}"
+        "try{$attr=[IO.File]::GetAttributes($p);"
+        "if(($attr -band [IO.FileAttributes]::Directory) -ne 0){"
+        "$acl=[IO.Directory]::GetAccessControl($p)}else{"
+        "$acl=[IO.File]::GetAccessControl($p)};"
+        "$acl.GetAccessRules($true,$true,"
+        "[Security.Principal.SecurityIdentifier])|ForEach-Object{"
+        "$_.IdentityReference.Value}}"
         "catch{'###E###'+$_.Exception.Message}}"
     )
     code, out = _run([_POWERSHELL, "-NoProfile", "-NonInteractive",
@@ -318,7 +325,7 @@ def _access_sids_batch(paths: list[Path]) -> dict[str, tuple[set[str], str]]:
         if cur is None:
             continue
         if ln.startswith("###E###"):
-            result[cur] = (set(), ln[len("###E###"):] or "Get-Acl failed")
+            result[cur] = (set(), ln[len("###E###"):] or "ACL read failed")
             continue
         sids, err = result[cur]
         if err:

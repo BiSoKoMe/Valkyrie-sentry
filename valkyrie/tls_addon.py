@@ -159,6 +159,54 @@ class ValkyrieAddon:
         self.intercept_count = 0
         # response cache: url -> (expiry_time, cleaned_bytes | None)
         self._resp_cache: dict[str, tuple[float, bytes | None]] = {}
+        # Nyx diagnostics. Every path below that used to fail silently now
+        # counts itself here, and records the last exception text where there
+        # was one. A 2026-09-03 nyx-live run leaked a REAL browser device id to
+        # the tracker on the second of two origins while the first was faked
+        # correctly, and the event counts alone could not distinguish "Nyx never
+        # observed that request" from "Nyx observed it and the rewrite threw" -
+        # because both silent paths produce exactly the same totals. Guessing
+        # between them is what this dict exists to make unnecessary; the same
+        # instrument-don't-guess step that root-caused the earlier startup
+        # deafness. Pure counters: nothing here changes a request.
+        self.nyx_diag: dict[str, int | str] = {
+            "observe_calls": 0,          # _nyx_observe entered
+            "observed_with_findings": 0, # inspect_outbound returned >=1
+            "emit_skipped_no_pid": 0,    # leak events dropped: pid unresolved
+            "emit_error": 0,             # _emit_nyx_observations threw
+            "act_attempted": 0,          # NYX_ACT on and something to fake
+            "act_succeeded": 0,          # rewrite applied, nyx_fake logged
+            "act_partial": 0,            # only some request fields were changed
+            "act_rewrite_error": 0,      # rewrite threw -> request went out RAW
+            "act_url_error": 0,          # url rewrite threw; body/headers still done
+            "observe_error": 0,          # _nyx_observe itself threw
+            "last_error": "",
+        }
+
+    # Diagnostics must never be able to break the thing they observe, so both
+    # helpers tolerate an instance built without __init__ (tests legitimately
+    # do this via __new__ to exercise one method in isolation) and swallow
+    # anything that goes wrong counting. A counter that can raise is worse than
+    # no counter.
+    def _diag_bump(self, key: str) -> None:
+        try:
+            diag = getattr(self, "nyx_diag", None)
+            if diag is None:
+                diag = {}
+                self.nyx_diag = diag
+            diag[key] = int(diag.get(key, 0)) + 1
+        except Exception:
+            pass
+
+    def _diag_note(self, text: str) -> None:
+        try:
+            diag = getattr(self, "nyx_diag", None)
+            if diag is None:
+                diag = {}
+                self.nyx_diag = diag
+            diag["last_error"] = text[:300]
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # mitmproxy hooks
@@ -308,6 +356,7 @@ class ValkyrieAddon:
         fakes so the tracker gets believable-but-false data and the request
         still completes. Fully guarded: a bug here must never break browsing
         nor derail the request pipeline."""
+        self._diag_bump("observe_calls")
         try:
             from .config import NYX_ACT
             req = flow.request
@@ -317,6 +366,7 @@ class ValkyrieAddon:
                 method=req.method, url=url, headers=headers, body=body)
             if not observations:
                 return
+            self._diag_bump("observed_with_findings")
 
             self._emit_nyx_observations(flow, observations)
 
@@ -332,27 +382,31 @@ class ValkyrieAddon:
                     req.method, url, headers, body)
                 faked = list(dict.fromkeys(faked + header_faked))
                 if faked:
-                    try:
-                        if new_url != url:
-                            req.url = new_url
-                        if new_body is not None and new_body != body:
-                            req.set_content(new_body if isinstance(new_body, bytes)
-                                            else str(new_body).encode("utf-8"))
-                        for hk, hv in new_headers.items():
-                            req.headers[hk] = hv
+                    self._diag_bump("act_attempted")
+                    from .nyx_rewrite import apply_rewrite
+                    result = apply_rewrite(
+                        req, url=url, body=body, headers=headers,
+                        new_url=new_url, new_body=new_body, new_headers=new_headers)
+                    if result.outcome == "applied":
                         self._log(domain, url, proc, "deceived",
-                                  "Nyx fed fake data for your "
-                                  + ", ".join(faked) + f" to {domain}",
-                                  category="nyx_fake")
-                        return   # acted - do not also log an observe event
-                    except Exception:
-                        pass     # rewrite failed -> fall through to observe log
+                                  "Nyx rewrote observed request fields for "
+                                  + ", ".join(faked), category="nyx_fake")
+                        self._diag_bump("act_succeeded")
+                        return
+                    if "url" in result.failed:
+                        self._diag_bump("act_url_error")
+                    self._diag_bump("act_partial" if result.outcome == "partial" else "act_rewrite_error")
+                    self._diag_note("rewrite outcome: " + result.outcome
+                                    + "; failed parts: " + ",".join(result.failed))
+                    # Partial edits remain useful, but must not be reported as
+                    # complete protection. Preserve the observation below.
 
             for ob in observations:
                 self._log(domain, url, proc, "flagged", ob.sentence,
                           category="nyx_leak")
-        except Exception:
-            pass
+        except Exception as exc:
+            self._diag_bump("observe_error")
+            self._diag_note(f"observe: {exc!r}")
 
     def _resolve_causality_pid(self, flow) -> tuple[int, str]:
         """Best-effort local-process resolution for causality attribution
@@ -386,6 +440,11 @@ class ValkyrieAddon:
         try:
             pid, name = self._resolve_causality_pid(flow)
             if pid <= 0:
+                # Attribute nothing (correct), but this silently drops EVERY
+                # leak event for the request - so a genuine observation can
+                # vanish from the ledger for a reason that has nothing to do
+                # with privacy. Count it so the ledger's silence is explainable.
+                self._diag_bump("emit_skipped_no_pid")
                 return
             for ob in observations:
                 event = TelemetryEvent(
@@ -403,8 +462,9 @@ class ValkyrieAddon:
                         "attribution_confidence": "best_effort_port_mapping",
                     })
                 self.edr.ingest_telemetry(event)
-        except Exception:
-            pass
+        except Exception as exc:
+            self._diag_bump("emit_error")
+            self._diag_note(f"emit: {exc!r}")
 
     # Compatibility for extensions that called the short-lived private seam.
     _attribute_nyx_observations = _emit_nyx_observations

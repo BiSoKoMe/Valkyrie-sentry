@@ -54,8 +54,11 @@ MALICIOUS = [
     ("comsvcs-minidump", "rundll32.exe", "cmd.exe", "rundll32 C:\\windows\\system32\\comsvcs.dll MiniDump 640 c:\\lsass.dmp full", ""),
     ("procdump-lsass", "procdump.exe", "cmd.exe", "procdump -ma lsass.exe lsass.dmp", ""),
     ("reg-save-hive", "reg.exe", "cmd.exe", "reg save hklm\\sam c:\\sam.hive", ""),
+    ("reg-save-hive-lsa-secrets", "reg.exe", "cmd.exe", "reg save hklm\\security c:\\security.hive", ""),
     ("ntdsutil-ifm", "ntdsutil.exe", "cmd.exe", "ntdsutil ac i ntds ifm create full c:\\out q q", ""),
     ("vaultcmd-creds", "vaultcmd.exe", "cmd.exe", "vaultcmd /listcreds:\"Windows Credentials\"", ""),
+    ("cred-registry-password-hunt", "reg.exe", "cmd.exe",
+     "reg query HKLM /f password /t REG_SZ /s", ""),
     ("reg-add-runkey", "reg.exe", "cmd.exe", "reg add hkcu\\software\\microsoft\\windows\\currentversion\\run /v x /d evil.exe", ""),
     ("schtasks-create", "schtasks.exe", "cmd.exe", "schtasks /create /tn x /tr evil.exe /sc onlogon", ""),
     ("sc-create-service", "sc.exe", "cmd.exe", "sc create evil binpath= c:\\evil.exe", ""),
@@ -399,6 +402,7 @@ BENIGN = [
     ("net.exe", "cmd.exe", "net user Administrator /active:no", ""),                                 # DISABLE account, not enable
     ("wmic.exe", "cmd.exe", "wmic useraccount get name,disabled", ""),                              # list accounts, not set
     ("reg.exe", "cmd.exe", "reg query HKLM\\SYSTEM\\CurrentControlSet\\Services\\Spooler /v ImagePath", ""),  # read ImagePath, not write
+    ("reg.exe", "cmd.exe", "reg query HKLM\\Software\\MyApp /f version /t REG_SZ /s", ""),          # searching for "version", not a credential keyword
     ("netsh.exe", "cmd.exe", "netsh trace show status", ""),                                        # show, not start capture
     ("pktmon.exe", "cmd.exe", "pktmon list", ""),                                                   # list adapters, not start
     # Round-9 FP boundaries:

@@ -51,11 +51,33 @@ HONEST BOUNDARIES
 -----------------
 * This does not make a user untrackable. A tracker with a first-party cookie,
   a login, or an IP address does not need any of these fields.
-* The persona is per-machine, not per-site. A tracker present on two sites sees
-  one consistent identity - which is what a real user looks like. Cross-site
-  decorrelation is farble's job, on surfaces we can actually rewrite.
 * Nothing here touches real system values. It never reads or reports the user's
   actual locale, timezone, or screen; it fabricates a plausible one instead.
+
+SITE-SCOPED PERSONAS (why `persona_for()` exists, not just `persona()`)
+------------------------------------------------------------------------
+An earlier version of this module handed out ONE machine-wide persona to
+every destination. That satisfies "internally coherent" and "stable across
+sessions" - but a tracker embedded on two UNRELATED sites then receives the
+exact same fake advertising_id from both. That is not a fixed identity
+becoming safe by being false; it is a NEW durable cross-site identifier,
+exactly as correlatable as the real one it replaced - the tracker still
+learns "the same visitor was on site A and site B", which is the whole thing
+this product exists to prevent. It also compounds if that fake ID is ever
+paired with one field Nyx failed to catch: a single real fact tied to a
+persistent fake ID de-anonymises every site that ID has ever touched.
+
+`persona_for(site_key)` derives a persona from `HMAC(machine_seed, site_key)`
+instead of the bare machine seed. The caller builds `site_key` from the
+(first-party, third-party) PAIR - see `nyx.py`'s `_site_persona()` - so:
+  * the SAME tracker on the SAME site keeps answering with the SAME identity
+    (stability holds within that site's relationship to that tracker), but
+  * the SAME tracker on a DIFFERENT site gets a DIFFERENT, unrelated identity
+    (separation holds across sites, mirroring what farble already does for
+    surfaces read from a real browser).
+`persona()` (the bare machine-wide identity) remains for contexts with no
+site to key on - e.g. a diagnostics endpoint, or the DNS-level deception
+listener before it has parsed a request it can attribute to a first party.
 """
 
 from __future__ import annotations
@@ -405,6 +427,13 @@ class PersonaStore:
     what the code believes.
     """
 
+    # Bounds the site-persona cache. A busy machine can browse thousands of
+    # distinct (first-party, tracker) pairs; without a cap this dict would
+    # grow for the life of the process. build_persona() is cheap (five HMACs)
+    # so evicting and recomputing on a cache miss costs nothing an outbound
+    # request would notice.
+    _MAX_SITE_PERSONAS = 4096
+
     def __init__(self, path: Optional[Path] = None):
         if path is None:
             from .config import DATA_DIR
@@ -413,6 +442,7 @@ class PersonaStore:
         self._lock = threading.Lock()
         self._persona: Optional[Persona] = None
         self._seed: Optional[bytes] = None
+        self._site_personas: dict[str, Persona] = {}
 
     @property
     def path(self) -> Path:
@@ -453,6 +483,38 @@ class PersonaStore:
                 self._persona = build_persona(self._seed)
             return self._persona
 
+    def persona_for(self, *parts: str) -> Persona:
+        """A persona scoped to `parts` - stable for that exact tuple, unrelated
+        to any other tuple, both derived from the same machine seed.
+
+        `parts` is typically (first_party, third_party): nyx.py's site-scoping
+        key. Each part is length-prefixed before joining so
+        ``("a", "b|c")`` and ``("a|b", "c")`` can never collide on the same
+        cache key or derived seed merely because a domain happened to contain
+        the join character - the length prefix pins exactly where one part
+        ends and the next begins, independent of what characters it contains.
+        """
+        site_key = "\x1e".join(f"{len(p)}:{p}" for p in parts)
+        with self._lock:
+            cached = self._site_personas.get(site_key)
+            if cached is not None:
+                return cached
+            if self._seed is None:
+                self._seed = self._load_or_create_seed()
+            # HMAC, not concatenation-then-hash: a site_key chosen to collide
+            # with the machine seed's own byte layout must not let a caller
+            # steer the derived seed toward a value it picked.
+            site_seed = hmac.new(self._seed, site_key.encode("utf-8"), hashlib.sha256).digest()
+            site_persona = build_persona(site_seed)
+            if len(self._site_personas) >= self._MAX_SITE_PERSONAS:
+                # Bounded, not LRU: evicting an arbitrary entry only costs one
+                # recomputation on that key's next request, and dict iteration
+                # order (insertion order) means this evicts the OLDEST entry
+                # first without tracking access recency separately.
+                self._site_personas.pop(next(iter(self._site_personas)))
+            self._site_personas[site_key] = site_persona
+            return site_persona
+
     def rotate(self) -> Persona:
         """Deliberately become a different person.
 
@@ -473,6 +535,11 @@ class PersonaStore:
                 pass
             self._seed = seed
             self._persona = build_persona(seed)
+            # Every site-scoped persona derives from the seed just replaced -
+            # a stale cache entry would keep answering old-identity fields to
+            # a tracker that already saw them, silently defeating rotation for
+            # every site visited before this call.
+            self._site_personas.clear()
             return self._persona
 
 
@@ -490,3 +557,15 @@ def default_store() -> PersonaStore:
 
 def current_persona() -> Persona:
     return default_store().persona()
+
+
+def persona_for_site(first_party: str, third_party: str) -> Persona:
+    """The persona this machine shows to `third_party` while visiting
+    `first_party` - stable for that pair, unrelated to any other pair.
+    Falls back to the bare machine persona when either side is unknown
+    (e.g. no first party to key on), matching the previous global behaviour
+    rather than fabricating a key from an empty string that every unattributed
+    caller would then collide on."""
+    if not first_party or not third_party:
+        return current_persona()
+    return default_store().persona_for(first_party, third_party)

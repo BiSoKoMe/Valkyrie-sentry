@@ -106,7 +106,8 @@ class EdrStore:
                     result       TEXT NOT NULL DEFAULT '',
                     operator     TEXT NOT NULL DEFAULT 'local',
                     dry_run      INTEGER NOT NULL DEFAULT 1,
-                    incident_id  TEXT NOT NULL DEFAULT ''
+                    incident_id  TEXT NOT NULL DEFAULT '',
+                    audit_state  TEXT NOT NULL DEFAULT 'not_configured'
                 );
                 CREATE INDEX IF NOT EXISTS idx_resp_incident ON edr_responses(incident_id);
             """)
@@ -123,6 +124,13 @@ class EdrStore:
                 conn.execute(
                     "ALTER TABLE edr_incidents ADD COLUMN technique "
                     "TEXT NOT NULL DEFAULT ''")
+                conn.commit()
+            response_cols = {row[1] for row in
+                             conn.execute("PRAGMA table_info(edr_responses)").fetchall()}
+            if "audit_state" not in response_cols:
+                conn.execute(
+                    "ALTER TABLE edr_responses ADD COLUMN audit_state "
+                    "TEXT NOT NULL DEFAULT 'not_configured'")
                 conn.commit()
 
     # ------------------------------------------------------------------
@@ -245,11 +253,12 @@ class EdrStore:
         with self._lock, self._connect() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO edr_responses"
-                "(id,timestamp,action,target,status,result,operator,dry_run,incident_id)"
-                " VALUES (?,?,?,?,?,?,?,?,?)",
+                "(id,timestamp,action,target,status,result,operator,dry_run,incident_id,audit_state)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (action.id, action.timestamp, action.action, action.target,
                  action.status, action.result, action.operator,
-                 1 if action.dry_run else 0, action.incident_id),
+                 1 if action.dry_run else 0, action.incident_id,
+                 action.audit_state),
             )
             conn.commit()
 

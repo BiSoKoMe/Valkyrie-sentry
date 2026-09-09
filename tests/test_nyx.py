@@ -105,10 +105,40 @@ def main() -> int:
     one_fp = nyx.inspect_outbound("POST", THIRD, HDR, b"lang=en-US")
     c.check("a single surface is not a fingerprint bundle", nyx.CAT_FINGERPRINT not in _cats(one_fp))
 
-    # A random 16-digit id is not a card - Luhn is the precision boundary.
+    # A random 16-digit id is not a card - Luhn is A precision boundary.
     non_luhn = nyx.inspect_outbound("POST", THIRD, HDR, b"session=1234567890123456")
     c.check("a non-Luhn 16-digit id is NOT flagged as a card",
             nyx.CAT_FINANCIAL not in _cats(non_luhn))
+
+    # Beta 1's live-fire soak found Luhn ALONE is not precise enough: an
+    # arbitrary 13-19 digit number (a timestamp, an order id, a session
+    # counter) has roughly a 1-in-10 chance of coincidentally passing the
+    # Luhn checksum, since it is only a mod-10 property. A real run hit
+    # this: a plain `ts=<millisecond-timestamp>` field with no card-shaped
+    # context got faked into a card number. Card detection now also
+    # requires a card-shaped key OR real card-style grouping - matching
+    # every other category here (_ID_KEY, _LAT_KEY, _FP_CORES, ...), none
+    # of which ever accepted a bare value shape alone either.
+    luhn_valid_ts = 1788154881436
+    while not nyx._luhn_ok(str(luhn_valid_ts)):
+        luhn_valid_ts += 1
+    coincidental = nyx.inspect_outbound(
+        "POST", THIRD, HDR, f"event=pageview&ts={luhn_valid_ts}".encode())
+    c.check("a Luhn-valid but NOT card-shaped timestamp is NOT flagged as a card",
+            nyx.CAT_FINANCIAL not in _cats(coincidental))
+    unrelated_key = nyx.inspect_outbound(
+        "POST", THIRD, HDR, f"x={luhn_valid_ts}".encode())
+    c.check("the same Luhn-valid number under an unrelated key is still NOT flagged",
+            nyx.CAT_FINANCIAL not in _cats(unrelated_key))
+    # But a real card is still caught: under a card-shaped key...
+    card_key = nyx.inspect_outbound("POST", THIRD, HDR, b"card_number=4242424242424242")
+    c.check("a Luhn-valid number under a card-shaped key IS still flagged",
+            nyx.CAT_FINANCIAL in _cats(card_key))
+    # ...or with real card-style grouping, even with no clear key at all.
+    grouped = nyx.inspect_outbound(
+        "POST", THIRD, HDR, b"note=card is 4242-4242-4242-4242 thanks")
+    c.check("Luhn-valid digits with real card-style grouping ARE still flagged",
+            nyx.CAT_FINANCIAL in _cats(grouped))
 
     # A short functional cookie is not a tracking id.
     func_cook = nyx.inspect_outbound("GET", THIRD, {"Referer": FP, "Cookie": "lang=en; theme=dark; s=1"})
@@ -203,12 +233,62 @@ def main() -> int:
     c.check("payment card rewritten to a fake (real card gone)",
             b"4242424242424242" not in bdy and b"4111111111111111" in bdy)
 
+    # 8025x4513 is deliberately outside persona.py's _SCREENS pool (every
+    # real entry there is a plausible resolution under ~4000 wide) - using a
+    # pool member here (2560x1440 used to be hardcoded) meant this test
+    # coincidentally failed on any fresh persona seed that happened to pick
+    # that SAME resolution (~8% of fresh CI runs, weight 8 of ~100): a real
+    # persona given a value identical to what it would fake correctly skips
+    # the no-op replacement (nyx.py's own "only replace if the fake differs
+    # from the real value" rule), which this test's fixed input then wrongly
+    # read as a failure to rewrite.
     u, bdy, faked = nyx.fake_outbound(
         "POST", THIRD, HDR,
-        b"screen=2560x1440&timezone=America/New_York&lang=en-US&cores=16", persona)
+        b"screen=8025x4513&timezone=America/New_York&lang=en-US&cores=16", persona)
     c.check("fingerprint bundle rewritten to consistent persona device values",
-            b"2560x1440" not in bdy
+            b"8025x4513" not in bdy
             and f"{persona.screen_width}x{persona.screen_height}".encode() in bdy)
+
+    # REGRESSION: Beta 1's live-fire soak found _apply_repl applying each
+    # substitution as its own sequential text.replace() call could corrupt
+    # an already-faked value - "3840x2160" (a fake screen) became "3840x280"
+    # because a SEPARATE, later substitution ("16" -> "8", for cores) also
+    # matched the "16" hiding inside "2160". This is deterministic (no
+    # random persona needed): a multi-field body where one fake value's
+    # text contains another field's raw value as a substring.
+    collision_repl = {"8025x4513": "3840x2160", "16": "8"}
+    fixed = nyx._apply_repl("screen=8025x4513&cores=16", collision_repl)
+    c.check("a later substitution does NOT corrupt an earlier one's fake output",
+            fixed == "screen=3840x2160&cores=8")
+    c.check("the corruption shape this regresses against is NOT present",
+            "280" not in fixed)
+
+    # REGRESSION: substitution vs. URL STRUCTURE, the sibling of the collision
+    # above and a genuine privacy failure rather than a cosmetic one. A real
+    # beacon carries cores=8, so the map holds the single character "8", and
+    # rewriting the WHOLE url turned http://tracker.test:8111/api/ingest into
+    # port 4111. nyx-live run 33830249645 hit the variant where the mangled
+    # port left 0-65535 entirely: mitmproxy's url setter raised ValueError,
+    # the rewrite was abandoned, and the beacon went out RAW carrying the real
+    # device id. The authority must never be substituted.
+    port_url = "http://tracker.test:8111/api/ingest"
+    kept = nyx._apply_repl_url(port_url, {"8": "4", "1280x720": "1920x1080"})
+    c.check("url authority (host:port) is NEVER rewritten by a substitution",
+            kept == port_url)
+    c.check("the port-corruption shape this regresses against is NOT present",
+            ":4111" not in kept)
+    # ...while a value genuinely sitting in the query still gets faked.
+    q_url = "http://tracker.test:8111/px?adid=550e8400-e29b-41d4-a716-446655440000"
+    q_fixed = nyx._apply_repl_url(q_url, {"550e8400-e29b-41d4-a716-446655440000": "FAKEID"})
+    c.check("a personal value in the QUERY is still substituted",
+            "FAKEID" in q_fixed and "tracker.test:8111" in q_fixed)
+    # End-to-end through the real entry point, with the exact live-run body.
+    live_body = (b"adid=2c5de9c1-fe35-4758-9474-904aa3b0cd68&screen=1280x720"
+                 b"&timezone=UTC&lang=en-US&cores=8")
+    lu, lb, lfaked = nyx.fake_outbound("POST", port_url, HDR, live_body)
+    c.check("fake_outbound leaves the tracker url's port intact", lu == port_url)
+    c.check("fake_outbound still removes the real device id from the body",
+            b"2c5de9c1-fe35-4758-9474-904aa3b0cd68" not in (lb or live_body))
 
     # Consistency: the SAME persona value across two different requests (the tell
     # a sloppy spoof would fail - two requests must not disagree about the user).

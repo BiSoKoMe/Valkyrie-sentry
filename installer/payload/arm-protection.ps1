@@ -53,8 +53,24 @@ function Test-DnsPort {
 }
 
 Write-Host '[*] Confirming Valkyrie engine is answering on port 53...'
-if (-not (Test-DnsPort -Port $DnsPort)) {
-    Write-Host '[ERROR] Engine is not answering on 127.0.0.1:53 - leaving system DNS unchanged.'
+# One immediate attempt is not enough: the ValkyrieShield service reports
+# RUNNING to the SCM as soon as its process starts, which is well before its
+# DNS interceptor has actually bound :53 - blocklist load, Sysmon setup, and
+# Unbound bring-up all happen first. Found live (2026-09-07): a fresh service
+# restart left this single-shot check failing for the first several seconds,
+# so "Start Protection" clicked right after boot/install/restart silently did
+# nothing and system DNS was never touched - the exact "not protected" report
+# with no automatic retry and no path back to the user. Retries for up to
+# ~20s, the same order of magnitude the desktop app already budgets for the
+# engine to become ready, before genuinely giving up.
+$armed = $false
+for ($i = 0; $i -lt 10; $i++) {
+    if (Test-DnsPort -Port $DnsPort) { $armed = $true; break }
+    if ($i -eq 0) { Write-Host '[*] Engine not answering yet - retrying while it finishes starting...' }
+    Start-Sleep -Milliseconds 2000
+}
+if (-not $armed) {
+    Write-Host '[ERROR] Engine is not answering on 127.0.0.1:53 after retrying - leaving system DNS unchanged.'
     Write-Host '        (Is the ValkyrieShield service running?) No internet risk taken.'
     exit 1
 }

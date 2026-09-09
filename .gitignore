@@ -21,8 +21,8 @@ logs/
 service_stdout.log
 service_stderr.log
 
-# Tools (downloaded binaries, e.g. nssm.exe)
-tools/
+# Tools (downloaded binaries only - the scripts in tools/ are real source)
+tools/*.exe
 
 # Rust accelerator build artifacts (the crate's Cargo.lock IS tracked)
 rust/**/target/
@@ -113,3 +113,14 @@ graphify-out/
 # Scratch driver for one-shot Electron verification; hardcodes a per-session
 # temp path, so it is never valid on a second run.
 electron/_verify_driver_TEMP.js
+
+# UI design-review scratch (impeccable skill): screenshots, a working
+# design.json and a PID file from a local review server. Regenerated per
+# review session, never a source of truth.
+.impeccable/
+output/ui/
+
+# Real host captures: redacted structure, but still a fingerprint of the
+# capturing machine (its process names). Regenerate locally with
+# tools/capture_causal_corpus.py; never publish.
+redteam/evaluation/real_causal_corpus*.json

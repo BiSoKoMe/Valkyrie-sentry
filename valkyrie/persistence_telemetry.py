@@ -219,7 +219,28 @@ def _persistence_severity(activity: str, command: str) -> tuple[str, list[str], 
 class PersistenceCollector:
     """Polls ASEP locations and emits a TelemetryEvent per newly-created entry."""
 
-    def __init__(self, emit: Callable[[TelemetryEvent], None], interval: float = 15.0,
+    # 300s, not 15s. The budgets below cap ONE poll at snapshot_budget +
+    # emit_budget = up to 8 seconds of GIL-heavy registry/task enumeration, and
+    # a real machine consumes very nearly all of it: a live service log on
+    # 2026-09-08 showed 196 of its last 200 lines were "[persist-poll] snapshot
+    # held the thread for 4.1s ... 9.2s", one every ~15-20s. At a 15s interval
+    # that is roughly a HALF-DUTY-CYCLE of blocking work on the process whose
+    # asyncio loop also serves /api, the health probe and the arm-protection
+    # confirmation - so the engine spent about half its wall clock unable to
+    # answer, the UI reported "Protection did not arm in time" against an engine
+    # that was in fact running, and the same run went on to log a 1194.8s
+    # loop-stall. The budgets bounded the 253s freeze this collector once caused
+    # (see snapshot()); they do not make paying that cost every 15s affordable.
+    #
+    # ASEPs are install-time artifacts - services, scheduled tasks, Run keys and
+    # startup folders change when software is installed, not several times a
+    # minute. asset_inventory.py, which reads overlapping data, already reached
+    # this conclusion and polls hourly ("this is inventory drift, not a
+    # real-time sensor"). 300s keeps per-poll coverage identical while cutting
+    # the starvation ~20x, and a new autostart entry is still surfaced within
+    # minutes - and in real time by Sysmon's registry events where Sysmon is
+    # actually running.
+    def __init__(self, emit: Callable[[TelemetryEvent], None], interval: float = 300.0,
                  snapshot_budget: float = 4.0, startup_grace: float = 5.0,
                  emit_budget: float = 4.0) -> None:
         self._emit = emit

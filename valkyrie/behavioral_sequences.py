@@ -118,7 +118,7 @@ SEQUENCES: tuple = (
         (Step("code injection into another process",
               techniques=("T1055",), labels=("remote_thread", "process_injection")),
          Step("credential access (LSASS / SAM)",
-              techniques=("T1003",), labels=("lsass_access", "sam_dump", "ntds_dump"))),
+              techniques=("T1003",), labels=("lsass_access", "sam_dump", "lsa_secrets_dump", "ntds_dump"))),
         "A process injected code into another process and then accessed "
         "credential stores — reflective-injection credential theft."),
 
@@ -127,8 +127,8 @@ SEQUENCES: tuple = (
         "creds-then-exfil", "Credential access followed by network exfiltration",
         "critical", "T1041 — Exfiltration Over C2 Channel", 300.0,
         (Step("credential access",
-              techniques=("T1003",), labels=("lsass_access", "sam_dump", "ntds_dump",
-                                             "vault_enum")),
+              techniques=("T1003",), labels=("lsass_access", "sam_dump", "lsa_secrets_dump",
+                                             "ntds_dump", "vault_enum")),
          Step("outbound network / C2",
               techniques=("T1041", "T1071", "T1048", "T1567", "T1105"),
               labels=("download_cradle", "lolbin_network_fetch", "c2", "beacon"))),

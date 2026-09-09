@@ -13,8 +13,14 @@ on:
   push:
     branches:
       - master
+      - main
     paths:                    # only rebuild when packaging-relevant files change
       - "valkyrie/**"
+      - "tests/**"
+      - "electron/**"
+      - "installer/**"
+      - "browser_extension/**"
+      - ".github/workflows/tests.yml"
       - "run_valkyrie.py"
       - "valkyrie.spec"
       - "requirements_modular.txt"
@@ -22,9 +28,17 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: read
+
 jobs:
+  qualification:
+    uses: ./.github/workflows/tests.yml
   build:
+    needs: qualification
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -61,7 +75,11 @@ jobs:
         run: |
           # These exit cleanly and exercise the frozen import graph + EDR engine.
           dist/valkyrie_test.exe --hunt list
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged hunt smoke test failed' }
           dist/valkyrie_test.exe --incidents
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged incident smoke test failed' }
+          $artifactDigest = (Get-FileHash -LiteralPath 'dist/valkyrie_test.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$artifactDigest  valkyrie_test.exe" | Set-Content -LiteralPath 'dist/valkyrie_test.exe.sha256' -Encoding ascii
           Write-Host "Frozen exe smoke test passed."
 
       - name: Upload valkyrie_test.exe artifact
@@ -73,7 +91,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: valkyrie_test-windows
-          path: dist/valkyrie_test.exe
+          path: |
+            dist/valkyrie_test.exe
+            dist/valkyrie_test.exe.sha256
           if-no-files-found: error
           retention-days: 14
 
@@ -81,4 +101,12 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/valkyrie_test.exe
+          draft: true
+          body: |
+            Local evaluation build. This executable has passed the repository's
+            Windows qualification checks but is not code-signed. Keep this
+            release as a draft until Authenticode signing and isolated Windows
+            validation are complete.
+          files: |
+            dist/valkyrie_test.exe
+            dist/valkyrie_test.exe.sha256
