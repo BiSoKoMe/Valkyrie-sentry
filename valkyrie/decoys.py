@@ -21,6 +21,7 @@ line. Persisted so tokens survive restarts; degrades to a no-op off Windows.
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import threading
 from pathlib import Path
@@ -49,7 +50,7 @@ class DecoyManager:
     def __init__(self, manifest_path: Optional[Path] = None,
                  dirs: Optional[Iterable[Path]] = None) -> None:
         self._manifest = Path(manifest_path) if manifest_path else None
-        self._dirs = [Path(d) for d in dirs] if dirs else None
+        self._dirs = [Path(d) for d in dirs] if dirs is not None else None
         self._tokens: set[str] = set()
         self._paths: list[str] = []
         self._lock = threading.Lock()
@@ -68,7 +69,7 @@ class DecoyManager:
         # mirroring persistence_telemetry._startup_dirs's existing pattern for
         # the identical service-vs-interactive-user problem.
         dirs: list[Path] = []
-        users_root = Path(os.environ.get("SystemDrive", "C:") + "\\") / "Users"
+        users_root = Path(os.environ.get("SystemDrive", "C:") + os.sep) / "Users"
         skip = {"public", "default", "default user", "all users", "defaultuser0"}
         found_any = False
         if users_root.is_dir():
@@ -94,6 +95,8 @@ class DecoyManager:
         """Write decoy files; return how many were planted. Never raises."""
         planted = 0
         with self._lock:
+            tokens: set[str] = set()
+            paths: set[str] = set()
             for d in self.target_dirs():
                 try:
                     d.mkdir(parents=True, exist_ok=True)
@@ -104,14 +107,32 @@ class DecoyManager:
                     name = f"{stem}.{ext}" if ext else stem
                     path = d / name
                     try:
-                        if not path.exists():
-                            path.write_text(header + f"\n# ref:{token}\n",
-                                            encoding="utf-8")
-                        self._tokens.add(token.lower())
-                        self._paths.append(str(path))
-                        planted += 1
-                    except OSError:
+                        try:
+                            # Exclusive creation never overwrites an existing
+                            # user file, even if it appears during deployment.
+                            with path.open("x", encoding="utf-8") as out:
+                                out.write(header + f"\n# ref:{token}\n")
+                        except FileExistsError:
+                            if path.is_symlink() or not path.is_file():
+                                continue
+                            with path.open(encoding="utf-8") as existing:
+                                content = existing.read(4096)
+                            owned = re.fullmatch(
+                                re.escape(header) + r"\n# ref:(VLK7Y[0-9a-f]{10})\n",
+                                content,
+                            )
+                            if owned is None:
+                                continue  # a user's own file is never a decoy
+                            token = owned.group(1)
+                        tokens.add(token.lower())
+                        paths.add(str(path))
+                    except (OSError, UnicodeError):
                         continue
+            # Keep only tripwires that actually exist, using their on-disk
+            # token. Restarts must not accumulate phantom tokens or paths.
+            self._tokens = tokens
+            self._paths = sorted(paths)
+            planted = len(paths)
             self._save()
         return planted
 

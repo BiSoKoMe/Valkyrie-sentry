@@ -224,21 +224,25 @@ def main() -> int:
         _t0 = time.time()
         body, status = _get_ready(f"{base}/api/asset-inventory", timeout=45.0)
         print(f"  DEBUG asset-inventory took {time.time() - _t0:.1f}s")
-        c.check("responds 200 (not 503 -- AssetInventoryCollector actually "
-                "started: proves __main__.py's pre-init + AppContext field + "
-                "endpoint_enabled wiring all actually work together)",
-                status == 200)
-        c.check("has counts/software/listening_ports/kernel_drivers",
-                {"counts", "software", "listening_ports", "kernel_drivers"}
-                <= set(body.keys()))
-        counts = body.get("counts", {})
-        c.check("REAL software found on THIS host (not a mock, not zero)",
-                counts.get("software", 0) > 0)
-        c.check("REAL kernel drivers found on THIS host (not a mock, not zero)",
-                counts.get("kernel_drivers", 0) > 0)
-        c.check("collector_running is True (the background poller actually "
-                "started, not just importable)",
-                body.get("collector_running") is True)
+        if sys.platform != "win32":
+            c.check("Windows inventory reports unavailable on this platform",
+                    status == 503 and body.get("starting") is False)
+        else:
+            c.check("responds 200 (not 503 -- AssetInventoryCollector actually "
+                    "started: proves __main__.py's pre-init + AppContext field + "
+                    "endpoint_enabled wiring all actually work together)",
+                    status == 200)
+            c.check("has counts/software/listening_ports/kernel_drivers",
+                    {"counts", "software", "listening_ports", "kernel_drivers"}
+                    <= set(body.keys()))
+            counts = body.get("counts", {})
+            c.check("REAL software found on THIS host (not a mock, not zero)",
+                    counts.get("software", 0) > 0)
+            c.check("REAL kernel drivers found on THIS host (not a mock, not zero)",
+                    counts.get("kernel_drivers", 0) > 0)
+            c.check("collector_running is True (the background poller actually "
+                    "started, not just importable)",
+                    body.get("collector_running") is True)
 
         # --- No traceback anywhere in startup/runtime output ---
         print("\n[6] no traceback anywhere in startup or request-handling output")

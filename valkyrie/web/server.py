@@ -1431,12 +1431,12 @@ def create_app(ctx: Optional[AppContext] = None):
         collector isn't available, or hasn't completed its first poll yet."""
         ai = getattr(state, "asset_inventory", None)
         if ai is None:
-            return JSONResponse({"error": "asset inventory not available"},
-                                status_code=503)
+            return _subsystem_unavailable("asset inventory")
         snap = ai.last_snapshot()
         if snap is None:
             return JSONResponse(
-                {"error": "asset inventory has not completed its first poll yet"},
+                {"error": "asset inventory has not completed its first poll yet",
+                 "starting": True},
                 status_code=503)
         return {
             "counts": snap.counts(),

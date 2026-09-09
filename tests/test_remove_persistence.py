@@ -18,10 +18,12 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from valkyrie.edr.plugins import PluginContext
+from tests.winreg_constants import constants as registry_constants
 from valkyrie.edr.response import (
     RemovePersistenceResponder, BUILTIN_RESPONDERS, register_responders,
 )
@@ -43,7 +45,11 @@ def _run(target, dry_run=True):
                      ctx=PluginContext())
 
 
-def test_descriptor_and_dry_run() -> None:
+@patch.dict(sys.modules, {"winreg": registry_constants})
+@patch("valkyrie.persistence_telemetry._WINREG", True)
+@patch("valkyrie.persistence_telemetry.winreg", registry_constants, create=True)
+@patch("valkyrie.persistence_telemetry._enum_loaded_user_sids", return_value=[])
+def test_descriptor_and_dry_run(_sids=None) -> None:
     print("[1/2] descriptor parsing + dry-run action shaping")
 
     status, msg = _run("scheduled_task::ValkTest")

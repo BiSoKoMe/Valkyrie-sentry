@@ -26,6 +26,7 @@ the severity via the same heuristics the process collector uses.
 
 from __future__ import annotations
 
+import ntpath
 import os
 import threading
 import time
@@ -125,7 +126,8 @@ def _exe_from_command(command: str) -> str:
         first = c[1:end] if end > 0 else c[1:]
     else:
         first = c.split(" ")[0]
-    return os.path.basename(first.strip().strip('"'))
+    # ImagePath is a Windows path even when telemetry is replayed on Linux.
+    return ntpath.basename(first.strip().strip('"'))
 
 
 def _read_values(hive, subkey) -> dict:
