@@ -77,36 +77,40 @@ require.cache[ELECTRON_PATH] = {
 // Reusing one require()'d instance across tests leaked test 1's cached token
 // into test 2 and desynced the scripted response queue against it.
 const ENGINE_PATH = require.resolve('./engine.js');
-function freshEngine() {
+function freshEngine(t, tokens = ['A'.repeat(32)]) {
+  t.mock.method(require('./lifecycle'), 'engineDataDir', () => 'test-data');
+  let index = 0;
+  t.mock.method(require('fs').promises, 'readFile', async (filename) => {
+    assert.equal(filename, require('path').join('test-data', 'control', 'token'));
+    const value = tokens[Math.min(index++, tokens.length - 1)];
+    if (value instanceof Error) throw value;
+    return value;
+  });
   delete require.cache[ENGINE_PATH];
   return require('./engine.js');
 }
 
-test('apiPost: a stale cached token is retried once with a fresh one', async () => {
-  const engine = freshEngine();
+test('apiPost: a stale cached token is retried once with a fresh one', async (t) => {
+  const engine = freshEngine(t, ['A'.repeat(32), 'B'.repeat(32)]);
   // 1st apiPost call: controlToken() fetches "token-A" (GET), then the POST
   // itself is rejected 403 (simulating the engine having restarted and
   // minted a new token since "token-A" was cached), so apiPost refetches
   // (GET -> "token-B") and retries the POST, which now succeeds.
   scriptResponses(
-    { statusCode: 200, body: JSON.stringify({ token: 'token-A' }) },  // controlToken()
     { statusCode: 403, body: JSON.stringify({ error: 'forbidden: missing or invalid control token' }) }, // stale POST
-    { statusCode: 200, body: JSON.stringify({ token: 'token-B' }) },  // controlToken(force)
     { statusCode: 200, body: JSON.stringify({ ok: true }) },          // retried POST succeeds
   );
   const result = await engine.apiPost('/api/edr/respond', { action: 'isolate_host' });
   assert.deepEqual(result, { ok: true });
 });
 
-test('apiPost: a genuinely forbidden request is NOT retried forever', async () => {
-  const engine = freshEngine();
+test('apiPost: a genuinely forbidden request is NOT retried forever', async (t) => {
+  const engine = freshEngine(t);
   // The refetched token is identical to the one that just failed -- a real
   // auth failure, not staleness -- so apiPost must surface the error rather
   // than loop.
   scriptResponses(
-    { statusCode: 200, body: JSON.stringify({ token: 'token-C' }) },
     { statusCode: 403, body: JSON.stringify({ error: 'forbidden' }) },
-    { statusCode: 200, body: JSON.stringify({ token: 'token-C' }) },  // same token again
   );
   await assert.rejects(
     () => engine.apiPost('/api/edr/respond', {}),
@@ -114,16 +118,71 @@ test('apiPost: a genuinely forbidden request is NOT retried forever', async () =
   );
 });
 
-test('apiPost: a non-auth failure is never retried', async () => {
-  const engine = freshEngine();
+test('apiPost: a non-auth failure is never retried', async (t) => {
+  const engine = freshEngine(t);
   // A 500 must propagate immediately -- retrying a fresh token would not
   // help and would mask a real server error as a token problem.
   scriptResponses(
-    { statusCode: 200, body: JSON.stringify({ token: 'token-D' }) },
     { statusCode: 500, body: JSON.stringify({ error: 'internal error' }) },
   );
   await assert.rejects(
     () => engine.apiPost('/api/edr/respond', {}),
     /internal error/
   );
+});
+
+test('apiPost: inaccessible credentials do not trigger HTTP bootstrap or mutation', async (t) => {
+  const engine = freshEngine(t, [new Error('EACCES')]);
+  scriptResponses({ statusCode: 200, body: '{}' });
+  await assert.rejects(() => engine.apiPost('/api/edr/respond', {}), /authorized local session/);
+  assert.equal(_plan.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// waitUntilArmed - regression test for a real report (2026-09-07): "Start
+// Protection" reported success the instant the (normally already-running)
+// engine answered a ping, while the real arm attempt - an INDEPENDENT
+// scheduled task this call never otherwise waited on - was still silently
+// retrying in the background for up to another 35+ seconds. The button
+// settled, then the UI read "Not Protected" for the whole gap, which looks
+// exactly like the click did nothing.
+// ---------------------------------------------------------------------------
+test('waitUntilArmed: only resolves true once BOTH the marker and dns_active agree', async (t) => {
+  const engine = freshEngine(t);
+  t.mock.method(require('fs'), 'existsSync', (p) => {
+    assert.equal(p, require('path').join('test-data', 'valkyrie_dns_adapter.txt'));
+    return true;   // the marker was written; dns_active is the piece still catching up
+  });
+  scriptResponses(
+    { statusCode: 200, body: JSON.stringify({ dns_active: false }) },  // still arming
+    { statusCode: 200, body: JSON.stringify({ dns_active: false }) },  // still arming
+    { statusCode: 200, body: JSON.stringify({ dns_active: true }) },   // now armed
+  );
+  const ticks = [];
+  const armed = await engine.waitUntilArmed((isArmed, i) => ticks.push(isArmed), { attempts: 5, intervalMs: 1 });
+  assert.equal(armed, true);
+  assert.deepEqual(ticks, [false, false, true]);
+});
+
+test('waitUntilArmed: gives up and returns false after exhausting its attempts', async (t) => {
+  const engine = freshEngine(t);
+  t.mock.method(require('fs'), 'existsSync', () => false);   // marker never appears
+  scriptResponses(
+    { statusCode: 200, body: JSON.stringify({ dns_active: false }) },
+    { statusCode: 200, body: JSON.stringify({ dns_active: false }) },
+    { statusCode: 200, body: JSON.stringify({ dns_active: false }) },
+  );
+  const armed = await engine.waitUntilArmed(() => {}, { attempts: 3, intervalMs: 1 });
+  assert.equal(armed, false);
+});
+
+test('waitUntilArmed: a transient API error mid-poll does not abort the wait', async (t) => {
+  const engine = freshEngine(t);
+  t.mock.method(require('fs'), 'existsSync', () => true);
+  scriptResponses(
+    { statusCode: 500, body: JSON.stringify({ error: 'temporary hiccup' }) },  // one bad poll
+    { statusCode: 200, body: JSON.stringify({ dns_active: true }) },          // then it recovers
+  );
+  const armed = await engine.waitUntilArmed(() => {}, { attempts: 3, intervalMs: 1 });
+  assert.equal(armed, true);
 });

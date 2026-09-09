@@ -53,11 +53,8 @@ def _grant_users_read(path: Path) -> bool:
 
 
 def main() -> int:
-    # Every assertion below reads or writes a Windows ACL through PowerShell's
-    # Get-Acl / Set-Acl. Some Windows environments - GitHub's windows-latest
-    # runner among them - cannot auto-load Microsoft.PowerShell.Security, so
-    # Get-Acl returns "the module could not be loaded" and every ACL assertion
-    # fails for a reason that has nothing to do with secure_file.py.
+    # Every assertion below reads or writes a Windows ACL. Some restricted
+    # Windows environments can still deny native ACL access entirely.
     #
     # That is absent coverage, not a defect, and must be reported as a SKIP
     # rather than a FAIL. The product itself is unaffected and already fails

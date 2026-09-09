@@ -8,8 +8,8 @@ Every action is:
     it reports ``skipped`` with the reason, it does not silently no-op.
 
 Built-in responders:
-  block_domain     - add a domain to the user block rules (enforced by DNS).
-  unblock_domain   - remove it again.
+  block_domain     - apply an expiring exact-domain override (enforced by DNS).
+  unblock_domain   - remove only that temporary override.
   kill_process     - terminate a PID (never a system/critical PID).
   isolate_host     - network-contain the endpoint (block all egress except the
                      local resolver + loopback). Generates the exact commands;
@@ -23,8 +23,10 @@ actions (quarantine file, disable NIC, notify SIEM, ...) via the same registry.
 from __future__ import annotations
 
 import base64
+import copy
 import json
 import logging
+import math
 import os
 import platform
 import threading
@@ -36,7 +38,7 @@ from typing import Optional
 from ..config import ISOLATION_BACKUP_DIR, PERSISTENCE_BACKUP_DIR
 from . import cascade, invariants, leases, reversibility
 from .plugins import PluginContext, ResponderPlugin
-from .schema import ResponseAction, severity_rank
+from .schema import ResponseAction, normalize_response_status, severity_rank
 
 log = logging.getLogger("valkyrie.response")
 
@@ -145,31 +147,34 @@ class BlockDomainResponder(ResponderPlugin):
     def execute(self, action, target, *, dry_run, ctx):
         # Valkyrie keeps NO human-authored block/allow list. A block from the EDR
         # (a confirmed-C2 playbook, or a manual "block this") is recorded in the
-        # ANALYSIS memory - the same learned-intelligence store the DNS engine
-        # consults - so it is enforced on the next lookup without any rules file.
+        # Use a separate response override in the intelligence store. Learned
+        # threat and trust evidence remains independent from operator response.
         domain = (target or "").strip().lower()
-        if not domain or not all(c.isalnum() or c in ".-_*" for c in domain):
+        if (not domain or len(domain) > 253
+                or not all(c.isascii() and (c.isalnum() or c in ".-") for c in domain)):
             return ("failed", f"invalid domain: {target!r}")
         intel = ctx.intelligence
         if intel is None:
             return ("skipped", "analysis (intelligence) layer not available")
         if action == "block_domain":
             if dry_run:
-                return ("dry_run", f"would block '{domain}' via analysis memory")
+                return ("dry_run", f"would apply a temporary DNS block for '{domain}'")
             try:
-                intel.remember_block(domain, "edr:auto_block")
+                expires_at = getattr(ctx, "response_expires_at", None) or (time.time() + leases.DEFAULT_TTL_S)
+                if not intel.apply_response_block(domain, expires_at):
+                    return ("skipped", "domain response refused by intelligence safety policy")
             except Exception as exc:      # noqa: BLE001
                 return ("failed", f"could not block '{domain}': {exc}")
             return ("succeeded",
-                    f"'{domain}' blocked via analysis (effective next lookup)")
+                    f"temporary DNS block applied to '{domain}' (effective next lookup)")
         # unblock_domain
         if dry_run:
-            return ("dry_run", f"would mark '{domain}' known-good")
+            return ("dry_run", f"would remove the temporary response block for '{domain}'")
         try:
-            intel.remember_good(domain, "")
+            intel.release_response_block(domain)
         except Exception as exc:          # noqa: BLE001
             return ("failed", f"could not unblock '{domain}': {exc}")
-        return ("succeeded", f"'{domain}' marked known-good (unblocked)")
+        return ("succeeded", f"temporary response block removed for '{domain}'; independent threat evidence retained")
 
 
 # ---------------------------------------------------------------------------
@@ -185,11 +190,24 @@ class KillProcessResponder(ResponderPlugin):
 
     def execute(self, action, target, *, dry_run, ctx):
         try:
-            pid = int(str(target).strip())
+            raw = str(target).strip()
+            identity = json.loads(raw) if raw.startswith("{") else None
+            expected_created = None
+            if identity is not None:
+                if set(identity) != {"pid", "create_time"} or type(identity["pid"]) is not int:
+                    raise ValueError("invalid process identity")
+                pid = identity["pid"]
+                expected_created = float(identity["create_time"])
+                if not math.isfinite(expected_created) or expected_created <= 0:
+                    raise ValueError("invalid process creation time")
+            else:
+                pid = int(raw)
         except (TypeError, ValueError):
             return ("failed", f"invalid pid: {target!r}")
         if pid in _PROTECTED_PIDS or pid <= 0:
             return ("skipped", f"refusing to kill protected pid {pid}")
+        if not dry_run and expected_created is None:
+            return ("skipped", "process termination requires pid and observed create_time; bare PID targets are ambiguous")
         try:
             import psutil
         except ImportError:
@@ -206,6 +224,8 @@ class KillProcessResponder(ResponderPlugin):
         if dry_run:
             return ("dry_run", f"would terminate '{pname}' (pid {pid})")
         try:
+            if proc.create_time() != expected_created:
+                return ("skipped", "process identity changed since observation; refusing stale PID response")
             proc.terminate()
             try:
                 proc.wait(timeout=3)
@@ -812,12 +832,11 @@ class ResponseManager:
         return None
 
     def _after_enforced(self, action: str, target: str,
-                        lease_ttl_s: Optional[float]) -> None:
+                        lease_ttl_s: Optional[float]) -> Optional[str]:
         """Book-keeping after an enforcement action really ran.
 
-        Two things, both best-effort: neither may take down the response path,
-        because a bookkeeping failure must not turn a successful enforcement
-        into a reported failure.
+        Cascade accounting is best-effort. A lease is a safety control, so a
+        persistence failure is returned to the caller for immediate rollback.
 
         The lease is granted AFTER the action succeeds, never before. A lease
         recorded for enforcement that then failed to apply would schedule a
@@ -834,8 +853,10 @@ class ResponseManager:
                     action, target,
                     ttl_s=lease_ttl_s or leases.DEFAULT_TTL_S,
                     reason=f"auto-granted on {action}")
-            except Exception:                              # noqa: BLE001
+            except Exception as exc:                       # noqa: BLE001
                 log.exception("lease grant failed for %s on %s", action, target)
+                return f"{type(exc).__name__}: enforcement lease was not persisted"
+        return None
 
     def _invariant_block(self, action: str, target: str) -> Optional[tuple[str, str]]:
         """Categorical veto. Checked BEFORE the severity floor, because a floor
@@ -874,7 +895,7 @@ class ResponseManager:
             # failed, the lease stays due and the next sweep retries it --
             # dropping it here would strand the very enforcement this exists
             # to lift.
-            if not dry_run and act.status in ("ok", "success", "completed"):
+            if not dry_run and act.status == "succeeded":
                 reg.release(lease.lease_id)
         return out
 
@@ -890,6 +911,8 @@ class ResponseManager:
         """
         act = ResponseAction(action=action, target=target, dry_run=dry_run,
                              operator=operator, incident_id=incident_id)
+        preflight_persisted = False
+        responder_invoked = False
         responder = self._registry.responder_for(action)
         if responder is None:
             act.status = "failed"
@@ -906,23 +929,79 @@ class ResponseManager:
                 act.status, act.result = block
             else:
                 try:
-                    status, result = responder.execute(
-                        action, target, dry_run=dry_run, ctx=self._ctx)
-                    act.status, act.result = status, result
+                    ctx = self._ctx
+                    if not dry_run and action == "block_domain":
+                        ttl = leases.DEFAULT_TTL_S if lease_ttl_s is None else float(lease_ttl_s)
+                        if not math.isfinite(ttl) or not 0 < ttl <= leases.MAX_TTL_S:
+                            raise ValueError("invalid response lease duration")
+                        if ctx is not None:
+                            ctx = copy.copy(ctx)
+                            ctx.response_expires_at = time.time() + ttl
                 except Exception as exc:          # noqa: BLE001
                     act.status = "failed"
                     act.result = f"responder error: {type(exc).__name__}: {exc}"
                 else:
-                    if not dry_run and status in ("ok", "success", "completed"):
-                        self._after_enforced(action, target, lease_ttl_s)
+                    if not dry_run and self._store is not None:
+                        act.status = "pending"
+                        act.result = "response authorized; responder not yet invoked"
+                        act.audit_state = "preflight_persisted"
+                        try:
+                            self._store.record_response(act)
+                        except Exception:          # noqa: BLE001
+                            act.status = "failed"
+                            act.result = "audit persistence unavailable; response not executed"
+                            act.audit_state = "unavailable"
+                            log.exception(
+                                "response blocked because preflight audit could not be recorded "
+                                "for action %s (incident %s)", act.action, act.incident_id)
+                        else:
+                            preflight_persisted = True
+
+                    if dry_run or self._store is None or preflight_persisted:
+                        try:
+                            responder_invoked = True
+                            status, result = responder.execute(
+                                action, target, dry_run=dry_run, ctx=ctx)
+                            status = normalize_response_status(status)
+                            act.status, act.result = status, result
+                        except Exception as exc:    # noqa: BLE001
+                            act.status = "failed"
+                            act.result = f"responder error: {type(exc).__name__}: {exc}"
+                        else:
+                            if not dry_run and status == "succeeded":
+                                lease_failure = self._after_enforced(
+                                    action, target, lease_ttl_s)
+                                if lease_failure:
+                                    rev = reversibility.get(action)
+                                    reverse_action = rev.reverse_action if rev else None
+                                    rollback = self.respond(
+                                        reverse_action or "", target, dry_run=False,
+                                        operator="lease-failsafe",
+                                        incident_id=incident_id, severity="critical")
+                                    if rollback.status == "succeeded":
+                                        act.status = "failed"
+                                        act.result = (
+                                            f"{act.result}; {lease_failure}; "
+                                            "enforcement rolled back immediately")
+                                    else:
+                                        act.result = (
+                                            f"{act.result}; CRITICAL: {lease_failure}; "
+                                            f"rollback {rollback.status}: {rollback.result}")
         if self._store is not None:
+            prior_audit_state = act.audit_state
+            act.audit_state = "final_persisted"
             try:
                 self._store.record_response(act)
-            except Exception:
-                # An audit-trail write failing must never crash the response
-                # path, but it must not vanish either - a response that
-                # "succeeded" yet was never recorded is exactly the kind of
-                # gap an EDR cannot afford to have silently.
+            except Exception:                      # noqa: BLE001
+                if preflight_persisted:
+                    act.audit_state = "final_update_failed"
+                    act.result = (
+                        f"{act.result}; final audit update failed; "
+                        "pending preflight row retained")
+                else:
+                    act.audit_state = "unavailable"
+                    if responder_invoked or prior_audit_state != "unavailable":
+                        act.result = f"{act.result}; audit persistence unavailable"
                 log.exception("failed to record response audit row for action %s (incident %s)",
                              act.action, act.incident_id)
         return act
@@ -936,21 +1015,19 @@ class ResponseManager:
 
 reversibility.register(reversibility.Reversibility(
     action="block_domain", reversible=True,
-    rollback="unblock_domain (intel.remember_good) reverses it on the next DNS lookup",
-    residual_on_crash="none — a single synchronous intel.remember_block() call; "
-                      "if the process dies before it returns, the block was never "
-                      "recorded, so there is nothing left behind",
+    rollback="unblock_domain removes only the temporary response override on the next DNS lookup",
+    residual_on_crash="the persisted override remains bounded by its expiry; "
+                      "a restart reloads it only while the matching lease is active",
     false_positive_impact="a benign domain stops resolving until unblock_domain "
-                          "runs; no data loss, no persistent host-state change "
-                          "beyond the analysis-memory entry itself",
+                          "runs or the bounded expiry is reached; learned trust and "
+                          "threat evidence are unchanged",
     min_severity="low",
     reverse_action="unblock_domain",
 ))
 reversibility.register(reversibility.Reversibility(
     action="unblock_domain", reversible=True,
     rollback="block_domain re-applies the block",
-    residual_on_crash="none — a single synchronous intel.remember_good() call, "
-                      "same shape as block_domain's write",
+    residual_on_crash="none; deletion of the response override is transactional",
     false_positive_impact="a domain that should stay blocked resolves again "
                           "until it is re-blocked",
     min_severity="low",

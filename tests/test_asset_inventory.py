@@ -347,8 +347,18 @@ def test_api_endpoint() -> None:
                 "slow live probe (current_snapshot())",
                 fake.last_snapshot.called and not fake.current_snapshot.called)
         c.check("counts reflects the fake snapshot", body["counts"]["software"] == 1)
-        c.check("no POST route exists (read-only monitoring surface)",
-                client2.post("/api/asset-inventory").status_code == 405)
+        # The invariant worth pinning is "an unauthenticated POST to this
+        # read-only surface never succeeds" - not the specific rejection code.
+        # This asserted 405 (no such method) until the blanket control gate
+        # landed in server.py, which now rejects every unauthenticated /api/
+        # mutation with 403 BEFORE routing - so it never reaches the 405. That
+        # is a strictly stronger guarantee (it does not even disclose whether
+        # the route exists), so accept either, and keep asserting the thing that
+        # actually matters: it is not a 2xx.
+        _post = client2.post("/api/asset-inventory")
+        c.check("unauthenticated POST to the read-only monitoring surface is "
+                f"refused (got {_post.status_code})",
+                _post.status_code in (403, 405) and not (200 <= _post.status_code < 300))
     finally:
         state.asset_inventory = prior
 

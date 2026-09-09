@@ -123,7 +123,12 @@ function netGet(pathname, timeoutMs) {
 // recompute per request instead of caching, the same class as the 34s
 // asset-inventory hang), and until that is fixed the poll interval can still
 // be shorter than the response time.
-function apiGet(pathname, timeoutMs = 6000) {
+// Raised again, 6000 -> 12000: the persistence collector's own documented
+// worst case is an 8s wall-clock hold on the GIL per poll (see its "8s budget"
+// fix) - a request that lands during that window needs a client-side timeout
+// safely ABOVE 8s to have any chance of seeing the eventual real answer,
+// not just a floor above the typical 2-3s case this default was last tuned for.
+function apiGet(pathname, timeoutMs = 12000) {
   return netGet(pathname, timeoutMs).then(({ statusCode, body }) => {
     if (statusCode && statusCode >= 200 && statusCode < 300) return JSON.parse(body);
     throw new Error(`HTTP ${statusCode}`);
@@ -143,7 +148,15 @@ function apiGetText(pathname, timeoutMs = 4000) {
 // Generic request (GET/POST) against the loopback API. Control POSTs carry the
 // per-process token; a Node caller sends no Origin header, which the engine
 // treats as same-origin, so token + loopback is sufficient.
-function apiRequest(method, pathname, { token, body, timeoutMs = 4000 } = {}) {
+// Every apiPost() call (kill_process, block_domain, hunt, incident triage,
+// every mutating action in the app) went through this default. Found live
+// (2026-09-07): Hunt reported "Could not reach the engine" with a healthy,
+// reachable server - the underlying query itself ran in 2ms - because a POST
+// landing during the persistence collector's documented 8s worst-case stall
+// timed out client-side at 4s, well before the server ever got a chance to
+// answer. A one-shot mutating action has no retry to fall back on the way a
+// polling GET does, so this needed the same fix as apiGet's, not a shorter one.
+function apiRequest(method, pathname, { token, body, timeoutMs = 12000 } = {}) {
   return new Promise((resolve, reject) => {
     const data = body != null ? JSON.stringify(body) : null;
     const headers = {};
@@ -207,12 +220,22 @@ function apiRequest(method, pathname, { token, body, timeoutMs = 4000 } = {}) {
 let _tokenCache = null;
 async function controlToken(force = false) {
   if (_tokenCache && !force) return _tokenCache;
-  const r = await apiGet('/api/system/token', 2000);
-  _tokenCache = r && r.token;
+  // OS file access is the temporary control boundary. A non-elevated shell
+  // cannot read a SYSTEM service's credential and remains a viewer. Never
+  // fall back to the former unauthenticated HTTP bootstrap.
+  const credentialPath = path.join(lifecycle.engineDataDir(), 'control', 'token');
+  let token;
+  try {
+    token = (await fs.promises.readFile(credentialPath, 'utf8')).trim();
+  } catch {
+    throw new Error('Control requires an authorized local session with access to the protected service credential');
+  }
+  if (!/^[A-Za-z0-9_-]{32}$/.test(token)) throw new Error('Protected control credential is invalid');
+  _tokenCache = token;
   return _tokenCache;
 }
 async function apiPost(pathname, body) {
-  const token = await controlToken().catch(() => null);
+  const token = await controlToken();
   try {
     return await apiRequest('POST', pathname, { token, body });
   } catch (err) {
@@ -361,6 +384,35 @@ async function waitUntilReady(onTick, { attempts = 60, intervalMs = 1000 } = {})
   return false;
 }
 
+// Poll until DNS is actually ARMED (not just "the engine responded"), or give
+// up. Needed because arming happens via an independent scheduled task
+// (ValkyrieArm, see start() below) that this call never waits on directly -
+// `schtasks /run` returns as soon as the task is QUEUED, not once
+// arm-protection.ps1 (which itself now retries for up to ~35s while the
+// engine finishes its own first-boot startup: blocklist download, Sysmon
+// setup, Unbound bring-up) actually succeeds or gives up.
+//
+// Without this, engine:start's waitUntilReady(isUp) call above was the ONLY
+// thing it awaited - and since the ValkyrieShield service is normally
+// already running continuously, isUp() succeeds almost instantly regardless
+// of whether arming has happened at all. "Start Protection" reported success
+// (the button settled, the spinner cleared) while the real arm attempt was
+// still silently retrying for up to another 35+ seconds - which reads
+// exactly like the click did nothing, the original report this exists to fix.
+async function waitUntilArmed(onTick, { attempts = 24, intervalMs = 2000 } = {}) {
+  for (let i = 0; i < attempts; i++) {
+    let armed = false;
+    try {
+      const stats = await apiGet('/api/stats', 6000);
+      armed = isProtected() && stats && stats.dns_active === true;
+    } catch { /* engine hiccup mid-poll - treat as not-yet-armed, keep trying */ }
+    if (onTick) onTick(armed, i);
+    if (armed) return true;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return false;
+}
+
 // Snapshot for the dashboard: stats + recent events, tolerant of partial
 // availability so a half-warmed engine still renders something real.
 async function telemetry() {
@@ -390,6 +442,7 @@ module.exports = {
   start,
   stop,
   waitUntilReady,
+  waitUntilArmed,
   telemetry,
   installationGaps,
   apiGet,

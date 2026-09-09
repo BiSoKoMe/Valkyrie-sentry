@@ -221,6 +221,17 @@ class Store:
             rows = conn.execute(
                 "SELECT domain, COUNT(*) c FROM events "
                 "WHERE timestamp >= ? AND decision IN ('blocked','behavioral') "
+                # A behavioral/anomaly block applied at the connection level
+                # (e.g. a beacon-like pattern flagged by IP, never a DNS
+                # query) has no domain at all, not merely an unusual one -
+                # found live with 383 such rows for a single anomaly signal,
+                # enough to crowd real domains out of the top slice and
+                # render as the literal string "undefined" in the desktop
+                # app (its JS falls through domain -> name -> undefined,
+                # and escapeHtml() has no null guard). The detection itself
+                # is real and stays visible elsewhere (incidents/events); a
+                # ranking of named domains just has nothing to put here for it.
+                "AND domain IS NOT NULL AND domain != '' "
                 "GROUP BY domain ORDER BY c DESC LIMIT ?",
                 (since, limit),
             ).fetchall()

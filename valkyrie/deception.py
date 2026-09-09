@@ -61,7 +61,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
-from .persona import Persona, current_persona
+from .dns_tunnel import registrable_base
+from .nyx import first_party_of
+from .persona import Persona, current_persona, persona_for_site
 
 # A real 1x1 transparent GIF. Tracking pixels genuinely return this exact kind
 # of payload; returning zero bytes or a 204 where a GIF is expected is a tell.
@@ -165,6 +167,23 @@ def _persona_block(p: Persona) -> dict:
     }
 
 
+def _resolve_persona(headers: Optional[dict]) -> Persona:
+    """Same (first-party, third-party) scoping as nyx.py's outbound rewrite
+    path (see persona.py's SITE-SCOPED PERSONAS note) - a tracker DNS-redirected
+    here from two unrelated sites must not receive the same fake identity from
+    both, or the deception recreates the exact cross-site correlation it exists
+    to prevent. `third_party` comes from the beacon's own Host header (every
+    connection reaching this listener resolved SOME hostname to loopback);
+    `first_party` comes from Referer/Origin when the beacon sent one. Falls
+    back to the bare machine persona when either is absent, e.g. a beacon with
+    no Referer (some background pings genuinely omit one)."""
+    h = headers or {}
+    host = str(h.get("Host") or h.get("host") or "").split(":", 1)[0]
+    third_party = registrable_base(host) if host else ""
+    first_party = first_party_of(h)
+    return persona_for_site(first_party, third_party)
+
+
 def build_reply(method: str, path: str, query: str = "",
                 headers: Optional[dict] = None,
                 persona: Optional[Persona] = None) -> Reply:
@@ -174,7 +193,7 @@ def build_reply(method: str, path: str, query: str = "",
     this returns byte-identical output - which is both what makes it testable
     and what makes the lie stable across sessions.
     """
-    p = persona if persona is not None else current_persona()
+    p = persona if persona is not None else _resolve_persona(headers)
     fam = classify_beacon(path, query)
     pb = _persona_block(p)
 

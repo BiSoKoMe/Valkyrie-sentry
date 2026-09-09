@@ -18,7 +18,9 @@ Verdict rules:
 
 from __future__ import annotations
 
+import math
 import threading
+import time
 from datetime import datetime
 from typing import Optional
 
@@ -30,6 +32,8 @@ from ..popular_domains import is_popular, is_reserved_test_domain
 # decision.reason_denotes_deceivable). Deliberately excludes "beacon": a C2
 # beacon is real malware and must stay a learned threat, not be purged as noise.
 _TRACKER_REASON_MARKERS = ("tracker", "analytics", "advertising", "telemetry")
+_MAX_RESPONSE_BLOCKS = 512
+_MAX_RESPONSE_TTL_S = 86_400.0
 
 
 def _reason_denotes_tracker(reason: str) -> bool:
@@ -45,6 +49,7 @@ class IntelligenceMemory:
         self._lock = threading.RLock()
         self._bad:  dict[str, str] = {}     # domain -> reason
         self._good: set[str] = set()
+        self._response_blocks: dict[str, float] = {}
         # Domains purged at startup because they were a tracker wrongly learned
         # as a THREAT (the old duplicate-block bug). Exposed so the caller can
         # also drop them from the threat graph. Populated by start().
@@ -58,6 +63,10 @@ class IntelligenceMemory:
         conn = self._store.connection()
         try:
             conn.executescript("""
+                CREATE TABLE IF NOT EXISTS edr_domain_blocks (
+                    domain TEXT PRIMARY KEY,
+                    expires_at REAL NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS intel_memory (
                     domain     TEXT PRIMARY KEY,
                     verdict    TEXT NOT NULL,          -- 'bad' | 'good'
@@ -70,6 +79,20 @@ class IntelligenceMemory:
                 );
             """)
             conn.commit()
+            now = time.time()
+            conn.execute(
+                "DELETE FROM edr_domain_blocks WHERE expires_at<=? OR expires_at>?",
+                (now, now + _MAX_RESPONSE_TTL_S),
+            )
+            conn.commit()
+            with self._lock:
+                self._response_blocks = {
+                    str(row[0]): float(row[1]) for row in conn.execute(
+                        "SELECT domain,expires_at FROM edr_domain_blocks "
+                        "ORDER BY expires_at DESC LIMIT ?",
+                        (_MAX_RESPONSE_BLOCKS,),
+                    ).fetchall()
+                }
             rows = conn.execute(
                 "SELECT domain, verdict, reason FROM intel_memory"
             ).fetchall()
@@ -157,6 +180,50 @@ class IntelligenceMemory:
         self._persist(domain, "good", process=process,
                       reason="consistently clean behaviour")
 
+    def apply_response_block(self, domain: str, expires_at: float) -> bool:
+        """Persist a bounded exact-domain override without changing learned trust."""
+        domain = domain.lower().rstrip(".")
+        now = time.time()
+        labels = domain.split(".")
+        if (not domain or len(domain) > 253
+                or any(not label or len(label) > 63
+                       or label.startswith("-") or label.endswith("-")
+                       or not all(c.isascii() and (c.isalnum() or c == "-")
+                                  for c in label)
+                       for label in labels)):
+            raise ValueError("invalid exact domain")
+        if is_popular(domain):
+            return False
+        if (not math.isfinite(expires_at)
+                or not 0 < expires_at - now <= _MAX_RESPONSE_TTL_S):
+            raise ValueError("invalid response expiry")
+        with self._lock:
+            self._response_blocks = {d: expiry for d, expiry in self._response_blocks.items() if expiry > now}
+            if (domain not in self._response_blocks
+                    and len(self._response_blocks) >= _MAX_RESPONSE_BLOCKS):
+                raise ValueError("response block capacity reached")
+            conn = self._store.connection()
+            try:
+                with conn:
+                    conn.execute("DELETE FROM edr_domain_blocks WHERE expires_at<=?", (now,))
+                    conn.execute("INSERT OR REPLACE INTO edr_domain_blocks VALUES (?,?)", (domain, expires_at))
+            finally:
+                conn.close()
+            self._response_blocks[domain] = expires_at
+        return True
+
+    def release_response_block(self, domain: str) -> None:
+        """Remove only the response override, never an independently learned verdict."""
+        domain = domain.lower().rstrip(".")
+        with self._lock:
+            conn = self._store.connection()
+            try:
+                with conn:
+                    conn.execute("DELETE FROM edr_domain_blocks WHERE domain=?", (domain,))
+            finally:
+                conn.close()
+            self._response_blocks.pop(domain, None)
+
     def check(self, domain: str, ip: str = "") -> Optional[str]:
         """Fast path: 'bad' / 'good' if already decided, else None."""
         domain = domain.lower().rstrip(".")
@@ -172,6 +239,9 @@ class IntelligenceMemory:
         # silently negated the cache where it mattered most.
         popular = is_popular(domain)
         with self._lock:
+            remaining = self._response_blocks.get(domain, 0) - time.time()
+            if not popular and 0 < remaining <= _MAX_RESPONSE_TTL_S:
+                return "bad"
             if not popular:
                 if domain in self._bad:
                     return "bad"
@@ -191,6 +261,9 @@ class IntelligenceMemory:
     def reason_for(self, domain: str) -> str:
         domain = domain.lower().rstrip(".")
         with self._lock:
+            if (0 < self._response_blocks.get(domain, 0) - time.time()
+                    <= _MAX_RESPONSE_TTL_S):
+                return "edr:temporary_response_block"
             if domain in self._bad:
                 return self._bad[domain]
             parts = domain.split(".")
@@ -216,9 +289,14 @@ class IntelligenceMemory:
     def stats(self) -> dict:
         with self._lock:
             bad, good = len(self._bad), len(self._good)
+            response_blocks = sum(
+                1 for expiry in self._response_blocks.values()
+                if 0 < expiry - time.time() <= _MAX_RESPONSE_TTL_S
+            )
         return {
             "threats_learned": bad,
             "safe_patterns":   good,
+            "active_response_blocks": response_blocks,
             "db_size_bytes":   self._store.db_size_bytes(),
         }
 

@@ -253,6 +253,22 @@ def probe_sysmon() -> SysmonEnvironment:
     env.service_state = out.strip().splitlines()[-1].strip() if ok and out.strip() else "not-found"
     if env.service_state != "Running":
         env.detail = f"Sysmon service state is '{env.service_state}'"
+        # A registered-but-stopped service (not "not-found", which just means
+        # install never happened) is the exact shape seen live on a real
+        # machine: the service and its config exist, every start attempt
+        # exits immediately, and its own Operational log never gets created
+        # even once - consistent with another security product's real-time/
+        # tamper protection blocking a new kernel-driver-backed monitoring
+        # tool, a documented and expected outcome on a real fraction of
+        # client machines (see install_or_verify's MODE_BLOCKED), not
+        # evidence of a broken install. This is the ONE place a real user
+        # actually looks (Defense Coverage); the startup console log already
+        # said this, but a packaged app has no console to read.
+        if env.service_state not in ("not-found", "n/a-not-windows"):
+            env.detail += (" - often caused by antivirus real-time protection "
+                          "blocking a newly installed monitoring driver; this "
+                          "is a known interaction on some machines, not "
+                          "necessarily a broken install")
         env.errors = tuple(errors)
         return env
     env.present = True

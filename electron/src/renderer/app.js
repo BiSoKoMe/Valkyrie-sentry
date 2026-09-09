@@ -71,10 +71,26 @@ function fmtUptime(s) {
   const sec = Math.floor(s % 60);
   return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
 }
-function privacyScore(stats, up) {
-  if (!up || !stats) return 0;
-  const blocked = (stats.dns_blocked || 0) + (stats.fw_blocked || 0);
-  return Math.min(100, Math.round(72 + 28 * (1 - 1 / (1 + blocked / 200))));
+// The privacy layer's OWN work, not a re-count of the blocks already shown in
+// the chip next to it.
+//
+// This used to return dns_blocked + fw_blocked + elements_cleaned, which is
+// literally the "Blocked" chip's value plus one more term. Caught live on
+// 2026-09-07 with elements_cleaned at null: the header rendered
+// "BLOCKED 12,789" and "PRIVACY ACTIONS 12,789" side by side - the same 12,789
+// blocks presented twice under two names, reading as ~25,000 things done. It
+// also buried the one number that says whether the privacy engine did anything
+// at all inside a sum dominated by DNS blocking, so a completely inert privacy
+// layer still displayed a large, reassuring figure.
+//
+// null is returned unchanged (never `|| 0`): the API sends null for "this layer
+// is switched off", which is not the same claim as "it ran and found nothing" -
+// the same three-state distinction statVal()/NO_DATA preserve everywhere else,
+// and which the old `|| 0` quietly destroyed one line after onTele() took care
+// to keep it.
+function privacyActionCount(stats, up) {
+  if (!up || !stats) return null;
+  return stats.elements_cleaned ?? null;
 }
 // Sentinel for "this poll did not reach the engine", which is NOT the same as
 // null ("this layer is switched off") and NOT the same as 0 ("we looked and
@@ -359,33 +375,33 @@ async function runSetupSplash(scenario) {
 }
 
 /* ============================ Chrome / nav ==========================
-   Enterprise SOC information architecture: the sidebar is grouped by what an
-   analyst is DOING - Monitor (what is happening) -> Detect (what we found) ->
-   Protect (what is enforcing) -> System (how the product itself is doing) -
-   rather than as one flat product-feature list. Every entry below maps to a
-   real implemented PAGES.* route; nothing here is a dead link.
+   The sidebar names the three product boundaries directly. Valkyrie owns EDR
+   and enforcement, NYX owns outbound privacy defense, and Aegis owns local
+   investigation. Every entry below maps to a real implemented PAGES.* route.
    `count` is an optional key on the live telemetry `stats` object; when the
    engine reports it, the row shows it as a badge (open detections, incidents,
    endpoints). `crit: true` lets that badge use the one permitted red. */
 const NAV_GROUPS = [
-  ['Monitor', [
+  ['Command', [
     ['dashboard',    'Overview',            'dashboard'],
+  ]],
+  ['Valkyrie EDR', [
+    ['threats',      'Detections',          'alert',      { count: 'flagged', crit: true }],
+    ['hunting',      'Threat Hunting',      'search'],
     ['devices',      'Endpoints',           'devices'],
     ['network',      'Network',             'network'],
     ['applications', 'Applications',        'apps'],
-  ]],
-  ['Detect', [
-    ['threats',      'Detections',          'alert',      { count: 'flagged', crit: true }],
-    ['nyx',          'Nyx Data Guard',      'brain'],
-    ['aegis',        'Aegis Reasoning',     'target'],
-    ['hunting',      'Threat Hunting',      'search'],
     ['intelligence', 'Intelligence',        'brain'],
-  ]],
-  ['Protect', [
     ['protection',   'Protection',          'shield'],
-    ['privacy',      'Privacy',             'lock'],
     ['firewall',     'Firewall',            'flame'],
     ['dns',          'DNS',                 'dns'],
+  ]],
+  ['NYX', [
+    ['nyx',          'Privacy Defense',      'lock'],
+    ['privacy',      'Privacy Controls',     'shield'],
+  ]],
+  ['Aegis', [
+    ['aegis',        'Investigations',       'target'],
   ]],
   ['System', [
     ['components',   'Components',          'cpu'],
@@ -401,6 +417,13 @@ const NAV = NAV_GROUPS.flatMap(([, items]) => items.map(([id, label, icon]) => [
 // id -> {count, crit} for the rows that carry a live badge.
 const NAV_BADGES = Object.fromEntries(
   NAV_GROUPS.flatMap(([, items]) => items.filter((i) => i[3]).map((i) => [i[0], i[3]])));
+const PAGE_TITLES = Object.fromEntries(NAV_GROUPS.flatMap(([group, items]) =>
+  items.map(([id, label]) => [id, ['NYX', 'Aegis'].includes(group) ? `${group} · ${label}` : label])));
+
+function announcePageState(message) {
+  const status = $('pageStatus');
+  if (status && status.textContent !== message) status.textContent = message;
+}
 
 function buildChrome() {
   $('brandMark').innerHTML = ICON.mark;
@@ -418,6 +441,8 @@ function buildChrome() {
       item.dataset.route = id;
       item.tabIndex = 0;
       item.setAttribute('role', 'button');
+      item.setAttribute('aria-label', label);
+      item.title = label;
       item.setAttribute('aria-current', id === 'dashboard' ? 'page' : 'false');
       item.onclick = () => route(id);
       item.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); route(id); } };
@@ -455,12 +480,22 @@ function route(id) {
     n.setAttribute('aria-current', on ? 'page' : 'false');
   });
   const meta = NAV.find((n) => n[0] === id);
-  $('pageTitle').textContent = meta ? meta[1] : 'Valkyrie';
+  const title = meta ? PAGE_TITLES[id] : 'Valkyrie';
+  $('pageTitle').textContent = title;
   if (meta) saveLastRoute(id);
   const page = PAGES[id] || PAGES.dashboard;
+  $('page').setAttribute('aria-busy', page.poll ? 'true' : 'false');
+  announcePageState(`Opening ${title}`);
   page.render();
   if (state.tele && page.onTele) page.onTele(state.tele);
-  if (page.poll) { page.poll(); state.pageTimer = setInterval(page.poll, page.interval || 3000); }
+  if (page.poll) {
+    Promise.resolve(page.poll()).catch(() => {
+      announcePageState(`${title} could not finish loading`);
+    }).finally(() => {
+      if (state.route === id) $('page').setAttribute('aria-busy', 'false');
+    });
+    state.pageTimer = setInterval(page.poll, page.interval || 3000);
+  }
 }
 
 /* ============================ PAGES ================================= */
@@ -760,7 +795,6 @@ PAGES.dashboard = {
   onTele(data) {
     const stats = (data && data.stats) || {}, up = !!(data && data.ok);
     setProtectionUI(!!(data && data.protected), up);
-    const ps = privacyScore(stats, up);
     const vals = {
       dns_blocked: statVal(up, stats.dns_blocked), fw_blocked: statVal(up, stats.fw_blocked),
       flagged: statVal(up, stats.flagged), total_24h: statVal(up, stats.total_24h),
@@ -770,7 +804,6 @@ PAGES.dashboard = {
       // On a failed poll we don't even know that much, so it is NO_DATA, not Off.
       elements_cleaned: up ? (stats.elements_cleaned ?? null) : NO_DATA,
       scanner_decisions: statVal(up, stats.scanner_decisions),
-      privacy: up ? ps : NO_DATA,
     };
     for (const [k, v] of Object.entries(vals)) animateNumber($('card-' + k), v);
     renderFeed((data && data.events) || [], up);
@@ -779,7 +812,7 @@ PAGES.dashboard = {
     const headline = $('trendHeadline');
     if (headline) headline.textContent = fmt(up ? (stats.dns_blocked || 0) + (stats.fw_blocked || 0) : 0);
     drawTrend();
-    renderPosture(stats, up, !!(data && data.protected), ps);
+    renderPosture(stats, up, !!(data && data.protected));
   },
 };
 
@@ -788,7 +821,7 @@ PAGES.dashboard = {
    anything is currently flagged), and it says so in plain words. It is NOT a
    vanity score: when the engine is unreachable it refuses to show a number at
    all rather than inventing a reassuring one. */
-function renderPosture(stats, up, prot, privacy) {
+function renderPosture(stats, up, prot) {
   const arc = $('postureArc'), score = $('postureScore');
   const head = $('postureHeadline'), detail = $('postureDetail');
   if (!arc || !score || !head || !detail) return;
@@ -802,9 +835,9 @@ function renderPosture(stats, up, prot, privacy) {
     return;
   }
   const flagged = stats.flagged || 0;
-  const value = prot ? privacy : Math.min(privacy, 45);
+  const value = prot ? 100 : 0;
   arc.style.strokeDashoffset = String(CIRC - (CIRC * Math.max(0, Math.min(100, value)) / 100));
-  score.textContent = String(value);
+  score.textContent = prot ? 'ON' : 'OFF';
 
   if (!prot) {
     head.textContent = 'Not protected';
@@ -824,7 +857,7 @@ function renderPosture(stats, up, prot, privacy) {
 let _feedKeys = [];
 function feedRowKey(e) {
   return [e.time || e.timestamp || '', e.domain || e.query || e.name || e.host || e.target || '',
-          e.process || '', e.action || e.verdict || e.decision || ''].join('|');
+          e.process_name || e.process || '', e.action || e.verdict || e.decision || ''].join('|');
 }
 function renderFeed(events, up) {
   const feed = $('feed'); if (!feed) return;
@@ -842,7 +875,11 @@ function renderFeed(events, up) {
     const verdict = (e.action || e.verdict || e.decision || '').toString().toLowerCase();
     const kind = /block|deny|sinkhole/.test(verdict) ? 'block' : /flag|suspic|warn/.test(verdict) ? 'flag' : 'allow';
     const name = e.domain || e.query || e.name || e.host || e.target || '—';
-    const meta = [e.process, e.type, e.reason].filter(Boolean).join(' · ');
+    // /api/events objects carry process_name + category, never process/type -
+    // this read the wrong fields on both counts and silently dropped the
+    // process name from the live feed's metadata line on every row (`.type`
+    // was always undefined too, so only `reason` was ever actually shown).
+    const meta = [e.process_name || e.process, e.category || e.type, e.reason].filter(Boolean).join(' · ');
     const t = e.time || e.timestamp || '';
     // Only genuinely new events animate in; carried-over rows appear instantly.
     const cls = prev.has(keys[i]) ? 'feed-row no-anim' : 'feed-row';
@@ -851,6 +888,63 @@ function renderFeed(events, up) {
        <span class="fmeta">${escapeHtml(meta || t)}</span>`));
   });
   _feedKeys = keys;
+}
+
+// Exposure inference used to be presented as Aegis. It belongs to NYX because
+// it reasons about what outbound traffic reveals. Aegis now owns durable cases,
+// investigation and correlation over Valkyrie's endpoint evidence.
+const EXPOSURE_HYPOTHESES = [
+  ['DESTINATION_DISCLOSURE',     'Who you talked to',      'A watcher can tell which service you contacted.'],
+  ['ACTIVITY_CLASSIFICATION',    'What you were doing',    'A watcher can classify the kind of activity, not just that traffic happened.'],
+  ['CROSS_SESSION_LINKABILITY',  'You, across sessions',   'Today’s activity can be tied back to an earlier session.'],
+  ['FLOW_LINKAGE',               'Two connections, one person', 'Separate connections can be joined as belonging to the same person.'],
+  ['USER_LINKABILITY',           'It’s identifiably you',  'The traffic can be attached to a specific identity, not just a consistent stranger.'],
+];
+
+function renderNyxExposure(status, ledger) {
+  const headline = $('nyxExposureHeadline');
+  const list = $('nyxExposureHyps');
+  if (!headline || !list) return;
+  const statusAvailable = !!status && !status.error;
+  const ledgerAvailable = !!ledger && !ledger.error && Array.isArray(ledger.entries);
+  const starting = statusAvailable && !!status.starting;
+  const entries = ledgerAvailable ? ledger.entries : [];
+  const latest = entries.length ? entries[entries.length - 1] : null;
+  const decisions = latest && latest.inference_hypotheses ? latest.inference_hypotheses : {};
+  const established = EXPOSURE_HYPOTHESES.filter(
+    ([id]) => decisions[id] && decisions[id].action === 'alert').length;
+
+  if (starting) headline.textContent = 'Exposure reasoning is starting';
+  else if (!statusAvailable) headline.textContent = 'Exposure reasoning is unavailable';
+  else if (!ledgerAvailable) headline.textContent = 'Exposure history is unavailable';
+  else if (!latest) headline.textContent = 'No outbound exposure has been measured yet';
+  else headline.textContent = established
+    ? `${established} of ${EXPOSURE_HYPOTHESES.length} privacy inferences are supported`
+    : 'Current traffic supports none of the five privacy inferences';
+
+  if (!statusAvailable || starting || !ledgerAvailable || !latest) {
+    const kind = !statusAvailable ? 'offline' : (!ledgerAvailable && !starting ? 'error' : 'empty');
+    const title = starting ? 'Reasoning is starting'
+      : !statusAvailable ? 'Exposure reasoning unavailable'
+        : !ledgerAvailable ? 'Exposure history unavailable' : 'No exposure evidence yet';
+    const detail = !statusAvailable ? 'Start protection and try again.'
+      : !ledgerAvailable ? 'NYX could not read the local exposure ledger.'
+        : 'NYX evaluates this after outbound traffic is observed.';
+    list.innerHTML = stateBlock(kind, title, detail);
+    return;
+  }
+  list.innerHTML = EXPOSURE_HYPOTHESES.map(([id, label, plain]) => {
+    const decision = decisions[id];
+    const on = !!decision && decision.action === 'alert';
+    const confidence = decision && typeof decision.confidence === 'number'
+      ? `confidence ${decision.confidence.toFixed(2)}` : 'insufficient evidence';
+    return `<div class="feed-row">
+      <span class="fdot ${on ? 'flag' : 'allow'}"></span>
+      <span class="fname stack">${escapeHtml(label)}: ${on ? 'supported' : 'not supported'}
+        <span class="fsub">${escapeHtml(plain)}</span></span>
+      <span class="fmeta mono">${escapeHtml(confidence)}</span>
+    </div>`;
+  }).join('');
 }
 
 /* ---- Nyx (the data guard) ---- */
@@ -881,7 +975,8 @@ PAGES.nyx = {
       reading the raw data itself, catches when a piece of <em>you</em> — a device ID, your location,
       your contact details, a browser fingerprint — is being handed to a third party you didn't mean to talk to.
       <b id="nyxMode"></b></div>
-      <div class="btn-row"><button class="btn primary" id="nyxSelfTest">${ICON.activity || ''}<span>Show me Nyx working</span></button></div>
+      <div class="btn-row"><button class="btn primary" id="nyxSelfTest" aria-describedby="nyxSelfTestReason">${ICON.activity || ''}<span id="nyxSelfTestLabel">Show me Nyx working</span></button>
+        <span class="action-reason" id="nyxSelfTestReason"></span></div>
       <div class="feed" id="nyxSelfTestOut"></div>
       ${sectionHead('What Nyx saw', 'Live · updates every 3s')}
       <div class="grid">
@@ -891,9 +986,17 @@ PAGES.nyx = {
         ${statCard('nyx_blocked', 'Trackers Stopped', 'shield', 'accent-green')}
       </div>
       ${sectionHead('What crossed to third parties', 'Each line is one thing Nyx caught leaving')}
-      <div class="feed" id="nyxFeed"><div class="empty">Waiting for Nyx…</div></div>`;
+      <div class="feed" id="nyxFeed"><div class="empty">Waiting for Nyx…</div></div>
+      ${sectionHead('What traffic reveals', 'Privacy inference from observed outbound exposure')}
+      <div class="headline-block compact-headline"><div class="hl-main" id="nyxExposureHeadline">Evaluating exposure…</div></div>
+      <div class="feed" id="nyxExposureHyps"><div class="empty">Evaluating…</div></div>`;
     const stBtn = $('nyxSelfTest');
     if (stBtn) stBtn.onclick = async () => {
+      if (!state.engineUp) return;
+      if (!state.protected) {
+        await toggleProtection();
+        return;
+      }
       const out = $('nyxSelfTestOut');
       out.innerHTML = '<div class="empty">Running Nyx against synthetic trackers…</div>';
       const r = await safe(() => V.api.get('/api/nyx/self-test'), null);
@@ -910,11 +1013,17 @@ PAGES.nyx = {
            <span class="fmeta">${escapeHtml(cse.after)}</span>`));
       });
     };
+    syncNyxSelfTest();
   },
+  onTele() { syncNyxSelfTest(); },
   interval: 3000,
   async poll() {
     const feed = $('nyxFeed'); if (!feed) return;
-    const data = await safe(() => V.api.get('/api/nyx'), null);
+    const [data, exposureStatus, exposureLedger] = await Promise.all([
+      safe(() => V.api.get('/api/nyx'), null),
+      safe(() => V.api.get('/api/nyx/exposure/status'), null),
+      safe(() => V.api.get('/api/nyx/exposure/ledger?limit=50'), null),
+    ]);
     const up = !!data && !data.error;
     const d = data || {}, def = d.defended || {};
     const acting = d.mode === 'acting';
@@ -964,7 +1073,10 @@ PAGES.nyx = {
     const tb = $('nyxTrackers');
     if (tb) {
       const trk = (up && d.trackers) ? d.trackers : [];
-      if (!trk.length) {
+      if (!up) {
+        tb.innerHTML = stateBlock('offline', 'Tracker correlation unavailable',
+          'Turn protection on and NYX will start linking tracker observations.');
+      } else if (!trk.length) {
         tb.innerHTML = stateBlock('empty', 'No trackers correlated yet',
           'As you browse, Nyx links each tracker across your sites here.');
       } else {
@@ -996,6 +1108,10 @@ PAGES.nyx = {
       }
     }
 
+    renderNyxExposure(exposureStatus, exposureLedger);
+    syncNyxSelfTest();
+    announcePageState(up ? 'NYX privacy evidence updated' : 'NYX data unavailable');
+
     if (!up) {
       feed.innerHTML = stateBlock('offline', 'Nyx is offline',
         'Turn protection on and Nyx will start watching your data.');
@@ -1018,163 +1134,136 @@ PAGES.nyx = {
   },
 };
 
-/* ---- Aegis: the exposure-inference reasoning layer -------------------
-   Aegis has been wired into the live engine since the Beta 2/3 platform work
-   and answers on /api/aegis/status + /api/aegis/ledger, but it had no surface
-   in the app at all - the third component was doing its job invisibly.
+function syncNyxSelfTest() {
+  const button = $('nyxSelfTest');
+  const label = $('nyxSelfTestLabel');
+  const reason = $('nyxSelfTestReason');
+  if (!button || !label || !reason) return;
+  if (!state.engineUp) {
+    button.disabled = true;
+    label.textContent = 'NYX self-test unavailable';
+    reason.textContent = 'The local engine is unreachable.';
+  } else if (!state.protected) {
+    button.disabled = false;
+    label.textContent = 'Start protection';
+    reason.textContent = 'Protection must be running before the NYX self-test.';
+  } else {
+    button.disabled = false;
+    label.textContent = 'Show me NYX working';
+    reason.textContent = 'Runs against synthetic tracker data on this device.';
+  }
+}
 
-   The question this page answers is Aegis's actual question, in plain words:
-   given only what left this machine, what could a watcher REASON about you?
-   That is a different question from Nyx's ("what personal data crossed?") and
-   from Detections' ("what attacked this host?"), which is why it gets its own
-   page rather than a card on either.
-
-   Reasoning-only is stated on the page, not just in the docstring: Aegis
-   cannot raise an incident and cannot authorize enforcement (engine.py's
-   aegis_status(), and the tested separation invariant behind it). A privacy
-   tool that overstated its own authority would be exactly the kind of thing
-   this project refuses to ship. */
-
-// The 5 canonical hypotheses, in the order evaluate_pair() reaches them.
-// Labels are plain language; the ATT&CK-style id stays visible in mono so the
-// page never hides which hypothesis it is actually reporting.
-const AEGIS_HYPOTHESES = [
-  ['DESTINATION_DISCLOSURE',     'Who you talked to',      'A watcher can tell which service you contacted.'],
-  ['ACTIVITY_CLASSIFICATION',    'What you were doing',    'A watcher can classify the kind of activity, not just that traffic happened.'],
-  ['CROSS_SESSION_LINKABILITY',  'You, across sessions',   'Today’s activity can be tied back to an earlier session.'],
-  ['FLOW_LINKAGE',               'Two connections, one person', 'Separate connections can be joined as belonging to the same person.'],
-  ['USER_LINKABILITY',           'It’s identifiably you',  'The traffic can be attached to a specific identity, not just a consistent stranger.'],
-];
-
+/* ---- Aegis: investigation and correlation over durable local cases ---- */
 PAGES.aegis = {
   render() {
     $('page').innerHTML = `
       <div class="headline-block" id="aegisHeadline">
-        <div class="hl-top">What could be inferred about you</div>
-        <div class="hl-main" id="aegisHeadlineMain">Reasoning…</div>
-        <div class="hl-sub" id="aegisHeadlineSub"></div>
+        <div class="hl-main" id="aegisHeadlineMain">Loading local cases…</div>
+        <div class="hl-sub" id="aegisHeadlineSub">Correlating endpoint detections into one investigation record.</div>
+        <div class="hl-pair" id="aegisHeadlinePair"></div>
       </div>
-      <div class="page-intro">Aegis reasons over what already left this machine and asks what a watcher
-      could <em>work out</em> from it — not whether any single request was malicious. An inference is
-      shown as <b>established</b> only when the evidence Aegis holds actually supports it.
-      <b>Aegis is a reasoning layer: it never raises an alert, blocks traffic, or changes what Valkyrie
-      or Nyx decide.</b></div>
-      ${sectionHead('What a watcher could infer', 'Each inference, and whether Aegis can currently establish it')}
-      <div class="feed" id="aegisHyps"><div class="empty">Evaluating…</div></div>
-      ${sectionHead('Reasoning activity', 'Live · updates every 5s')}
-      <div class="grid">
-        ${statCard('aegis_established', 'Inferences Established', 'target')}
-        ${statCard('aegis_obs', 'Exposure Observations', 'network', 'accent-blue')}
-        ${statCard('aegis_subjects', 'Subjects Reasoned Over', 'devices', 'accent-blue')}
-        ${statCard('aegis_entries', 'Ledger Entries', 'activity', 'accent-green')}
-      </div>
-      ${sectionHead('What Aegis observed', 'The raw exposure categories behind the reasoning above')}
-      <div class="feed" id="aegisObs"><div class="empty">Waiting for Aegis…</div></div>`;
+      <div class="page-intro">Aegis is the investigation layer. It keeps cases durable, joins related
+      detections, and exposes the evidence trail for local review. Aegis does not independently authorize
+      enforcement; every response still passes through Valkyrie's audited response boundary.</div>
+      ${sectionHead('Cases requiring review', 'Open a case to inspect detections, evidence, timeline and bounded response options')}
+      <div class="list" id="aegisCases"><div class="empty">Loading cases…</div></div>
+      ${sectionHead('Correlation health', 'Whether evidence is reaching the local investigation layer')}
+      <div id="aegisHealth"><div class="empty">Checking…</div></div>`;
+    const list = $('aegisCases');
+    list.onclick = (event) => {
+      const row = event.target.closest('.inc-row');
+      if (row && row.dataset.id) openReplay(row.dataset.id);
+    };
+    list.onkeydown = (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      const row = event.target.closest('.inc-row');
+      if (row && row.dataset.id) { event.preventDefault(); openReplay(row.dataset.id); }
+    };
   },
-  interval: 5000,
+  interval: 3000,
   async poll() {
-    const hypBox = $('aegisHyps'); if (!hypBox) return;
-    const [status, ledger] = await Promise.all([
-      safe(() => V.api.get('/api/aegis/status'), null),
-      safe(() => V.api.get('/api/aegis/ledger?limit=50'), null),
+    const list = $('aegisCases'); if (!list) return;
+    const [status, payload] = await Promise.all([
+      safe(() => V.api.get('/api/v1/aegis/status'), null),
+      safe(() => V.api.get('/api/v1/aegis/cases?limit=100'), null),
     ]);
-    const up = !!status && !status.error;
-    // The API distinguishes "EDR still starting" from "EDR unavailable" via a
-    // `starting` flag. That window is 30-60s on a cold start, and reporting it
-    // as "not running - start protection" would be telling the user something
-    // false about their own protection, and inviting a pointless action.
-    const starting = !!status && !!status.starting;
-    const entries = (ledger && Array.isArray(ledger.entries)) ? ledger.entries : [];
+    const statusAvailable = !!status && !status.error;
+    const casesAvailable = !!payload && !payload.error && Array.isArray(payload.cases);
+    const cases = casesAvailable ? payload.cases : [];
+    const openCases = cases.filter((item) =>
+      !['resolved', 'closed', 'dismissed'].includes(String(item.status || '').toLowerCase()));
+    const critical = openCases.filter((item) => String(item.severity || '').toLowerCase() === 'critical').length;
+    const deliveryAvailable = statusAvailable && !!status.delivery
+      && typeof status.delivery.failed === 'number';
+    const delivery = deliveryAvailable ? status.delivery : null;
+    const failures = deliveryAvailable ? Number(delivery.failed) : null;
+    const headline = $('aegisHeadlineMain');
+    const sub = $('aegisHeadlineSub');
+    const pair = $('aegisHeadlinePair');
+    if (!statusAvailable) {
+      headline.textContent = 'Aegis is unavailable';
+      sub.textContent = 'Start protection to restore local case correlation.';
+      pair.innerHTML = '';
+      list.innerHTML = stateBlock('offline', 'Investigation unavailable',
+        'The local engine is not serving Aegis cases.');
+    } else if (!casesAvailable) {
+      headline.textContent = 'Aegis case data is unavailable';
+      sub.textContent = 'Correlation is online, but the local case ledger could not be read.';
+      pair.innerHTML = '';
+      list.innerHTML = stateBlock('error', 'Case ledger unavailable',
+        'Aegis could not load the local investigation records.');
+    } else if (!openCases.length) {
+      headline.textContent = 'No cases require investigation';
+      sub.textContent = cases.length
+        ? 'The local ledger contains no open cases.'
+        : 'Aegis is receiving evidence and the local case ledger is empty.';
+      pair.innerHTML = `<span class="hl-num">0<small>Open cases</small></span>`;
+      list.innerHTML = stateBlock('empty', 'No open cases',
+        'New correlated detections will appear here with their evidence trail.');
+    } else {
+      headline.textContent = openCases.length === 1
+        ? '1 case requires review'
+        : `${openCases.length} cases require review`;
+      sub.textContent = 'Open a case to inspect its timeline, evidence joins and response boundary.';
+      pair.innerHTML = `<span class="hl-num">${openCases.length}<small>Open cases</small></span>
+        <span class="hl-num ${critical ? '' : 'hl-num-dim'}">${critical}<small>Critical</small></span>`;
+      list.innerHTML = openCases.map((item) => {
+        const severity = String(item.severity || 'unknown').toLowerCase();
+        const severityClass = /crit/.test(severity) ? 'critical' : /high/.test(severity) ? 'high'
+          : /med/.test(severity) ? 'medium' : /low/.test(severity) ? 'low' : '';
+        const title = item.title || 'Untitled case';
+        const entity = item.entity || item.host || 'entity unavailable';
+        const statusText = item.status || 'open';
+        const technique = String(item.technique || '').match(/T\d{4}(?:\.\d{3})?/);
+        return `<div class="list-row inc-row" data-sev="${severityClass}" data-id="${escapeHtml(item.id || '')}"
+          tabindex="0" role="button" aria-label="Open Aegis case: ${escapeHtml(title)}">
+          <span class="inc-rail"></span><span class="sev ${severityClass}">${escapeHtml(severity)}</span>
+          <div class="lr-main"><span class="lr-title">${escapeHtml(title)}</span>
+            <span class="lr-sub"><span class="mono-tag">${escapeHtml(entity)}</span> ${escapeHtml(statusText)}</span>
+            ${item.explanation ? `<span class="lr-sub lr-explain">${escapeHtml(truncate(item.explanation, 160))}</span>` : ''}
+          </div>${technique ? `<span class="mono-tag">${escapeHtml(technique[0])}</span>` : ''}
+          <span class="rp-open">Open case</span></div>`;
+      }).join('');
+    }
 
-    // Newest entry carries the current reasoning state; the rest give volume.
-    const latest = entries.length ? entries[entries.length - 1] : null;
-    const decisions = (latest && latest.inference_hypotheses) || {};
-    const established = AEGIS_HYPOTHESES.filter(
-      ([id]) => decisions[id] && decisions[id].action === 'alert').length;
-    const allObs = entries.reduce(
-      (n, e) => n + ((e.exposure_observations || []).length), 0);
-    const subjects = new Set(entries.map((e) => e.instance_id).filter(Boolean)).size;
-
-    animateNumber($('card-aegis_established'), statVal(up && !!latest, established));
-    animateNumber($('card-aegis_obs'),         statVal(up, allObs));
-    animateNumber($('card-aegis_subjects'),    statVal(up, subjects));
-    animateNumber($('card-aegis_entries'),     statVal(up, status ? status.ledger_entries : 0));
-
-    // ---- Headline ----
-    const hlMain = $('aegisHeadlineMain'), hlSub = $('aegisHeadlineSub');
-    if (hlMain) {
-      if (starting) {
-        hlMain.textContent = 'Aegis is starting…';
-        if (hlSub) hlSub.textContent = 'The detection engine is still coming up.';
-      } else if (!up) {
-        hlMain.textContent = 'Aegis is not running';
-        if (hlSub) hlSub.textContent = 'Start protection to begin reasoning about exposure.';
-      } else if (!latest) {
-        hlMain.textContent = 'Nothing to reason about yet';
-        if (hlSub) hlSub.textContent = 'Aegis reasons over traffic as it leaves — nothing has crossed yet.';
-      } else {
-        hlMain.textContent = established === 0
-          ? 'Nothing could be inferred about you'
-          : `${established} of ${AEGIS_HYPOTHESES.length} inferences could be made about you`;
-        if (hlSub) hlSub.textContent = established === 0
-          ? 'From what Aegis has seen leave, a watcher could not establish any of the five.'
-          : 'Based on what Aegis has seen leave this machine.';
+    const health = $('aegisHealth');
+    if (health) {
+      health.innerHTML = rowsPanel([
+        ['Case storage', statusAvailable ? badge('Local and durable', 'ok') : badge('Unavailable', 'off'), 'devices'],
+        ['Evidence delivery', !deliveryAvailable ? badge('Data unavailable', 'off')
+          : failures ? badge(`${failures} failed deliveries`, 'warn') : badge('No observed failures', 'ok'), 'activity'],
+        ['Events published', deliveryAvailable ? fmt(delivery.published || 0) : '—', 'network'],
+        ['Enforcement authority', badge('Valkyrie response boundary', 'off'), 'shield'],
+      ]);
+      if (!statusAvailable) {
+        health.innerHTML = stateBlock('offline', 'Correlation health unavailable',
+          'The engine must be running to report evidence delivery.');
       }
     }
-
-    // ---- The five hypotheses ----
-    hypBox.innerHTML = '';
-    if (starting) {
-      hypBox.innerHTML = stateBlock('empty', 'Aegis is starting',
-        'The detection engine is still coming up — reasoning begins once it is ready.');
-    } else if (!up) {
-      hypBox.innerHTML = stateBlock('offline', 'Aegis unavailable',
-        'The engine is not running, so nothing is being reasoned about.');
-    } else if (!latest) {
-      hypBox.innerHTML = stateBlock('empty', 'No reasoning yet',
-        'Aegis evaluates once traffic has actually left this machine.');
-    } else {
-      AEGIS_HYPOTHESES.forEach(([id, label, plain]) => {
-        const d = decisions[id];
-        const on = !!d && d.action === 'alert';
-        // 'flag' (not 'block'): an established inference is a privacy finding
-        // to understand, never an attack to contain - Aegis cannot contain.
-        const conf = d && typeof d.confidence === 'number'
-          ? ` · confidence ${d.confidence.toFixed(2)}` : '';
-        hypBox.appendChild(el('div', 'feed-row',
-          `<span class="fdot ${on ? 'flag' : 'allow'}"></span>
-           <span class="fname stack">${escapeHtml(label)} — ${escapeHtml(on ? 'established' : 'not established')}
-             <span class="fsub">${escapeHtml(plain)}</span></span>
-           <span class="fmeta mono">${escapeHtml(id)}${escapeHtml(conf)}</span>`));
-      });
-    }
-
-    // ---- Raw observations behind it ----
-    const obsBox = $('aegisObs'); if (!obsBox) return;
-    const obs = [];
-    for (let i = entries.length - 1; i >= 0 && obs.length < 25; i--) {
-      (entries[i].exposure_observations || []).forEach((o) => {
-        if (obs.length < 25) obs.push(o);
-      });
-    }
-    obsBox.innerHTML = '';
-    if (!obs.length) {
-      obsBox.innerHTML = stateBlock(up ? 'empty' : 'offline',
-        up ? 'No exposure observations yet' : 'Aegis unavailable',
-        up ? 'Nothing observable has crossed to a third party yet.' : '');
-      return;
-    }
-    obs.forEach((o) => {
-      // precision < 1 is a REAL result, not a rounding artifact: Aegis 1A found
-      // bucketing degrades a category's precision without removing the category.
-      const prec = typeof o.precision === 'number' ? o.precision : 1;
-      const degraded = prec < 1;
-      obsBox.appendChild(el('div', 'feed-row',
-        `<span class="fdot ${degraded ? 'allow' : 'flag'}"></span>
-         <span class="fname">${escapeHtml(String(o.category || 'unknown'))} observable
-           at ${escapeHtml(String(o.observation_point || 'unknown'))}</span>
-         <span class="fmeta mono">precision ${prec.toFixed(2)}${degraded ? ' (degraded)' : ''}</span>`));
-    });
+    announcePageState(!statusAvailable ? 'Aegis unavailable'
+      : !casesAvailable ? 'Aegis case ledger unavailable'
+        : `${openCases.length} open Aegis ${openCases.length === 1 ? 'case' : 'cases'}`);
   },
 };
 
@@ -1447,7 +1536,12 @@ function renderTopBlocked(box, top, up) {
   if (vs.kind !== 'list') { box.innerHTML = stateBlock(vs.kind, vs.title, vs.sub); return; }
   const max = Math.max(...top.map((t) => t[1] || t.count || 0), 1);
   box.innerHTML = top.slice(0, 8).map((t) => {
-    const name = Array.isArray(t) ? t[0] : (t.domain || t.name);
+    // The server now excludes domain-less rows (a connection-level anomaly
+    // block has no domain to report), but this stays defensive: a missing
+    // name must never fall through to JS's literal "undefined" string via
+    // escapeHtml's un-guarded String(s) - that reads as a real (bizarre)
+    // blocked domain, not as the absence of one.
+    const name = (Array.isArray(t) ? t[0] : (t.domain || t.name)) || '(unnamed)';
     const n = Array.isArray(t) ? t[1] : (t.count || 0);
     return `<div class="bar-row"><span class="bn">${escapeHtml(name)}</span>
       <span class="bar-track"><span class="bar-fill" style="--fill:${Math.max(0.04, n / max)}"></span></span>
@@ -1760,7 +1854,11 @@ PAGES.applications = {
       ['Top destination', escapeHtml(s.top_domain || '—'), 'globe'],
     ]);
     const byProc = {};
-    events.forEach((e) => { const p = e.process; if (p) byProc[p] = (byProc[p] || 0) + 1; });
+    // /api/events objects carry `process_name`, never `process` - this read
+    // the wrong field and always found undefined, so the page showed "No
+    // process activity yet" permanently regardless of real traffic (found
+    // live with 12,789 blocks already recorded and this panel still empty).
+    events.forEach((e) => { const p = e.process_name; if (p) byProc[p] = (byProc[p] || 0) + 1; });
     const rows = Object.entries(byProc).sort((a, b) => b[1] - a[1]).slice(0, 15);
     const list = $('appList'); if (!list) return;
     const vs = ViewState.processListState(up, rows);
@@ -2213,6 +2311,18 @@ async function toggleProtection() {
     if (wantOn && r && r.ready === false) {
       await V.errorDialog('Unable to start protection',
         'Valkyrie could not confirm the engine came online. Open logs to see why.');
+    } else if (wantOn && r && r.ready === true && r.armed === false) {
+      // Distinct from the engine-unreachable case above: the engine answered
+      // fine (it was very likely already running as the background service),
+      // but DNS interception did not confirm armed within the wait window.
+      // Reporting this as a generic/engine-down error would send the user
+      // looking in the wrong place - the fix here is usually just time
+      // (first-ever startup can still be finishing blocklist download,
+      // Sysmon setup, or Unbound bring-up) or clicking Start again, not a
+      // restart or a log dive.
+      await V.errorDialog('Protection did not arm in time',
+        'The engine is running, but DNS protection did not confirm as active yet. ' +
+        'This can happen on a fresh install while startup finishes. Wait a moment and try Start Protection again.');
     }
   } catch {
     await V.errorDialog('Protection error', 'An unexpected error occurred while changing protection state.');
@@ -2304,10 +2414,14 @@ function updateTopbar(data) {
   // that is the "numbers drop to zero and come back" flicker. Guard it with
   // `up` exactly like its two siblings already were.
   $('tbBlocked').textContent = up ? fmt((s.dns_blocked || 0) + (s.fw_blocked || 0)) : '—';
-  $('tbPrivacy').textContent = up ? privacyScore(s, up) : '—';
+  // fmt(null) renders '0', which would state "the privacy layer ran and did
+  // nothing" for a layer that is simply switched off. Keep those apart.
+  const _privacy = privacyActionCount(s, up);
+  $('tbPrivacy').textContent = (up && _privacy != null) ? fmt(_privacy) : '—';
   $('tbUptime').textContent = up ? fmtUptime(s.uptime_seconds) : '—';
   updateNavBadges(s, up);
   updateRailStatus(up, prot);
+  if (state.route === 'nyx') syncNyxSelfTest();
 }
 
 // Live counts on the sidebar rows. Same honesty rule as every other stat: a
@@ -2731,12 +2845,16 @@ const Replay = {
     const res = await safe(() => V.api.post('/api/edr/respond', {
       action: rec.action, target: rec.target || '', incident_id: this.inc.id, dry_run: false,
     }), null);
-    if (res && res.status && res.status !== 'failed') {
+    if (res && res.status && ResponseStatus.succeeded(res.status)) {
       out.innerHTML += `<div class="rp-desc" style="margin-top:6px">${escapeHtml(res.result || res.status)}</div>`;
       toast(`${rec.action} applied.`, 'ok');
     } else {
+      // 'skipped' means the engine REFUSED the action (e.g. a stale PID with
+      // no observed create_time) - as much a non-success as 'failed', and
+      // must never read as "applied" just because it isn't literally that.
+      const label = res && res.status ? ResponseStatus.outcomeLabel(res.status) : 'failed';
       out.innerHTML += `<div class="rp-desc" style="margin-top:6px;opacity:.85">${escapeHtml((res && res.result) || 'The action did not complete — check logs.')}</div>`;
-      toast(`${rec.action} failed — see incident log.`, 'error');
+      toast(`${rec.action} ${label} — see incident log.`, 'error');
     }
   },
 

@@ -107,28 +107,64 @@ def main() -> int:
             a3.kind == DnsActionKind.LEAVE)
 
     # ================================================================ [5]
-    print("\n[5] WATCHDOG end-to-end: it heals a stranded host on a tick")
+    print("\n[5] WATCHDOG end-to-end: it heals a stranded host once past its "
+          "own startup grace")
     adapter = FakeAdapter(servers=("1.1.1.1",))       # start healthy
     wd = DnsWatchdog(adapter.executor())
-    wd.tick()                                          # learns the real DNS
+    wd.tick(now=0.0)                                   # learns the real DNS
     c.check("watchdog recorded the real DNS", wd.saved_original == ("1.1.1.1",))
     # now a (legacy build / crash) redirect happens and the resolver is dead:
     adapter.servers = ("127.0.0.1",)
     adapter.resolver_up = False
-    wd.tick()
+    wd.tick(now=1.0)
+    c.check("still within the grace window: NOT healed yet, host untouched",
+            adapter.servers == ("127.0.0.1",) and wd.heals == 0)
+    wd.tick(now=wd.startup_grace_seconds + 5.0)
     c.check("watchdog restored the host's real DNS", adapter.servers == ("1.1.1.1",))
     c.check("a heal was counted", wd.heals == 1)
 
+    # ================================================================ [5b]
+    print("\n[5b] a resolver that answers even once loses the grace period "
+          "for good - a LATER crash is healed with no delay at all")
+    adapter = FakeAdapter(servers=("1.1.1.1",))
+    wd = DnsWatchdog(adapter.executor())
+    wd.tick(now=0.0)                                   # learns the real DNS
+    adapter.servers = ("127.0.0.1",)
+    adapter.resolver_up = True
+    wd.tick(now=1.0)                                   # proves itself alive immediately
+    adapter.resolver_up = False                        # then dies, moments later
+    wd.tick(now=2.0)                                   # still well inside what WOULD be grace
+    c.check("a resolver that already proved itself alive is healed instantly, "
+            "not given a second grace period",
+            adapter.servers == ("1.1.1.1",) and wd.heals == 1)
+
     # ================================================================ [6]
-    print("\n[6] WATCHDOG heals even with NO knowledge (post-crash cold start)")
+    print("\n[6] WATCHDOG heals even with NO knowledge (post-crash cold "
+          "start), once its own startup grace elapses")
     # Fresh watchdog, host already stranded, nothing saved (prior process died).
     adapter = FakeAdapter(servers=("127.0.0.1",))
     adapter.resolver_up = False
     wd = DnsWatchdog(adapter.executor())
-    wd.tick()
-    c.check("cold watchdog resets a stranded host to automatic",
+    wd.tick(now=0.0)
+    c.check("still within grace on tick one: no reset yet",
+            adapter.reset_calls == 0 and wd.heals == 0)
+    wd.tick(now=wd.startup_grace_seconds + 5.0)
+    c.check("cold watchdog resets a stranded host to automatic once past grace",
             adapter.reset_calls == 1 and adapter.servers == ())
     c.check("heal counted on cold rescue", wd.heals == 1)
+
+    # ================================================================ [6b]
+    print("\n[6b] the grace period is bounded, not indefinite, even if the "
+          "resolver NEVER once answers")
+    adapter = FakeAdapter(servers=("127.0.0.1",))
+    adapter.resolver_up = False
+    wd = DnsWatchdog(adapter.executor())
+    for t in (0.0, 10.0, 30.0, 55.0):
+        wd.tick(now=t)
+    c.check("55s in, still under the 60s default grace: not yet healed",
+            wd.heals == 0)
+    wd.tick(now=61.0)
+    c.check("61s in, past the bound: healed", wd.heals == 1)
 
     # ================================================================ [7]
     print("\n[7] WATCHDOG never acts on a HEALTHY interception")
@@ -172,7 +208,8 @@ def main() -> int:
                      set_servers=_fail, reset_auto=_fail)
     wd = DnsWatchdog(ex)
     try:
-        wd.tick()
+        wd.tick(now=0.0)      # first sighting of the redirect - starts the grace clock
+        wd.tick(now=wd.startup_grace_seconds + 5.0)     # past grace -> executor is called
         c.check("watchdog survived an executor exception", True)
         c.check("the error was recorded, not raised", len(wd.status()["errors"]) >= 1)
     except Exception as exc:  # noqa: BLE001

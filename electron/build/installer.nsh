@@ -32,6 +32,25 @@
 !macroend
 
 !macro customInstall
+  ; --- The engine binary must actually be on disk before anything else here
+  ; touches it. Found on a real machine (2026-09-07): three separate installs
+  ; (2026-08-20, 2026-08-23, 2026-09-05) each finished "successfully" with
+  ; resources\engine\ containing nssm.exe but NOT valkyrie.exe -- the extract
+  ; step silently dropped the one file the whole service depends on (most
+  ; likely AV real-time scanning holding a lock on a freshly-written unsigned
+  ; SYSTEM-service binary during the upgrade race customInit guards above; the
+  ; exact mechanism was never pinned down, which is precisely why this must be
+  ; a hard, visible check rather than trusted to not recur). Every subsequent
+  ; boot then failed with SCM error 7000/7024 "the system cannot find the file
+  ; specified", with nothing in the installer UI ever saying so. An install
+  ; that cannot run Valkyrie's actual engine is not a successful install.
+  IfFileExists "$INSTDIR\resources\engine\valkyrie.exe" engine_present engine_missing
+  engine_missing:
+    DetailPrint "[ERROR] resources\engine\valkyrie.exe was not written by this installer."
+    MessageBox MB_OK|MB_ICONSTOP "Valkyrie's engine file did not install correctly $\r$\n$\r$\n(resources\engine\valkyrie.exe is missing). Protection cannot run without it.$\r$\n$\r$\nThis can happen if antivirus real-time scanning locked the file during setup. Please close other security software temporarily and run this installer again, or download a fresh copy."
+    Abort
+  engine_present:
+
   ; --- Visual C++ runtime (bundled only if build_app.ps1 fetched it) ---------
   IfFileExists "$INSTDIR\resources\engine\vc_redist.x64.exe" vc_yes vc_no
   vc_yes:
@@ -60,7 +79,11 @@
   nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\resources\engine\service-install.ps1" -Root "$INSTDIR\resources\engine"'
   Pop $0
   ${If} $0 != 0
-    DetailPrint "[WARNING] Installing the Valkyrie service failed (exit $0)."
+    ; This is the actual product, not an optional extra like the tasks above -
+    ; a DetailPrint alone scrolls out of view and the installer still reports
+    ; "Completed" while protection silently never runs. Surface it.
+    DetailPrint "[ERROR] Installing the Valkyrie service failed (exit $0)."
+    MessageBox MB_OK|MB_ICONEXCLAMATION "The Valkyrie protection service could not be installed (exit code $0).$\r$\n$\r$\nThe app will still open, but protection will not be running. Check $\r$\n%ProgramData%\Valkyrie\service_stderr.log, or reinstall as Administrator."
   ${EndIf}
 !macroend
 

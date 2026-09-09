@@ -40,13 +40,14 @@ Handler = Callable[[dict], None]
 class EventBus:
     """Thread-safe, exception-isolating, synchronous pub/sub over dict events."""
 
-    __slots__ = ("_name", "_subs", "_lock")
+    __slots__ = ("_name", "_subs", "_lock", "_published", "_delivered", "_failed")
 
     def __init__(self, name: str = "") -> None:
         self._name = name
         # Each entry: (handler, allowed_types_or_None)
         self._subs: list[tuple[Handler, Optional[frozenset]]] = []
         self._lock = threading.RLock()
+        self._published = self._delivered = self._failed = 0
 
     # ------------------------------------------------------------------
     # Subscription
@@ -84,14 +85,18 @@ class EventBus:
         etype = event.get("type") if isinstance(event, dict) else None
         with self._lock:
             subs = list(self._subs)
+            self._published += 1
         for handler, allowed in subs:
             if allowed is not None and etype not in allowed:
                 continue
             try:
                 handler(event)
             except Exception:
-                # Deliberate: one bad subscriber must never break ingestion.
-                pass
+                with self._lock:
+                    self._failed += 1
+            else:
+                with self._lock:
+                    self._delivered += 1
 
     # ------------------------------------------------------------------
     # Introspection
@@ -100,6 +105,13 @@ class EventBus:
     def subscriber_count(self) -> int:
         with self._lock:
             return len(self._subs)
+
+    def stats(self) -> dict:
+        """Delivery attempts, not sensor completeness or durable acknowledgments."""
+        with self._lock:
+            return {"published": self._published, "delivered": self._delivered,
+                    "failed": self._failed, "subscribers": len(self._subs),
+                    "mode": "synchronous-best-effort"}
 
     def has_subscribers(self) -> bool:
         with self._lock:

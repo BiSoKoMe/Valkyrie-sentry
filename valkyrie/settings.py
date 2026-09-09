@@ -112,6 +112,20 @@ SPECS: list[Spec] = [
     # --- Web dashboard ---
     Spec("WEB_HOST", "str", "Dashboard bind address (127.0.0.1 = loopback-only)"),
     Spec("WEB_PORT", **_PORT, help="Dashboard port"),
+    # --- NYX privacy engine ---
+    # Found live (2026-09-07): NYX_ACT had no CLI flag, no API, no settings-
+    # file entry and no UI toggle anywhere in the codebase - a hardcoded
+    # `False` in config.py with a comment reading "until you turn this on",
+    # and literally no way for anyone to turn it on without editing source
+    # and rebuilding. NYX_ACT is the one setting that decides whether NYX
+    # ever actually rewrites/fakes a leaking value instead of merely
+    # observing and reporting it - i.e. whether the product's core "keep
+    # your data from reaching a data broker" claim does anything beyond
+    # logging the leak after it already happened. Every other override here
+    # only needs a config file or an env var; this one is exactly as
+    # security-relevant and was the one actually missing.
+    Spec("NYX_ACT", "bool", "NYX rewrites leaking personal data into consistent "
+                            "persona fakes instead of only observing it"),
     # --- Fleet control plane ---
     # FLEET_* specs removed 2026-08-04: the fleet control plane moved to
     # experimental/ (ADR 0044). Leaving a user-settable knob for a subsystem

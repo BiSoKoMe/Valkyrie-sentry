@@ -46,24 +46,26 @@
 
       <div class="content">
         <div class="topbar">
-          <div class="page-title" id="pageTitle">Dashboard</div>
+          <h1 class="page-title" id="pageTitle">Overview</h1>
           <div class="spacer"></div>
           <div class="metric-chip"><span class="k">Status</span><span class="v" id="tbStatus">—</span></div>
           <div class="metric-chip"><span class="k">Blocked</span><span class="v" id="tbBlocked">0</span></div>
-          <div class="metric-chip"><span class="k">Privacy</span><span class="v" id="tbPrivacy">—</span></div>
+          <div class="metric-chip"><span class="k">Privacy actions</span><span class="v" id="tbPrivacy">—</span></div>
           <div class="metric-chip"><span class="k">Uptime</span><span class="v" id="tbUptime">—</span></div>
           <button class="icon-btn command-trigger" id="searchBtn" title="Search everything (Ctrl+K)" aria-label="Search everything"><span class="search-icon"></span><span class="search-label">Search</span><kbd>Ctrl K</kbd></button>
           <button class="icon-btn" id="notifBtn" title="Notifications" aria-label="Open logs and notifications"></button>
           <div class="device-local" title="Telemetry remains on this device"><span></span>On-device</div>
         </div>
 
-        <div class="page" id="page"></div>
+        <div class="sr-only" id="pageStatus" role="status" aria-live="polite" aria-atomic="true"></div>
+        <main class="page" id="page" aria-labelledby="pageTitle" aria-busy="true"></main>
       </div>
     </div>
   </div>
 
   <script src="icons.js"></script>
   <script src="view-state.js"></script>
+  <script src="response-status.js"></script>
   <script src="command-index.js"></script>
   <script src="data-table.js"></script>
   <script src="app.js"></script>

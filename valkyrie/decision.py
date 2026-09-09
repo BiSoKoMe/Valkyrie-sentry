@@ -295,7 +295,7 @@ def _base_decision(sig: Signal, tc: ThreatClass, conf: Confidence,
         if conf == Confidence.MEDIUM:
             return Decision(
                 Action.BLOCK, tc, conf,
-                reason=f"Medium-confidence surveillance flow ({sig.entity}). Block "
+                reason=f"Medium-confidence surveillance flow ({sig.entity or sig.technique}). Block "
                        f"and deceive telemetry-like traffic; recommend High-Risk.",
                 user_message="Big V blocked a suspicious connection and is "
                              "watching more closely.",

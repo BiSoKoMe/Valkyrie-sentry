@@ -79,6 +79,15 @@ INCIDENT_STATES = ("open", "investigating", "contained", "resolved", "dismissed"
 RESPONSE_STATES = ("dry_run", "pending", "succeeded", "failed", "skipped")
 
 
+def normalize_response_status(status: str) -> str:
+    """Normalize legacy plugin results once, before accounting and persistence."""
+    aliases = {"ok": "succeeded", "success": "succeeded", "completed": "succeeded"}
+    normalized = aliases.get(status, status) if isinstance(status, str) else None
+    if normalized not in RESPONSE_STATES:
+        raise ValueError("responder returned an unsupported result status")
+    return normalized
+
+
 # ---------------------------------------------------------------------------
 # Detection
 # ---------------------------------------------------------------------------
@@ -152,6 +161,7 @@ class ResponseAction:
     operator:    str = "local"              # who requested it
     dry_run:     bool = True
     incident_id: str = ""
+    audit_state: str = "not_configured"     # preflight/final persistence state
     id:          str = field(default_factory=lambda: _new_id("act"))
     timestamp:   str = field(default_factory=_now_iso)
 

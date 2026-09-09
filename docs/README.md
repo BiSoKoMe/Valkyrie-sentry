@@ -8,6 +8,13 @@ interchangeable.
 
 ## Start here
 
+- [Three-component engineering roadmap](ENGINEERING_ROADMAP_2026-09-05.md) -
+  source-grounded plan for Valkyrie Endpoint, NYX privacy and Aegis investigation,
+  including release blockers, migration, priorities and measurable gates.
+- [Three-component contract](adr/0060-three-component-contract.md) - ownership,
+  authority and compatibility rules for Valkyrie, NYX and Aegis.
+- [Implementation status](IMPLEMENTATION_STATUS_2026-09-07.md) - completed
+  hardening work, current evidence, and the release gates that remain open.
 - [Causal authority research paper](CAUSAL_AUTHORITY_RESEARCH_PAPER.md) - the
   newest fixed-corpus experiment, results, limitations, and next hypothesis.
 - [Causal authority research paper PDF](../output/pdf/Valkyrie_Causal_Authority_Research_Paper.pdf) -

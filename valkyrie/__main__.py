@@ -1263,6 +1263,30 @@ def main() -> None:
         except PermissionError:
             console.print(f"[red]✗ Cannot bind port {args.port} — try sudo or use --port 5353[/red]")
             dns_server = None
+        except OSError as _bind_exc:
+            # PermissionError (above) only ever covers Linux's "port <1024
+            # needs root" case (EACCES/EPERM). A port already held by ANOTHER
+            # program - a VPN client's local DNS stub, Docker Desktop, WSL2,
+            # Pi-hole, or an orphaned prior Valkyrie process that never
+            # released the socket - raises a plain OSError on Windows
+            # (WinError 10048, WSAEADDRINUSE), which this except clause did
+            # not catch at all. Uncaught, that took down the ENTIRE engine
+            # process at startup - not just DNS - and NSSM's AppExit=Restart
+            # then restarted it into the identical crash every 5 seconds
+            # forever, with nothing anywhere saying why. A real client with
+            # any of the above already running would see "not protected"
+            # permanently and have no way to find out this was the cause.
+            # DNS interception is one feature, not the whole product: refuse
+            # only it, loudly, and let EDR/firewall/everything else start.
+            console.print(
+                f"[red]✗ Cannot bind DNS on {args.host}:{args.port} — "
+                f"{_bind_exc}[/red]\n"
+                f"  [yellow]Another program is very likely already using this "
+                f"port (a VPN client, Docker Desktop, WSL, Pi-hole, or "
+                f"another DNS tool). DNS protection is disabled; the rest of "
+                f"Valkyrie will still start.[/yellow]"
+            )
+            dns_server = None
     elif args.debug:
         console.print("[yellow]DNS interceptor disabled (--no-dns)[/yellow]")
 
@@ -1724,6 +1748,28 @@ def main() -> None:
     for _cname, _csvc, _ckind in _reg_specs:
         if _csvc is not None:
             registry.register_service(_cname, _csvc, kind=_ckind)
+    # DNS interception is the product's core protection mechanism, yet it was
+    # never in the list above - found live (2026-09-07) on an installed
+    # machine where the adapter WAS pointed at the sinkhole and resolution
+    # genuinely worked, but the desktop app still showed "not protected"
+    # forever: _dns_active() (web/server.py) reads this SAME registry for a
+    # component literally named "dns_interceptor", which never existed here -
+    # only in the separate SelfHealing watchdog's own component list, which
+    # this API never reads. Registered explicitly (not via the generic tuple
+    # list above) because its liveness method is named ``is_listening``, not
+    # the ``is_healthy``/``is_running`` convention Component._probe_health()
+    # auto-detects - passing that convention's default ("assumed up while
+    # wired") here would silently recreate the exact stale-marker failure
+    # _dns_active()'s own docstring was written to prevent.
+    if dns_server is not None:
+        from .components import Component, Health, STATE_DOWN, STATE_UP
+
+        def _dns_interceptor_health() -> Health:
+            return (Health(STATE_UP) if dns_server.is_listening()
+                    else Health(STATE_DOWN, "not listening"))
+
+        registry.register(Component("dns_interceptor", dns_server, kind="network",
+                                     health_fn=_dns_interceptor_health))
     _tick(f"Component registry ({len(registry.names())} plugins)", time.monotonic())
 
     # ------------------------------------------------------------------
@@ -1782,7 +1828,7 @@ def main() -> None:
                 f"[yellow]⚠ Web dashboard bound to {args.web_host} (off-loopback).[/yellow]\n"
                 f"  Live DNS/browsing history is reachable from the network. "
                 f"Off-loopback API and WebSocket calls now require the control "
-                f"token in [cyan]data/control_token.txt[/cyan] "
+                f"token in [cyan]data/control/token[/cyan] "
                 f"(header X-Valkyrie-Token or ?token=…)."
             )
         if args.debug:
@@ -1891,6 +1937,42 @@ def main() -> None:
             healer.register("process_watcher",
                             proc_watcher.is_running,
                             proc_watcher.start)
+
+        # The event loop itself. Every check above runs a component that
+        # lives INSIDE the same asyncio loop the web server serves requests
+        # on - if that loop ever wedges solid (a future regression of the
+        # class fixed in the persistence-collector GIL-hold incident; see
+        # the startup-deafness notes in telemetry_watchdog.py), every one of
+        # those checks freezes right alongside it, and the self-heal thread
+        # would keep reporting them as merely "unhealthy" forever without
+        # ever actually being able to act, because their recovery also
+        # depends on that same loop. This check is different on purpose: the
+        # decision (telemetry_watchdog.loop_is_alive) runs entirely off-loop
+        # on this thread, and its "recovery" is not asking the loop to do
+        # anything - it ends the whole process. NSSM's AppExit=Restart brings
+        # up a clean instance within its 5s delay, turning "stuck forever,
+        # silently" into "down for a few seconds."
+        #
+        # Relies on SelfHealing._loop() sleeping BEFORE its first check_now()
+        # (see self_heal.py): this fires first ~SELF_HEAL_INTERVAL (30s) after
+        # start(), by which point _loop_stall_monitor (~1 beat/s) has already
+        # beaten dozens of times, so "never beaten yet" can never be mistaken
+        # for a genuine freeze here. If SelfHealing is ever changed to check
+        # immediately on start(), this registration needs its own startup
+        # grace added - it does not have one today.
+        if args.web:
+            from .telemetry_watchdog import loop_is_alive
+
+            def _restart_on_frozen_loop() -> None:
+                import os
+                print("[self-heal] event loop has not beaten in over 60s - "
+                      "forcing a hard process restart", file=sys.stderr, flush=True)
+                os._exit(1)
+
+            healer.register(
+                "event_loop",
+                lambda: loop_is_alive(getattr(web_state, "loop_heartbeat", None)),
+                _restart_on_frozen_loop)
 
         healer.start()
         if args.web:

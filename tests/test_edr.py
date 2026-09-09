@@ -192,12 +192,12 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 
     # --- Response actions: dry-run, audit, protected PIDs ---
     print("\n-- Response actions --------------------------------")
-    # block_domain / unblock_domain route through the ANALYSIS memory now (no
-    # manual rules file). Give the responder a recording intelligence stub.
+    # block_domain / unblock_domain use a separate temporary override. Give
+    # the responder a recording intelligence stub.
     class _Intel:
-        def __init__(self): self.blocked = set(); self.good = set()
-        def remember_block(self, d, r=""): self.blocked.add(d)
-        def remember_good(self, d, r=""): self.good.add(d)
+        def __init__(self): self.blocked = set(); self.released = set()
+        def apply_response_block(self, d, expires_at): self.blocked.add(d); return True
+        def release_response_block(self, d): self.released.add(d)
     _intel = _Intel()
     engine._ctx.intelligence = _intel
     r1 = engine.respond("block_domain", "c2.evil", dry_run=True, incident_id=inc_id)
@@ -217,14 +217,14 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     check("response recorded in timeline",
           any(t["kind"] == "response" for t in detail["timeline"]))
 
-    # Real block_domain records the domain in analysis memory - NO file written,
-    # no manual list. The DNS engine enforces it via that same memory next lookup.
+    # Real block_domain records a temporary override. The DNS engine enforces it
+    # through the same intelligence lookup on the next query.
     got = engine.respond("block_domain", "tracker.test", dry_run=False)
     check("real block_domain succeeds", got["status"] == "succeeded")
-    check("blocked domain remembered in analysis memory",
+    check("temporary domain block reaches intelligence",
           "tracker.test" in _intel.blocked)
     engine.respond("unblock_domain", "tracker.test", dry_run=False)
-    check("unblock marks the domain known-good", "tracker.test" in _intel.good)
+    check("unblock removes only the temporary override", "tracker.test" in _intel.released)
 
     # --- Incident lifecycle ---
     print("\n-- Incident lifecycle ------------------------------")

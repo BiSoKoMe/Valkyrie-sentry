@@ -668,9 +668,7 @@ def fake_outbound(method, url, headers=None, body=None, persona=None,
     vals = _personal_values(url, headers, body, first_party_origin)
     if not vals:
         return url, body, []
-    if persona is None:
-        from .persona import current_persona
-        persona = current_persona()
+    persona = _site_persona(url, headers, first_party_origin, persona)
 
     repl: dict = {}
     faked: list[str] = []
@@ -695,6 +693,23 @@ def fake_outbound(method, url, headers=None, body=None, persona=None,
         else:
             new_body = _apply_repl(str(body), repl)
     return new_url, new_body, faked
+
+
+def _site_persona(url, headers, first_party_origin, persona):
+    """Resolve the persona to fake with: the caller's explicit persona wins
+    (tests and callers that already manage their own identity), otherwise the
+    identity is scoped to (first-party, third-party) so two unrelated sites
+    embedding the same tracker cannot compare notes on a fake ad_id any more
+    than they could on a real one - see persona.py's SITE-SCOPED PERSONAS
+    note. Falls back to the bare machine persona when there is no first party
+    to key on, matching this module's own third-party gate elsewhere."""
+    if persona is not None:
+        return persona
+    from .persona import persona_for_site
+    dest_host = _host_of(url)
+    dest_base = registrable_base(dest_host) if dest_host else ""
+    fp = (first_party_origin or "").strip() or first_party_of(headers)
+    return persona_for_site(fp, dest_base)
 
 
 # Header names inspect_outbound() itself refuses to scan for an identifier,
@@ -727,8 +742,8 @@ def fake_outbound_headers(method, url, headers=None, body=None, persona=None,
     if not fp or fp == dest_base:
         return {}, []
     if persona is None:
-        from .persona import current_persona
-        persona = current_persona()
+        from .persona import persona_for_site
+        persona = persona_for_site(fp, dest_base)
 
     changed: dict = {}
     for key, value in dict(headers or {}).items():

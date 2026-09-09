@@ -26,6 +26,7 @@ Two modes:
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Optional
 
@@ -709,8 +710,23 @@ class Investigator:
                     target = entities[0] if entities else ""
                     rationale = "Stop this endpoint from reaching the malicious domain."
                 elif act == "kill_process":
-                    target = str(display_process and _first_pid(detections) or "")
+                    identity = _first_process_identity(detections) if display_process else None
+                    # response.py's KillProcessResponder refuses a bare PID for
+                    # a real (non-dry-run) termination - a PID alone can be
+                    # reused by an unrelated process between detection and
+                    # action. Send the paired create_time whenever the sensor
+                    # captured one so the real action - not just its dry-run
+                    # preview - actually works; the responder re-checks this
+                    # against the live process immediately before acting.
+                    if identity and identity["create_time"] > 0:
+                        target = json.dumps(identity)
+                    else:
+                        target = str(identity["pid"]) if identity else ""
                     rationale = f"Terminate the offending process ({display_process or 'unknown'})."
+                    if identity and identity["create_time"] <= 0:
+                        rationale += (" (this sensor did not capture a process start time; "
+                                      "the real action will be refused as ambiguous — isolate "
+                                      "the host instead, or wait for a fresher detection)")
                 elif act == "isolate_host":
                     rationale = ("Network-contain this endpoint until triaged — this "
                                  "category indicates possible active C2.")
@@ -1066,8 +1082,21 @@ def _is_readable_indicator(value: str) -> bool:
     return True
 
 
-def _first_pid(detections: list) -> int:
+def _first_process_identity(detections: list) -> Optional[dict]:
+    """{"pid", "create_time"} from the first detection with a real PID.
+
+    Both fields come from the SAME detection - pairing one detection's pid
+    with a different detection's create_time would be its own identity bug.
+    create_time is 0.0 when the sensor that raised this detection never
+    captured one (schema.py's Detection has no such column; it rides in the
+    JSON `details` blob - see engine.py's det_kwargs).
+    """
     for d in detections:
         if d.process_pid:
-            return d.process_pid
-    return 0
+            details = d.details if isinstance(d.details, dict) else {}
+            try:
+                create_time = float(details.get("process_create_time") or 0.0)
+            except (TypeError, ValueError):
+                create_time = 0.0
+            return {"pid": d.process_pid, "create_time": create_time}
+    return None

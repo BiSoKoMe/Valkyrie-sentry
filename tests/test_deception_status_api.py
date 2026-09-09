@@ -113,9 +113,14 @@ def main() -> int:
             and " " in persona_block["browser"])
 
     # A monitoring-only endpoint must never let a caller change the identity
-    # it reports - there is deliberately no POST here to pin that.
+    # it reports - there is deliberately no POST here to pin that. An
+    # unauthenticated POST to ANY /api/* path is now refused before routing
+    # even runs (the blanket local-credential mutation gate in web/server.py),
+    # so this arrives as 403, not the plain "method not supported" 405 a
+    # route-less POST used to produce - a STRONGER guarantee than the one
+    # this check originally pinned, not a weaker one.
     c.check("no POST route exists for /api/deception/* (read-only surface)",
-            client.post("/api/deception/status").status_code == 405)
+            client.post("/api/deception/status").status_code in (403, 405))
 
     return c.finish()
 

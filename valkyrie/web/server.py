@@ -193,6 +193,12 @@ def _build_coverage() -> dict:
         # EdrEngine.available_actions() is the dispatchable-action surface;
         # _check_responder only needs that one method.
         responder_registry=state.edr,
+        # The same singleton /api/stats reports as `tls_inspection_active`.
+        # Without it the tls_inspector control fell back to "cannot confirm it
+        # is actually running" while this authoritative answer sat one field
+        # away -- and for TLS specifically, "off" (NYX cannot see inside HTTPS
+        # at all) is not a softer version of "on".
+        tls_inspector=state.tls_inspector,
     )
     summary = summarize(check_all(ctx))
     return {
@@ -411,23 +417,11 @@ def _build_stats() -> dict:
 log = logging.getLogger("valkyrie.web")
 
 _CONTROL_TOKEN = secrets.token_urlsafe(24)
-_CONTROL_TOKEN_FILE = DATA_DIR / "control_token.txt"
-try:
-    _CONTROL_TOKEN_FILE.write_text(_CONTROL_TOKEN, encoding="utf-8")
-    # This file IS the credential for every state-changing route - isolate the
-    # host, kill a process, disable telemetry protection, shut the engine down.
-    # Written under DATA_DIR, which on Windows inherits a BUILTIN\Users:read ACE
-    # from %ProgramData%, so without this any local account could read the token
-    # and drive those routes. The routes' auth was correct; the key to it was
-    # lying in the open, which makes the whole gate decorative.
-    from ..secure_file import harden as _harden_secret
-    _ok, _detail = _harden_secret(_CONTROL_TOKEN_FILE)
-    if not _ok:
-        log.error("control token file could not be protected (%s) — any local "
-                  "account may be able to read it and drive control routes",
-                  _detail)
-except OSError:
-    pass
+_CONTROL_TOKEN_FILE = DATA_DIR / "control" / "token"
+from ..control_credentials import publish as _publish_control_credential
+_CONTROL_TOKEN_PUBLISHED, _control_detail = _publish_control_credential(DATA_DIR, _CONTROL_TOKEN)
+if not _CONTROL_TOKEN_PUBLISHED:
+    log.error("HTTP control disabled: %s", _control_detail)
 
 
 def _peer_is_local(request) -> bool:
@@ -451,7 +445,7 @@ def _origin_is_local(request) -> bool:
 
 def _token_ok(request) -> bool:
     token = request.headers.get("x-valkyrie-token") or request.query_params.get("token", "")
-    return bool(token) and secrets.compare_digest(token, _CONTROL_TOKEN)
+    return _CONTROL_TOKEN_PUBLISHED and bool(token) and secrets.compare_digest(token, _CONTROL_TOKEN)
 
 
 def _control_guard(request):
@@ -725,6 +719,27 @@ def create_app(ctx: Optional[AppContext] = None):
         # control/EDR POSTs keep their own stricter loopback+origin+token guards
         # layered on top of this.
         path = request.url.path
+        browser_ingest = path == "/api/browser/events" and request.method == "POST"
+        if browser_ingest:
+            # Observation-only credential: never require or grant the service
+            # control secret to a browser native-messaging host.
+            collector = state.browser_context
+            if (not _peer_is_local(request) or not _origin_is_local(request)
+                    or collector is None
+                    or not collector.token_ok(request.headers.get("x-valkyrie-browser-token", ""))):
+                return JSONResponse({"error": "authorized browser observation session required"}, status_code=403)
+        # All mutations share one gate, including future routes. A token in a
+        # URL is never authority for a mutation (URLs enter histories/logs).
+        if (path.startswith("/api/") and not browser_ingest
+                and request.method in {"POST", "PUT", "PATCH", "DELETE"}):
+            token = request.headers.get("x-valkyrie-token", "")
+            if (not _CONTROL_TOKEN_PUBLISHED or not _peer_is_local(request)
+                    or not _origin_is_local(request) or not token
+                    or not secrets.compare_digest(token, _CONTROL_TOKEN)):
+                return JSONResponse(
+                    {"error": "control requires a protected local credential and authorized local session"},
+                    status_code=403,
+                )
         if (path.startswith("/api/")
                 and not _peer_is_local(request)
                 and not _token_ok(request)):
@@ -735,6 +750,56 @@ def create_app(ctx: Optional[AppContext] = None):
         return await call_next(request)
 
     # --- Routes ---
+
+    @app.get("/api/v1/capabilities")
+    def component_capabilities():
+        from ..capabilities import component_contract
+        return component_contract()
+
+    def _aegis_sensor_health() -> Optional[dict]:
+        # Aegis's own read of "is there evidence I'm not seeing right now" -
+        # the watchdog already tracks per-collector staleness for
+        # /api/telemetry/watchdog; a case view with zero open incidents must
+        # not look identical whether that is because nothing happened or
+        # because a sensor silently stopped feeding it.
+        watchdog = getattr(state, "telemetry_watchdog", None)
+        return watchdog.status() if watchdog is not None else None
+
+    @app.get("/api/v1/aegis/status")
+    def aegis_investigation_status():
+        if state.edr is None:
+            return _subsystem_unavailable("EDR")
+        from ..aegis import AegisInvestigator
+        return AegisInvestigator(state.edr, sensor_health_fn=_aegis_sensor_health).status()
+
+    @app.get("/api/v1/aegis/cases")
+    def aegis_cases(limit: int = 100, status: str = None):
+        if state.edr is None:
+            return _subsystem_unavailable("EDR")
+        from ..aegis import AegisInvestigator
+        return {"schema_version": 1, "cases": AegisInvestigator(state.edr).cases(limit=limit, status=status)}
+
+    @app.get("/api/v1/aegis/cases/{case_id}")
+    def aegis_case(case_id: str):
+        if state.edr is None:
+            return _subsystem_unavailable("EDR")
+        from ..aegis import AegisInvestigator
+        case = AegisInvestigator(state.edr).case(case_id)
+        return case if case is not None else JSONResponse({"error": "case not found"}, status_code=404)
+
+    @app.get("/api/nyx/exposure/status")
+    def nyx_exposure_status():
+        if state.edr is None:
+            return _subsystem_unavailable("EDR")
+        from ..aegis import NyxExposure
+        return NyxExposure(state.edr).status()
+
+    @app.get("/api/nyx/exposure/ledger")
+    def nyx_exposure_ledger(limit: int = 100):
+        if state.edr is None:
+            return _subsystem_unavailable("EDR")
+        from ..aegis import NyxExposure
+        return {"entries": NyxExposure(state.edr).ledger(limit)}
     #
     # THE ASYNC RULE FOR EVERY ROUTE BELOW - read before adding one.
     #
@@ -1391,12 +1456,12 @@ def create_app(ctx: Optional[AppContext] = None):
     # --- System control (launcher / dashboard buttons) ---
     @app.get("/api/system/token")
     def system_token(request: Request):
-        # Same-origin loopback only. Lets the dashboard fetch the control
-        # token it needs for restart/stop. A cross-origin page cannot read
-        # this response (no CORS headers) and fails the origin check anyway.
-        if not _peer_is_local(request) or not _origin_is_local(request):
-            return JSONResponse({"error": "forbidden"}, status_code=403)
-        return {"token": _CONTROL_TOKEN, "web_port": int(state.web_port or 0)}
+        # Loopback and Origin are not Windows caller authentication. Never
+        # bootstrap a privileged credential through the transport it protects.
+        return JSONResponse(
+            {"error": "HTTP credential bootstrap is disabled; use the authorized desktop session"},
+            status_code=403,
+        )
 
     @app.post("/api/system/restart")
     def system_restart(request: Request):
@@ -1659,9 +1724,14 @@ def create_app(ctx: Optional[AppContext] = None):
         if not action:
             return JSONResponse({"error": "action is required"}, status_code=400)
         # dry_run defaults to True - a real action must be explicitly requested.
-        dry_run = bool(body.get("dry_run", True))
+        dry_run = body.get("dry_run", True)
+        if type(dry_run) is not bool:
+            return JSONResponse({"error": "dry_run must be a boolean"}, status_code=400)
+        target = body.get("target", "")
+        if action == "kill_process" and isinstance(target, dict):
+            target = json.dumps(target)
         return state.edr.respond(
-            action, str(body.get("target", "")), dry_run=dry_run,
+            action, str(target), dry_run=dry_run,
             operator="dashboard", incident_id=str(body.get("incident_id", "")))
 
     @app.get("/api/edr/hunt/saved")

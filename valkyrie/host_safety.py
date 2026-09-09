@@ -44,6 +44,7 @@ reviewed shim.
 
 from __future__ import annotations
 
+import time as _time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Optional
@@ -89,12 +90,17 @@ class DnsAction:
 
 def decide_dns_action(current_servers: tuple,
                       resolver_alive: bool,
-                      saved_original: Optional[tuple]) -> DnsAction:
+                      saved_original: Optional[tuple], *,
+                      in_startup_grace: bool = False) -> DnsAction:
     """Decide the ONE safe action for the adapter's current DNS state. Pure.
 
     ``current_servers``  what the adapter's DNS is set to right now.
     ``resolver_alive``   is Valkyrie's local resolver actually answering?
     ``saved_original``   the pre-redirect servers we recorded, or None.
+    ``in_startup_grace``  true only while the CALLER's own resolver has never
+        once been confirmed alive AND its own startup budget has not yet
+        elapsed - computed by the caller (DnsWatchdog), never guessed here,
+        so this function stays a pure decision over facts it is handed.
 
     The decision tree, biased toward connectivity at every branch:
     """
@@ -118,6 +124,22 @@ def decide_dns_action(current_servers: tuple,
         return DnsAction(DnsActionKind.LEAVE, (),
                          "adapter is routed through Valkyrie's resolver and the "
                          "resolver is answering; interception is healthy")
+
+    # --- routed through us, not answering YET, but never proven alive and
+    # still inside our own startup budget: this is what "Start Protection"
+    # looks like for the first several seconds on a real machine (blocklist
+    # download, Sysmon setup, Unbound bring-up all run before the sinkhole
+    # is genuinely ready) - NOT the 2026-08-23 failure, which was a resolver
+    # that HAD been answering and then died. Reacting here, on tick one,
+    # undid the very thing the user just clicked, every time. Give it the
+    # grace; a resolver that answered even once loses this branch for good
+    # via `saved_original`/ever-alive tracking in the watchdog, so a genuine
+    # later crash is still healed immediately, with no added delay.
+    if in_startup_grace:
+        return DnsAction(DnsActionKind.LEAVE, (),
+                         "adapter is routed through Valkyrie and the resolver "
+                         "has not answered yet, but startup is still within "
+                         "its grace window; not yet treating this as a strand")
 
     # --- routed through us AND we are NOT answering: the strand condition ---
     # This is the exact 2026-08-23 failure. Restore connectivity NOW.
@@ -157,16 +179,29 @@ class DnsWatchdog:
     State is intentionally minimal and in-memory; the watchdog's correctness
     does not depend on persistence, because its whole job is to recover a host
     whose prior Valkyrie process may have died without cleaning up. Even with an
-    empty saved_original it still frees the host (RESET_TO_AUTO)."""
+    empty saved_original it still frees the host (RESET_TO_AUTO).
+
+    ``startup_grace_seconds`` bounds how long a redirect gets to prove its
+    resolver alive before "not answering yet" is treated as a strand rather
+    than ordinary startup (blocklist download, Sysmon setup, Unbound bring-up
+    all run before the sinkhole can answer). It applies ONLY until the
+    resolver is confirmed alive for the first time - `_ever_alive` makes that
+    a one-way door, so a resolver that dies after genuinely working is healed
+    on the very next tick, with no grace and no added delay, exactly as
+    before."""
     executor: DnsExecutor
     saved_original: Optional[tuple] = None
     last_action: Optional[DnsAction] = None
     heals: int = 0                               # count of connectivity rescues
+    startup_grace_seconds: float = 60.0
     _log: list = field(default_factory=list)
+    _ever_alive: bool = False
+    _first_redirect_seen_at: Optional[float] = None
 
-    def tick(self) -> DnsAction:
+    def tick(self, now: Optional[float] = None) -> DnsAction:
         """One observe->decide->act cycle. Never raises: a watchdog that can
         crash is not a safety device."""
+        now = now if now is not None else _time.time()
         try:
             current = tuple(self.executor.read_servers() or ())
         except Exception:
@@ -180,7 +215,24 @@ class DnsWatchdog:
         except Exception:
             alive = False   # unknown resolver == treat as dead == bias to restore
 
-        action = decide_dns_action(current, alive, self.saved_original)
+        if alive:
+            self._ever_alive = True
+        redirected = is_loopback_redirect(current)
+        if redirected and self._first_redirect_seen_at is None:
+            self._first_redirect_seen_at = now
+        elif not redirected:
+            # No longer redirected (host_safety itself just handled that, or
+            # something else changed the adapter) - a LATER redirect is a new
+            # attempt and earns its own fresh grace window, not whatever time
+            # happens to be left over from a previous, unrelated one.
+            self._first_redirect_seen_at = None
+
+        in_grace = (redirected and not self._ever_alive
+                    and self._first_redirect_seen_at is not None
+                    and (now - self._first_redirect_seen_at) < self.startup_grace_seconds)
+
+        action = decide_dns_action(current, alive, self.saved_original,
+                                   in_startup_grace=in_grace)
         self.last_action = action
 
         try:

@@ -119,3 +119,8 @@ electron/_verify_driver_TEMP.js
 # review session, never a source of truth.
 .impeccable/
 output/ui/
+
+# Real host captures: redacted structure, but still a fingerprint of the
+# capturing machine (its process names). Regenerate locally with
+# tools/capture_causal_corpus.py; never publish.
+redteam/evaluation/real_causal_corpus*.json

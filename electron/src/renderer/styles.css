@@ -33,7 +33,7 @@
   --text-0: #ffffff;        /* primary */
   --text-1: #b8b8b8;        /* secondary */
   --text-2: #7a7a7a;        /* tertiary / labels */
-  --text-3: #464646;        /* faintest */
+  --text-3: #858585;        /* faintest meaningful text; AA on black */
 
   /* The ONLY color in the product: critical severity. Nothing else. */
   --crit: #e14b3f;
@@ -231,7 +231,7 @@ html, body {
   display: flex; align-items: center; gap: 20px;
   padding: 0 22px; border-bottom: 1px solid var(--line);
 }
-.topbar .page-title { font-size: 14px; font-weight: 700; letter-spacing: -0.005em; }
+.topbar .page-title { margin: 0; font-size: 14px; font-weight: 700; letter-spacing: -0.005em; }
 .topbar .spacer { flex: 1; }
 .metric-chip { display: flex; flex-direction: column; gap: 2px; min-width: 70px; }
 .metric-chip .k { font-size: 9.5px; color: var(--text-3); letter-spacing: 0.07em; text-transform: uppercase; font-weight: 600; }
@@ -251,6 +251,10 @@ html, body {
 
 /* Scrollable page body */
 .page { flex: 1; overflow-y: auto; padding: 30px 26px 40px; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
 
 /* Sleek monochrome scrollbars EVERYWHERE (sidebar, tables, panels…) — replaces
    the chunky native Windows scrollbar with the arrow buttons. Thin, rounded,
@@ -466,6 +470,7 @@ html, body {
   border: 1px solid var(--line); border-radius: var(--radius);
   padding: 20px 22px; margin: 0 2px 22px;
 }
+.headline-block.compact-headline { padding: 14px 18px; margin-bottom: 10px; }
 .hl-top {
   font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
   color: var(--text-2); margin-bottom: 10px;
@@ -531,6 +536,7 @@ html, body {
 .btn.danger { color: var(--text-1); }
 .btn.danger:hover { border-color: rgba(225,75,63,0.45); color: var(--crit); background: var(--crit-dim); }
 .btn[disabled] { opacity: 0.4; pointer-events: none; }
+.action-reason { color: var(--text-2); font-size: 11.5px; line-height: 1.4; }
 
 .list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin-top: 6px; }
 .list-row {

@@ -176,6 +176,7 @@ class ValkyrieAddon:
             "emit_error": 0,             # _emit_nyx_observations threw
             "act_attempted": 0,          # NYX_ACT on and something to fake
             "act_succeeded": 0,          # rewrite applied, nyx_fake logged
+            "act_partial": 0,            # only some request fields were changed
             "act_rewrite_error": 0,      # rewrite threw -> request went out RAW
             "act_url_error": 0,          # url rewrite threw; body/headers still done
             "observe_error": 0,          # _nyx_observe itself threw
@@ -382,40 +383,23 @@ class ValkyrieAddon:
                 faked = list(dict.fromkeys(faked + header_faked))
                 if faked:
                     self._diag_bump("act_attempted")
-                    try:
-                        # Each rewrite is applied INDEPENDENTLY. These used to
-                        # share one try block, so a failure in the first
-                        # abandoned the rest - and run 33830249645 proved how
-                        # that fails: the url setter raised on a corrupted port,
-                        # the body rewrite never ran, and the real device id in
-                        # the BODY went out untouched. A url that cannot be
-                        # rewritten is no reason to also surrender the body.
-                        # Partial deception beats none; the counters record it.
-                        if new_url != url:
-                            try:
-                                req.url = new_url
-                            except Exception as exc:
-                                self._diag_bump("act_url_error")
-                                self._diag_note(f"act_url: {exc!r}")
-                        if new_body is not None and new_body != body:
-                            req.set_content(new_body if isinstance(new_body, bytes)
-                                            else str(new_body).encode("utf-8"))
-                        for hk, hv in new_headers.items():
-                            req.headers[hk] = hv
+                    from .nyx_rewrite import apply_rewrite
+                    result = apply_rewrite(
+                        req, url=url, body=body, headers=headers,
+                        new_url=new_url, new_body=new_body, new_headers=new_headers)
+                    if result.outcome == "applied":
                         self._log(domain, url, proc, "deceived",
-                                  "Nyx fed fake data for your "
-                                  + ", ".join(faked) + f" to {domain}",
-                                  category="nyx_fake")
+                                  "Nyx rewrote observed request fields for "
+                                  + ", ".join(faked), category="nyx_fake")
                         self._diag_bump("act_succeeded")
-                        return   # acted - do not also log an observe event
-                    except Exception as exc:
-                        # The request goes out RAW when this happens - the real
-                        # identifier reaches the tracker. Silence here meant a
-                        # privacy failure that looked identical to a request Nyx
-                        # simply never saw. Count it and keep the reason.
-                        self._diag_bump("act_rewrite_error")
-                        self._diag_note(f"act_rewrite: {exc!r}")
-                        # fall through to observe log
+                        return
+                    if "url" in result.failed:
+                        self._diag_bump("act_url_error")
+                    self._diag_bump("act_partial" if result.outcome == "partial" else "act_rewrite_error")
+                    self._diag_note("rewrite outcome: " + result.outcome
+                                    + "; failed parts: " + ",".join(result.failed))
+                    # Partial edits remain useful, but must not be reported as
+                    # complete protection. Preserve the observation below.
 
             for ob in observations:
                 self._log(domain, url, proc, "flagged", ob.sentence,

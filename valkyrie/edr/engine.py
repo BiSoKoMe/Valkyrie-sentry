@@ -421,6 +421,13 @@ class EdrEngine:
                      "activity": d.get("activity", ""),
                      "ppid": ppid, "parent_name": parent_name,
                      "parent_chain": list(fields.get("parent_chain") or []),
+                     # The sensor's own observed process-start time, when it
+                     # captured one (process_telemetry, sysmon). Carried so a
+                     # later kill_process response can pin PID+create_time
+                     # together (response.py refuses a bare, possibly-reused
+                     # PID for a real termination) instead of losing this the
+                     # moment the raw event becomes a Detection.
+                     "process_create_time": float(fields.get("create_time") or 0.0),
                      # Every ATT&CK technique this one event matched, not just the
                      # top pick surfaced in `technique`. A single action can be
                      # several techniques at once; keep them all on the detection
@@ -1076,6 +1083,9 @@ class EdrEngine:
 
     def subscribe(self, cb: Callable[[dict], None]) -> None:
         self._bus.subscribe(cb)
+
+    def delivery_status(self) -> dict:
+        return self._bus.stats()
 
     def unsubscribe(self, cb: Callable[[dict], None]) -> None:
         self._bus.unsubscribe(cb)

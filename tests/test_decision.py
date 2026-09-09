@@ -96,6 +96,22 @@ def test_surveillance_grades_by_confidence():
     _check("surv low", low.action, Action.ALERT)
 
 
+def test_medium_surveillance_falls_back_to_technique_when_entity_is_blank():
+    print("[7b] a connection-level anomaly with no resolved domain names its "
+          "technique instead of leaving a literal empty '()' in the case reason")
+    # The real shape found live: a beacon-like signal blocked at the IP/
+    # connection level, so there is no DNS-resolved domain for `entity` at all
+    # - not merely an unusual one. The HIGH-confidence branch already guards
+    # this (`sig.entity or sig.technique`); the MEDIUM branch had the same
+    # f-string without the fallback, so its reason rendered literally as
+    # "...surveillance flow (). Block..." in the Aegis case list.
+    d = decide(Signal(category="anomaly", severity="medium", labels=("beacon",),
+                      technique="T1071.004", entity=""))
+    _check("blank-entity medium surveillance still BLOCKs", d.action, Action.BLOCK)
+    assert "()" not in d.reason, f"empty parenthetical leaked into reason: {d.reason!r}"
+    assert "T1071.004" in d.reason, f"technique fallback missing from reason: {d.reason!r}"
+
+
 def test_clean_room_escalates_medium():
     print("[8] Clean Room steps medium compromise BLOCK → CONTAIN")
     sig = Signal(category="process", severity="medium", labels=("lolbin",),
@@ -127,6 +143,7 @@ def main() -> int:
                test_telemetry_deceives_in_standard_blocks_in_highrisk,
                test_sensitive_upload_blocks_and_alerts,
                test_surveillance_grades_by_confidence,
+               test_medium_surveillance_falls_back_to_technique_when_entity_is_blank,
                test_clean_room_escalates_medium,
                test_never_downgrades_high_compromise,
                test_low_noise_allows_in_standard):

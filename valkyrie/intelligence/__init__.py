@@ -218,6 +218,14 @@ class Intelligence:
         except Exception:
             pass
 
+    def apply_response_block(self, domain: str, expires_at: float) -> bool:
+        # Response must observe persistence failures rather than swallow them
+        # like the best-effort learning path above.
+        return self.memory.apply_response_block(domain, expires_at)
+
+    def release_response_block(self, domain: str) -> None:
+        self.memory.release_response_block(domain)
+
     # ------------------------------------------------------------------
     # Introspection (CLI flags + dashboard)
     # ------------------------------------------------------------------

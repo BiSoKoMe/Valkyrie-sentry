@@ -13,8 +13,9 @@ exit code if anything failed.
 It replaces the ad-hoc "run each file by hand" workflow and is what CI invokes.
 
 Usage:
-    python tests/run_tests.py            # run the unit suite (CI default)
-    python tests/run_tests.py --all      # also run integration tests
+    python tests/run_tests.py            # run only explicitly reviewed isolated tests
+    python tests/run_tests.py --disposable-host  # full non-integration suite in a designated VM
+    python tests/run_tests.py --disposable-host --all  # also run integration tests in that VM
     python tests/run_tests.py --list     # list tests and their category
     python tests/run_tests.py -k fleet   # run only tests whose name matches
 
@@ -44,6 +45,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -74,6 +76,24 @@ _REPO_ROOT = _TESTS_DIR.parent
 _INTEGRATION = {
     "test_dns.py",
     "test_resolver.py",
+}
+
+# Explicitly reviewed effects. Unclassified files are not safe merely because
+# their name starts with test_. Extend only after checking actual call paths.
+_SAFE = {
+    "test_aegis_facade.py": "temporary SQLite; no engine start, sensors or actions",
+    "test_capability_contract.py": "static manifest and read-only ASGI route",
+    "test_nyx_rewrite_contract.py": "in-memory request; mocked observation pipeline",
+    "test_nyx_receiver_contract.py": "loopback-only ephemeral HTTP server; no external network",
+    "test_process_response_identity.py": "mocked psutil; no real process response",
+    "test_control_credentials.py": "temporary files; mocked ACL commands",
+    "test_control_boundary.py": "ASGI fake handler; no host controls",
+    "test_response_contract.py": "real adapter; fake intelligence and temporary leases",
+    "test_response_block_memory.py": "temporary SQLite; no DNS or host controls",
+    "test_response_gating.py": "fake responders and temporary leases",
+    "test_runner_safety.py": "mocked subprocesses and temporary source fixtures",
+    "test_kill_process_recommendation_identity.py": "mocked psutil; no real process response",
+    "test_persona_site_scoping.py": "temporary persona seed files; no network or host state",
 }
 
 # Some unit tests accept a --quick flag to skip optional network downloads.
@@ -110,7 +130,9 @@ def _discover() -> list[Path]:
 
 
 def _category(path: Path) -> str:
-    return "integration" if path.name in _INTEGRATION else "unit"
+    if path.name in _INTEGRATION:
+        return "integration"
+    return "isolated" if path.name in _SAFE else "unclassified"
 
 
 # A test that exits 0 having asserted nothing is the failure mode this runner
@@ -174,7 +196,7 @@ def _classify(returncode: int, out: str) -> tuple[str, str]:
     return (OUTCOME_PASS, "")
 
 
-def _run_one(path: Path, timeout: int) -> tuple[str, float, str, str]:
+def _run_one(path: Path, timeout: int, coverage: bool = False) -> tuple[str, float, str, str]:
     """Run one test file as a subprocess. Returns (outcome, seconds, note, output)."""
     pytest_style = _is_pytest_style(path)
     if pytest_style:
@@ -183,6 +205,9 @@ def _run_one(path: Path, timeout: int) -> tuple[str, float, str, str]:
         cmd = [sys.executable, str(path)]
         if path.name in _ACCEPTS_QUICK:
             cmd.append("--quick")
+    if coverage:
+        cmd = [sys.executable, "-m", "coverage", "run", "--parallel-mode",
+               "--source=valkyrie", *cmd[1:]]
     # Force UTF-8 in the child. Windows consoles default to cp1252, and these
     # tests print arrows and box-drawing characters - without this, 7 suites die
     # with UnicodeEncodeError partway through and report a failure that has
@@ -192,10 +217,12 @@ def _run_one(path: Path, timeout: int) -> tuple[str, float, str, str]:
     env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
     start = time.monotonic()
     try:
-        proc = subprocess.run(
-            cmd, cwd=str(_REPO_ROOT), capture_output=True, text=True,
-            timeout=timeout, env=env, encoding="utf-8", errors="replace"
-        )
+        with tempfile.TemporaryDirectory(prefix="valkyrie-test-") as data_dir:
+            env["VALKYRIE_DATA_DIR"] = data_dir
+            proc = subprocess.run(
+                cmd, cwd=str(_REPO_ROOT), capture_output=True, text=True,
+                timeout=timeout, env=env, encoding="utf-8", errors="replace"
+            )
     except subprocess.TimeoutExpired:
         return (OUTCOME_FAIL, time.monotonic() - start,
                 f"TIMEOUT after {timeout}s", "")
@@ -218,6 +245,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Run the Valkyrie test suite.")
     ap.add_argument("--all", action="store_true",
                     help="also run integration tests (need live resolver/server)")
+    ap.add_argument("--disposable-host", action="store_true",
+                    help="permit unclassified tests on an explicitly designated disposable host")
+    ap.add_argument("--coverage", action="store_true",
+                    help="measure the actual script/pytest entry point in each child")
     ap.add_argument("--list", action="store_true",
                     help="list discovered tests and their category, then exit")
     ap.add_argument("-k", metavar="SUBSTR", default="",
@@ -225,6 +256,10 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=120,
                     help="per-test timeout in seconds (default 120)")
     args = ap.parse_args()
+    if (args.disposable_host or args.all) and os.environ.get("VALKYRIE_DISPOSABLE_TEST_HOST") != "1":
+        ap.error("host-affecting tests require a disposable VM and VALKYRIE_DISPOSABLE_TEST_HOST=1")
+    if args.all and not args.disposable_host:
+        ap.error("--all also requires --disposable-host")
 
     tests = _discover()
     if args.k:
@@ -245,14 +280,19 @@ def main() -> int:
     vacuous: list[tuple[str, str]] = []
 
     print(f"Valkyrie test runner — {len(tests)} discovered "
-          f"({'incl. integration' if args.all else 'unit only'})\n")
+          f"({'incl. integration' if args.all else 'disposable host' if args.disposable_host else 'reviewed isolated tests only'})\n")
 
     for t in tests:
-        if _category(t) == "integration" and not args.all:
+        category = _category(t)
+        if category == "unclassified" and not args.disposable_host:
+            print(f"  SKIP  {t.name}  (host effects unreviewed; disposable host required)")
+            skipped.append(t.name)
+            continue
+        if category == "integration" and not args.all:
             print(f"  SKIP  {t.name}  (integration — use --all)")
             skipped.append(t.name)
             continue
-        outcome, secs, note, out = _run_one(t, args.timeout)
+        outcome, secs, note, out = _run_one(t, args.timeout, coverage=args.coverage)
         suffix = f"  [{note}]" if note else ""
         if outcome == OUTCOME_PASS:
             print(f"  PASS  {t.name}  ({secs:.1f}s){suffix}")
@@ -288,7 +328,7 @@ def main() -> int:
         print("\nFailed tests:")
         for name, _ in failed:
             print(f"  - {name}")
-    return 1 if (failed or vacuous) else 0
+    return 1 if (failed or vacuous or not passed) else 0
 
 
 if __name__ == "__main__":

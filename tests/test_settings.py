@@ -112,6 +112,23 @@ def main() -> int:
     _check("config.CONFIG_OVERRIDES exists and is a list",
            isinstance(c.CONFIG_OVERRIDES, list))
 
+    print("\n[9] NYX_ACT is a real, overridable setting, not a source-only constant")
+    # Found live (2026-09-07): NYX_ACT (whether NYX actually rewrites a
+    # leaking value instead of only observing it - the entire point of the
+    # product's deception layer) had no CLI flag, no API, no config-file
+    # entry and no UI toggle anywhere - a hardcoded False with no way for
+    # any user to turn it on short of editing source and rebuilding. This
+    # pins that the settings-overlay mechanism (the one real path a user or
+    # the app can use) actually reaches it.
+    _check("describe() includes NYX_ACT", "NYX_ACT" in keys)
+    nyx_base = {"NYX_ACT": False}
+    resolved, overrides = settings.load(nyx_base, config_dir=Path("/nonexistent"),
+                                        environ={"VALKYRIE_NYX_ACT": "1"})
+    _check("VALKYRIE_NYX_ACT=1 actually resolves NYX_ACT to True",
+           resolved["NYX_ACT"] is True)
+    _check("the override is attributed to the environment, not silently applied",
+           any(o.key == "NYX_ACT" and "VALKYRIE_NYX_ACT" in o.source for o in overrides))
+
     print("\n" + "=" * 48)
     if _FAILURES:
         print(f"FAILED: {len(_FAILURES)} check(s)")
