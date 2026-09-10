@@ -82,7 +82,8 @@ jobs:
           # pytest: 10 test files (the Aegis reasoning layer, the Platform Alpha
           # baseline, collector diagnostics) are pytest-style, and run_tests.py
           # hands those to pytest rather than executing them as scripts.
-          python -m pip install cryptography httpx pytest
+          # tomli supplies the TOML fixture parser on Python 3.10.
+          python -m pip install cryptography httpx pytest tomli
 
       - name: Syntax / import gate
         run: python -m compileall -q valkyrie

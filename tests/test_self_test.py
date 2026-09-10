@@ -190,11 +190,15 @@ def main() -> int:
     # The fix recognises the reserved health-probe name directly off the wire in
     # the serve loop and answers INLINE, before any thread is spawned. This pins
     # two things: the wire-format encoding used by the probe (self_test) and the
-    # one used by the recogniser (dns_interceptor) must agree, and the live
-    # answer must come back correct even while a burst of worker threads runs.
+    # recogniser (dns_interceptor) must agree, and a live response must bypass
+    # worker dispatch while ordinary work is blocked. CPU-spinning threads
+    # starve the listener itself and made this test randomly fail on shared CI
+    # hosts even when dispatch was correctly bypassed.
     print("\n[1d] health-probe answered inline, never queued behind worker threads")
     import socket as _socket
     import threading as _threading
+    from unittest.mock import patch
+    import dns.message
     import valkyrie.dns_interceptor as _di
 
     probe_wire = st._encode_qname(HEALTH_PROBE_DOMAIN)
@@ -206,9 +210,8 @@ def main() -> int:
             not _di._is_health_probe_wire(
                 header + st._encode_qname("example.com") + b"\x00\x01\x00\x01"))
 
-    # Drive it through a REAL interceptor instance on a live loopback socket,
-    # with a burst of worker threads (simulating real query load) already
-    # occupying the GIL, and confirm the probe still answers fast.
+    # Drive the actual serve loop over UDP. Hold an ordinary query's worker
+    # until cleanup, then reject any new worker dispatch during the probe.
     interceptor = _di.DNSInterceptor(
         store=None, blocklist=None, behavioral=None, rules=None,
         process_watcher=None, host="127.0.0.1", port=0)
@@ -217,37 +220,48 @@ def main() -> int:
     interceptor._sock.settimeout(0.5)
     bound_port = interceptor._sock.getsockname()[1]
     interceptor._running = True
+    worker_started = _threading.Event()
+    release_worker = _threading.Event()
+    worker_finished = _threading.Event()
+    unexpected_dispatch = _threading.Event()
+
+    def blocked_worker(*args):
+        worker_started.set()
+        release_worker.wait(10)
+        worker_finished.set()
+
+    def reject_dispatch(*args, **kwargs):
+        unexpected_dispatch.set()
+
+    interceptor._handle = blocked_worker
     loop_thread = _threading.Thread(target=interceptor._serve_loop, daemon=True)
     loop_thread.start()
-
-    # Saturate the GIL with busy worker threads for the probe window, the same
-    # shape as a real query burst (CPU-bound work, no real query dispatch needed
-    # for this check - only the health-probe's OWN latency is under test).
-    stop_noise = _threading.Event()
-    def _spin():
-        while not stop_noise.is_set():
-            sum(i * i for i in range(2000))
-    noise_threads = [_threading.Thread(target=_spin, daemon=True) for _ in range(12)]
-    for t in noise_threads:
-        t.start()
+    client = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+    client.settimeout(1.0)
     try:
-        client = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
-        client.settimeout(1.0)
-        import time as _t
-        t0 = _t.monotonic()
-        client.sendto(full_packet, ("127.0.0.1", bound_port))
-        try:
-            reply, _addr = client.recvfrom(4096)
-            elapsed = _t.monotonic() - t0
-            c.check(f"health probe answered under GIL contention ({elapsed*1000:.0f}ms)",
-                    len(reply) > 0)
-        except _socket.timeout:
-            c.check("health probe answered under GIL contention", False)
-        client.close()
+        ordinary_packet = header + st._encode_qname("example.com") + b"\x00\x01\x00\x01"
+        client.sendto(ordinary_packet, ("127.0.0.1", bound_port))
+        c.check("ordinary query worker is blocked before probing",
+                worker_started.wait(2) and not worker_finished.is_set())
+        with patch.object(_di.threading.Thread, "start", reject_dispatch):
+            client.sendto(full_packet, ("127.0.0.1", bound_port))
+            try:
+                reply, _addr = client.recvfrom(4096)
+                response = dns.message.from_wire(reply)
+                c.check("health probe returns the expected sinkhole answer inline",
+                        response.id == 0x1234 and response.rcode() == 0
+                        and bool(response.answer)
+                        and str(response.answer[0][0]) == "0.0.0.0")
+            except _socket.timeout:
+                c.check("health probe returns the expected sinkhole answer inline", False)
+        c.check("health probe never dispatches another worker",
+                not unexpected_dispatch.is_set())
+        c.check("health probe completed while ordinary work stayed blocked",
+                not worker_finished.is_set())
     finally:
-        stop_noise.set()
-        for t in noise_threads:
-            t.join(timeout=2)
+        client.close()
+        release_worker.set()
+        worker_finished.wait(2)
         interceptor._running = False
         interceptor._sock.close()
         loop_thread.join(timeout=2)
