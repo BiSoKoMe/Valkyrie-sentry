@@ -132,8 +132,13 @@ def test_never_removes_valkyries_own_asep() -> None:
     # the BEHAVIOUR (our own task getting deleted) rather than on a missing
     # helper - running from source, this is the same directory the responder
     # resolves to.
-    root = str(Path(__file__).resolve().parents[1]).lower()
-    assert Path(root, "valkyrie", "edr", "response.py").exists(), root
+    repo_root = Path(__file__).resolve().parents[1]
+    assert (repo_root / "valkyrie" / "edr" / "response.py").exists(), repo_root
+    # Lowercased only for the comparison the responder makes (Windows paths are
+    # case-insensitive); never for touching the filesystem, which on a
+    # case-sensitive checkout - CI clones into .../Valkyrie-sentry/ - would then
+    # look for a directory that does not exist.
+    root = str(repo_root).lower()
     ours = (
         "<Task><Actions><Exec><Command>wscript.exe</Command>"
         f"<Arguments>//B //NoLogo '{root}/run-hidden.vbs' "
