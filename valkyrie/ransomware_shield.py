@@ -105,8 +105,33 @@ class Canary:
         return Canary(self.path, hashlib.sha256(data).hexdigest(), len(data))
 
     def is_intact(self) -> bool:
+        """Confirmed byte-identical to the armed state."""
         cur = self.current()
         return cur is not None and cur.sha256 == self.sha256
+
+    def is_tripped(self) -> bool:
+        """Modified or gone - the only two states that are actually evidence.
+
+        NOT the inverse of is_intact(). A canary we merely could not READ is
+        unknown, not tripped: Windows hands out sharing violations routinely
+        (AV scan, backup, sync), and a cloud-synced file that Files On-Demand
+        has dehydrated raises OSError when the machine is offline - and these
+        canaries live in Documents/Desktop/Pictures/Downloads, which is exactly
+        what gets cloud-synced. Treating "cannot read" as a trip suspends
+        whichever process happens to be writing most at that moment, which on
+        an idle desktop is plausibly the sync client itself.
+
+        A locked file that really is being encrypted still trips on the next
+        poll, once the writer releases it and the changed bytes are readable.
+        Absence stays a trip: ransomware deletes and renames.
+        """
+        try:
+            data = Path(self.path).read_bytes()
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        return hashlib.sha256(data).hexdigest() != self.sha256
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +208,7 @@ class CanaryManager:
 
     def verify(self) -> list[Canary]:
         """Return canaries that have been modified or deleted (tripped)."""
-        return [c for c in self.canaries if not c.is_intact()]
+        return [c for c in self.canaries if c.is_tripped()]
 
     def restore(self, tripped: Iterable[Canary]) -> int:
         n = 0

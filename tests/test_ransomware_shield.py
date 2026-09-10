@@ -153,3 +153,41 @@ if __name__ == "__main__":
             print(f"  FAIL  {t.__name__}: {e}")
     print(f"\n{len(tests) - failed}/{len(tests)} passed")
     sys.exit(1 if failed else 0)
+
+
+def test_an_unreadable_canary_is_not_evidence_of_ransomware():
+    """A canary Valkyrie cannot READ is unknown, not tripped.
+
+    The response path suspends the top writing processes, and _PROTECTED_PROCESSES
+    does not cover sync clients, AV or backup agents. Since canaries live in
+    Documents/Desktop/Pictures/Downloads - the folders that get cloud-synced - a
+    sharing violation or a dehydrated Files On-Demand placeholder would otherwise
+    suspend whichever process happened to be writing most at that moment.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        mgr = CanaryManager(d / "manifest.json", dirs=[d])
+        mgr.deploy()
+        assert mgr.verify() == []
+
+        target = Path(mgr.canaries[0].path)
+        before = target.read_bytes()
+        real_read = Path.read_bytes
+
+        def locked(self):
+            if self == target:
+                raise PermissionError(13, "The process cannot access the file")
+            return real_read(self)
+
+        Path.read_bytes = locked
+        try:
+            assert mgr.verify() == []
+        finally:
+            Path.read_bytes = real_read
+
+        # Unchanged on disk, and the real signals still fire.
+        assert target.read_bytes() == before
+        target.write_bytes(b"encrypted-by-ransomware")
+        assert [c.path for c in mgr.verify()] == [str(target)]
+        target.unlink()
+        assert [c.path for c in mgr.verify()] == [str(target)]
