@@ -40,7 +40,7 @@ from tests.winreg_constants import constants as registry_constants
 import valkyrie.telemetry_killer as tk
 
 
-@patch.object(tk, "is_admin", return_value=False)
+@patch.object(tk, "_is_admin", return_value=False)
 def main(_admin=None) -> int:
     c = Checks("telemetry killer (pure)", expect_min=22)
     print(f"winreg available: {tk._WINREG_OK}   admin: {tk.is_admin()}\n")

@@ -46,3 +46,20 @@ def test_direct_engine_boot_tests_require_a_disposable_host(monkeypatch):
     monkeypatch.setattr(runner.subprocess, "Popen", unexpected_launch)
     assert test_startup_smoke.main() == runner.EXIT_SKIP
     assert test_capability_delivery.main() == runner.EXIT_SKIP
+
+
+def test_telemetry_fixture_cannot_edit_an_elevated_windows_host(monkeypatch):
+    from tests import test_telemetry_pure
+    from tests.winreg_constants import constants
+    from valkyrie import telemetry_killer as tk
+
+    def unexpected_os_access(*args, **kwargs):
+        raise AssertionError("pure telemetry checks must not reach the OS")
+
+    monkeypatch.setattr(tk, "_WINREG_OK", True)
+    monkeypatch.setattr(tk, "winreg", constants, raising=False)
+    monkeypatch.setattr(tk, "_is_admin", lambda: True)
+    monkeypatch.setattr(tk, "_read_value", unexpected_os_access)
+    monkeypatch.setattr(tk, "_write_value", unexpected_os_access)
+    monkeypatch.setattr(tk.subprocess, "run", unexpected_os_access)
+    assert test_telemetry_pure.main() == 0
