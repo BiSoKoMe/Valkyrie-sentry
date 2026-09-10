@@ -71,13 +71,18 @@ jobs:
           Get-Item dist/valkyrie_test.exe | Format-List Name, Length
 
       - name: Smoke-test the frozen exe
+        timeout-minutes: 3
         shell: pwsh
+        env:
+          VALKYRIE_DATA_DIR: ${{ runner.temp }}/valkyrie-frozen-smoke
         run: |
-          # These exit cleanly and exercise the frozen import graph + EDR engine.
-          dist/valkyrie_test.exe --hunt list
-          if ($LASTEXITCODE -ne 0) { throw 'Packaged hunt smoke test failed' }
-          dist/valkyrie_test.exe --incidents
-          if ($LASTEXITCODE -ne 0) { throw 'Packaged incident smoke test failed' }
+          # A GUI-subsystem exe can return control before it exits. Wait for
+          # the actual child and inspect its exit code, not stale LASTEXITCODE.
+          $exePath = (Resolve-Path -LiteralPath 'dist/valkyrie_test.exe').Path
+          $hunt = Start-Process -FilePath $exePath -ArgumentList @('--hunt', 'list') -Wait -PassThru -WindowStyle Hidden
+          if ($hunt.ExitCode -ne 0) { throw "Packaged hunt smoke test failed (exit $($hunt.ExitCode))" }
+          $incidents = Start-Process -FilePath $exePath -ArgumentList '--incidents' -Wait -PassThru -WindowStyle Hidden
+          if ($incidents.ExitCode -ne 0) { throw "Packaged incident smoke test failed (exit $($incidents.ExitCode))" }
           $artifactDigest = (Get-FileHash -LiteralPath 'dist/valkyrie_test.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
           "$artifactDigest  valkyrie_test.exe" | Set-Content -LiteralPath 'dist/valkyrie_test.exe.sha256' -Encoding ascii
           Write-Host "Frozen exe smoke test passed."
