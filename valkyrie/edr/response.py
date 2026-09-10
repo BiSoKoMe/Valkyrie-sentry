@@ -29,6 +29,7 @@ import logging
 import math
 import os
 import platform
+import sys
 import threading
 import time
 import uuid
@@ -41,6 +42,22 @@ from .plugins import PluginContext, ResponderPlugin
 from .schema import ResponseAction, normalize_response_status, severity_rank
 
 log = logging.getLogger("valkyrie.response")
+
+
+def _own_install_root() -> str:
+    """Directory Valkyrie's own executables and helper scripts run from.
+
+    Frozen, that is <install>/resources/engine - which is also where
+    arm-protection.ps1 and run-hidden.vbs live, so a scheduled task whose
+    action runs from here is one of ours. In a source checkout it is the repo
+    root. Used to tell OUR autostart entries from an attacker's.
+    """
+    try:
+        if getattr(sys, "frozen", False):
+            return str(Path(sys.executable).resolve().parent).lower()
+        return str(Path(__file__).resolve().parents[2]).lower()
+    except Exception:                                    # noqa: BLE001
+        return ""
 
 _SYSTEM = platform.system()
 
@@ -481,6 +498,17 @@ class RemovePersistenceResponder(ResponderPlugin):
         "lsm", "samss", "schedule", "termservice", "winmgmt", "trustedinstaller",
         "mpssvc", "sysmon", "sysmon64", "lanmanserver", "lanmanworkstation",
         "netlogon", "profsvc", "gpsvc", "valkyrie", "nssm",
+        # The engine's own service is registered as ValkyrieShield, so the
+        # bare "valkyrie" entry above never matched it - remove_persistence
+        # could delete the service hosting the very engine running it.
+        "valkyrieshield",
+    }
+
+    # Valkyrie's own no-prompt arm/disarm tasks. Deleting one is the product
+    # dismantling its own control plane: the app needs them to change system
+    # DNS without a UAC prompt on every Start/Stop Protection click.
+    _OWN_TASKS = {
+        "valkyriearm", "valkyriedisarm", "valkyriestart", "valkyriestop",
     }
 
     def actions(self) -> list[str]:
@@ -512,20 +540,22 @@ class RemovePersistenceResponder(ResponderPlugin):
         if name.lower().startswith("microsoft\\windows\\"):
             return ("skipped", f"refusing to delete system scheduled task '{name}'")
         tn = "\\" + name
+        # ONE export, used for two things: deciding whether this task is ours,
+        # and (on the enforce path) the rollback snapshot. A separate query for
+        # the ownership check would double the schtasks calls this makes.
+        xml = self._task_xml(tn)
+        own = self._own_task_refusal(tn, name, xml)
+        if own:
+            return ("skipped", own)
         if dry_run:
             return ("dry_run", f"would delete scheduled task '{tn}' "
                                f"(schtasks /delete /tn {tn} /f) — a rollback "
                                f"snapshot (task XML export) is captured first")
         import subprocess
         backup_id = ""
-        try:
-            xr = subprocess.run(["schtasks", "/query", "/tn", tn, "/xml", "ONE"],
-                                capture_output=True, text=True, timeout=20)
-            if xr.returncode == 0 and xr.stdout.strip():
-                backup_id = _pb_record("scheduled_task", identity, True,
-                                       {"tn": tn, "xml": xr.stdout})
-        except Exception:                                # noqa: BLE001
-            pass   # best-effort snapshot; must never block the removal itself
+        if xml.strip():
+            backup_id = _pb_record("scheduled_task", identity, True,
+                                   {"tn": tn, "xml": xml})
         r = subprocess.run(["schtasks", "/delete", "/tn", tn, "/f"],
                            capture_output=True, text=True, timeout=20)
         if r.returncode == 0:
@@ -536,6 +566,46 @@ class RemovePersistenceResponder(ResponderPlugin):
         if "access is denied" in err.lower():
             return ("skipped", f"access denied deleting task '{tn}' (needs admin)")
         return ("failed", f"schtasks delete '{tn}' failed: {err}")
+
+    @staticmethod
+    def _task_xml(tn: str) -> str:
+        """The task's XML definition, or "" if it cannot be read."""
+        try:
+            import subprocess
+            r = subprocess.run(["schtasks", "/query", "/tn", tn, "/xml", "ONE"],
+                               capture_output=True, text=True, timeout=20)
+            return (r.stdout or "") if r.returncode == 0 else ""
+        except Exception:                                # noqa: BLE001
+            return ""
+
+    def _own_task_refusal(self, tn: str, name: str, xml: str) -> str:
+        """Reason to refuse, if this scheduled task is Valkyrie's own. Else "".
+
+        Seen live (2026-09-10): the persistence collector reported the app's
+        freshly registered ValkyrieArm/ValkyrieDisarm tasks as "new auto-start
+        entry created" at medium severity, and the enforce-mode
+        remove-persistence playbook deleted both about a second later - twice,
+        weeks apart. The visible symptom was Start Protection never arming DNS,
+        because the tasks it needs had been eaten by Valkyrie itself.
+
+        Ownership is decided by where the task's action RUNS FROM, not by its
+        name, so a hostile task merely named ValkyrieArm is still removable.
+        The name is used only as a fail-safe for when the definition cannot be
+        read at all - there, refusing costs one uncleaned task, while deleting
+        can cost the product its own control plane.
+        """
+        root = _own_install_root()
+        if xml:
+            if root and root in xml.lower():
+                return (f"refusing to remove Valkyrie's own scheduled task "
+                        f"'{tn}': its action runs from this installation "
+                        f"({root})")
+            return ""      # readable and not ours - fair game, even if named like us
+        if name.lower() in self._OWN_TASKS:
+            return (f"refusing to remove '{tn}': it carries a Valkyrie task "
+                    f"name and its definition could not be read to prove it is "
+                    f"not ours")
+        return ""
 
     # -- service ------------------------------------------------------------
     def _remove_service(self, identity: str, dry_run: bool) -> tuple[str, str]:
