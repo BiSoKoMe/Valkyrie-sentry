@@ -96,6 +96,7 @@ _SAFE = {
     "test_persona_site_scoping.py": "temporary persona seed files; no network or host state",
     "test_decoy_ownership.py": "temporary decoy files and manifests only",
     "test_seed_tracking_scope.py": "temporary blocklist path and in-memory domain scoring",
+    "test_service_install_acl.py": "icacls/Get-Acl against a throwaway temp directory only",
     "test_decoys.py": "temporary profile tree; fallback paths inspected without deployment",
     "test_dns_os.py": "read-only probes; all DNS mutations mocked",
     "test_doh_status_api.py": "temporary SQLite and ASGI clients; no detector start",
