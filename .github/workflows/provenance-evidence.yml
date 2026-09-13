@@ -45,10 +45,11 @@ jobs:
         run: |
           mkdir -p artifacts
           python tools/provenance_demo.py --json > artifacts/provenance-demo.json
+          python tools/provenance_demo.py --markdown > artifacts/PROVENANCE_EVIDENCE.md
       - name: Upload evidence
         uses: actions/upload-artifact@v4
         with:
           name: provenance-evidence-${{ github.sha }}
-          path: artifacts/provenance-demo.json
+          path: artifacts/
           if-no-files-found: error
           retention-days: 90

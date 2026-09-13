@@ -205,13 +205,53 @@ def _print_walkthrough(result: dict) -> None:
     print("\nEvidence: " + ", ".join(result["evidence"]["timeline_kinds"]))
 
 
+def _markdown_report(result: dict) -> str:
+    """Return the same demo evidence in a reviewer-friendly, static format."""
+    claims = "\n".join(f"- {claim}" for claim in result["claims_not_made"])
+    return f"""# Valkyrie provenance evidence
+
+**Scope:** {result["mode"]}
+
+## Causal chain
+
+`{' -> '.join(result["causal_chain"])}`
+
+## Observed
+
+- Privacy artifact: {result["observed"]["privacy_artifact"]}
+- Provenance complete: {result["observed"]["provenance_complete"]}
+- Raw content retained: {result["observed"]["raw_content_retained"]}
+
+## Decision
+
+- Incident: {result["decision"]["incident_category"]}
+- Standard policy: {result["decision"]["standard_profile_action"]}
+- Enforcement: {result["decision"]["playbook_execution"]}
+- Reason: {result["decision"]["reason"]}
+
+## Refusal
+
+- Condition: {result["refusal"]["condition"]}
+- Result: {result["refusal"]["result"]}
+- Content printed or persisted: {result["refusal"]["content_printed_or_persisted"]}
+
+## Limits of this evidence
+
+{claims}
+"""
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--json", action="store_true", help="print presentation-safe evidence as JSON")
+    output = parser.add_mutually_exclusive_group()
+    output.add_argument("--json", action="store_true", help="print presentation-safe evidence as JSON")
+    output.add_argument("--markdown", action="store_true", help="print reviewer-friendly evidence as Markdown")
     args = parser.parse_args()
     result = run_demo()
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))
+    elif args.markdown:
+        print(_markdown_report(result), end="")
     else:
         _print_walkthrough(result)
     return 0
