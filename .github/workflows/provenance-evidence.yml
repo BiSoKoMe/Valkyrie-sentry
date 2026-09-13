@@ -1,0 +1,54 @@
+name: Provenance evidence
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "tools/provenance_demo.py"
+      - "valkyrie/edr/**"
+      - "valkyrie/decision.py"
+      - "valkyrie/store.py"
+      - "valkyrie/telemetry.py"
+      - "tests/test_provenance_demo.py"
+      - "tests/test_privacy_consequence.py"
+      - ".github/workflows/provenance-evidence.yml"
+  pull_request:
+    paths:
+      - "tools/provenance_demo.py"
+      - "valkyrie/edr/**"
+      - "valkyrie/decision.py"
+      - "valkyrie/store.py"
+      - "valkyrie/telemetry.py"
+      - "tests/test_provenance_demo.py"
+      - "tests/test_privacy_consequence.py"
+      - ".github/workflows/provenance-evidence.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  evidence:
+    name: Guarded causal decision
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements_modular.txt pytest
+      - name: Verify the causal decision and its refusals
+        run: python -m pytest -q tests/test_provenance_demo.py tests/test_privacy_consequence.py
+      - name: Create presentation-safe evidence
+        run: |
+          mkdir -p artifacts
+          python tools/provenance_demo.py --json > artifacts/provenance-demo.json
+      - name: Upload evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: provenance-evidence-${{ github.sha }}
+          path: artifacts/provenance-demo.json
+          if-no-files-found: error
+          retention-days: 90
