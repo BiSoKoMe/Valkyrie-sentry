@@ -106,3 +106,18 @@ def test_fake_outbound_gives_the_same_tracker_different_fakes_on_different_sites
     _u1_again, _, _ = nyx.fake_outbound(
         "GET", tracker_url, headers, None, first_party_origin="siteA.example")
     assert _u1 == _u1_again
+
+
+def test_fake_outbound_uses_the_site_persona_not_the_machine_persona(tmp_path, monkeypatch):
+    store = PersonaStore(tmp_path / "seed.json")
+    monkeypatch.setattr(persona_mod, "_DEFAULT", store)
+    raw_id = "550e8400-e29b-41d4-a716-446655440000"
+    fake = persona_for_site("siteA.example", "tracker.example").advertising_id
+    machine = store.persona().advertising_id
+    rewritten, _, faked = nyx.fake_outbound(
+        "GET", f"https://tracker.example/collect?adid={raw_id}", {}, None,
+        first_party_origin="siteA.example")
+
+    assert faked == ["identifier"]
+    assert fake in rewritten and raw_id not in rewritten
+    assert machine not in rewritten
