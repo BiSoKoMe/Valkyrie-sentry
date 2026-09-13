@@ -86,7 +86,7 @@ def credential_store_paths(users_root: Optional[Path] = None) -> list[Path]:
         if not prof.is_dir() or prof.name.lower() in skip:
             continue
         for rel in _CHROMIUM_USER_DATA:
-            user_data = prof / rel
+            user_data = prof.joinpath(*rel.split("\\"))
             if not user_data.is_dir():
                 continue
             try:
@@ -98,7 +98,7 @@ def credential_store_paths(users_root: Optional[Path] = None) -> list[Path]:
                     continue
                 for fname in _CHROMIUM_CRED_FILES:
                     paths.append(sub / fname)
-        ff_profiles = prof / _FIREFOX_PROFILES
+        ff_profiles = prof.joinpath(*_FIREFOX_PROFILES.split("\\"))
         if ff_profiles.is_dir():
             try:
                 for sub in ff_profiles.iterdir():

@@ -30,15 +30,18 @@ import json
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from harness import Checks
+from tests.winreg_constants import constants as registry_constants
 import valkyrie.telemetry_killer as tk
 
 
-def main() -> int:
+@patch.object(tk, "_is_admin", return_value=False)
+def main(_admin=None) -> int:
     c = Checks("telemetry killer (pure)", expect_min=22)
     print(f"winreg available: {tk._WINREG_OK}   admin: {tk.is_admin()}\n")
 
@@ -46,29 +49,25 @@ def main() -> int:
     print("[1] degrades gracefully without elevation (the documented contract)")
     with tempfile.TemporaryDirectory() as td:
         killer = tk.TelemetryKiller(backup_path=Path(td) / "backup.json")
-        if tk.is_admin():
-            c.check("running elevated — degradation path not exercised here",
-                    True)
-        else:
-            try:
-                s = killer.scan()
-                c.check("scan() returns {} rather than raising", s == {})
-            except Exception as exc:                   # noqa: BLE001
-                c.check(f"scan() returns {{}} rather than raising ({exc})", False)
-            # kill()/restore() are safe to CALL unelevated precisely because
-            # they must refuse; that refusal is the thing being tested.
-            try:
-                k = killer.kill()
-                c.check("kill() refuses unelevated, returning {}", k == {})
-            except Exception as exc:                   # noqa: BLE001
-                c.check(f"kill() refuses unelevated ({exc})", False)
-            try:
-                r = killer.restore()
-                c.check("restore() refuses unelevated, returning {}", r == {})
-            except Exception as exc:                   # noqa: BLE001
-                c.check(f"restore() refuses unelevated ({exc})", False)
-            c.check("a refused kill() writes no backup file",
-                    not (Path(td) / "backup.json").exists())
+        try:
+            s = killer.scan()
+            c.check("scan() returns {} rather than raising", s == {})
+        except Exception as exc:                   # noqa: BLE001
+            c.check(f"scan() returns {{}} rather than raising ({exc})", False)
+        # kill()/restore() are safe to CALL unelevated precisely because
+        # they must refuse; that refusal is the thing being tested.
+        try:
+            k = killer.kill()
+            c.check("kill() refuses unelevated, returning {}", k == {})
+        except Exception as exc:                   # noqa: BLE001
+            c.check(f"kill() refuses unelevated ({exc})", False)
+        try:
+            r = killer.restore()
+            c.check("restore() refuses unelevated, returning {}", r == {})
+        except Exception as exc:                   # noqa: BLE001
+            c.check(f"restore() refuses unelevated ({exc})", False)
+        c.check("a refused kill() writes no backup file",
+                not (Path(td) / "backup.json").exists())
 
     # --- 2. The spec is well-formed and privacy-correct ---
     print("\n[2] the settings spec")
@@ -77,58 +76,61 @@ def main() -> int:
         c.check("no winreg on this platform, so the spec is empty by design",
                 spec == {})
         c.check("_spec() returns a dict even without winreg", isinstance(spec, dict))
-    else:
-        c.check(f"the spec is non-empty ({len(spec)} settings)", len(spec) > 0)
-        malformed = [k for k, v in spec.items() if not isinstance(v, tuple)
-                     or len(v) != 5]
-        c.check(f"every entry is a 5-tuple ({malformed[:3] or 'clean'})",
-                not malformed)
-        bad_key = [k for k, (_h, sub, _n, _t, _v) in spec.items()
-                   if not sub or not isinstance(sub, str)]
-        c.check(f"every entry names a registry subkey ({bad_key[:3] or 'clean'})",
-                not bad_key)
-        bad_name = [k for k, (_h, _s, name, _t, _v) in spec.items()
-                    if not name or not isinstance(name, str)]
-        c.check(f"every entry names a value ({bad_name[:3] or 'clean'})",
-                not bad_name)
-        # Keys are never deleted, only values - assert no subkey is a bare hive
-        # root, which would be a catastrophic edit.
-        rooty = [k for k, (_h, sub, _n, _t, _v) in spec.items()
-                 if sub.strip("\\").count("\\") < 1]
-        c.check(f"no entry targets a hive root ({rooty[:3] or 'clean'})", not rooty)
+    # Exercise the Windows specification on every OS using constants only.
+    with patch.object(tk, "_WINREG_OK", True), \
+         patch.object(tk, "winreg", registry_constants, create=True):
+        spec = tk._spec()
+    c.check(f"the spec is non-empty ({len(spec)} settings)", len(spec) > 0)
+    malformed = [k for k, v in spec.items() if not isinstance(v, tuple)
+                 or len(v) != 5]
+    c.check(f"every entry is a 5-tuple ({malformed[:3] or 'clean'})",
+            not malformed)
+    bad_key = [k for k, (_h, sub, _n, _t, _v) in spec.items()
+               if not sub or not isinstance(sub, str)]
+    c.check(f"every entry names a registry subkey ({bad_key[:3] or 'clean'})",
+            not bad_key)
+    bad_name = [k for k, (_h, _s, name, _t, _v) in spec.items()
+                if not name or not isinstance(name, str)]
+    c.check(f"every entry names a value ({bad_name[:3] or 'clean'})",
+            not bad_name)
+    # Keys are never deleted, only values - assert no subkey is a bare hive
+    # root, which would be a catastrophic edit.
+    rooty = [k for k, (_h, sub, _n, _t, _v) in spec.items()
+             if sub.strip("\\").count("\\") < 1]
+    c.check(f"no entry targets a hive root ({rooty[:3] or 'clean'})", not rooty)
 
-        # The privacy assertions: these specific values must be the
-        # telemetry-OFF ones. Getting one inverted would disable the wrong
-        # thing while reporting success.
-        def killed(name):
-            return spec[name][4] if name in spec else None
+    # The privacy assertions: these specific values must be the
+    # telemetry-OFF ones. Getting one inverted would disable the wrong
+    # thing while reporting success.
+    def killed(name):
+        return spec[name][4] if name in spec else None
 
-        c.check("AllowTelemetry is killed to 0 (off), not 1",
-                killed("telemetry_level") == 0)
-        c.check("advertising ID is killed to 0 (disabled)",
-                killed("advertising_id") == 0)
-        c.check("activity feed is killed to 0", killed("activity_feed") == 0)
-        c.check("location consent is killed to 'Deny'",
-                killed("location_consent") == "Deny")
-        c.check("Cortana is killed to 0", killed("cortana") == 0)
-        c.check("web search is killed to 1 (DisableWebSearch=1 means disabled)",
-                killed("cortana_web_search") == 1)
-        c.check("error reporting is killed to 1 (Disabled=1)",
-                killed("error_reporting") == 1)
-        c.check("Defender SpyNet reporting is killed to 0",
-                killed("defender_spynet_reporting") == 0)
-        # Sample submission 2 == "never send" in Microsoft's scheme; 1 would be
-        # "send safe samples", i.e. still uploading.
-        c.check("Defender sample submission is 2 (never send), not 1",
-                killed("defender_sample_submission") == 2)
+    c.check("AllowTelemetry is killed to 0 (off), not 1",
+            killed("telemetry_level") == 0)
+    c.check("advertising ID is killed to 0 (disabled)",
+            killed("advertising_id") == 0)
+    c.check("activity feed is killed to 0", killed("activity_feed") == 0)
+    c.check("location consent is killed to 'Deny'",
+            killed("location_consent") == "Deny")
+    c.check("Cortana is killed to 0", killed("cortana") == 0)
+    c.check("web search is killed to 1 (DisableWebSearch=1 means disabled)",
+            killed("cortana_web_search") == 1)
+    c.check("error reporting is killed to 1 (Disabled=1)",
+            killed("error_reporting") == 1)
+    c.check("Defender SpyNet reporting is killed to 0",
+            killed("defender_spynet_reporting") == 0)
+    # Sample submission 2 == "never send" in Microsoft's scheme; 1 would be
+    # "send safe samples", i.e. still uploading.
+    c.check("Defender sample submission is 2 (never send), not 1",
+            killed("defender_sample_submission") == 2)
 
-        # Settings sharing a subkey must not disagree about the hive.
-        by_key: dict[str, set] = {}
-        for _k, (hive, sub, _n, _t, _v) in spec.items():
-            by_key.setdefault(sub, set()).add(hive)
-        conflict = [s for s, hives in by_key.items() if len(hives) > 1]
-        c.check(f"no subkey is claimed under two hives ({conflict[:2] or 'clean'})",
-                not conflict)
+    # Settings sharing a subkey must not disagree about the hive.
+    by_key: dict[str, set] = {}
+    for _k, (hive, sub, _n, _t, _v) in spec.items():
+        by_key.setdefault(sub, set()).add(hive)
+    conflict = [s for s, hives in by_key.items() if len(hives) > 1]
+    c.check(f"no subkey is claimed under two hives ({conflict[:2] or 'clean'})",
+            not conflict)
 
     # --- 3. Backup round-trip - restore() is only as good as this ---
     print("\n[3] backup round-trip (restore depends entirely on it)")

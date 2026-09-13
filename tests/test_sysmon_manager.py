@@ -30,7 +30,8 @@ def _fake_zip(entry_name: str = "Sysmon/Sysmon64.exe", content: bytes = b"FAKEEX
     return buf.getvalue()
 
 
-def main() -> int:
+@mock.patch("platform.system", return_value="Windows")
+def main(_platform=None) -> int:
     c = Checks("sysmon manager (install/verify/uninstall)", expect_min=20)
 
     import valkyrie.sysmon_manager as sm

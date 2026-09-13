@@ -297,8 +297,9 @@ class DNSInterceptor:
             # scheduling contention. Verified live: heartbeat false-failures
             # correlated with concurrent query bursts, not just cold boot. The
             # reserved health-probe name is recognised straight off the wire
-            # (byte-slice compare, no dns.message parse, no thread spawn), so
-            # it never competes with worker threads for the GIL.
+            # (byte-slice compare before dns.message parsing, no thread spawn),
+            # so it avoids worker dispatch. The listener still needs the GIL;
+            # this is not a hard latency guarantee under CPU starvation.
             if _is_health_probe_wire(data):
                 try:
                     request = dns.message.from_wire(data)

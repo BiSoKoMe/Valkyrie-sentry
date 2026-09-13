@@ -36,7 +36,7 @@ def main() -> int:
         return c.finish()
 
     try:
-        from valkyrie.web.server import create_app, state
+        from valkyrie.web.server import create_app, state, _CONTROL_TOKEN
     except ImportError as exc:
         c.skip("all checks", f"fastapi/web stack unavailable: {exc}")
         return c.finish()
@@ -82,7 +82,9 @@ def main() -> int:
 
     # Monitoring-only surface: no way to mutate anything through this route.
     c.check("no POST route exists for /api/telemetry/contention (read-only)",
-            client.post("/api/telemetry/contention").status_code == 405)
+            client.post("/api/telemetry/contention", headers={
+                "X-Valkyrie-Token": _CONTROL_TOKEN,
+            }).status_code == 405)
 
     return c.finish()
 

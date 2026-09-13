@@ -308,7 +308,16 @@ async function runSplashNormal() {
   state.engineUp = ready;
   await sleep(500);
   finishSplash(stopParticles);
-  if (!ready) await handleIncompleteInstall(boot);
+  // NOT gated on !ready. The engine runs as its own service, independent of
+  // the arm/disarm tasks, so the commonest shape of this fault is an install
+  // whose engine is perfectly reachable and whose tasks are simply absent -
+  // exactly the case this dialog exists for, and exactly the case the old
+  // `if (!ready)` guard skipped. Seen live: healthy service on 8090, zero
+  // Valkyrie tasks registered, and Start Protection failing every time with
+  // nothing on screen to explain it. handleIncompleteInstall() already
+  // returns immediately when there are no gaps, so a healthy install is
+  // unaffected.
+  await handleIncompleteInstall(boot);
 }
 
 // main.js's boot handler already detects an incomplete install (setup's
@@ -328,13 +337,21 @@ async function handleIncompleteInstall(bootPromise) {
     'Installation incomplete',
     `Valkyrie is missing required setup component(s): ${gaps.join(', ')}. ` +
     'This usually means setup was interrupted, blocked by another security ' +
-    'tool, or run without administrator rights.'
+    'tool, or run without administrator rights.\n\n' +
+    'The engine itself may still be running, but Start Protection cannot arm ' +
+    'DNS until this is repaired. Repair re-registers the missing component(s) ' +
+    'and will ask for administrator approval.'
   );
   if (response === 1) {           // "Repair"
     const r = await safe(() => V.repair(), { restored: false, ready: false });
-    toast(r.ready ? 'Repair complete - protection is back online.'
-                  : 'Repair attempted - restart Valkyrie if this keeps happening.',
-          r.ready ? 'ok' : 'error');
+    // `ready` alone is not the answer here: the engine was already up in this
+    // failure mode, so reporting on it would say "Repair complete" even when
+    // the user declined the elevation prompt and the tasks are still missing.
+    const fixed = r.tasksRepaired !== false;
+    toast(fixed && r.ready ? 'Repair complete - protection is back online.'
+                           : 'Repair incomplete - the missing setup component(s) are still ' +
+                             'not registered. Re-run the installer as administrator.',
+          fixed && r.ready ? 'ok' : 'error');
     if (r.ready) state.engineUp = true;
   } else if (response === 2) {    // "View Logs"
     await V.openLogs();
@@ -2308,7 +2325,29 @@ async function toggleProtection() {
   const label = $('orbLabel'); if (label) label.textContent = wantOn ? 'Starting…' : 'Stopping…';
   try {
     const r = wantOn ? await V.startEngine() : await V.stopEngine();
-    if (wantOn && r && r.ready === false) {
+    if (wantOn && r && r.started === false) {
+      // Incomplete install: the no-prompt arm task is not registered, so there
+      // is nothing to wait for and nothing to retry. This case used to fall
+      // through to the "did not arm in time" branch below, which tells the
+      // user to wait a moment and press Start Protection again - a loop that
+      // can never succeed, because the missing component is what does the
+      // arming. Offer the repair that actually fixes it instead.
+      const gaps = Array.isArray(r.gaps) && r.gaps.length
+        ? r.gaps.join(', ') : 'a required setup component';
+      const { response } = await V.errorDialog('Protection cannot be armed',
+        `This installation is missing ${gaps}, so Valkyrie cannot change your DNS `
+        + 'settings without prompting every time. Retrying will not fix this. Choose '
+        + 'Repair to re-register it - you will be asked for administrator approval.');
+      if (response === 1) {
+        const rep = await safe(() => V.repair(), { tasksRepaired: false });
+        toast(rep.tasksRepaired
+                ? 'Repair complete - press Start Protection again.'
+                : 'Repair incomplete - re-run the installer as administrator.',
+              rep.tasksRepaired ? 'ok' : 'error');
+      } else if (response === 2) {
+        await V.openLogs();
+      }
+    } else if (wantOn && r && r.ready === false) {
       await V.errorDialog('Unable to start protection',
         'Valkyrie could not confirm the engine came online. Open logs to see why.');
     } else if (wantOn && r && r.ready === true && r.armed === false) {

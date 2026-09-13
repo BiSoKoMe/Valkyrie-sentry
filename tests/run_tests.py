@@ -94,6 +94,20 @@ _SAFE = {
     "test_runner_safety.py": "mocked subprocesses and temporary source fixtures",
     "test_kill_process_recommendation_identity.py": "mocked psutil; no real process response",
     "test_persona_site_scoping.py": "temporary persona seed files; no network or host state",
+    "test_decoy_ownership.py": "temporary decoy files and manifests only",
+    "test_seed_tracking_scope.py": "temporary blocklist path and in-memory domain scoring",
+    "test_service_install_acl.py": "icacls/Get-Acl against a throwaway temp directory only",
+    "test_decoys.py": "temporary profile tree; fallback paths inspected without deployment",
+    "test_dns_os.py": "read-only probes; all DNS mutations mocked",
+    "test_doh_status_api.py": "temporary SQLite and ASGI clients; no detector start",
+    "test_telemetry_contention_api.py": "ASGI reads of this process; no controls",
+    "test_telemetry_pure.py": "admin checks mocked false; registry constants and temporary backups",
+    "test_remove_persistence.py": "dry-run responders with registry constants mocked",
+    "test_responder_reversibility.py": "mocked OS controls and registry; temporary rollback files",
+    "test_sysmon_manager.py": "mocked installation, download, signature and removal operations",
+    "test_web_api_nonblocking.py": "ASGI clients with a slow fake store",
+    "test_thread_resilience.py": "AST scan and workers whose OS work is replaced with errors",
+    "test_powershell_encoding.py": "read-only source and PowerShell parser checks",
 }
 
 # Some unit tests accept a --quick flag to skip optional network downloads.
