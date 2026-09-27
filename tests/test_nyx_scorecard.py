@@ -65,6 +65,35 @@ def test_known_gaps_are_named_not_hidden_in_the_pass_rate():
     assert not gaps["gap-no-referer-context"]["observed"]
 
 
+def test_cross_site_authorized_flows_are_left_alone():
+    # Regression (2026-09-24 disclosure gate): each of these carries an
+    # id-shaped value to a DIFFERENT site, and each was rewritten by NYX_ACT
+    # before -- breaking the sign-in, the emailed link, or the app's own
+    # signed-in write. Authorized means untouched AND unreported.
+    report = score(build_scenarios())
+    by_id = {r["scenario_id"]: r for r in report["results"]}
+    for sid in ("auth-oidc-token-exchange", "auth-oidc-authorize", "auth-oauth-callback",
+                "auth-emailed-link", "auth-signed-in-backend"):
+        assert by_id[sid]["request_unchanged"], sid
+        assert by_id[sid]["observed_categories"] == (), sid
+
+
+def test_fetch_metadata_closes_the_no_referer_gap_for_current_browsers():
+    report = score(build_scenarios())
+    result = next(r for r in report["results"]
+                  if r["scenario_id"] == "unauth-no-referer-fetch-metadata")
+    assert result["observed_categories"] == ("identifier",)
+    assert result["faked_categories"] == ("identifier",)
+    assert not result["raw_value_leaked"]
+
+
+def test_uuid_in_an_asset_path_is_not_an_identifier():
+    report = score(build_scenarios())
+    result = next(r for r in report["results"] if r["scenario_id"] == "benign-uuid-asset-path")
+    assert result["observed_categories"] == ()
+    assert result["request_unchanged"]
+
+
 def test_header_carried_identifier_is_now_deceived():
     # Regression: fake_outbound_headers() closes the gap this scorecard first
     # surfaced -- an identifier sent via a request header (a real tracker-SDK
@@ -85,5 +114,8 @@ if __name__ == "__main__":
     test_no_raw_sentinel_value_survives_into_the_report()
     test_scorecard_is_honest_about_its_own_evidence_class()
     test_known_gaps_are_named_not_hidden_in_the_pass_rate()
+    test_cross_site_authorized_flows_are_left_alone()
+    test_fetch_metadata_closes_the_no_referer_gap_for_current_browsers()
+    test_uuid_in_an_asset_path_is_not_an_identifier()
     test_header_carried_identifier_is_now_deceived()
-    print("8 passed")
+    print("11 passed")

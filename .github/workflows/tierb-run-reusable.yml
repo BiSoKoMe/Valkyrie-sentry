@@ -344,6 +344,19 @@ jobs:
           $Error.Clear()
           $global:LASTEXITCODE = 0
 
+      - name: Public summary (annotations - readable without admin rights)
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          # Logs and artifacts need repo-admin rights to read; check-run
+          # annotations are public. See public_summary.py's header.
+          $files = @(Get-ChildItem redteam/evaluation/results/*tierB.json,
+                                   redteam/evaluation/results/*tierB.partial.jsonl `
+                     -ErrorAction SilentlyContinue | Select-Object -Expand FullName)
+          python redteam/evaluation/public_summary.py @files
+          $global:LASTEXITCODE = 0
+
       - name: Upload Tier B evidence
         if: always()
         continue-on-error: true

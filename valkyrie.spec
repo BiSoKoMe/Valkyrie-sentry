@@ -51,6 +51,11 @@ datas = [
     # Imported detection content (Elastic 2.0 + SigmaHQ DRL 1.1). Also loads
     # fail-soft, so omitting it would ship an engine quietly missing 111 rules.
     ("valkyrie/defaults/imported_rules.json", "valkyrie/defaults"),
+    # Public Suffix List (MPL-2.0): what "same site" means for Nyx's
+    # third-party gate. Also fail-soft (valkyrie/psl.py falls back to
+    # last-two-labels), so omitting it would ship a Nyx that scores every
+    # .co.uk / .com.au / github.io site as one site - blind between them.
+    ("valkyrie/defaults/public_suffix_list.dat", "valkyrie/defaults"),
 ]
 
 binaries = []

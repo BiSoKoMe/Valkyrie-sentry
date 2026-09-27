@@ -103,7 +103,7 @@ function New-AzureVmLab {
     <# Creates the resource group + VM with the exact flags the real bring-up
        needed: --security-type Standard (disables Trusted Launch/Secure Boot -
        test-signing will NOT take effect on a Trusted Launch VM), an explicit
-       --computer-name under 15 chars (separate from the longer Azure -–name),
+       --computer-name under 15 chars (separate from the longer Azure --name),
        and a size that falls back across $VmSizeCandidates since a fresh
        free-trial subscription's available SKUs are not guaranteed. #>
     param([string]$AdminPassword)

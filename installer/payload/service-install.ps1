@@ -27,6 +27,31 @@ $svc  = 'ValkyrieShield'
 $data = Join-Path $env:ProgramData 'Valkyrie'
 if (-not (Test-Path $data)) { New-Item -ItemType Directory -Path $data -Force | Out-Null }
 
+# %ProgramData%'s own default ACL grants BUILTIN\Users create/write on new
+# subfolders (that is what the folder is for, historically). Left inherited,
+# this SYSTEM-privileged service reads its own detection policy - playbooks,
+# rules, the control token the desktop app authenticates with - from a
+# directory ANY standard-user account or process on the machine can write
+# into. No admin rights needed to disable enforcement (rewrite playbooks.yaml
+# to dry_run), plant an exclusion for a specific attacker binary, or read the
+# control token and drive the loopback API's mutation endpoints directly.
+# That is a real, checked-in security gap: docs/ENGINEERING_ROADMAP lists the
+# HTTP side of this exact problem as its #1 release blocker (SEC-01).
+#
+# The app still needs to READ this directory unelevated (the Electron main
+# process reads control\token directly off disk to authenticate its own API
+# calls), so this narrows Users to Read+Execute rather than removing access
+# outright. Only SYSTEM (the service's own identity) and Administrators keep
+# write. Re-run on every upgrade - icacls /inheritance:r is idempotent, and a
+# failure here must never block install; the prior (inherited, permissive)
+# ACL is what every install had before this line existed.
+Write-Host '[*] Restricting write access to the data directory to SYSTEM/Administrators...'
+& icacls $data /inheritance:r 2>&1 | Out-Null
+& icacls $data /grant:r 'SYSTEM:(OI)(CI)F' 'Administrators:(OI)(CI)F' 'Users:(OI)(CI)(RX)' /T /C 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[WARNING] Could not restrict $data's ACL (exit $LASTEXITCODE) - a standard-user process on this machine can still rewrite Valkyrie's own policy files."
+}
+
 foreach ($f in @($nssm, $exe)) {
     if (-not (Test-Path $f)) { Write-Host "[ERROR] Missing $f"; exit 1 }
 }

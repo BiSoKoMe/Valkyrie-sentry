@@ -38,7 +38,8 @@ cfg.NYX_ACT = True                       # test the full deception, end to end
 
 from valkyrie.store import Store          # noqa: E402
 from valkyrie.tls_inspector import TLSInspector   # noqa: E402
-from valkyrie.persona import current_persona      # noqa: E402
+from valkyrie.persona import persona_for_site     # noqa: E402
+from valkyrie.dns_tunnel import registrable_base  # noqa: E402
 
 PORT = 8899
 PROXY_PORT = 8443
@@ -86,7 +87,6 @@ def main() -> int:
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     time.sleep(1.0)
 
-    persona = current_persona()
     real_ids: list[str] = []
     canvas: dict[str, int] = {}
     beacon_status: dict[str, str] = {}
@@ -160,7 +160,17 @@ def main() -> int:
 
     caught = len(nyx_ev) > 0
     real_leaked = any(any(rid in b for rid in real_ids) for b in tracker_bodies)
-    fake_served = any(persona.advertising_id in b for b in tracker_bodies)
+    # ACT mode deliberately derives a different persona for each
+    # (first-party, tracker) pair. Checking the machine-wide persona here made
+    # a correct rewrite look like a failure whenever more than one page sent a
+    # beacon to this tracker.
+    expected_fake_ids = {
+        persona_for_site(origin, registrable_base("tracker.test")).advertising_id
+        for origin in beacon_status
+    }
+    fake_served = bool(expected_fake_ids) and all(
+        any(fake_id in body for body in tracker_bodies)
+        for fake_id in expected_fake_ids)
     cross_origin_differs = len(set(canvas.values())) > 1 if canvas else False
 
     print("=" * 64)
@@ -173,7 +183,7 @@ def main() -> int:
     print("NYX caught the real beacon:", caught, f"({len(nyx_ev)} nyx events)")
     print("NYX faked it (nyx_fake events):", len(faked_ev))
     print("real browser id LEAKED to tracker:", real_leaked, "(want False)")
-    print("FAKE persona id served to tracker:", fake_served, "(want True)")
+    print("FAKE site persona id(s) served to tracker:", fake_served, "(want True)")
     print("farble canvas differs per origin:", cross_origin_differs, canvas)
     print("nyx addon diagnostics:", nyx_diag or "(unavailable)")
     if real_leaked:

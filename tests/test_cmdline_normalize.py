@@ -84,6 +84,19 @@ BENIGN_CONTROLS = [
     # be turned into a detection.
     ("powershell.exe", 'Write-Host ("{0} files in {1}s" -f $count, $secs)'),
     ("powershell.exe", '("{0}-{1}" -f "Production","WebServer") | Out-Host'),
+    # Regression for a real bug (2026-09-10): the caret handler fired on ANY
+    # "^" in the command line with no threshold, so it counted regex anchors
+    # and git's revision syntax as cmd.exe escape-obfuscation. Measured live
+    # on a real dev machine: 107 MEDIUM/T1027 "compromise" incidents in one
+    # week against grep.exe, bash.exe, git.exe, sed.exe, pwsh.exe, python.exe
+    # and cmd.exe - every one of them ordinary terminal use, not an attack.
+    ('grep.exe', 'grep -n "def classify_behavior" -r valkyrie'),
+    ('grep.exe', "grep -E '^def ' file.py"),
+    ('rg.exe', r"rg 'return.*\^' -n src"),
+    ('sed.exe', "sed -n '/^class/p' file.py"),
+    ('git.exe', 'git log HEAD^2..HEAD'),
+    ('git.exe', 'git rev-parse HEAD^{tree}'),
+    ('git.exe', 'git show HEAD^'),
 ]
 
 
@@ -124,6 +137,20 @@ def main() -> int:
 
     print("\n[2] EVASIVE vs COSMETIC classification")
     _check("caret is EVASIVE", normalize_cmdline("n^et").obfuscated)
+    _check("caret splitting BOTH words of a keyword is EVASIVE",
+           normalize_cmdline("n^et us^er hacker /a^dd").obfuscated)
+    # Regression (2026-09-10, 107 real incidents - see BENIGN_CONTROLS above):
+    # a caret is only evidence when it sits BETWEEN two letters, the shape of
+    # n^et. A regex anchor has nothing alphabetic before the caret; git's
+    # revision syntax has a digit or brace after it, not a letter.
+    _check("regex anchor caret is NOT obfuscation",
+           not normalize_cmdline("grep -E '^def ' file.py").obfuscated)
+    _check("git HEAD^ revision syntax is NOT obfuscation",
+           not normalize_cmdline("git log HEAD^2..HEAD").obfuscated)
+    _check("git rev^{tree} syntax is NOT obfuscation",
+           not normalize_cmdline("git rev-parse HEAD^{tree}").obfuscated)
+    _check("bare trailing caret (batch line continuation) is NOT obfuscation",
+           not normalize_cmdline("copy a.txt b.txt ^").obfuscated)
     _check("char arithmetic is EVASIVE",
            normalize_cmdline("[char]110+[char]101").obfuscated)
     _check("full-width unicode is EVASIVE", normalize_cmdline("ｎｅｔ").obfuscated)

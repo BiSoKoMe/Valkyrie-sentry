@@ -69,7 +69,11 @@ on:
   # process fix, not a discipline fix - remembering to run it is exactly what
   # failed.
   push:
-    branches: [feat/efficacy-etw-coverage]
+    # codex/master-reliability added 2026-09-27: the owner's machine cannot
+    # host the battery, and this session has no GitHub API login to
+    # workflow_dispatch it - a push to the working branch is the only way to
+    # get a live Tier B run on the detector changes (ADR 0063).
+    branches: [feat/efficacy-etw-coverage, codex/master-reliability]
     paths:
       - ".github/workflows/redteam-tierb.yml"
       - "redteam/**"

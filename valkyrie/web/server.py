@@ -298,9 +298,18 @@ def _build_nyx() -> dict:
         trackers, tracker_summary = [], {}
 
     s = store.stats()
+    try:
+        from ..psl import status as _psl_status
+        site_list = _psl_status()
+    except Exception as exc:
+        site_list = {"loaded": False, "error": repr(exc)}
     return {
         "watched_24h":     s.get("total_24h", 0),
         "mode":            "acting" if acting else "watching",
+        # Whether the third-party gate is using the real Public Suffix List
+        # or the degraded last-two-labels fallback (a build missing the data
+        # file) - so the degraded state is visible, never silent.
+        "site_list":       site_list,
         "leak_count":      len(leaks),
         "leaks":           leaks[:50],   # most recent first (recent_events is DESC)
         "fake_count":      len(faked),
@@ -606,6 +615,28 @@ def _build_telemetry_watchdog():
     return wd
 
 
+def _quiet_proactor_reset_handler(loop, context: dict) -> None:
+    """Event-loop exception handler: silence one specific, well-documented
+    Windows/asyncio artifact instead of dumping a full traceback for it.
+
+    Windows' ProactorEventLoop logs "Exception in callback
+    _ProactorBasePipeTransport._call_connection_lost(None)" /
+    ConnectionResetError every time a loopback client (the Electron app
+    polling /api/* routes, or a browser tab closing mid-request) resets the
+    TCP connection - the disconnect was already handled correctly; this is
+    asyncio's own cleanup racing itself, not an application error. Left
+    unfiltered it drowns out a genuinely new traceback in hundreds of
+    identical, harmless ones (measured: 411 of these in one log). Anything
+    that is NOT this exact shape still goes to asyncio's own default handler,
+    unmodified - this narrows, it never widens, what gets suppressed.
+    """
+    exc = context.get("exception")
+    if (isinstance(exc, (ConnectionResetError, ConnectionAbortedError))
+            and "_call_connection_lost" in context.get("message", "")):
+        return
+    loop.default_exception_handler(context)
+
+
 # ---------------------------------------------------------------------------
 # FastAPI app factory
 # ---------------------------------------------------------------------------
@@ -639,6 +670,7 @@ def create_app(ctx: Optional[AppContext] = None):
         "is the loop beating at all right now", the same liveness question the
         stderr print alone could not answer outside a live CI transcript."""
         import sys as _sys
+        from ..telemetry_watchdog import is_suspend_gap
         interval = 1.0
         while True:
             t0 = time.monotonic()
@@ -652,7 +684,15 @@ def create_app(ctx: Optional[AppContext] = None):
                     state.loop_heartbeat.beat(drift)
                 except Exception:
                     pass
-            if drift > 1.5:
+            if is_suspend_gap(drift):
+                # Not a stall: the process was asleep (laptop lid close /
+                # Modern Standby), and time.monotonic() kept advancing
+                # through it. Say so plainly instead of printing an
+                # hours-long "BLOCKED" line that reads like a crash.
+                print(f"[loop-resume] {time.strftime('%H:%M:%S')} resumed after "
+                      f"an apparent suspend of {drift:.1f}s (not counted as a "
+                      f"loop stall)", file=_sys.stderr, flush=True)
+            elif drift > 1.5:
                 print(f"[loop-stall] {time.strftime('%H:%M:%S')} event loop was "
                       f"BLOCKED for {drift:.1f}s (health would have been deaf this "
                       f"whole time)", file=_sys.stderr, flush=True)
@@ -662,6 +702,7 @@ def create_app(ctx: Optional[AppContext] = None):
         # Startup: capture loop, register live-event subscriber
         global _loop
         _loop = asyncio.get_running_loop()
+        _loop.set_exception_handler(_quiet_proactor_reset_handler)
         _stall_task = asyncio.create_task(_loop_stall_monitor())
         if state.loop_heartbeat is None:
             from ..telemetry_watchdog import LoopHeartbeat
@@ -755,6 +796,51 @@ def create_app(ctx: Optional[AppContext] = None):
     def component_capabilities():
         from ..capabilities import component_contract
         return component_contract()
+
+    @app.get("/api/v1/settings")
+    def list_settings():
+        # Read-only introspection: every overridable setting, its current
+        # resolved value, where that value came from, and whether writing a
+        # new one here takes effect immediately or needs a restart (see
+        # settings.LIVE_WITHOUT_RESTART - most settings are read via a
+        # module-top-level import elsewhere and are frozen at that module's
+        # own import time; a live PATCH-equivalent to one of those would be a
+        # silent no-op, which this project has a named rule against).
+        from .. import config, settings as _settings
+        overridden = {o.key: o.source for o in config.CONFIG_OVERRIDES}
+        return {
+            "settings": [
+                {**spec, "value": getattr(config, spec["key"], None),
+                 "source": overridden.get(spec["key"], "default")}
+                for spec in _settings.describe()
+            ],
+        }
+
+    @app.post("/api/v1/settings")
+    async def write_setting(request: Request):
+        guard = _edr_guard(request)
+        if guard is not None:
+            return guard
+        from .. import config, settings as _settings
+        body = await _safe_json(request)
+        key = body.get("key")
+        if not key or "value" not in body:
+            return JSONResponse(
+                {"error": "body must be {\"key\": <setting name>, \"value\": <new value>}"},
+                status_code=400)
+        try:
+            val, path = _settings.write_override(key, body["value"], config_dir=config.DATA_DIR)
+        except _settings.ConfigError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        setattr(config, key, val)
+        config.CONFIG_OVERRIDES = (
+            [o for o in config.CONFIG_OVERRIDES if o.key != key]
+            + [_settings.Override(key, val, f"config file ({path})")]
+        )
+        return {
+            "key": key, "value": val,
+            "live_without_restart": key in _settings.LIVE_WITHOUT_RESTART,
+        }
 
     def _aegis_sensor_health() -> Optional[dict]:
         # Aegis's own read of "is there evidence I'm not seeing right now" -
@@ -1431,12 +1517,12 @@ def create_app(ctx: Optional[AppContext] = None):
         collector isn't available, or hasn't completed its first poll yet."""
         ai = getattr(state, "asset_inventory", None)
         if ai is None:
-            return JSONResponse({"error": "asset inventory not available"},
-                                status_code=503)
+            return _subsystem_unavailable("asset inventory")
         snap = ai.last_snapshot()
         if snap is None:
             return JSONResponse(
-                {"error": "asset inventory has not completed its first poll yet"},
+                {"error": "asset inventory has not completed its first poll yet",
+                 "starting": True},
                 status_code=503)
         return {
             "counts": snap.counts(),

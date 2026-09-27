@@ -21,7 +21,7 @@ def _check(label: str, ok: bool) -> None:
 def main() -> int:
     from valkyrie.telemetry_watchdog import (
         TelemetryWatchdog, LoopHeartbeat, evaluate_poll_source, PollSourceSpec,
-        FaultInjectableTestCollector,
+        FaultInjectableTestCollector, is_suspend_gap,
         REASON_NOT_AVAILABLE, REASON_NOT_RUNNING, REASON_NO_POLL_YET,
         REASON_STALE_POLL, REASON_LOOP_NEVER_BEAT, REASON_LOOP_STALLED,
     )
@@ -89,6 +89,32 @@ def main() -> int:
     old_beat_at = lh3.last_beat_at
     st3 = lh3.status(now=old_beat_at + 30.0, stale_after=5.0)
     _check("no beat for 30s against a 5s stale bound -> stale", st3["stale"] is True)
+
+    print("\n[8b] is_suspend_gap: threshold between real in-process jitter "
+          "and an OS suspend (laptop sleep / Modern Standby)")
+    _check("an 8s gap (the collector's own worst documented bound) is not a suspend",
+           is_suspend_gap(8.0) is False)
+    _check("a 30s gap is not (yet) classified as suspend", is_suspend_gap(30.0) is False)
+    _check("a 31s gap is classified as suspend", is_suspend_gap(31.0) is True)
+    _check("an 18.75-hour gap (a real laptop-sleep duration this bug hit) is suspend",
+           is_suspend_gap(67555.1) is True)
+
+    print("\n[8c] LoopHeartbeat.beat(): a suspend-scale drift must not read "
+          "as a stall or poison worst_drift_seconds - the process was "
+          "asleep, not blocked")
+    lh_susp = LoopHeartbeat()
+    lh_susp.beat(drift=2.5)          # one real, ordinary stall first
+    lh_susp.beat(drift=80615.9)      # then a laptop-sleep-scale gap
+    _check("the suspend beat still counts as a fresh heartbeat",
+           lh_susp.status(now=lh_susp.last_beat_at)["beating"] is True)
+    _check("worst_drift_seconds keeps the real stall, not the sleep duration",
+           lh_susp.worst_drift_seconds == 2.5)
+    _check("last_drift_seconds reads 0 for the suspend beat, not the sleep duration",
+           lh_susp.last_drift_seconds == 0.0)
+    _check("the suspend is counted separately rather than silently dropped",
+           lh_susp.suspected_suspend_resumes == 1)
+    _check("an ordinary drift right after is still tracked normally",
+           (lh_susp.beat(drift=1.0), lh_susp.last_drift_seconds == 1.0)[1])
 
     print("\n[9b] loop_is_alive: the process-restart decision (Reliability hardening)")
     from valkyrie.telemetry_watchdog import loop_is_alive

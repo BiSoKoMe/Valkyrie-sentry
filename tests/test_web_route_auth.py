@@ -16,8 +16,8 @@ any other local user, container, or browser-reachable service turns the security
 product into the privilege-escalation path. The failure mode is not "data leak",
 it is "the EDR becomes the exploit".
 
-Loopback is intentionally allowed without a token (that is the product's local
-UX). The gate under test is the off-loopback path.
+Loopback reads work without a token. Mutations require both a loopback peer
+and the published control token, even when a remote caller knows that token.
 """
 
 from __future__ import annotations
@@ -213,8 +213,11 @@ def main() -> int:
     # The gate must be a real gate, not a permanent 403: the correct token has
     # to actually let a caller through, or the checks above are vacuous.
     print("\n[3] the gate opens for the correct token (else the above is vacuous)")
+    c.check("even the correct token cannot authorize a remote mutation",
+            all(remote.request(method, _concrete(path), headers=good).status_code == 403
+                for path, method in sample))
     opened = sum(1 for path, method in sample
-                 if remote.request(method, _concrete(path),
+                 if local.request(method, _concrete(path),
                                    headers=good).status_code not in (401, 403))
     c.check(f"the correct token is accepted somewhere ({opened}/{len(sample)} "
             "sampled routes opened)", opened > 0)

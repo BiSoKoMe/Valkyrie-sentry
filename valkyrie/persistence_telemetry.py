@@ -26,6 +26,7 @@ the severity via the same heuristics the process collector uses.
 
 from __future__ import annotations
 
+import ntpath
 import os
 import threading
 import time
@@ -125,7 +126,8 @@ def _exe_from_command(command: str) -> str:
         first = c[1:end] if end > 0 else c[1:]
     else:
         first = c.split(" ")[0]
-    return os.path.basename(first.strip().strip('"'))
+    # ImagePath is a Windows path even when telemetry is replayed on Linux.
+    return ntpath.basename(first.strip().strip('"'))
 
 
 def _read_values(hive, subkey) -> dict:
@@ -479,12 +481,29 @@ class PersistenceCollector:
                 return 0
             with self._diagnostics.stage("diff_normalize_emit"):
                 count = 0
-                deadline = time.monotonic() + self._emit_budget
-                budget_spent = False
+                # A fresh deadline PER CATEGORY, not one shared across all
+                # four - a backlog in run_keys/services (processed first)
+                # used to be able to exhaust a single shared deadline before
+                # scheduled_tasks was ever reached, deferring every one of
+                # its entries every cycle. Deferred entries are deliberately
+                # left OUT of the new baseline (see below), so with a shared
+                # deadline a large-enough backlog anywhere earlier in
+                # iteration order could starve a later category FOREVER
+                # instead of merely delaying it - confirmed live: 243 stock
+                # Windows scheduled tasks re-flagged as new persistence on
+                # nearly every poll for three weeks straight, each correctly
+                # refused by the "don't delete system tasks" guard but never
+                # once actually clearing. An equal per-category slice
+                # guarantees every category makes SOME progress every cycle,
+                # so a backlog shrinks instead of staying constant.
+                per_category_budget = self._emit_budget / max(1, len(new))
+                truncated_any = False
                 next_last: dict = {}
                 for activity, entries in new.items():
                     prev = self._last.get(activity, {})
                     kept: dict = {}
+                    deadline = time.monotonic() + per_category_budget
+                    budget_spent = False
                     for identity, value in entries.items():
                         if identity not in prev:
                             if budget_spent or time.monotonic() >= deadline:
@@ -499,8 +518,10 @@ class PersistenceCollector:
                             count += 1
                         kept[identity] = value
                     next_last[activity] = kept
+                    if budget_spent:
+                        truncated_any = True
                 self._last = next_last
-                if budget_spent:
+                if truncated_any:
                     self._truncated = self._truncated + ["diff_normalize_emit"]
             return count
         finally:

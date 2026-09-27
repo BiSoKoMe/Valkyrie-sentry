@@ -117,6 +117,70 @@ def test_status_route_surfaces_the_wired_telemetry_watchdog(tmp_path, monkeypatc
         store.stop()
 
 
+def test_cases_lists_every_saved_incident_not_just_the_first(tmp_path):
+    # test_case_identity_persists_and_exposure_alias_preserves_semantics
+    # above only ever saves ONE incident - real multi-case behavior (does the
+    # facade actually return every case, or silently truncate/drop) was
+    # never exercised until now.
+    store = Store(db_path=tmp_path / "multi.db")
+    store.start()
+    try:
+        engine = EdrEngine(store)
+        engine._edr.init_schema()
+        saved = [Incident(title=f"Incident {i}") for i in range(5)]
+        for inc in saved:
+            engine._edr.save_incident(inc)
+        aegis = AegisInvestigator(engine)
+        returned_ids = {case["id"] for case in aegis.cases()}
+        assert returned_ids == {inc.id for inc in saved}
+    finally:
+        store.stop()
+
+
+def test_cases_status_filter_at_the_route_level(tmp_path, monkeypatch):
+    from tests.testclient_compat import make_client
+    from valkyrie.web import server
+    store = Store(db_path=tmp_path / "status-filter.db")
+    store.start()
+    try:
+        engine = EdrEngine(store)
+        engine._edr.init_schema()
+        open_inc = Incident(title="Still open")
+        resolved_inc = Incident(title="Already resolved", status="resolved")
+        engine._edr.save_incident(open_inc)
+        engine._edr.save_incident(resolved_inc)
+        monkeypatch.setattr(server.state, "edr", engine)
+        client = make_client(server.create_app(), "127.0.0.1")
+
+        r = client.get("/api/v1/aegis/cases", params={"status": "resolved"})
+        ids = {c["id"] for c in r.json()["cases"]}
+        assert ids == {resolved_inc.id}, "status filter must reach the real SQL WHERE clause"
+
+        r_all = client.get("/api/v1/aegis/cases")
+        assert {c["id"] for c in r_all.json()["cases"]} == {open_inc.id, resolved_inc.id}
+    finally:
+        store.stop()
+
+
+def test_cases_limit_is_bounded_both_directions(tmp_path):
+    # AegisInvestigator.cases() clamps to [1, 200] before it ever reaches
+    # SQL - a limit of 0 or negative must never become "no limit" (a
+    # full-table scan), and an oversized limit must never bypass the cap.
+    store = Store(db_path=tmp_path / "limit-bounds.db")
+    store.start()
+    try:
+        engine = EdrEngine(store)
+        engine._edr.init_schema()
+        for i in range(3):
+            engine._edr.save_incident(Incident(title=f"Incident {i}"))
+        aegis = AegisInvestigator(engine)
+        assert len(aegis.cases(limit=100000)) == 3   # clamped to 200, but only 3 exist
+        assert len(aegis.cases(limit=0)) == 1         # floored to 1, not "unlimited"
+        assert len(aegis.cases(limit=-5)) == 1
+    finally:
+        store.stop()
+
+
 def test_failed_subscriber_is_counted_and_does_not_hide_other_delivery():
     bus = EventBus()
     received = []

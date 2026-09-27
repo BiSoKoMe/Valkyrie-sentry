@@ -223,11 +223,11 @@ class EdrStore:
         return [Incident.from_row(dict(r)) for r in rows]
 
     def find_open_incident(self, entity: str, category: str,
-                           process_name: str, within_seconds: float) -> Optional[Incident]:
-        """Return the most-recent still-open incident matching this
-        (entity, category) or (process, category) within the correlation
-        window, or None. Used by the engine to fold repeat detections into a
-        single incident instead of spamming one per event."""
+                           within_seconds: float) -> Optional[Incident]:
+        """Return the most-recent open incident for the same explicit entity.
+
+        This never merges cases merely because their process names match.
+        """
         cutoff = (datetime.now(timezone.utc)
                   - timedelta(seconds=within_seconds)).isoformat()
         with self._connect() as conn:
@@ -240,8 +240,6 @@ class EdrStore:
         for r in rows:
             d = dict(r)
             if entity and d.get("entity") == entity:
-                return Incident.from_row(d)
-            if process_name and d.get("process_name") == process_name:
                 return Incident.from_row(d)
         return None
 

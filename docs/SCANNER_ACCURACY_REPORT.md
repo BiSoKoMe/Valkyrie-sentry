@@ -1,5 +1,36 @@
 # Behavioural scanner - real-world accuracy measurement
 
+## Current regression result - 2026-09-09
+
+The unchanged 15-tracker and 15-benign sample now catches **14/15 trackers
+(93.3%)**, with **0/15 false positives** and 100% precision. The existing
+85% recall, 95% precision, and zero false-positive gates remain unchanged.
+
+This is a fixed pipeline regression set, not a held-out benchmark of unseen
+trackers. Seven sample trackers now match the shipped seed list, including
+through parent-domain entries. All seven are caught; the pipeline catches
+seven of the eight trackers outside the seed list. The test prints both
+counts and excludes cached downloaded lists even when run directly.
+
+Two exact tracking endpoints were added to the seed list:
+
+- `tr.snapchat.com`: Snap documents it as the web and app conversion-event
+  endpoint in [Using the API](https://www.developers.snap.com/marketing-api/Conversions-API/UsingTheAPI).
+- `ct.pinterest.com`: Pinterest documents its tag requests and tracking
+  cookies in [View tag parameters and cookies](https://help.pinterest.com/en/business/article/pinterest-tag-parameters-and-cookies).
+
+These are known-endpoint coverage improvements. Generic `tr`, `ct`, and
+`events` scoring is unchanged. Fifteen additional regression cases verify
+offline matching and preserve parent sites, account/help subdomains,
+event-calendar sites, ambiguous short labels, and suffix lookalikes.
+
+`events.reddit.com` remains an explicit miss in this single-query sample.
+Passing the gate does not imply perfect detection. The dated measurements
+below are historical; their original novelty claims do not describe the
+current seed list.
+
+## Historical measurement - 2026-07-07
+
 **Date:** 2026-07-07
 **Mode:** intelligence-only (`USE_EXTERNAL_LISTS = False` - seed blocklist +
 behavioural scanner + intelligence layer, no downloaded lists)

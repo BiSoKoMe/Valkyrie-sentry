@@ -18,10 +18,13 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from valkyrie.edr.plugins import PluginContext
+from tests.winreg_constants import constants as registry_constants
 from valkyrie.edr.response import (
     RemovePersistenceResponder, BUILTIN_RESPONDERS, register_responders,
 )
@@ -43,7 +46,11 @@ def _run(target, dry_run=True):
                      ctx=PluginContext())
 
 
-def test_descriptor_and_dry_run() -> None:
+@patch.dict(sys.modules, {"winreg": registry_constants})
+@patch("valkyrie.persistence_telemetry._WINREG", True)
+@patch("valkyrie.persistence_telemetry.winreg", registry_constants, create=True)
+@patch("valkyrie.persistence_telemetry._enum_loaded_user_sids", return_value=[])
+def test_descriptor_and_dry_run(_sids=None) -> None:
     print("[1/2] descriptor parsing + dry-run action shaping")
 
     status, msg = _run("scheduled_task::ValkTest")
@@ -106,6 +113,90 @@ def test_persistence_event_entity() -> None:
     _check("engine-shaped entity is consumable", status == "dry_run")
 
 
+def test_never_removes_valkyries_own_asep() -> None:
+    """Valkyrie must not delete its own auto-start entries.
+
+    Seen live 2026-09-10 on a real install: the persistence collector reported
+    the app's own ValkyrieArm/ValkyrieDisarm tasks as "new auto-start entry
+    created" (medium), and the enforce-mode remove-persistence playbook deleted
+    both about a second after registration - twice, weeks apart. The user-facing
+    symptom was Start Protection never arming DNS, because the no-prompt tasks
+    it needs had been eaten by Valkyrie itself.
+    """
+    print("[3/3] never removes Valkyrie's own autostart entries")
+    from valkyrie.edr import response as resp  # noqa: F401  (module under test)
+
+    # The guard asks whether the task's action runs from our install root, so
+    # the fixture only has to carry that root somewhere in the XML. Derived
+    # here rather than read back from the module under test, so this fails on
+    # the BEHAVIOUR (our own task getting deleted) rather than on a missing
+    # helper - running from source, this is the same directory the responder
+    # resolves to.
+    repo_root = Path(__file__).resolve().parents[1]
+    assert (repo_root / "valkyrie" / "edr" / "response.py").exists(), repo_root
+    # Lowercased only for the comparison the responder makes (Windows paths are
+    # case-insensitive); never for touching the filesystem, which on a
+    # case-sensitive checkout - CI clones into .../Valkyrie-sentry/ - would then
+    # look for a directory that does not exist.
+    root = str(repo_root).lower()
+    ours = (
+        "<Task><Actions><Exec><Command>wscript.exe</Command>"
+        f"<Arguments>//B //NoLogo '{root}/run-hidden.vbs' "
+        f"'{root}/arm-protection.ps1'</Arguments></Exec></Actions></Task>"
+    )
+    theirs = ("<Task><Actions><Exec><Command>C:/Users/Public/eviL.exe"
+              "</Command></Exec></Actions></Task>")
+
+    def query_returns(xml, code=0):
+        def fake_run(cmd, *a, **kw):
+            if "/xml" in cmd:
+                return SimpleNamespace(returncode=code, stdout=xml, stderr="")
+            raise AssertionError(f"a protected task must never reach: {cmd}")
+        return fake_run
+
+    # 1. Our own task, identified by where its action runs from - not by name.
+    with patch("subprocess.run", query_returns(ours)):
+        status, detail = _run("scheduled_task::ValkyrieArm", dry_run=False)
+    _check("our own arm task is refused, not deleted", status == "skipped")
+    _check("the refusal says why", "own scheduled task" in detail)
+
+    # 2. Dry-run must report the refusal too, or a playbook preview would
+    #    promise a deletion that (correctly) never happens.
+    with patch("subprocess.run", query_returns(ours)):
+        status, _ = _run("scheduled_task::ValkyrieArm", dry_run=True)
+    _check("dry-run reports the refusal rather than 'would delete'",
+           status == "skipped")
+
+    # 3. A hostile task merely NAMED like ours is still removable: ownership is
+    #    decided by the action path, so the guard cannot be used as cover.
+    deleted = []
+
+    def fake_run(cmd, *a, **kw):
+        if "/xml" in cmd:
+            return SimpleNamespace(returncode=0, stdout=theirs, stderr="")
+        deleted.append(cmd)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with patch("subprocess.run", fake_run):
+        status, _ = _run("scheduled_task::ValkyrieArm", dry_run=False)
+    _check("an impostor task with our name is NOT protected", status == "succeeded")
+    _check("the impostor was actually deleted",
+           any("/delete" in c for c in deleted))
+
+    # 4. Unreadable definition + one of our names -> refuse (fail-safe): one
+    #    uncleaned task beats deleting our own control plane.
+    with patch("subprocess.run", query_returns("", code=1)):
+        status, _ = _run("scheduled_task::ValkyrieDisarm", dry_run=False)
+    _check("unreadable + our name is refused", status == "skipped")
+
+    # 5. The engine's own SERVICE is ValkyrieShield; the bare "valkyrie" entry
+    #    never matched it, so remove_persistence could delete the service
+    #    hosting the engine running it.
+    status, detail = _run("service_install::ValkyrieShield", dry_run=False)
+    _check("the engine's own service is protected", status == "skipped")
+    _check("service refusal names it protected", "protected service" in detail)
+
+
 def main() -> int:
     print("=" * 60)
     print("RemovePersistenceResponder tests (all dry-run — nothing deleted)")
@@ -114,6 +205,7 @@ def main() -> int:
     test_descriptor_and_dry_run()
     test_safety_rails()
     test_persistence_event_entity()
+    test_never_removes_valkyries_own_asep()
     print("-" * 60)
     if _failures:
         print(f"{_failures} check(s) FAILED.")

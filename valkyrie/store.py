@@ -56,7 +56,7 @@ class DnsEvent:
     reason:       str
     suspicion:    float = 0.0
     raw_category: str  = ""     # e.g. "doh_bypass", "anomaly", "behavioral"
-    url:          str  = ""     # full URL - populated for HTTPS/TLS-inspected events
+    url:          str  = ""     # retained for legacy rows; TLS telemetry deliberately omits URLs
 
     @classmethod
     def now(cls, **kwargs) -> "DnsEvent":

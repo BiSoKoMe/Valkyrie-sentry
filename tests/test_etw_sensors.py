@@ -21,7 +21,7 @@ from valkyrie.etw.sysmon import (                                  # noqa: E402
 from valkyrie.etw.wineventlog import parse_event_xml, record_id_of  # noqa: E402
 from valkyrie.telemetry import (                                   # noqa: E402
     ACT_FLAGGED, CAT_NETWORK, CAT_PERSISTENCE, CAT_PROCESS, PERSIST_WMI,
-    SEV_HIGH, SEV_INFO, SEV_MEDIUM, TelemetryEvent, severity_rank,
+    SEV_HIGH, SEV_INFO, SEV_LOW, SEV_MEDIUM, TelemetryEvent, severity_rank,
 )
 
 
@@ -281,10 +281,62 @@ def test_sysmon_eid1_emits_discovery_labels_for_the_burst_combiner():
 
 
 def test_sysmon_unsigned_image_load():
+    # An application loading an unsigned DLL is context, not an incident:
+    # PyInstaller/Java/Electron apps unpack unsigned native libraries into
+    # %TEMP% and load them constantly. Still emitted (visible, correlatable).
     args = classify_sysmon(7, {"Image": r"C:\app.exe", "ImageLoaded": r"C:\Temp\evil.dll",
                                "Signed": "false", "SignatureStatus": "Unavailable",
                                "Hashes": "SHA256=DEAD"})
-    assert args["severity"] == SEV_MEDIUM and "unsigned_module" in args["labels"]
+    assert args["severity"] == SEV_LOW and "unsigned_module" in args["labels"]
+    # A Windows system binary pulling an unsigned DLL out of a user folder is
+    # the proxy-execution shape, and does escalate.
+    args = classify_sysmon(7, {"Image": r"C:\Windows\System32\rundll32.exe",
+                               "ImageLoaded": r"C:\Users\bob\AppData\Roaming\x.dll",
+                               "Signed": "false", "SignatureStatus": "Unavailable"})
+    assert args["severity"] == SEV_MEDIUM
+
+
+def test_sysmon_system_dll_name_from_user_folder_is_a_hijack():
+    # Signed OR unsigned: the planted copy can be Microsoft's own signed DLL.
+    for signed, status in (("true", "Valid"), ("false", "Unavailable")):
+        args = classify_sysmon(7, {"Image": r"C:\Users\bob\AppData\Roaming\updater.exe",
+                                   "ImageLoaded": r"C:\Users\bob\AppData\Roaming\amsi.dll",
+                                   "Signed": signed, "SignatureStatus": status})
+        assert args and args["severity"] == SEV_HIGH and "dll_hijack" in args["labels"]
+        assert args["technique"].startswith("T1574.001")
+    # The same library from System32 is just Windows working (and signed -> dropped).
+    assert classify_sysmon(7, {"Image": r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                               "ImageLoaded": r"C:\Windows\System32\amsi.dll",
+                               "Signed": "true", "SignatureStatus": "Valid"}) is None
+    # A game bundling its own dbghelp/d3d copy is not on the hijack list.
+    args = classify_sysmon(7, {"Image": r"C:\Users\bob\Games\x\game.exe",
+                               "ImageLoaded": r"C:\Users\bob\Games\x\dbghelp.dll",
+                               "Signed": "true", "SignatureStatus": "Valid"})
+    assert args is None
+
+
+def test_sysmon_renamed_system_utility():
+    ps = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+    args = classify_sysmon(1, {"ProcessId": "7", "Image": r"C:\Windows\Temp\lsass.exe",
+                               "ParentImage": ps, "OriginalFileName": "Cmd.Exe",
+                               "CommandLine": r"C:\Windows\Temp\lsass.exe /B"})
+    assert args and args["severity"] in (SEV_HIGH, "critical")
+    assert "renamed_system_binary" in args["labels"]
+    assert any(t.startswith("T1036.003") for t in [args["technique"]] + args["all_techniques"])
+    args = classify_sysmon(1, {"ProcessId": "8", "Image": r"C:\Users\bob\AppData\Roaming\updater.exe",
+                               "ParentImage": r"C:\Windows\System32\cmd.exe",
+                               "OriginalFileName": "PowerShell.EXE",
+                               "CommandLine": r"C:\Users\bob\AppData\Roaming\updater.exe -Command exit"})
+    assert args and "renamed_system_binary" in args["labels"]
+    # Not renames: the real binaries, and a vendor's own 64-bit build.
+    for image, orig in ((r"C:\Windows\System32\cmd.exe", "Cmd.Exe"),
+                        (r"C:\Tools\procdump64.exe", "procdump"),
+                        (r"C:\Tools\PsExec64.exe", "psexec.c"),
+                        (r"C:\Program Files\PowerShell\7\pwsh.exe", "pwsh.dll"),
+                        (r"C:\Program Files\Vendor\app.exe", "electron.exe")):
+        args = classify_sysmon(1, {"ProcessId": "9", "Image": image, "OriginalFileName": orig,
+                                   "ParentImage": r"C:\Windows\explorer.exe", "CommandLine": image})
+        assert not args or "renamed_system_binary" not in args["labels"], image
     # A properly signed module is not emitted.
     assert classify_sysmon(7, {"ImageLoaded": r"C:\Windows\System32\kernel32.dll",
                                "Signed": "true", "SignatureStatus": "Valid"}) is None

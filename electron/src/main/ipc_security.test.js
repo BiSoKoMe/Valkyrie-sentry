@@ -18,6 +18,8 @@ test('only the exact main frame in the current application window is trusted', (
 test('mutation bridge permits named operations and rejects path tricks', () => {
   assert.deepEqual(security.postArguments({ path: '/api/edr/respond', body: { dry_run: true } }),
     { pathname: '/api/edr/respond', body: { dry_run: true } });
+  assert.deepEqual(security.postArguments({ path: '/api/v1/settings', body: { key: 'NYX_ACT', value: true } }),
+    { pathname: '/api/v1/settings', body: { key: 'NYX_ACT', value: true } });
   for (const path of ['/api/debug/telemetry/fault', '/api/browser/events', '/api/future-action',
     '/api/../system/shutdown', '/api/%2e%2e/shutdown', '/api/edr/respond?token=foo',
     '/api/edr/respond#fragment', '/api/edr\\respond', 'https://untrusted.example/api/edr/respond']) {

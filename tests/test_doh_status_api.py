@@ -92,7 +92,7 @@ def main() -> int:
         return c.finish()
 
     try:
-        from valkyrie.web.server import create_app, state
+        from valkyrie.web.server import create_app, state, _CONTROL_TOKEN
     except ImportError as exc:
         c.skip("API endpoint checks", f"fastapi/web stack unavailable: {exc}")
         return c.finish()
@@ -132,7 +132,9 @@ def main() -> int:
 
     # A monitoring-only endpoint must never let a caller change anything.
     c.check("no POST route exists for /api/doh/* (read-only surface)",
-            client2.post("/api/doh/status").status_code == 405)
+            client2.post("/api/doh/status", headers={
+                "X-Valkyrie-Token": _CONTROL_TOKEN,
+            }).status_code == 405)
 
     return c.finish()
 

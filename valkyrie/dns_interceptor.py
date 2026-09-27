@@ -281,13 +281,35 @@ class DNSInterceptor:
     # ------------------------------------------------------------------
 
     def _serve_loop(self) -> None:
+        # Consecutive OSErrors survived without a successful recv in between.
+        # Windows routinely surfaces an EARLIER reply's ICMP port-unreachable
+        # (the destination stopped listening, e.g. a browser tab closed before
+        # the answer arrived) as ConnectionResetError/WinError 10054 on the
+        # NEXT recvfrom() of THIS socket - a normal, per-packet condition for
+        # a connectionless UDP "server", unrelated to the packet that raised
+        # it. Treating it as fatal used to kill this whole loop/thread over
+        # one unrelated client's reset, taking every other in-flight DNS
+        # query down with it until the next self-heal cycle (up to 30s later)
+        # noticed is_listening()==False and restarted the socket - a real,
+        # repeated, full-system DNS outage window confirmed live via
+        # self_heal's own event history. Bounded so a socket that is
+        # GENUINELY broken (not just one stray reset) still exits promptly
+        # for self-heal to rebind, instead of spinning.
+        consecutive_errors = 0
         while self._running:
             try:
                 data, addr = self._sock.recvfrom(4096)
             except socket.timeout:
+                consecutive_errors = 0
                 continue
             except OSError:
-                break
+                if not self._running:
+                    break   # stop() closed the socket - expected shutdown
+                consecutive_errors += 1
+                if consecutive_errors > 20:
+                    break   # not one stray reset any more - genuinely broken
+                continue
+            consecutive_errors = 0
             # Liveness-probe fast path: answered INLINE on this loop thread,
             # never spawning a worker thread. Real queries each get their own
             # thread below (to avoid head-of-line blocking), but Python's GIL
@@ -297,8 +319,9 @@ class DNSInterceptor:
             # scheduling contention. Verified live: heartbeat false-failures
             # correlated with concurrent query bursts, not just cold boot. The
             # reserved health-probe name is recognised straight off the wire
-            # (byte-slice compare, no dns.message parse, no thread spawn), so
-            # it never competes with worker threads for the GIL.
+            # (byte-slice compare before dns.message parsing, no thread spawn),
+            # so it avoids worker dispatch. The listener still needs the GIL;
+            # this is not a hard latency guarantee under CPU starvation.
             if _is_health_probe_wire(data):
                 try:
                     request = dns.message.from_wire(data)

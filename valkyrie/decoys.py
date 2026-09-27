@@ -21,6 +21,7 @@ line. Persisted so tokens survive restarts; degrades to a no-op off Windows.
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import threading
 from pathlib import Path
@@ -49,9 +50,12 @@ class DecoyManager:
     def __init__(self, manifest_path: Optional[Path] = None,
                  dirs: Optional[Iterable[Path]] = None) -> None:
         self._manifest = Path(manifest_path) if manifest_path else None
-        self._dirs = [Path(d) for d in dirs] if dirs else None
+        self._dirs = [Path(d) for d in dirs] if dirs is not None else None
         self._tokens: set[str] = set()
         self._paths: list[str] = []
+        # path -> on-disk token. Lets deploy() tell "this tripwire is gone"
+        # apart from "this tripwire could not be read this pass".
+        self._pairs: dict[str, str] = {}
         self._lock = threading.Lock()
 
     # -- targets ------------------------------------------------------------
@@ -68,7 +72,7 @@ class DecoyManager:
         # mirroring persistence_telemetry._startup_dirs's existing pattern for
         # the identical service-vs-interactive-user problem.
         dirs: list[Path] = []
-        users_root = Path(os.environ.get("SystemDrive", "C:") + "\\") / "Users"
+        users_root = Path(os.environ.get("SystemDrive", "C:") + os.sep) / "Users"
         skip = {"public", "default", "default user", "all users", "defaultuser0"}
         found_any = False
         if users_root.is_dir():
@@ -94,24 +98,69 @@ class DecoyManager:
         """Write decoy files; return how many were planted. Never raises."""
         planted = 0
         with self._lock:
+            pairs: dict[str, str] = {}
+            # A path we could not read is NOT a path we know is gone. Dropping
+            # one leaves the bait file on disk with nothing watching it - a
+            # silently disarmed tripwire, persisted to the manifest on save.
+            # Windows hands out sharing violations routinely (AV scan, backup,
+            # cloud sync), so retention is the fail-safe direction here.
+            unverified: list[str] = []
             for d in self.target_dirs():
+                names = [f"{stem}.{ext}" if ext else stem
+                         for stem, ext, _ in _TEMPLATES]
                 try:
                     d.mkdir(parents=True, exist_ok=True)
                 except OSError:
+                    unverified.extend(str(d / n) for n in names)
                     continue
                 for stem, ext, header in _TEMPLATES:
                     token = _TOKEN_PREFIX + secrets.token_hex(5)
                     name = f"{stem}.{ext}" if ext else stem
                     path = d / name
                     try:
-                        if not path.exists():
-                            path.write_text(header + f"\n# ref:{token}\n",
-                                            encoding="utf-8")
-                        self._tokens.add(token.lower())
-                        self._paths.append(str(path))
-                        planted += 1
-                    except OSError:
+                        try:
+                            # Exclusive creation never overwrites an existing
+                            # user file, even if it appears during deployment.
+                            with path.open("x", encoding="utf-8") as out:
+                                out.write(header + f"\n# ref:{token}\n")
+                        except FileExistsError:
+                            if path.is_symlink() or not path.is_file():
+                                continue
+                            with path.open(encoding="utf-8") as existing:
+                                content = existing.read(4096)
+                            owned = re.fullmatch(
+                                re.escape(header) + r"\n# ref:(VLK7Y[0-9a-f]{10})\n",
+                                content,
+                            )
+                            if owned is None:
+                                continue  # a user's own file is never a decoy
+                            token = owned.group(1)
+                        pairs[str(path)] = token.lower()
+                    except UnicodeError:
+                        # Decoding as our UTF-8 template is part of the
+                        # ownership proof, so this is someone else's file.
                         continue
+                    except OSError:
+                        unverified.append(str(path))
+            known = set(self._paths)
+            stale = {q: self._pairs[q] for q in unverified
+                     if q in self._pairs and q not in pairs}
+            # Tripwires planted before the manifest carried path->token pairs:
+            # we cannot say which token is theirs, so keep the previous set
+            # rather than disarm them. A token outliving its file cannot cause
+            # a false positive - nothing but the file itself puts an
+            # unguessable VLK7Y string on a command line.
+            orphaned = {q for q in unverified
+                        if q in known and q not in self._pairs and q not in pairs}
+            pairs.update(stale)
+            # Everything not retained above is confirmed: created, adopted from
+            # disk, or proven to be a user's own file. Restarts must not
+            # accumulate phantom tokens or duplicate paths.
+            self._tokens = set(pairs.values()) | (set(self._tokens) if orphaned
+                                                  else set())
+            self._pairs = pairs
+            self._paths = sorted(set(pairs) | orphaned)
+            planted = len(self._paths)
             self._save()
         return planted
 
@@ -149,7 +198,9 @@ class DecoyManager:
             import json
             self._manifest.parent.mkdir(parents=True, exist_ok=True)
             self._manifest.write_text(
-                json.dumps({"tokens": sorted(self._tokens), "paths": self._paths}),
+                json.dumps({"tokens": sorted(self._tokens),
+                            "paths": self._paths,
+                            "pairs": self._pairs}),
                 encoding="utf-8")
         except OSError:
             pass
@@ -163,6 +214,9 @@ class DecoyManager:
             with self._lock:
                 self._tokens = {str(t).lower() for t in data.get("tokens", [])}
                 self._paths = [str(p) for p in data.get("paths", [])]
+                pairs = data.get("pairs")
+                self._pairs = ({str(k): str(v).lower() for k, v in pairs.items()}
+                               if isinstance(pairs, dict) else {})
             return len(self._tokens)
         except (OSError, ValueError):
             return 0

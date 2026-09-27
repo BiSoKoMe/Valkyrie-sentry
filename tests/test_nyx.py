@@ -208,6 +208,26 @@ def main() -> int:
     c.check("the request still went through the normal 'allowed' path",
             any(getattr(e, "raw_category", "") == "https" for e in store.events))
 
+    # The TLS decision path needs the complete URL to classify this beacon, but
+    # the persisted event must not retain its path, query, or fragment.
+    sentinel = "nyx-log-query-sentinel"
+    blocked_store = _FakeStore()
+    blocked_addon = ValkyrieAddon(blocked_store, blocklist=None, behavioral=None,
+                                  rules=None, threat_intel=None)
+    def _capture_block(_flow, block_domain, block_url, block_proc, block_reason, category):
+        blocked_addon._log(block_domain, block_url, block_proc, "blocked",
+                           block_reason, category)
+    blocked_addon._block = _capture_block
+    blocked_flow = _Flow()
+    blocked_flow.request.method = "GET"
+    blocked_flow.request.path = f"/pixel?secret={sentinel}#private-fragment"
+    blocked_flow.request.pretty_url = (
+        f"https://collector.tracker.example{blocked_flow.request.path}")
+    blocked_addon._handle_request(blocked_flow)
+    stored = blocked_store.events[0] if blocked_store.events else None
+    c.check("TLS log omits the URL query sentinel",
+            stored is not None and not stored.url and sentinel not in repr(stored))
+
     # --- ACT MODE: feed fake data, keep the request working, never touch benign -
     print("\n[5] ACT mode: rewrites third-party leaks into consistent persona fakes")
     from valkyrie.persona import current_persona

@@ -307,7 +307,7 @@ class AmsiScanner:
         self._dll = None
         self._ctx = None                       # HAMSICONTEXT
         self._lock = threading.Lock()          # guards ctx lifecycle + cache + stats
-        self._cache: "OrderedDict[str, AmsiVerdict]" = OrderedDict()
+        self._cache: "OrderedDict[tuple[str, str], AmsiVerdict]" = OrderedDict()
         self._available: Optional[bool] = None
         self._provider_confirmed: Optional[bool] = None
         self._last_selftest: Optional[dict] = None
@@ -416,7 +416,7 @@ class AmsiScanner:
 
     # -- cache --------------------------------------------------------------
 
-    def _cache_get(self, key: str) -> Optional[AmsiVerdict]:
+    def _cache_get(self, key: tuple[str, str]) -> Optional[AmsiVerdict]:
         with self._lock:
             v = self._cache.get(key)
             if v is not None:
@@ -424,7 +424,7 @@ class AmsiScanner:
                 self.stats["cache_hits"] += 1
             return v
 
-    def _cache_put(self, key: str, verdict: AmsiVerdict) -> None:
+    def _cache_put(self, key: tuple[str, str], verdict: AmsiVerdict) -> None:
         with self._lock:
             self._cache[key] = verdict
             while len(self._cache) > self._cache_size:
@@ -454,9 +454,11 @@ class AmsiScanner:
                                scanned_bytes=len(data),
                                error=f"content exceeds {self._max_bytes} byte scan cap")
 
-        key = ""
+        key = None
         if use_cache:
-            key = hashlib.sha256(data).hexdigest()
+            # Providers also inspect the content name (for example its file
+            # extension). Reusing a verdict across names loses that context.
+            key = (content_name, hashlib.sha256(data).hexdigest())
             hit = self._cache_get(key)
             if hit is not None:
                 return replace(hit, cached=True, content_name=content_name)

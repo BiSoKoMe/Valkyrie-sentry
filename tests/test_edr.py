@@ -161,6 +161,21 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     check("distinct category → separate incident",
           len(engine.list_incidents()) == 2)
 
+    # A process name alone is too broad. Different IOCs must stay in distinct
+    # cases even when the same executable reports both quickly.
+    engine.report_detection(Detection(
+        source="test.boundary", severity="high", category="case_boundary",
+        title="first distinct entity", entity="first.example",
+        process_name="chrome.exe"))
+    engine.report_detection(Detection(
+        source="test.boundary", severity="high", category="case_boundary",
+        title="second distinct entity", entity="second.example",
+        process_name="chrome.exe"))
+    boundary_incs = [i for i in engine.list_incidents()
+                     if i["category"] == "case_boundary"]
+    check("same process name with different entities stays in separate incidents",
+          len(boundary_incs) == 2)
+
     # `technique` was captured per-Detection from day one (edr_detections has
     # had the column since the start) but never copied onto the Incident it
     # correlated into, so a real MITRE id like T1562.001 was computed and
@@ -310,6 +325,13 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     # Subscribers receive incidents; nothing in that path writes to a socket.
     check("engine fan-out is in-process only (EventBus, not a client)",
           "EventBus" in _src)
+
+    delivery = engine.delivery_status()["evidence_delivery"]
+    check("evidence delivery starts healthy",
+          delivery["overall"] == "HEALTHY" and delivery["write_errors"] == 0)
+    store._dropped_events += 1  # deterministic queue-overflow simulation
+    check("evidence delivery exposes queue loss as degraded",
+          engine.delivery_status()["evidence_delivery"]["overall"] == "DEGRADED")
 
     engine.stop()
     store.stop()

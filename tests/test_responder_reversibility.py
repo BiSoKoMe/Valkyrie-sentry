@@ -254,7 +254,7 @@ def test_isolate_dry_run_names_the_snapshot_step() -> None:
 # [12] remove_persistence -> restore_persistence round trip: registry run key
 # ---------------------------------------------------------------------------
 
-import winreg as _real_winreg   # noqa: E402  (read-only: constants only, never opened for real here)
+from tests.winreg_constants import constants as _real_winreg
 
 
 class _FakeKey:
@@ -477,7 +477,10 @@ def test_scheduled_task_remove_and_restore_round_trip(tmp_backup_dir: Path) -> N
 # main
 # ---------------------------------------------------------------------------
 
-def main() -> int:
+@patch("valkyrie.persistence_telemetry._WINREG", True)
+@patch("valkyrie.persistence_telemetry.winreg", _real_winreg, create=True)
+@patch("valkyrie.persistence_telemetry._enum_loaded_user_sids", return_value=[])
+def main(_sids=None) -> int:
     print("=" * 70)
     print("Responder reversibility audit (code + mocked tests only)")
     print("=" * 70)

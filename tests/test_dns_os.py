@@ -197,9 +197,11 @@ def main() -> int:
          mock.patch("subprocess.run") as m:
         m.return_value = mock.Mock(returncode=0, stdout="", stderr="")
         wd = DnsWatchdog(ex)
-        action = wd.tick()
-        c.check("adapter reported redirected+dead -> watchdog HEALS on the "
-                "very first tick (no saved_original yet, so RESET_TO_AUTO)",
+        first = wd.tick(now=0.0)
+        c.check("startup grace leaves a warming resolver alone",
+                first.kind.value == "leave" and not m.called)
+        action = wd.tick(now=wd.startup_grace_seconds)
+        c.check("adapter still redirected+dead after startup grace -> RESET_TO_AUTO",
                 action.kind.value == "reset_to_auto")
         c.check("a heal was actually counted", wd.heals == 1)
         c.check("the REAL reset_auto() ran the REAL app's own disarm "

@@ -123,11 +123,16 @@ def main() -> int:
         d.mkdir()
         okd, detaild = sf.harden(d, is_dir=True)
         c.check(f"harden() works on a directory ({detaild[:50]})", okd is True)
-        # A file created inside should inherit the restriction.
+        # Windows ACLs inherit. POSIX directory modes do not set child modes.
         child = d / "generated-ca.pem"
         child.write_text("key", encoding="utf-8")
+        if not _IS_WINDOWS:
+            c.check("the POSIX directory excludes other users",
+                    d.stat().st_mode & 0o777 == 0o700)
+            hardened, _ = sf.harden(child)
+            c.check("a newly generated POSIX key is explicitly hardened", hardened)
         okc, _ = sf.verify(child)
-        c.check("a key created INSIDE a hardened dir is already protected",
+        c.check("the generated key has platform-appropriate protection",
                 okc is True)
 
         # --- The public certificate must stay readable ---

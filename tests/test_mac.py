@@ -239,6 +239,82 @@ check("live-readback mismatch sets a 'did not apply' last_error",
 result, err, calls = _run_apply_windows([_ok(0), _ok(0)], readback_mac="AA:BB:CC:DD:EE:FF")
 check("full success path (netsh OK + readback matches) returns True", result is True)
 
+# --- Test 8: _apply_mac/randomize skip the disable/enable cycle when the
+# interface is already at the target address - the fix for _monitor_loop
+# calling randomize() on every Wi-Fi down->up transition (including waking
+# from sleep): reconnecting to an already-known network legitimately
+# recomputes the SAME per-network address every time, and that used to still
+# force a needless several-second adapter bounce.
+print("\n-- Skip the adapter cycle when already at the target MAC --------")
+
+_orig_backup2 = _cfg.MAC_BACKUP_PATH
+with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as _tf2:
+    _tmp_backup2 = Path(_tf2.name)
+_cfg.MAC_BACKUP_PATH = _tmp_backup2
+
+try:
+    inst8 = MacRandomizer(store=None)
+
+    # 8a. Current MAC already equals the target -> no OS-level apply at all
+    with patch.object(inst8, "_read_current_mac", return_value="AA:BB:CC:DD:EE:FF"), \
+         patch.object(inst8, "_apply_windows") as m_win, \
+         patch.object(inst8, "_apply_linux") as m_lin, \
+         patch.object(inst8, "_apply_macos") as m_mac:
+        result8a = inst8._apply_mac("Wi-Fi", "AA:BB:CC:DD:EE:FF")
+    check("already-correct MAC returns True", result8a is True)
+    check("no Windows adapter cycle was attempted", m_win.call_count == 0)
+    check("no Linux adapter cycle was attempted", m_lin.call_count == 0)
+    check("no macOS adapter cycle was attempted", m_mac.call_count == 0)
+
+    # 8b. Case/separator differences (hyphens, lowercase - as Windows reports
+    # them) must still count as "already correct", not a false mismatch.
+    with patch.object(inst8, "_read_current_mac", return_value="aa-bb-cc-dd-ee-ff"), \
+         patch.object(inst8, "_apply_windows") as m_win2:
+        result8b = inst8._apply_mac("Wi-Fi", "AA:BB:CC:DD:EE:FF")
+    check("hyphenated/lowercase current MAC still matches (True, no cycle)",
+          result8b is True and m_win2.call_count == 0)
+
+    # 8c. Genuinely different MAC still goes through the real apply path
+    with patch.object(inst8, "_read_current_mac", return_value="11:22:33:44:55:66"), \
+         patch.object(inst8, "_apply_windows", return_value=True) as m_win3:
+        result8c = inst8._apply_mac("Wi-Fi", "AA:BB:CC:DD:EE:FF")
+    check("a real address change still calls the platform apply path",
+          result8c is True and m_win3.call_count == 1)
+
+    # 8d. randomize() does not log a "MAC randomised" event when nothing
+    # actually changed - logging one every reconnect would misreport a no-op
+    # adapter cycle as an action that never happened.
+    logged: list[str] = []
+    inst8._log = lambda msg: logged.append(msg)
+    with patch.object(inst8, "_next_mac", return_value=("AA:BB:CC:DD:EE:FF", "per-network")), \
+         patch.object(inst8, "_resolve_interfaces", return_value=["Wi-Fi"]), \
+         patch.object(inst8, "_read_current_mac", return_value="AA:BB:CC:DD:EE:FF"), \
+         patch.object(inst8, "_apply_windows") as m_win4, \
+         patch("valkyrie.mac_randomizer._platform", return_value="windows"), \
+         patch("valkyrie.mac_randomizer._is_windows_admin", return_value=True):
+        returned8d = inst8.randomize("Wi-Fi")
+    check("randomize() still reports the (unchanged) address",
+          returned8d == "AA:BB:CC:DD:EE:FF")
+    check("randomize() logs nothing when reconnecting to an already-known network",
+          logged == [], str(logged))
+    check("randomize()'s no-op path never touched the adapter",
+          m_win4.call_count == 0)
+
+    # 8e. Regression: a genuine address change through randomize() still logs
+    logged.clear()
+    with patch.object(inst8, "_next_mac", return_value=("AA:BB:CC:DD:EE:FF", "per-network")), \
+         patch.object(inst8, "_resolve_interfaces", return_value=["Wi-Fi"]), \
+         patch.object(inst8, "_read_current_mac", return_value="11:22:33:44:55:66"), \
+         patch.object(inst8, "_apply_windows", return_value=True), \
+         patch("valkyrie.mac_randomizer._platform", return_value="windows"), \
+         patch("valkyrie.mac_randomizer._is_windows_admin", return_value=True):
+        returned8e = inst8.randomize("Wi-Fi")
+    check("randomize() still logs a real address change",
+          any("MAC randomised" in m for m in logged), str(logged))
+finally:
+    _cfg.MAC_BACKUP_PATH = _orig_backup2
+    _tmp_backup2.unlink(missing_ok=True)
+
 # --- Summary ---
 print(f"\n{'=' * 50}")
 print(f"  {PASS} passed  /  {FAIL} failed")

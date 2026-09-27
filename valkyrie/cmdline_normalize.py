@@ -102,6 +102,14 @@ _SHORTPATH = {
 
 # %VAR% and %VAR:~offset,length% (the substring form used to build characters
 # one at a time, e.g. %COMSPEC:~0,1% -> "c").
+# A caret with a LETTER on both sides: the shape of n^et / us^er / vssa^dmin -
+# keyword-splitting evasion. Digits deliberately excluded on either side so
+# git's own revision syntax (HEAD^2, HEAD^^, rev^{tree}) never matches, and a
+# regex anchor (^def, ^\s*) never matches either, since nothing alphabetic
+# precedes the caret there. See the caret-handling comment below for the
+# incident count this closes.
+_RE_CARET_MIDWORD = re.compile(r"[A-Za-z]\^[A-Za-z]")
+
 _RE_ENV = re.compile(r"%([a-z0-9_()]+)(?::~(-?\d+)(?:,(-?\d+))?)?%", re.I)
 # PowerShell $env:VAR and ${env:VAR}
 _RE_PSENV = re.compile(r"\$\{?env:([a-z0-9_()]+)\}?", re.I)
@@ -442,9 +450,27 @@ def normalize_cmdline(cmdline: str) -> Normalized:
             # cmd.exe caret and PowerShell backtick both escape the NEXT
             # character; for substring matching, dropping the escape char
             # recovers the keyword (n^et -> net, vssa`dmin -> vssadmin).
+            #
+            # Stripping is unconditionally worth doing (it can only help a
+            # real n^et-style keyword match), but counting it as an EVASIVE
+            # signal is not: "^" is also regex "start of line/negation" and
+            # git's revision syntax (HEAD^, HEAD^2, rev^{tree}), so `if "^" in
+            # cur` fired on ordinary `grep -E "^def "`, `rg '^\s*'`, and
+            # `git log HEAD^..HEAD` with zero threshold. Measured live on a
+            # real dev machine: 107 MEDIUM/T1027 "compromise" incidents in one
+            # week against grep.exe, bash.exe, git.exe, sed.exe, pwsh.exe,
+            # python.exe and cmd.exe - ordinary terminal use, not an attack.
+            # Real caret-escape evasion breaks up an alphabetic keyword the
+            # rule engine would otherwise recognise (n^et, us^er, vssa^dmin),
+            # so only THAT shape counts: a caret with a letter on both sides.
+            # A regex anchor has no letter immediately before the caret
+            # (`^def`, `^\s*`); git's revision syntax has a digit or brace
+            # immediately after (`HEAD^2`, `HEAD^{tree}`), not a letter -
+            # both fail this check while every EVASION_CORPUS caret case
+            # still passes it.
             if "^" in cur:
                 s = cur.replace("^", "")
-                if s != cur:
+                if s != cur and _RE_CARET_MIDWORD.search(cur):
                     fired.append("caret")
                 cur = s
             if "`" in cur:

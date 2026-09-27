@@ -184,6 +184,13 @@ function registerIpc() {
     // to restore connectivity rather than treating one failed tick as final.
     lifecycle.setProtectionIntent(PROTECTION_INTENT.ENABLED);
     const r = await engine.start();
+    // start() refuses on an installed layout whose arm task is missing. There
+    // is nothing to wait for in that case: waitUntilArmed would poll for ~48s
+    // for a marker only the (absent) task writes, and the user would get a
+    // silent failure. Hand the gaps back so the renderer can offer the repair.
+    if (r.started === false) {
+      return { ...r, ready: await engine.isUp(), armed: false };
+    }
     const ready = await engine.waitUntilReady((up, i) => {
       if (win) win.webContents.send('engine:progress', { up, attempt: i, phase: 'engine' });
     });
@@ -331,9 +338,15 @@ function registerIpc() {
   // Manual self-heal (the "Repair" button in the professional error dialog).
   ipcMain.handle('lifecycle:repair', async () => {
     const restored = lifecycle.selfHeal();
+    // selfHeal() only restores data folders and the rules file, so on its own
+    // it could never fix the one fault that actually raises the Repair dialog:
+    // ValkyrieArm/ValkyrieDisarm missing from an otherwise healthy install.
+    let tasks = { ok: true, gaps: [], via: 'nothing-to-do' };
+    try { tasks = await engine.repairInstallation(); }
+    catch (err) { console.error('[main.repair] task registration failed:', err); tasks = { ok: false, gaps: ['ValkyrieArm'], via: 'error' }; }
     let ready = await engine.isUp();
     if (!ready) { try { await engine.start(); } catch {} ready = await engine.waitUntilReady(null, { attempts: 20 }); }
-    return { restored, ready };
+    return { restored, ready, tasksRepaired: tasks.ok, gaps: tasks.gaps };
   });
 
   ipcMain.handle('telemetry:now', async () => engine.telemetry());

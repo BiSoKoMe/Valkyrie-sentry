@@ -11,6 +11,7 @@ const POST_ROUTES = [
   /^\/api\/components\/[A-Za-z0-9_.-]+\/restart$/,
   /^\/api\/edr\/(respond|hunt)$/,
   /^\/api\/edr\/incidents\/[A-Za-z0-9_-]+\/(status|investigate|triage)$/,
+  /^\/api\/v1\/settings$/,
 ];
 
 function trustedSender(event, win) {

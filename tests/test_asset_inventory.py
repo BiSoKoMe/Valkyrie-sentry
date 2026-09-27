@@ -48,10 +48,16 @@ def test_real_enumeration_on_this_host() -> None:
             isinstance(snap.listening_ports, dict))
     c.check("snapshot_kernel_drivers() returns a dict",
             isinstance(snap.kernel_drivers, dict))
-    c.check("this real Windows host has at least SOME installed software",
-            len(snap.software) > 0)
-    c.check("this real Windows host has at least SOME kernel drivers",
-            len(snap.kernel_drivers) > 0)
+    if sys.platform == "win32":
+        c.check("this real Windows host has at least SOME installed software",
+                len(snap.software) > 0)
+        c.check("this real Windows host has at least SOME kernel drivers",
+                len(snap.kernel_drivers) > 0)
+    else:
+        c.check("Windows software inventory is empty on unsupported hosts",
+                snap.software == {})
+        c.check("Windows driver inventory is empty on unsupported hosts",
+                snap.kernel_drivers == {})
     c.check("counts() matches the actual dict sizes",
             snap.counts()["software"] == len(snap.software)
             and snap.counts()["kernel_drivers"] == len(snap.kernel_drivers))
@@ -301,12 +307,19 @@ def test_api_endpoint() -> None:
     from testclient_compat import make_client   # noqa: E402
 
     prior = state.asset_inventory
+    prior_ready = state.ready
     try:
         state.asset_inventory = None
+        state.ready = False
         app = create_app()
         client = make_client(app, "127.0.0.1")
         resp = client.get("/api/asset-inventory")
         c.check("no collector wired -> 503, not a crash", resp.status_code == 503)
+        c.check("a collector still being wired reports startup",
+                resp.json().get("starting") is True)
+        state.ready = True
+        c.check("an unavailable collector after startup is not still warming",
+                client.get("/api/asset-inventory").json().get("starting") is False)
 
         # Collector wired but hasn't completed its first poll yet -- must be
         # an honest 503, never a 30+-second block while it computes one on
@@ -322,6 +335,8 @@ def test_api_endpoint() -> None:
         resp0 = client0.get("/api/asset-inventory")
         c.check("collector wired but no poll completed yet -> 503, not a hang",
                 resp0.status_code == 503)
+        c.check("a pending first snapshot tells callers to retry",
+                resp0.json().get("starting") is True)
         c.check("the endpoint NEVER calls the slow current_snapshot() itself",
                 not fake_not_polled.current_snapshot.called)
 
@@ -361,6 +376,7 @@ def test_api_endpoint() -> None:
                 _post.status_code in (403, 405) and not (200 <= _post.status_code < 300))
     finally:
         state.asset_inventory = prior
+        state.ready = prior_ready
 
 
 def main() -> int:

@@ -133,20 +133,32 @@ def main() -> int:
             _check("a missing file is skipped, not an error",
                    live.scan_file(str(Path(td) / "nope")).disposition == A.DISP_SKIPPED)
 
-        # [5] cache
-        big = AmsiScanner(max_bytes=1 << 20)
-        big.start()
-        payload = "Get-Process | Where-Object { $_.CPU -gt 10 }"
-        first = big.scan_string(payload, content_name="c")
-        second = big.scan_string(payload, content_name="c")
-        _check("identical content is served from the verdict cache",
-               first.cached is False and second.cached is True
-               and big.stats["cache_hits"] >= 1)
-        big.stop()
-        _check("stop() releases the context", big.is_running() is False)
         live.stop()
     else:
         print("  [~] scanner-live checks skipped (AMSI unavailable on this host)")
+
+    # [5] Cache semantics are independent of provider availability. Windows CI
+    # can initialize AMSI while its provider still refuses an actual scan.
+    from unittest.mock import patch
+    cached_scanner = AmsiScanner(max_bytes=1 << 20)
+    with patch.object(cached_scanner, "_ctx", object()), \
+         patch.object(cached_scanner, "_scan_call", return_value=AmsiVerdict(
+             A.DISP_NOT_DETECTED, result=1)) as scan:
+        first = cached_scanner.scan_string("fixture", content_name="c")
+        second = cached_scanner.scan_string("fixture", content_name="c")
+        _check("identical content is served from the verdict cache",
+               not first.cached and second.cached and scan.call_count == 1)
+        cached_scanner.scan_string("fixture", content_name="different.ps1")
+        _check("content names remain part of the provider's scan context",
+               scan.call_count == 2)
+        with patch.object(cached_scanner, "_scan_call", return_value=AmsiVerdict(
+                A.DISP_ERROR, error="provider unavailable")) as failed_scan:
+            cached_scanner.scan_string("uncacheable", content_name="c")
+            again = cached_scanner.scan_string("uncacheable", content_name="c")
+            _check("provider failures are retried, never cached as verdicts",
+                   not again.cached and failed_scan.call_count == 2)
+    cached_scanner.stop()
+    _check("stop releases the context", not cached_scanner.is_running())
 
     # --- the sensor seam ---------------------------------------------------
     from valkyrie.etw.powershell import PowerShellSensor, _AMSI_MIN_SCRIPT_LEN

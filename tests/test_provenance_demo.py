@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from tools.provenance_demo import run_demo
+from tools.provenance_demo import _markdown_report, run_demo
 
 
 def test_demo_exercises_guarded_consequence_and_retention_boundary():
@@ -17,6 +17,15 @@ def test_demo_exercises_guarded_consequence_and_retention_boundary():
     assert result["decision"]["standard_profile_action"] == "deceive"
     assert result["refusal"]["result"] == "privacy_boundary_violation"
     assert "decision" in result["evidence"]["timeline_kinds"]
+
+
+def test_markdown_report_keeps_the_evidence_boundary_visible():
+    report = _markdown_report(run_demo())
+
+    assert "# Valkyrie provenance evidence" in report
+    assert "chrome.exe -> helper.exe -> DNS rare.example" in report
+    assert "privacy_boundary_violation" in report
+    assert "No live browser traffic was observed." in report
 
 
 if __name__ == "__main__":

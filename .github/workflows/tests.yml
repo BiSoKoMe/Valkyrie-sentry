@@ -82,7 +82,8 @@ jobs:
           # pytest: 10 test files (the Aegis reasoning layer, the Platform Alpha
           # baseline, collector diagnostics) are pytest-style, and run_tests.py
           # hands those to pytest rather than executing them as scripts.
-          python -m pip install cryptography httpx pytest
+          # tomli supplies the TOML fixture parser on Python 3.10.
+          python -m pip install cryptography httpx pytest tomli
 
       - name: Syntax / import gate
         run: python -m compileall -q valkyrie
@@ -234,7 +235,8 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements_modular.txt
           python -m pip install cryptography httpx coverage pytest
-      - name: Measure coverage and enforce the floor
+      - name: Measure test coverage
+        id: measure
         # Measured 59% when this gate was introduced, 64% after TEST_PLAN
         # tiers 1-3, 65% after the security/lifecycle audit. The floor is a
         # RATCHET: raise it as coverage improves, never lower it to make a
@@ -246,9 +248,15 @@ jobs:
         # which legitimately moves the number by a point or two, and a gate
         # that flaps gets disabled by whoever it annoys first.
         run: |
-          COVERAGE_FLOOR=62
           python -m coverage erase
           python tests/run_tests.py --disposable-host --coverage
+
+      - name: Report coverage and enforce the floor
+        # Preserve coverage evidence even when the suite finds a regression.
+        # The failed test step still fails the job; nothing is waived here.
+        if: ${{ !cancelled() && steps.measure.outcome != 'skipped' }}
+        run: |
+          COVERAGE_FLOOR=62
           python -m coverage combine
           python -m coverage report --fail-under=$COVERAGE_FLOOR
 

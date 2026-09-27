@@ -177,7 +177,7 @@ def test_read_only_status_and_ledger_api(tmp_path: Path):
         from valkyrie.context import AppContext
         from valkyrie.edr.engine import EdrEngine
         from valkyrie.store import Store
-        from valkyrie.web.server import create_app
+        from valkyrie.web.server import create_app, _CONTROL_TOKEN
     except ImportError:
         return
 
@@ -195,7 +195,7 @@ def test_read_only_status_and_ledger_api(tmp_path: Path):
         assert status.json()["mode"] == "shadow"
         assert ledger.status_code == 200
         assert len(ledger.json()["entries"]) == 1
-        assert client.post("/api/edr/detection-v2/ledger").status_code == 405
+        assert client.post("/api/edr/detection-v2/ledger", headers={"X-Valkyrie-Token": _CONTROL_TOKEN}).status_code == 405
     finally:
         engine.stop()
         store.stop()
@@ -327,7 +327,7 @@ def test_aegis_status_and_ledger_api(tmp_path: Path):
         from valkyrie.context import AppContext
         from valkyrie.edr.engine import EdrEngine
         from valkyrie.store import Store
-        from valkyrie.web.server import create_app
+        from valkyrie.web.server import create_app, _CONTROL_TOKEN
     except ImportError:
         return
 
@@ -347,7 +347,7 @@ def test_aegis_status_and_ledger_api(tmp_path: Path):
         assert status.json()["mode"] == "reasoning-only"
         assert ledger.status_code == 200
         assert len(ledger.json()["entries"]) == 1
-        assert client.post("/api/aegis/ledger").status_code == 405
+        assert client.post("/api/aegis/ledger", headers={"X-Valkyrie-Token": _CONTROL_TOKEN}).status_code == 405
     finally:
         engine.stop()
         store.stop()

@@ -14,7 +14,11 @@
 // ---------------------------------------------------------------------------
 
 const { net } = require('electron');
-const { spawn, execFile } = require('child_process');
+// Resolved through the module object rather than destructured at load so the
+// lifecycle tests can substitute schtasks/PowerShell. Destructuring captures
+// the reference before any test can replace it, and child_process is a
+// builtin, so the require.cache fake used for 'electron' cannot reach it.
+const childProcess = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const lifecycle = require('./lifecycle');
@@ -59,7 +63,7 @@ function ensurePortableEngine() {
   const exe = bundledEngineExe();
   if (!fs.existsSync(exe)) return false;
   if (_portableChild && !_portableChild.killed) return true;
-  _portableChild = spawn(
+  _portableChild = childProcess.spawn(
     exe, ['--web', '--no-ui', '--web-port', String(WEB_PORT)],
     { detached: false, stdio: 'ignore', windowsHide: true, env: lifecycle.engineEnv() }
   );
@@ -274,13 +278,13 @@ async function isUp() {
 // Does a named scheduled task exist? (No UAC just to query.)
 function taskExists(name) {
   return new Promise((resolve) => {
-    execFile(SCHTASKS, ['/query', '/tn', name], { windowsHide: true }, (err) => resolve(!err));
+    childProcess.execFile(SCHTASKS, ['/query', '/tn', name], { windowsHide: true }, (err) => resolve(!err));
   });
 }
 
 function runTask(name) {
   return new Promise((resolve, reject) => {
-    execFile(SCHTASKS, ['/run', '/tn', name], { windowsHide: true }, (err) =>
+    childProcess.execFile(SCHTASKS, ['/run', '/tn', name], { windowsHide: true }, (err) =>
       err ? reject(err) : resolve()
     );
   });
@@ -315,7 +319,7 @@ function runScriptDetached(name, extraArgs = []) {
   if (!fs.existsSync(script)) {
     return Promise.reject(new Error(`missing ${name} at ${script}`));
   }
-  const child = spawn(
+  const child = childProcess.spawn(
     POWERSHELL,
     ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, ...extraArgs],
     { detached: true, stdio: 'ignore', windowsHide: true }
@@ -351,11 +355,57 @@ async function start() {
     await runTask('ValkyrieStart');
     return { started: true, via: 'task' };
   }
+  // An installed layout that reaches this line is an INCOMPLETE INSTALL, not a
+  // source checkout: register-tasks.ps1 never ran or failed, which the boot
+  // path already refuses to paper over (see main.js's RECONCILE_ARM branch)
+  // and which installationGaps() exists to name. Falling through to
+  // start_all.ps1 here ran the dev-checkout script against an installed
+  // machine anyway - and returned started:true regardless, so the caller then
+  // waited ~48s for an arm marker nothing was going to write. Seen live: the
+  // engine service was healthy and answering on 8090, both tasks were absent,
+  // and Start Protection reported failure with no explanation. Refuse, and say
+  // why, so the UI can offer the repair that actually fixes it.
+  if (lifecycle.mode() === 'installed') {
+    return { started: false, via: 'none', gaps: await installationGaps() };
+  }
   // -Silent: the app has its own splash/progress UI, so the engine must
   // launch with no visible window - unlike a developer running this script
   // by hand from a terminal, where the console is deliberately kept.
   await runScriptDetached('start_all.ps1', ['-Silent']);
   return { started: true, via: 'script' };
+}
+
+// Re-run the installer's task registration (elevated) for an install that is
+// missing ValkyrieArm/ValkyrieDisarm. This is what makes the Repair button
+// able to fix an incomplete install: selfHeal() only restores data folders, so
+// before this the dialog offered a Repair that could not touch the actual
+// fault. One UAC prompt is correct here - it is a user-initiated repair, and
+// registering a Highest-runlevel task requires admin.
+async function repairInstallation() {
+  const gaps = await installationGaps();
+  if (!gaps.length) return { ok: true, gaps: [], via: 'nothing-to-do' };
+  const root = path.join(process.resourcesPath || '', 'engine');
+  const script = path.join(root, 'register-tasks.ps1');
+  if (!fs.existsSync(script)) {
+    return { ok: false, gaps, via: 'missing-register-tasks' };
+  }
+  // Embedded in a single-quoted PowerShell string, so a quote in the path
+  // would break the command apart. Install paths never contain one; refuse
+  // rather than build something malformed if that ever changes.
+  if (script.includes("'") || root.includes("'")) {
+    return { ok: false, gaps, via: 'unsupported-path' };
+  }
+  const inner =
+    `Start-Process -FilePath '${POWERSHELL}' -Verb RunAs -WindowStyle Hidden -Wait ` +
+    `-ArgumentList '-NoProfile -ExecutionPolicy Bypass -File "${script}" -Root "${root}"'`;
+  await new Promise((resolve) => {
+    childProcess.execFile(POWERSHELL, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', inner],
+      { windowsHide: true }, () => resolve());
+  });
+  // Trust the OS, not the exit code: the repair worked only if the tasks are
+  // actually there now (the user can also decline the UAC prompt).
+  const remaining = await installationGaps();
+  return { ok: remaining.length === 0, gaps: remaining, via: 'register-tasks' };
 }
 
 // Turn protection OFF: disarm the DNS adapter (engine service keeps running).
@@ -445,6 +495,7 @@ module.exports = {
   waitUntilArmed,
   telemetry,
   installationGaps,
+  repairInstallation,
   apiGet,
   apiGetText,
   apiPost,

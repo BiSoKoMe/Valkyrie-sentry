@@ -36,6 +36,12 @@ SEED_DOMAINS: frozenset[str] = frozenset({
     "graph.instagram.com", "atdmt.com", "atlasdmt.com", "atlassolutions.com",
     "facebook-analytics.com", "fbsbx.com",
 
+    # --- Social conversion tracking (keep the consumer sites reachable) ---
+    # Vendor documentation confirms these exact hosts collect advertising events:
+    # https://www.developers.snap.com/marketing-api/Conversions-API/UsingTheAPI
+    # https://help.pinterest.com/en/business/article/pinterest-tag-parameters-and-cookies
+    "tr.snapchat.com", "ct.pinterest.com",
+
     # --- Amazon advertising ---
     "amazon-adsystem.com", "amazonaax.com", "aax.amazon-adsystem.com",
     "a9.com", "serving.amazon-adsystem.com",

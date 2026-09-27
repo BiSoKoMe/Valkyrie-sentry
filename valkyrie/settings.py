@@ -28,6 +28,7 @@ JSON is accepted as a fallback).
 from __future__ import annotations
 
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -149,6 +150,23 @@ SPECS: list[Spec] = [
 
 _SPECS_BY_KEY = {s.key: s for s in SPECS}
 
+# Every consumer of every setting below reads it via a MODULE-TOP-LEVEL
+# `from .config import X` (confirmed by grepping every import site), which
+# freezes the value at that module's own import time - changing config.X
+# afterward (e.g. via write_override() below) never reaches that module's
+# copy of the name, so it only takes effect on the next restart. NYX_ACT is
+# the one exception: both its real consumers (tls_addon.py, web/server.py)
+# read it via a deferred import INSIDE the function body, re-executed on
+# every call, so it genuinely sees a live change with no restart. A setting
+# that quietly does nothing until a restart nobody was told to expect is
+# exactly the "silent no-op" failure this module's own FLEET_* history
+# already warns about - callers of write_override() must say which is true,
+# not assume. Audited by hand 2026-09-11; re-audit if a key gains a new
+# consumer or an existing one changes how it imports config.
+LIVE_WITHOUT_RESTART: frozenset[str] = frozenset({"NYX_ACT"})
+
+_write_lock = threading.Lock()
+
 
 # ---------------------------------------------------------------------------
 # File loading
@@ -241,6 +259,45 @@ def describe() -> list[dict]:
     """Introspection: every overridable setting, its env var, type, and help."""
     return [
         {"key": s.key, "env": s.env, "type": s.type, "help": s.help,
-         "min": s.minv, "max": s.maxv, "choices": s.choices}
+         "min": s.minv, "max": s.maxv, "choices": s.choices,
+         "live_without_restart": s.key in LIVE_WITHOUT_RESTART}
         for s in SPECS
     ]
+
+
+def write_override(key: str, value: Any, *, config_dir: Path) -> tuple[Any, Path]:
+    """Validate and persist one override to the resolved config file.
+
+    Read-modify-write under a lock so two near-simultaneous writes can never
+    clobber each other. Raises ``ConfigError`` for an unknown key or a value
+    that fails ``Spec.coerce_and_validate`` - the same validation ``load()``
+    already applies to a hand-edited file, so a bad value from this API can
+    never reach disk any more than a bad value in the file itself could.
+
+    Returns ``(value, path)`` - the coerced value actually written, and the
+    exact file it was written to. That second part matters: the actual file
+    resolution (``$VALKYRIE_CONFIG``, an existing ``valkyrie.yml`` vs
+    ``.yaml``) lives in ``_load_file()``; a caller re-guessing the path
+    instead of reading this return value would drift from it the moment
+    either resolution rule changes.
+
+    Comments in an existing hand-edited file are NOT preserved -
+    ``yaml.safe_dump`` rewrites the whole file; this is a known, accepted
+    limitation, not an oversight - add a comment-preserving parser
+    (``ruamel.yaml``) only if that becomes a real complaint, not speculatively.
+    """
+    spec = _SPECS_BY_KEY.get(key)
+    if spec is None:
+        raise ConfigError(f"{key!r} is not an overridable setting")
+    val = spec.coerce_and_validate(value, "settings API")
+
+    import yaml
+    with _write_lock:
+        data, path = _load_file(config_dir, os.environ)
+        if path is None:
+            path = Path(config_dir) / "valkyrie.yaml"
+        data[key] = val
+        path.write_text(
+            yaml.safe_dump(data, default_flow_style=False, sort_keys=True),
+            encoding="utf-8")
+    return val, path

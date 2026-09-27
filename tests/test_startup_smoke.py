@@ -27,8 +27,9 @@ SAFETY. This boots a real engine, so it is deliberately constrained:
     system change with its own failure modes (see the ADR - a mainstream
     consumer AV can silently collide with it), and a unit-test smoke boot
     must never trigger it.
-It is therefore safe on a developer workstation, which is the only reason it
-can live in the default suite rather than the host-affecting exclusion list.
+These flags do not disable every host effect: DNS recovery and user-profile
+tripwires still run during startup. A disposable host is required even when
+this script is invoked directly, outside the categorized test runner.
 """
 
 from __future__ import annotations
@@ -64,6 +65,11 @@ def _get(url: str, timeout: float = 3.0):
 
 
 def main() -> int:
+    if os.environ.get("VALKYRIE_DISPOSABLE_TEST_HOST") != "1":
+        return skip_file(
+            "real engine boot",
+            "requires a disposable host: startup includes DNS recovery and user-profile tripwires",
+        )
     c = Checks("startup smoke", expect_min=8)
 
     port = _free_port()

@@ -95,7 +95,8 @@ def test_persistence_collector_detects_new_run_key():
 
     run = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
     marker = "ValkyrieTest_DELETEME"
-    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, run, 0, winreg.KEY_SET_VALUE)
+    # Fresh Windows images need not have any Run entries yet.
+    key = winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, run, 0, winreg.KEY_SET_VALUE)
     try:
         winreg.SetValueEx(key, marker, 0, winreg.REG_SZ,
                           r"powershell -enc SQBFAFgA")
@@ -162,7 +163,7 @@ def test_persistence_collector_detects_run_key_via_hkey_users():
     events = []
     coll = PersistenceCollector(emit=events.append, interval=60)
     coll._last = coll.snapshot()          # baseline (includes the HKU entries now)
-    key = winreg.OpenKey(winreg.HKEY_USERS, run, 0, winreg.KEY_SET_VALUE)
+    key = winreg.CreateKeyEx(winreg.HKEY_USERS, run, 0, winreg.KEY_SET_VALUE)
     try:
         winreg.SetValueEx(key, marker, 0, winreg.REG_SZ, r"C:\Program Files\App\app.exe")
         winreg.CloseKey(key)

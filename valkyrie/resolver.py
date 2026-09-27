@@ -94,7 +94,7 @@ server:
     root-hints: "{root_hints}"
 
     # DNSSEC
-    auto-trust-anchor-file: "{trust_anchor}"
+{trust_anchor_directive}
 {tls_cert_directive}
 {forward_zone}"""
 
@@ -191,6 +191,44 @@ def _fetch_root_hints(dest: Path) -> None:
         pass
 
 
+def _seed_trust_anchor(dest: Path, unbound_bin: str) -> bool:
+    """One-time bootstrap of Unbound's DNSSEC trust anchor.
+
+    ``auto-trust-anchor-file`` only MAINTAINS an anchor that already exists
+    (RFC 5011 rollover) - it does not create one from nothing. Pointing it at
+    a file that has never existed makes Unbound's validator module fail to
+    initialize and the WHOLE PROCESS EXIT, every single time it is started:
+    observed live as "error: unable to open .../root.key for reading: No
+    such file or directory" -> "fatal error: failed to init modules", with
+    root.key never having been created by anything. ``unbound-anchor``,
+    shipped next to ``unbound`` by NLnetLabs for exactly this one-time secure
+    bootstrap (RFC 7958), is what actually creates it; nothing here ever
+    called it.
+
+    Returns True if a usable anchor file exists after this call, so the
+    caller can drop DNSSEC validation instead of letting Unbound die when
+    bootstrapping isn't possible (no anchor tool, no network) - a resolver
+    without DNSSEC validation is still far better than no local resolver.
+    """
+    if dest.exists():
+        return True
+    anchor_bin = str(Path(unbound_bin).with_name(
+        "unbound-anchor.exe" if _SYSTEM == "Windows" else "unbound-anchor"))
+    if not Path(anchor_bin).exists():
+        anchor_bin = _which("unbound-anchor")
+    if not anchor_bin:
+        return False
+    try:
+        # unbound-anchor's exit code is not a plain success/failure signal
+        # (it can exit non-zero after a successful anchor UPDATE, by design)
+        # - whether the file exists afterward is the real signal.
+        subprocess.run([anchor_bin, "-a", str(dest)],
+                       timeout=30, capture_output=True)
+    except Exception:
+        pass
+    return dest.exists()
+
+
 def _install_hint(_system: str) -> str:
     if _system == "Linux":
         return (
@@ -279,7 +317,7 @@ class UnboundManager:
             )
             return False
 
-        self._write_conf()
+        self._write_conf(unbound_bin)
         self._proc = self._launch(unbound_bin)
         if self._proc is None:
             return False
@@ -374,12 +412,23 @@ class UnboundManager:
     # Internal
     # ------------------------------------------------------------------
 
-    def _write_conf(self) -> None:
+    def _write_conf(self, unbound_bin: str) -> None:
         root_hints  = DATA_DIR / "named.root"
         trust_anchor = DATA_DIR / "root.key"
         log_path    = DATA_DIR / "unbound.log"
 
         _fetch_root_hints(root_hints)
+
+        if _seed_trust_anchor(trust_anchor, unbound_bin):
+            trust_anchor_posix = str(trust_anchor).replace("\\", "/")
+            trust_anchor_directive = f'    auto-trust-anchor-file: "{trust_anchor_posix}"'
+        else:
+            trust_anchor_directive = ""
+            self._print(
+                "[yellow]Could not establish a DNSSEC trust anchor[/yellow] "
+                "— starting without DNSSEC validation (unbound-anchor "
+                "unavailable or offline)"
+            )
 
         tls_directive = _resolve_tls_cert_directive()
         if tls_directive:
@@ -397,12 +446,12 @@ class UnboundManager:
             )
 
         conf = _UNBOUND_CONF_TEMPLATE.format(
-            port               = self._port,
-            logfile            = str(log_path).replace("\\", "/"),
-            root_hints         = str(root_hints).replace("\\", "/"),
-            trust_anchor       = str(trust_anchor).replace("\\", "/"),
-            tls_cert_directive = tls_directive or "",
-            forward_zone       = forward_zone,
+            port                    = self._port,
+            logfile                 = str(log_path).replace("\\", "/"),
+            root_hints              = str(root_hints).replace("\\", "/"),
+            trust_anchor_directive  = trust_anchor_directive,
+            tls_cert_directive      = tls_directive or "",
+            forward_zone            = forward_zone,
         )
         self._conf_path.write_text(conf, encoding="utf-8")
 

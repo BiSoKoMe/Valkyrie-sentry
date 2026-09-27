@@ -22,7 +22,10 @@ Three keystones:
 from __future__ import annotations
 
 import sys
-import tomllib
+try:
+    import tomllib
+except ImportError:  # Python 3.10; stdlib tomllib arrived in 3.11.
+    import tomli as tomllib
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent

@@ -1,14 +1,14 @@
-"""Real-world accuracy measurement of Valkyrie's behavioural scanner.
+"""Offline accuracy regression gate for Valkyrie's DNS decision pipeline.
 
-This is a MEASUREMENT, not a pass/fail test.  It drives the REAL DNS
+This measures and gates the REAL DNS
 decision pipeline (DNSInterceptor._decide) in intelligence-only mode
 (USE_EXTERNAL_LISTS = False - seed blocklist + behavioural scanner +
 intelligence, no downloaded lists) against two labelled sets:
 
   * 15 confirmed tracker/telemetry endpoints, each independently confirmed
-    by EasyPrivacy (github.com/easylist/easylist) AND deliberately absent
-    from Valkyrie's own seed_blocklist.py - so every one is genuinely novel
-    to Valkyrie.
+    by EasyPrivacy (github.com/easylist/easylist). Some are now covered by
+    the shipped seed blocklist. Report those separately so overall recall
+    cannot be mistaken for unseen-tracker recall.
   * 15 confirmed-benign domains (OS projects, CDNs, reference sites) absent
     from both EasyPrivacy and the seed list - a false-positive control.
 
@@ -36,6 +36,7 @@ from __future__ import annotations
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -56,7 +57,7 @@ from valkyrie.store import Store
 
 
 # (domain, ground-truth label) - label is the INDEPENDENT verdict.
-#   "tracker" -> confirmed by EasyPrivacy, absent from Valkyrie's seed list
+#   "tracker" -> confirmed by EasyPrivacy; seed coverage is reported separately
 #   "clean"   -> absent from EasyPrivacy and from Valkyrie's seed list
 TRACKERS = [
     "analytics.tiktok.com",
@@ -109,13 +110,17 @@ def main() -> int:
     store.start()
 
     blocklist = BlocklistManager()
-    n = blocklist.load(allow_download=False)   # seed only, offline
+    # Downloads off still loads a workstation's cached list. Exclude that
+    # cache explicitly or a previous download can silently inflate recall.
+    with patch("valkyrie.blocklist.BLOCKLIST_PATH", tmp / "no_cached_list.txt"):
+        n = blocklist.load(allow_download=False)
+    seed_covered = {d for d in TRACKERS if blocklist.is_blocked(d)}
 
     scanner = SiteScanner(store=store)
     behavioral = BehavioralEngine()
     intel = Intelligence(store, behavioral=behavioral)
     intel.start()
-    rules = RulesLoader(); rules.start()
+    rules = RulesLoader(path=tmp / "rules.yaml"); rules.start()
 
     import psutil
     live_name = psutil.Process().name()
@@ -176,6 +181,7 @@ def main() -> int:
 
     blocked_tp = sum(1 for d, t, dec, s, r in rows if t == "tracker" and dec == "blocked")
     flagged_tp = sum(1 for d, t, dec, s, r in rows if t == "tracker" and dec == "flagged")
+    deceived_tp = sum(1 for d, t, dec, s, r in rows if t == "tracker" and dec == "deceived")
 
     precision = TP / (TP + FP) if (TP + FP) else float("nan")
     recall    = TP / (TP + FN) if (TP + FN) else float("nan")
@@ -183,17 +189,24 @@ def main() -> int:
           if precision and recall and (precision + recall) else float("nan"))
 
     print("\n" + "=" * 60)
-    print("CONFUSION MATRIX  (positive = block or flag)")
+    print("CONFUSION MATRIX  (positive = block, flag, deceive or behavioral)")
     print("=" * 60)
     print(f"                    predicted TRACKER   predicted CLEAN")
     print(f"  actual TRACKER          TP={TP:<2}              FN={FN:<2}")
     print(f"  actual CLEAN            FP={FP:<2}              TN={TN:<2}")
-    print(f"\n  of the {TP} caught trackers: {blocked_tp} blocked, {flagged_tp} flagged")
+    print(f"\n  of the {TP} caught trackers: {blocked_tp} blocked, "
+          f"{flagged_tp} flagged, {deceived_tp} deceived")
     print(f"\n  Precision = {precision:.3f}")
     print(f"  Recall    = {recall:.3f}")
     print(f"  F1        = {f1:.3f}")
     print(f"  Trackers missed (false negatives): {FN}/{len(TRACKERS)}")
     print(f"  Clean wrongly flagged (false positives): {FP}/{len(CLEAN)}")
+    seed_tp = sum(1 for d, t, dec, s, r in rows
+                  if t == "tracker" and d in seed_covered and positive(dec))
+    unseeded_count = len(TRACKERS) - len(seed_covered)
+    print(f"  Seed-covered trackers caught: {seed_tp}/{len(seed_covered)}")
+    print(f"  Trackers outside seed caught: {TP - seed_tp}/{unseeded_count}")
+    print("  This fixed regression set is not a held-out generalization benchmark.")
 
     if FN:
         print("\n  MISSED trackers (Valkyrie allowed these EasyPrivacy-confirmed trackers):")
