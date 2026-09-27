@@ -362,7 +362,17 @@ RULES: tuple = (
                   "\\winlogon", "\\userinit")),
     Rule("schtasks-create", "T1053.005 — Scheduled Task", SEV_MEDIUM,
          "persistence_task", "Scheduled task created",
-         images=("schtasks.exe",), cmd_any=("/create",)),
+         images=("schtasks.exe",), cmd_any=("/create",),
+         parents_not=("msiexec.exe",)),
+    # An INSTALLER registering its own updater task is the single most common
+    # schtasks /create on a real machine. Kept as context (label + technique)
+    # rather than an incident; a hostile task body is still judged on its own
+    # by the command-line heuristics (encoded/cradle) and, at rest, by the
+    # persistence collector - which reads the task's action, not its creator.
+    Rule("schtasks-create-by-installer", "T1053.005 — Scheduled Task", SEV_LOW,
+         "persistence_task", "Scheduled task created by an installer",
+         images=("schtasks.exe",), cmd_any=("/create",),
+         parents=("msiexec.exe",)),
     Rule("sc-create-service", "T1543.003 — Windows Service", SEV_MEDIUM,
          "persistence_service", "New Windows service created",
          images=("sc.exe",), cmd_any=("create",)),
@@ -483,7 +493,18 @@ RULES: tuple = (
     Rule("installutil-exec", "T1218.004 — InstallUtil", SEV_HIGH,
          "lolbin_dotnet_exec", "InstallUtil used to execute a .NET assembly (uninstall bypass)",
          images=("installutil.exe",),
-         cmd_any=("/logfile=", "/u ", "/u\t", "/logtoconsole")),
+         cmd_any=("/logfile=", "/u ", "/u\t", "/logtoconsole"),
+         parents_not=("msiexec.exe",)),
+    # A product's own MSI (un)registering the service it installed. Keyed on
+    # the PARENT, not on "\program files\" in the command line: a cmd_not on
+    # that string is forgeable for free (/logfile="C:\Program Files\x" /u
+    # C:\temp\evil.dll), whereas running as an msiexec child means building
+    # and installing an MSI. Context, not an incident.
+    Rule("installutil-exec-by-installer", "T1218.004 — InstallUtil", SEV_LOW,
+         "lolbin_dotnet_exec", "InstallUtil run by an installer (msiexec)",
+         images=("installutil.exe",),
+         cmd_any=("/logfile=", "/u ", "/u\t", "/logtoconsole"),
+         parents=("msiexec.exe",)),
     # /U (unregister - runs the assembly's UnregisterClass, a code-exec vector)
     # OR an assembly loaded from a user-writable/temp path. Plain `regasm MyLib.dll`
     # registering a normally-pathed assembly (no /U) stays clear: every legit

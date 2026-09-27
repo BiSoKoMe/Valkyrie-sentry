@@ -370,7 +370,13 @@ class EdrEngine:
         # asset changes clustered with other activity from the same actor is
         # real signal a sequence rule could key on -- feed it through before
         # the severity gate would otherwise drop it outright.
-        if "discovery_command" in labels or "asset_change" in labels:
+        # And 'lolbin_network_fetch' (process_telemetry.classify_cmdline): a
+        # command that fetches remote content but executes nothing is LOW on
+        # its own - admins and developers download files all day - yet it is
+        # exactly the middle step of "document shell fetched a payload" and
+        # "fetched a tool, then persisted it". Same treatment, same reason.
+        if ("discovery_command" in labels or "asset_change" in labels
+                or "lolbin_network_fetch" in labels):
             fields0 = d.get("fields") or {}
             self._correlate_sequence(Detection(
                 source=str(d.get("source", "collector")), severity=severity,

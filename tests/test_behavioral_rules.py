@@ -61,6 +61,12 @@ MALICIOUS = [
      "reg query HKLM /f password /t REG_SZ /s", ""),
     ("reg-add-runkey", "reg.exe", "cmd.exe", "reg add hkcu\\software\\microsoft\\windows\\currentversion\\run /v x /d evil.exe", ""),
     ("schtasks-create", "schtasks.exe", "cmd.exe", "schtasks /create /tn x /tr evil.exe /sc onlogon", ""),
+    # Context-only (LOW): an installer registering its own updater task.
+    ("schtasks-create-by-installer", "schtasks.exe", "msiexec.exe",
+     r'schtasks /create /tn "Vendor\Updater" /tr "C:\Program Files\Vendor\update.exe" /sc daily /f', ""),
+    # Context-only (LOW): a product's MSI (un)registering its own service.
+    ("installutil-exec-by-installer", "installutil.exe", "msiexec.exe",
+     r'InstallUtil.exe /u "C:\Program Files\Vendor\svc.exe"', ""),
     ("sc-create-service", "sc.exe", "cmd.exe", "sc create evil binpath= c:\\evil.exe", ""),
     ("net-user-add", "net.exe", "cmd.exe", "net user backdoor P@ss /add", ""),
     ("net-localgroup-admin-add", "net.exe", "cmd.exe",

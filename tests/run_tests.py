@@ -117,6 +117,7 @@ _SAFE = {
     "test_settings_api.py": "temporary config dir; DATA_DIR + control token monkeypatched, no real settings file touched",
     "test_persistence_telemetry.py": "in-memory collector with a fake emit sink and monkeypatched snapshot(); no real registry/filesystem access",
     "test_nyx_disclosure_gate.py": "pure nyx/psl calls on fabricated requests; persona store pointed at a temp dir; no proxy, no network",
+    "test_benign_launch_fp.py": "pure classify_sysmon calls on corpus/fabricated process events; reads a bundled JSON file only",
 }
 
 # Some unit tests accept a --quick flag to skip optional network downloads.

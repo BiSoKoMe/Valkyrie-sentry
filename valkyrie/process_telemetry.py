@@ -102,9 +102,21 @@ def classify_process(name: str, path: str = "",
         reasons.append(f"{par} spawned a shell/script host ({n})")
         _raise(SEV_HIGH)
     elif n in _LOLBINS:
+        # A LOLBin STARTING is not evidence of anything: cmd.exe, powershell.exe,
+        # rundll32.exe, curl.exe, schtasks.exe and sc.exe start hundreds of
+        # times a day on any machine (terminals, IDEs, installers, build tools,
+        # Windows itself). This was MEDIUM - the incident threshold - on the
+        # name alone, and measured 2026-09-25 through the real Sysmon EID 1
+        # path it made 72% of ordinary workstation launches and 82% of the
+        # Elastic benign-software corpus raise an incident. The label is kept
+        # (the causality graph, the kill-chain, the decision layer and the
+        # anomaly nose all read it), but the ALERT has to come from how the
+        # binary is used: a command-line heuristic, an IOA rule, the anomaly
+        # scorer, an Office parent, or a temp/download path (below) - each of
+        # which already escalates on its own.
         labels.append("lolbin")
         reasons.append(f"living-off-the-land binary ({n})")
-        _raise(SEV_MEDIUM)
+        _raise(SEV_LOW)
 
     if any(frag in p for frag in _SUSPICIOUS_PATHS):
         # Temp/download execution ALONE is a weak signal: installers, updaters
@@ -129,19 +141,34 @@ def classify_process(name: str, path: str = "",
 # hidden-window flags are the clearest signals of malicious LOLBin use.
 # ---------------------------------------------------------------------------
 _ENCODED_PS = ("-enc ", "-enc:", "-encodedcommand", "-ec ", " -e ")
-_HIDDEN_FLAGS = ("-w hidden", "-windowstyle hidden", "-nop ", "-noprofile",
+_HIDDEN_WINDOW = ("-w hidden", "-windowstyle hidden", "-win hidden", "-w 1 ",
+                  "-windowstyle 1")
+_HIDDEN_FLAGS = ("-nop ", "-noprofile",
                  "-noni", "-noninteractive",
                  # WScript/CScript silent-batch mode ("wscript //b //nologo x.vbs")
                  # - a common way to run VBScript/JScript with no window or
                  # error prompts. Trailing space keeps this off URLs (`//blah`).
                  "//b ", "//nologo")
-_DOWNLOAD_CRADLES = (
-    "downloadstring", "downloadfile", "downloaddata", "invoke-expression",
-    "iex(", "iex (", "iex ", "frombase64string", "net.webclient", "webclient",
+# A download CRADLE is two halves: fetch something, then execute it in memory.
+# These used to be one flat token list where either half alone was a HIGH
+# "cradle" - so a bare Invoke-Expression (Claude Code's own shell launcher,
+# Chocolatey, countless install scripts) or a bare Invoke-WebRequest (a
+# developer fetching a release zip) raised a high-severity incident. Each half
+# on its own is context; together they are the technique. certutil's
+# download/decode verbs are the exception - essentially never legitimate, so
+# they stay HIGH alone.
+_FETCH_TOKENS = (
+    "downloadstring", "downloadfile", "downloaddata", "net.webclient", "webclient",
     "start-bitstransfer", "bitstransfer", "invoke-webrequest", "invoke-restmethod",
-    "certutil -urlcache", "certutil.exe -urlcache", "certutil -decode",
-    "-decodehex", "wget http", "curl http", "wget.exe http", "curl.exe http",
+    "iwr ", "irm ", "wget http", "curl http", "wget.exe http", "curl.exe http",
 )
+_EXEC_TOKENS = ("invoke-expression", "iex(", "iex (", "iex ", "|iex", "| iex",
+                "scriptblock]::create")
+_DECODE_TOKENS = ("frombase64string",)
+_LOLBIN_TRANSFER = ("certutil -urlcache", "certutil.exe -urlcache",
+                    "certutil -decode", "-decodehex")
+# Kept for callers that only need "does this line touch any cradle half".
+_DOWNLOAD_CRADLES = _FETCH_TOKENS + _EXEC_TOKENS + _DECODE_TOKENS + _LOLBIN_TRANSFER
 
 
 def classify_cmdline(name: str, cmdline: str) -> tuple[str, list[str], str]:
@@ -158,19 +185,59 @@ def classify_cmdline(name: str, cmdline: str) -> tuple[str, list[str], str]:
         if severity_rank(to) > severity_rank(severity):
             severity = to
 
-    if any(t in c for t in _ENCODED_PS):
+    # The encoded-command switches (-e / -ec / -enc / -EncodedCommand) are
+    # PowerShell's. " -e " is also node's, perl's, ruby's and sqlcmd's
+    # ordinary "evaluate this" / "echo" flag, so matching it on ANY process
+    # scored `node -e "console.log(1)"` as HIGH "encoded PowerShell". Only
+    # judge them when PowerShell is the process, or is what the command line
+    # launches (cmd /c powershell -e ...).
+    if (_is_powershell(name) or "powershell" in c or "pwsh" in c) \
+            and any(t in c for t in _ENCODED_PS):
         labels.append("encoded_powershell")
         reasons.append("encoded/obfuscated command line")
         _raise(SEV_HIGH)
-    if any(t in c for t in _DOWNLOAD_CRADLES):
+    fetch = any(t in c for t in _FETCH_TOKENS)
+    execs = any(t in c for t in _EXEC_TOKENS)
+    decode = any(t in c for t in _DECODE_TOKENS)
+    if any(t in c for t in _LOLBIN_TRANSFER) or (fetch and (execs or decode)):
         labels.append("download_cradle")
         reasons.append("in-memory download/execute cradle")
         _raise(SEV_HIGH)
-    if any(t in c for t in _HIDDEN_FLAGS):
+    elif decode and execs:
+        labels.append("dynamic_exec")
+        reasons.append("decodes and executes code in memory")
+        _raise(SEV_HIGH)
+    elif fetch:
+        # Fetch alone: context (T1105), fed to the sequence engine ahead of
+        # the severity gate (edr/engine.py) so "fetched, then persisted" and
+        # "document shell fetched a payload" still complete.
+        labels.append("lolbin_network_fetch")
+        reasons.append("command fetches remote content")
+        _raise(SEV_LOW)
+    elif execs:
+        labels.append("dynamic_exec")
+        reasons.append("evaluates a string as code (Invoke-Expression)")
+        _raise(SEV_LOW)
+    if any(t in c for t in _HIDDEN_WINDOW):
         labels.append("hidden_window")
-        reasons.append("hidden / non-interactive execution flags")
+        reasons.append("hidden window execution flags")
         _raise(SEV_MEDIUM)
+    elif any(t in c for t in _HIDDEN_FLAGS):
+        # -NoProfile / -NonInteractive / //nologo / //b are how EVERY piece of
+        # automation starts a script host - VS Code, SCCM, Intune, Ansible over
+        # WinRM, scheduled maintenance scripts. On their own they say "not a
+        # human at a prompt", not "hiding"; measured, they were the largest
+        # false-positive class left once bare-LOLBin starts stopped alerting.
+        # Recorded as context; the attack shapes they travel with (encoded
+        # commands, cradles, a hidden window, an IOA rule) alert on their own.
+        labels.append("noninteractive_flags")
+        reasons.append("non-interactive execution flags")
+        _raise(SEV_LOW)
     return severity, labels, "; ".join(reasons)
+
+
+def _is_powershell(name: str) -> bool:
+    return (name or "").lower() in ("powershell.exe", "pwsh.exe", "powershell", "pwsh")
 
 
 # ---------------------------------------------------------------------------

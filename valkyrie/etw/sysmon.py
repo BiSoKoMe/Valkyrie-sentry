@@ -51,6 +51,74 @@ _EVENT_IDS = (1, 3, 6, 7, 8, 10, 11, 12, 13, 14, 25)
 _DRIVER_DROP_DIRS = ("\\appdata\\", "\\temp\\", "\\downloads\\",
                      "\\users\\public\\", "\\programdata\\", "\\$recycle")
 
+# --- T1036.003 Rename System Utilities --------------------------------------
+# Sysmon EID 1 carries the PE's own OriginalFileName (from its version
+# resource), which a copy-and-rename does not change. cmd.exe copied to
+# %SystemRoot%\Temp\lsass.exe still says "Cmd.Exe"; powershell.exe copied to
+# %APPDATA%\updater.exe still says "PowerShell.EXE". Renaming a system utility
+# or an attacker staple has no legitimate everyday purpose, and the attacker
+# cannot fake the result without editing (and so re-signing) the binary.
+# Limited to binaries that are abused and that nobody ships renamed - NOT e.g.
+# electron.exe / node.exe / python.exe, which apps legitimately rebrand.
+_RENAME_WATCHED = frozenset({
+    "cmd.exe", "powershell.exe", "pwsh.dll", "rundll32.exe", "regsvr32.exe",
+    "mshta.exe", "wscript.exe", "cscript.exe", "certutil.exe", "bitsadmin.exe",
+    "msbuild.exe", "installutil.exe", "regasm.exe", "regsvcs.exe", "wmic.exe",
+    "schtasks.exe", "sc.exe", "reg.exe", "net.exe", "net1.exe", "vssadmin.exe",
+    "wevtutil.exe", "bcdedit.exe", "netsh.exe", "whoami.exe", "cmstp.exe",
+    "msiexec.exe", "psexec.c", "psexesvc.exe", "procdump", "nc.exe", "rclone.exe",
+    "adfind.exe", "7z.exe", "rar.exe", "plink.exe", "ntdsutil.exe",
+})
+
+
+def _utility_stem(filename: str) -> str:
+    """Name with its extension and any 32/64-bit suffix dropped, so the vendor's
+    own architecture builds (procdump64.exe, PsExec64.exe - same
+    OriginalFileName as the 32-bit build) are not read as renames."""
+    stem = filename.rsplit(".", 1)[0]
+    return stem[:-2] if stem.endswith(("64", "32")) else stem
+
+
+def _renamed_utility(image: str, original_filename: str) -> str:
+    """The watched utility this image really is, when it runs under another
+    name; "" otherwise. Case-insensitive and extension-tolerant ("pwsh.dll" is
+    pwsh.exe's own OriginalFileName)."""
+    orig = (original_filename or "").strip().lower()
+    if orig not in _RENAME_WATCHED:
+        return ""
+    name = _name(image).lower()
+    if not name or _utility_stem(name) == _utility_stem(orig):
+        return ""
+    return orig
+
+
+# --- T1574.001 / .002 DLL search-order hijacking & side-loading -------------
+# A DLL that carries the NAME of a Windows system library, loaded from a
+# directory a user can write to, is the hijack: the loader found the planted
+# copy before the real one in System32. The names are ones hijack research
+# (HijackLibs) shows abused and that applications essentially never ship their
+# own copy of - deliberately NOT dbghelp/d3d*/dxgi/msvcp*, which games, crash
+# handlers and runtimes legitimately bundle.
+_HIJACKABLE_SYSTEM_DLLS = frozenset({
+    "amsi.dll", "version.dll", "winhttp.dll", "userenv.dll", "wtsapi32.dll",
+    "cryptbase.dll", "cryptsp.dll", "secur32.dll", "sspicli.dll", "uxtheme.dll",
+    "dwmapi.dll", "profapi.dll", "netapi32.dll", "srvcli.dll", "wkscli.dll",
+    "wbemcomn.dll", "fveapi.dll", "rasapi32.dll", "cscapi.dll", "mpr.dll",
+    "ntmarta.dll", "edputil.dll", "wlbsctrl.dll", "wow64log.dll", "iphlpapi.dll",
+    "dnsapi.dll", "propsys.dll", "winmm.dll", "wininet.dll", "dbgcore.dll",
+    "tsmsisrv.dll", "tsvipsrv.dll", "cryptnet.dll", "wer.dll", "dpapi.dll",
+})
+_USER_WRITABLE = ("\\users\\", "\\temp\\", "\\programdata\\", "\\appdata\\",
+                  "\\downloads\\", "\\$recycle", "\\perflogs\\")
+_SYSTEM_DIRS = ("\\windows\\system32\\", "\\windows\\syswow64\\",
+                "\\windows\\winsxs\\", "\\windows\\microsoft.net\\")
+
+
+def _is_user_writable(path: str) -> bool:
+    p = (path or "").lower().replace("/", "\\")
+    return any(d in p for d in _USER_WRITABLE) and not any(d in p for d in _SYSTEM_DIRS)
+
+
 # Known LSASS-read access masks that indicate credential dumping (Mimikatz-
 # style) - a fast path of the common values, NOT the only signal (see below).
 _LSASS_READ_MASKS = {"0x1010", "0x1410", "0x1438", "0x143a", "0x1fffff", "0x1010h"}
@@ -239,6 +307,23 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
             if anomaly.get("technique") and anomaly["technique"] not in all_techniques:
                 all_techniques.append(anomaly["technique"])
 
+        # A renamed system utility (T1036.003) - evidence only Sysmon has: the
+        # PE's own OriginalFileName, which a copy-and-rename leaves intact.
+        renamed = _renamed_utility(image, d.get("OriginalFileName", ""))
+        if renamed:
+            if severity_rank(SEV_HIGH) > severity_rank(sev):
+                sev = SEV_HIGH
+            if "renamed_system_binary" not in labels:
+                labels.append("renamed_system_binary")
+            reason = "; ".join(r for r in (
+                reason, f"'{name}' is really {renamed} running under another name "
+                        f"(renamed system utility)") if r)
+            rename_tech = "T1036.003 — Masquerading: Rename System Utilities"
+            if not technique:
+                technique = rename_tech
+            if rename_tech not in all_techniques:
+                all_techniques.append(rename_tech)
+
         # Discovery-tactic weak labeling. Must run on THIS path, not just the
         # poller: a lone discovery command is INFO by design (never alerts on
         # its own), but the reconnaissance-burst sequence needs to SEE several
@@ -343,24 +428,45 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
                         "signed": d.get("Signed", "")},
         }
 
-    # EID 7 - image/DLL load. Emit only unsigned / invalid-signature loads.
+    # EID 7 - image/DLL load.
     if eid == 7:
         status = (d.get("SignatureStatus", "") or "").lower()
         signed = (d.get("Signed", "") or "").lower()
-        if status in ("valid",) or signed == "true":
-            return None
         loaded = d.get("ImageLoaded", "")
-        return {
-            "category": CAT_PROCESS, "activity": "image_load",
-            "actor_pid": int(d.get("ProcessId", 0) or 0), "actor_name": _name(d.get("Image", "")),
-            "actor_path": d.get("Image", ""),
-            "target": {"path": loaded},
-            "severity": SEV_MEDIUM, "labels": ["unsigned_module"],
-            "reason": f"unsigned/invalid module load ({_name(loaded)})",
-            "technique": "T1574 — Hijack Execution Flow",
-            "context": {"sha256": parse_hashes(d.get("Hashes", "")).get("sha256", ""),
-                        "signature_status": d.get("SignatureStatus", "")},
-        }
+        loader = d.get("Image", "")
+        dll = _name(loaded).lower()
+        context = {"sha256": parse_hashes(d.get("Hashes", "")).get("sha256", ""),
+                   "signature_status": d.get("SignatureStatus", "")}
+        base = {"category": CAT_PROCESS, "activity": "image_load",
+                "actor_pid": int(d.get("ProcessId", 0) or 0), "actor_name": _name(loader),
+                "actor_path": loader, "target": {"path": loaded}, "context": context}
+        # A Windows system library's NAME loaded from a user-writable folder is
+        # the search-order hijack / side-load, SIGNED OR NOT - the ART amsi.dll
+        # variant plants Microsoft's own signed copy, and the signature check
+        # below would have hidden it.
+        is_signed = status == "valid" or signed == "true"
+        if dll in _HIJACKABLE_SYSTEM_DLLS and _is_user_writable(loaded):
+            hijack = "T1574.001 — Hijack Execution Flow: DLL Search Order Hijacking"
+            return {**base, "severity": SEV_HIGH,
+                    "labels": ["dll_hijack"] + ([] if is_signed else ["unsigned_module"]),
+                    "reason": f"system library '{dll}' loaded from a user-writable folder "
+                              f"({loaded}) - DLL search-order hijack / side-loading",
+                    "technique": hijack,
+                    "all_techniques": [hijack, "T1574.002 — Hijack Execution Flow: DLL Side-Loading"]}
+        if is_signed:
+            return None
+        # Any other unsigned DLL: context, not an incident. Python extension
+        # modules, Node native addons, game mods and in-house builds are all
+        # unsigned and load constantly - at MEDIUM each one was an incident.
+        # It still escalates when a Windows system binary (rundll32, svchost,
+        # regsvr32...) pulls an unsigned DLL out of a user-writable folder,
+        # which is the proxy-execution shape rather than an app's own plugin.
+        sev = SEV_LOW
+        if _is_user_writable(loaded) and any(s in loader.lower() for s in _SYSTEM_DIRS):
+            sev = SEV_MEDIUM
+        return {**base, "severity": sev, "labels": ["unsigned_module"],
+                "reason": f"unsigned/invalid module load ({_name(loaded)})",
+                "technique": "T1574 — Hijack Execution Flow"}
 
     # EID 8 - CreateRemoteThread -> classic code injection.
     if eid == 8:

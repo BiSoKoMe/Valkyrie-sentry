@@ -28,8 +28,12 @@ def main() -> int:
     sev, labels, _ = classify_process("chrome.exe", "C:/Program Files/chrome.exe")
     _check("benign proc -> info, no labels", sev == T.SEV_INFO and labels == [])
 
+    # A LOLBin merely STARTING is context, not an incident (2026-09-25): at
+    # MEDIUM on the name alone it made 72% of ordinary workstation launches and
+    # 82% of the Elastic benign corpus raise incidents. The label must stay -
+    # causality, the kill-chain, decisions and the anomaly nose all read it.
     sev, labels, reason = classify_process("powershell.exe", "C:/Windows/System32/ps.exe")
-    _check("lolbin -> medium", sev == T.SEV_MEDIUM)
+    _check("bare lolbin -> low (context, not an incident)", sev == T.SEV_LOW)
     _check("lolbin labelled", "lolbin" in labels)
 
     sev, labels, reason = classify_process("cmd.exe", "C:/x/cmd.exe", parent_name="winword.exe")

@@ -142,9 +142,16 @@ _DOC_AND_NET_APPS = frozenset({
 # string is involved to write a rule against.
 _SERVER_PROCS = frozenset({
     "w3wp.exe", "httpd.exe", "nginx.exe", "tomcat.exe", "tomcat9.exe",
-    "java.exe", "sqlservr.exe", "mysqld.exe", "php-cgi.exe", "node.exe",
+    "sqlservr.exe", "mysqld.exe", "php-cgi.exe",
     "ws_tomcatservice.exe", "aspnet_wp.exe",
 })
+# General-purpose runtimes that ARE sometimes the internet-facing service
+# (Log4Shell ran as java.exe; Express as node.exe) but on a workstation are
+# overwhelmingly build tools and dev servers: npm scripts, Gradle, Maven and
+# Electron apps spawn cmd.exe all day. Scored as a compounding signal only -
+# java.exe -> `cmd /c curl http://...` still fires (this + the network fetch),
+# `npm run build` does not.
+_RUNTIME_PROCS = frozenset({"java.exe", "javaw.exe", "node.exe"})
 _SHELLS = frozenset({"cmd.exe", "powershell.exe", "pwsh.exe", "wscript.exe",
                      "cscript.exe", "mshta.exe", "bash.exe", "sh.exe"})
 
@@ -490,6 +497,11 @@ def _sig_impossible_ancestry(c: _Ctx) -> Optional[Signal]:
                       f"internet-facing service '{c.parent}' spawned a shell "
                       f"('{c.image}') — web-shell pattern",
                       "T1505.003 — Web Shell")
+    if c.parent in _RUNTIME_PROCS and c.image in _SHELLS:
+        return Signal("runtime_spawned_shell", 0.3,
+                      f"application runtime '{c.parent}' spawned a shell "
+                      f"('{c.image}')",
+                      "T1505.003 — Web Shell")
     # Document/browser/comms app spawning an interpreter -> macro/exploit foothold.
     if c.parent in _DOC_AND_NET_APPS and c.image in _INTERPRETERS:
         return Signal("document_spawned_interpreter", 0.5,
@@ -527,13 +539,23 @@ _SCRIPT_PROXY = frozenset({
 })
 
 
+# A UNC path is a TOKEN that starts with two backslashes and a host
+# (`\\server\share\x.sct`). Any "\\" anywhere used to count, so a doubled
+# separator in the middle of an ordinary local path (`C:\Temp\\file.txt`, which
+# Windows treats as one separator) read as "references a network path". An
+# attacker's real UNC reference has to start at a token boundary to resolve at
+# all, so requiring one costs no coverage. `\\?\` / `\\.\` device and long-path
+# prefixes are local, not network.
+_UNC_TOKEN = re.compile(r"(?:^|[\s\"'=(,;]|/[A-Za-z]+:)\\\\(?![?.]\\)[^\\\s\"'/]+\\")
+
+
 def _sig_lolbin_remote(c: _Ctx) -> Optional[Signal]:
     # An interpreter/LOLBin whose command reaches out to the network (URL, raw
     # IP, or UNC path) - the download-and-run shape, independent of the payload.
     if c.image in _INTERPRETERS or c.image in _SHELLS:
         has_url = bool(_URL.search(c.raw_cmd))
         has_ip = bool(_IP_LITERAL.search(c.raw_cmd))
-        has_unc = "\\\\" in c.raw_cmd and not c.raw_cmd.strip().startswith("\\\\?\\")
+        has_unc = bool(_UNC_TOKEN.search(c.raw_cmd))
         if has_url or has_ip or has_unc:
             what = ("a URL" if has_url else "a raw IP address" if has_ip
                     else "a UNC network path")
