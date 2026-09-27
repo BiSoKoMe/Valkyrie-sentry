@@ -75,6 +75,11 @@ def _is_valid_mac(mac: str) -> bool:
     return bool(_MAC_RE.match(mac))
 
 
+def _mac_equal(a: str, b: str) -> bool:
+    """Case/separator-insensitive MAC comparison (Windows reports hyphens)."""
+    return a.replace("-", ":").upper() == b.replace("-", ":").upper()
+
+
 def _RE_IPV4(s: str) -> bool:
     return bool(_IPV4_RE.match(s.strip()))
 
@@ -218,10 +223,17 @@ class MacRandomizer:
         last   = ""
         for iface in ifaces:
             new_mac, mode = self._next_mac(iface)
+            already = _mac_equal(self.get_current(iface) or "", new_mac)
             ok      = self._apply_mac(iface, new_mac)
             if ok:
                 last = new_mac
-                self._log(f"MAC randomised ({mode}): {iface} → {new_mac}")
+                # Reconnecting to an already-known network legitimately
+                # recomputes the SAME per-network address every time - that
+                # is not an event worth a log line, and logging it as
+                # "randomised" would misreport a no-op adapter cycle as an
+                # action that never happened.
+                if not already:
+                    self._log(f"MAC randomised ({mode}): {iface} → {new_mac}")
         if not last and ifaces and not self.last_error:
             self.last_error = "No interface could be changed (adapter not found or write failed)."
         return last
@@ -336,14 +348,25 @@ class MacRandomizer:
         if not _is_valid_mac(new_mac):
             return False
 
+        current = self._read_current_mac(iface)
+
         # Backup the current MAC before first change
         if not is_restore:
             backup = self._load_backup()
-            if iface not in backup:
-                current = self._read_current_mac(iface)
-                if current:
-                    backup[iface] = current
-                    self._save_backup(backup)
+            if iface not in backup and current:
+                backup[iface] = current
+                self._save_backup(backup)
+
+        # Already at the target address - most commonly a reconnect to an
+        # already-known network, where a stable per-network address is the
+        # whole point: nothing needs to change. _monitor_loop calls
+        # randomize() on every down->up transition, including waking from
+        # sleep, so without this check every reconnect to a network already
+        # seen paid for a needless several-second adapter disable/enable
+        # cycle - exactly the "protection breaks Wi-Fi for no reason"
+        # failure mode this feature exists to avoid.
+        if current and _mac_equal(current, new_mac):
+            return True
 
         sys = _platform()
         try:

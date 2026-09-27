@@ -30,6 +30,7 @@ import platform
 import socket
 import time
 import zipfile
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -220,12 +221,18 @@ class TriageCollector:
 def verify_bundle(path: Path) -> dict:
     """Re-hash every artifact inside a bundle against its manifest.
 
-    Returns {"ok": bool, "mismatched": [...], "missing": [...]} - the
-    integrity half of chain of custody, runnable anywhere, stdlib only.
+    Returns {"ok": bool, "mismatched": [...], "missing": [...],
+    "unexpected": [...], "duplicates": [...]}. Every non-manifest ZIP
+    member must be declared and each artifact must appear exactly once.
     """
     with zipfile.ZipFile(path) as z:
+        entries = z.namelist()
         manifest = json.loads(z.read("MANIFEST.json"))
-        names = set(z.namelist()) - {"MANIFEST.json"}
+        names = set(entries) - {"MANIFEST.json"}
+        expected = set(manifest.get("artifacts", {}))
+        unexpected = sorted(names - expected)
+        duplicates = sorted(
+            name for name, count in Counter(entries).items() if count > 1)
         mismatched, missing = [], []
         for name, meta in manifest.get("artifacts", {}).items():
             if name not in names:
@@ -233,7 +240,8 @@ def verify_bundle(path: Path) -> dict:
                 continue
             if hashlib.sha256(z.read(name)).hexdigest() != meta.get("sha256"):
                 mismatched.append(name)
-    return {"ok": not mismatched and not missing,
+    return {"ok": not (mismatched or missing or unexpected or duplicates),
             "mismatched": mismatched, "missing": missing,
+            "unexpected": unexpected, "duplicates": duplicates,
             "artifacts": len(manifest.get("artifacts", {})),
             "collection_errors": manifest.get("collection_errors", {})}

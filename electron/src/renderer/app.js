@@ -422,7 +422,6 @@ const NAV_GROUPS = [
   ]],
   ['System', [
     ['components',   'Components',          'cpu'],
-    ['compliance',   'Compliance',          'shieldCheck'],
     ['updates',      'Updates',             'download'],
     ['settings',     'Settings',            'settings'],
     ['about',        'About',               'info'],
@@ -1448,9 +1447,8 @@ PAGES.privacy = {
       const dohBox = $('dohRows'); if (dohBox) dohBox.innerHTML = stateBlock(vs.kind, vs.title, vs.sub);
       return;
     }
-    const [tel, vpn, zero, mac, fp, dec, doh] = await Promise.all([
+    const [tel, zero, mac, fp, dec, doh] = await Promise.all([
       safe(() => V.api.get('/api/telemetry/status'), {}),
-      safe(() => V.api.get('/api/vpn/status'), {}),
       safe(() => V.api.get('/api/zero-log/status'), {}),
       safe(() => V.api.get('/api/mac/status'), {}),
       safe(() => V.api.get('/api/fingerprint/status'), {}),
@@ -1481,7 +1479,6 @@ PAGES.privacy = {
       ['TCP/IP fingerprint', fpCell, 'activity'],
       ['Windows telemetry', telStatus, 'shield'],
       ['Telemetry settings tracked', fmt((tel.settings || []).length), 'activity'],
-      ['Encrypted transport (VPN)', vpn.hop1_conf_exists ? badge('Configured', 'ok') : badge('Not configured', 'off'), 'globe'],
       ['Zero-log mode', zero.active ? badge('Active', 'ok') : badge('Disk logging', 'off'), 'lock'],
       ['Log integrity', zero.integrity === 'verified' ? badge('Verified', 'ok') : (zero.integrity || '—'), 'check'],
     ]);
@@ -2177,112 +2174,17 @@ PAGES.components = {
   },
 };
 
-function frameworkRefs(refs) { return (refs && refs.length) ? refs.join(' · ') : ''; }
-function mttrText(minutes) {
-  if (minutes == null) return '—';
-  return minutes < 60 ? `${Math.round(minutes)}m` : fmtUptime(minutes * 60);
-}
-
-/* ---- Compliance ---- */
-// Evidence, not certification - the backend (compliance.py) is explicit that
-// it never claims compliance, only reports what actually happened, computed
-// live with no hardcoded "OK" fields. The UI's job is to not lose that
-// framing: the disclaimer ships from the API and is shown verbatim, first.
-PAGES.compliance = {
-  report: null,
-  render() {
-    $('page').innerHTML = `
-      <div class="page-intro">Point-in-time operational evidence for auditors (SOC 2, ISO 27001, insurers) —
-      generated live from what Valkyrie actually recorded. This is evidence toward the referenced controls,
-      never a certification.</div>
-      <div class="hunt-filters" style="margin-bottom:20px">
-        <select class="rp-select" id="compPeriod" aria-label="Reporting period">
-          <option value="24">Last 24 hours</option>
-          <option value="168">Last 7 days</option>
-          <option value="720" selected>Last 30 days</option>
-          <option value="2160">Last 90 days</option>
-        </select>
-        <button class="btn" id="compCopyMd">${ICON.activity}<span>Copy as Markdown</span></button>
-      </div>
-      <div id="complianceBody"><div class="empty">Loading…</div></div>`;
-    $('compPeriod').onchange = () => this.load();
-    $('compCopyMd').onclick = () => this.copyMarkdown();
-    this.load();
-  },
-  async load() {
-    const box = $('complianceBody'); if (!box) return;
-    if (!state.engineUp) {
-      box.innerHTML = stateBlock('offline', 'Protection is off',
-        'Compliance evidence is computed from live monitoring data — start protection to generate a report.');
-      return;
-    }
-    box.innerHTML = '<div class="empty">Generating report…</div>';
-    const hours = $('compPeriod').value;
-    const report = await safe(() => V.api.get(`/api/compliance/report?hours=${hours}&format=json`), null);
-    this.report = report;
-    this.renderReport(report);
-  },
-  renderReport(r) {
-    const box = $('complianceBody'); if (!box) return;
-    if (!r || !r.sections) {
-      box.innerHTML = stateBlock('error', 'Could not generate report', 'The compliance engine did not return a report.');
-      return;
-    }
-    const s = r.sections;
-    const mon = s.monitoring || {}, det = s.detection_response || {}, intel = s.threat_intel || {}, audit = s.audit_trail || {};
-    const wiredRows = Object.entries(mon.components_wired || {})
-      .map(([k, v]) => [escapeHtml(k), v ? badge('Wired', 'ok') : badge('Not wired', 'off'), 'cpu']);
-    box.innerHTML = `
-      <div class="comp-disclaimer">${escapeHtml(r.disclaimer || '')}</div>
-      <div class="grid">
-        <div class="card"><div class="label">${ICON.cpu}Components Wired</div>
-          <div class="value">${fmt(mon.wired_count || 0)}<span class="unit">/ ${fmt(mon.component_total || 0)}</span></div></div>
-        <div class="card"><div class="label">${ICON.alert}Incidents in Period</div><div class="value">${fmt(det.incidents_in_period || 0)}</div></div>
-        <div class="card"><div class="label">${ICON.flame}Open High/Critical</div><div class="value">${fmt(det.open_high_or_critical || 0)}</div></div>
-        <div class="card accent-green"><div class="label">${ICON.check}Median Time to Resolve</div><div class="value">${mttrText(det.median_time_to_resolve_minutes)}</div></div>
-      </div>
-      ${sectionHead('Detection &amp; Response', frameworkRefs(det.framework_refs))}
-      ${det.available === false ? stateBlock('empty', 'EDR not available', '') : rowsPanel([
-        ['Incidents in period', fmt(det.incidents_in_period || 0), 'alert'],
-        ['Resolved', fmt(det.resolved_count || 0), 'check'],
-        ['Open (high/critical)', fmt(det.open_high_or_critical || 0), 'flame'],
-        ['Mean time to resolve', mttrText(det.mean_time_to_resolve_minutes), 'activity'],
-      ])}
-      ${sectionHead('Monitoring', frameworkRefs(mon.framework_refs))}
-      ${wiredRows.length ? rowsPanel(wiredRows) : stateBlock('empty', 'No components reporting', '')}
-      ${sectionHead('Threat Intelligence', frameworkRefs(intel.framework_refs))}
-      ${intel.available === false ? stateBlock('empty', 'Threat intelligence not available', intel.error || '') : rowsPanel([
-        ['Feeds tracked', fmt(Object.keys(intel.feeds || {}).length), 'globe'],
-        ['Stale feeds', fmt((intel.stale_feeds || []).length), 'alert'],
-      ])}
-      ${sectionHead('Audit Trail', frameworkRefs(audit.framework_refs))}
-      ${rowsPanel([
-        ['Response actions audited', audit.response_audit_available ? badge('Yes', 'ok') : badge('No', 'off'), 'shield'],
-      ])}`;
-  },
-  async copyMarkdown() {
-    const btn = $('compCopyMd'); if (!btn) return;
-    const span = btn.querySelector('span'); const original = span ? span.textContent : '';
-    if (span) span.textContent = 'Copying…';
-    btn.disabled = true;
-    const hours = $('compPeriod').value;
-    const md = await safe(() => V.api.getText(`/api/compliance/report?hours=${hours}&format=md`), null);
-    btn.disabled = false;
-    if (span) span.textContent = original;
-    if (!md) { toast('Could not generate the report.', 'error'); return; }
-    try {
-      await navigator.clipboard.writeText(md);
-      toast('Compliance report copied as Markdown.', 'ok');
-    } catch {
-      toast('Could not access the clipboard.', 'error');
-    }
-  },
-};
-
 /* ---- Settings ---- */
 PAGES.settings = {
   async render() {
     const info = await safe(() => V.appInfo(), {});
+    // NYX_ACT decides whether NYX actually rewrites leaking data into
+    // consistent fakes, or only observes and reports it - the product's
+    // core privacy claim, previously reachable only by hand-editing a
+    // settings file and restarting (no API, no UI existed at all).
+    const settingsResp = await safe(() => V.api.get('/api/v1/settings'), { settings: [] });
+    const nyxSpec = (settingsResp.settings || []).find((s) => s.key === 'NYX_ACT');
+    const nyxOn = !!(nyxSpec && nyxSpec.value);
     $('page').innerHTML = `
       <div class="page-intro">Application and engine configuration.</div>
       ${rowsPanel([
@@ -2290,15 +2192,36 @@ PAGES.settings = {
         ['Engine location', `<span style="font-size:11.5px;color:var(--text-2)">${escapeHtml(info.engineRoot || '—')}</span>`, 'settings'],
         ['Dashboard port', '8090', 'globe'],
         ['Launch at startup', badge('Managed by installer', 'ok'), 'download'],
+        ['NYX active protection',
+          badge(nyxOn ? 'On — rewriting leaks into fakes' : 'Off — observing only', nyxOn ? 'ok' : 'off'),
+          'shield'],
       ])}
       <div class="btn-row">
+        <button class="btn" id="setNyxAct">${ICON.shield}<span>${nyxOn ? 'Turn off active protection' : 'Turn on active protection'}</span></button>
         <button class="btn" id="setLogs">${ICON.activity}<span>Open Logs</span></button>
         <button class="btn danger" id="setStop">${ICON.power}<span>Stop Protection</span></button>
       </div>`;
     $('setLogs').onclick = () => V && V.openLogs();
     $('setStop').onclick = () => V && V.stopEngine();
+    $('setNyxAct').onclick = () => toggleNyxAct();
   },
 };
+
+async function toggleNyxAct() {
+  if (!V) return;
+  const r = await safe(() => V.api.get('/api/v1/settings'), { settings: [] });
+  const spec = (r.settings || []).find((s) => s.key === 'NYX_ACT');
+  const turningOn = !(spec && spec.value);
+  const res = await safe(() => V.api.post('/api/v1/settings', { key: 'NYX_ACT', value: turningOn }), null);
+  if (!res || res.error) {
+    toast('Could not change NYX protection' + (res && res.error ? ': ' + res.error : '.'), 'error');
+    return;
+  }
+  toast(turningOn
+    ? 'NYX now rewrites leaking data into consistent fakes instead of only observing it.'
+    : 'NYX is back to observing and reporting only.', 'ok');
+  if (PAGES.settings.render) PAGES.settings.render();
+}
 
 /* ---- About ---- */
 PAGES.about = {
@@ -2514,17 +2437,28 @@ function rpSevClass(s) {
 }
 function rpTech(t) { const m = String(t || '').match(/T\d{4}(?:\.\d{3})?/); return m ? m[0] : ''; }
 
+// Timeline entries the engine actually writes (valkyrie/edr/engine.py's
+// TimelineEntry) carry only kind/summary/timestamp/data - never a top-level
+// title/reason/activity/source. Every real incident's replay was showing the
+// literal word "Event" for every single step because of that mismatch,
+// confirmed against the live database: 16k+ real incidents, every timeline
+// entry shaped {kind, summary, data: {...}}. See timeline-steps.js for the
+// actual label-selection logic (extracted so it can be unit tested).
+
 function normalizeSteps(inc) {
   let tl = (inc && (inc.timeline || inc.events)) || [];
   if (!Array.isArray(tl)) tl = [];
+  const TS = TimelineSteps;
   const steps = tl.map((t) => ({
     t: t.timestamp != null ? t.timestamp : (t.ts != null ? t.ts : t.time),
-    sev: rpSevClass(t.severity),
-    title: t.title || t.reason || t.activity || t.source || 'Event',
-    entity: t.entity || t.target || '',
-    tech: rpTech(t.technique),
-    techLabel: t.technique || '',
-    source: t.source || '',
+    sev: rpSevClass(TS.stepSeverity(t)),
+    kind: t.kind || '',
+    kindLabel: TS.stepKindLabel(t),
+    title: TS.stepTitle(t),
+    entity: TS.stepEntity(t),
+    tech: rpTech(TS.stepTechnique(t)),
+    techLabel: TS.stepTechnique(t),
+    source: TS.stepSource(t),
   }));
   // Ascending by time when timestamps are present.
   if (steps.every((s) => s.t != null)) {
@@ -2568,6 +2502,7 @@ const Replay = {
       <div class="rp-ev" data-sev="${s.sev}" data-i="${i}">
         <span class="rp-node"></span>
         <div class="rp-row1"><span class="rp-time">${escapeHtml(rpTime(s.t) || ('step ' + (i + 1)))}</span>
+          ${s.kindLabel ? `<span class="mono-tag">${escapeHtml(s.kindLabel)}</span>` : ''}
           <span class="rp-ttl">${escapeHtml(s.title)}</span>
           ${s.tech ? `<span class="rp-chip">${escapeHtml(s.tech)}</span>` : ''}</div>
         <div class="rp-desc">${s.entity ? `<span class="m">${escapeHtml(s.entity)}</span>` : ''}${s.source ? `${s.entity ? ' · ' : ''}${escapeHtml(s.source)}` : ''}</div>

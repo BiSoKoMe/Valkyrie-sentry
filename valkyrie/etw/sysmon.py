@@ -113,6 +113,43 @@ def _name(path: str) -> str:
     return (path or "").replace("/", "\\").rsplit("\\", 1)[-1]
 
 
+# --- Sysmon SignatureStatus -> Valkyrie signature-vocabulary -----------------
+# Sysmon's EID 1 carries the code-signature verdict of the binary under
+# observation (`Signature` / `SignatureStatus`), which lets Valkyrie's
+# code-signature rules (`Rule.signed` in behavioral_rules.py:
+# masquerade-unsigned-system-binary, tampered-or-revoked-signature,
+# unsigned-binary-from-drop-zone) fire in REAL TIME on a Sysmon-equipped host,
+# independent of the disk-verify path in signature.py (cached, but only
+# reachable through the ~2s process poller).
+#
+# Sysmon's vocabulary is not Valkyrie's. Map onto the event-side strings
+# `Rule.matches` compares against - "trusted" / "unsigned" / "untrusted".
+# ("not_trusted" is a RULE-side value meaning "unsigned or untrusted", never an
+# event-side one - see behavioral_rules.py Rule.matches.)
+#
+# FAIL CLOSED like everything signature-shaped in this project: any status we
+# do not recognise (Unknown, Timeout, empty, a future value) maps to "unknown",
+# which never satisfies a rule's signature requirement - an unrecognised OS
+# verdict must never be read as "unsigned" and manufacture a detection.
+_SYS_SIG_TRUST = {
+    "valid": "trusted",
+    "trusted": "trusted",
+    "notsigned": "unsigned",
+    "unsigned": "unsigned",
+    "expired": "untrusted",
+    "invalid": "untrusted",
+    "mismatch": "untrusted",
+    "bad digest": "untrusted",
+    "not trusted": "untrusted",
+    "untrusted": "untrusted",
+}
+
+
+def _sysmon_signature_trust(status: str) -> str:
+    """Map a Sysmon `SignatureStatus` onto Valkyrie's trust strings."""
+    return _SYS_SIG_TRUST.get((status or "").strip().lower(), "unknown")
+
+
 # --- per-EID classification (pure) ---
 def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
     """Return a dict of TelemetryEvent kwargs to emit, or None to skip.
@@ -164,8 +201,14 @@ def classify_sysmon(event_id: int, d: dict) -> Optional[dict]:
 
         # The MITRE-mapped IOA rule content layer (32 rules). Its top hit
         # carries the exact ATT&CK technique so the kill-chain gets a real
-        # tactic instead of one inferred from labels.
-        behavior = classify_behavior(name, parent, cmdline, image)
+        # tactic instead of one inferred from labels. Signature state comes
+        # from Sysmon's own SignatureStatus (real time, no disk read), not the
+        # poller-only signature.py path - so the code-signature rules fire on a
+        # Sysmon host independent of the ~2s poller. Fails closed on an
+        # unrecognised status (see _sysmon_signature_trust).
+        behavior = classify_behavior(
+            name, parent, cmdline, image,
+            _sysmon_signature_trust(d.get("SignatureStatus", "")))
         if behavior is not None:
             if severity_rank(behavior["severity"]) > severity_rank(sev):
                 sev = behavior["severity"]

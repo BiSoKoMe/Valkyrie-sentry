@@ -88,6 +88,17 @@ built. A perfect score is not the honest expectation; a *fair* score is.
 Give the VM **no bridged access to your real network** if you can avoid it -
 NAT is fine and safer.
 
+Before provisioning the guest, run this read-only host gate from the repository:
+
+```powershell
+.\tools\vm_lab_preflight.ps1 -AsJson
+```
+
+It must report `"ready_for_live_validation": true`. It verifies a working
+VirtualBox service, the named lab VM, non-bridged networking, a recovery
+snapshot, the installer, and the Tier-B runner. A failed gate is an
+infrastructure failure, not a detection result.
+
 ## Run it (inside the VM)
 
 ```powershell

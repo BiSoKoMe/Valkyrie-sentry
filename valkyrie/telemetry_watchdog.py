@@ -85,6 +85,23 @@ def evaluate_poll_source(spec: PollSourceSpec, now: float, started_at: float,
             "reason": None, "status": status}
 
 
+# Nothing in this codebase holds the GIL for anywhere near this long - the
+# heaviest documented in-process stall (the persistence collector's bounded
+# snapshot, see valkyrie_startup_deafness) is capped at 8s. A measured gap
+# past this line cannot be a scheduling delay inside a live process; on
+# Windows, time.monotonic() keeps advancing through Modern Standby (laptop
+# lid-close sleep), so the first wake after a sleep reports a "stall" equal
+# to the entire sleep duration - minutes to many hours - not a real one.
+SUSPECTED_SUSPEND_GAP_S = 30.0
+
+
+def is_suspend_gap(overrun_seconds: float) -> bool:
+    """True when a monitored wait overran its expected interval by more than
+    any real in-process stall could explain - almost certainly the OS
+    suspended the whole process (sleep/Modern Standby), not a genuine hang."""
+    return overrun_seconds > SUSPECTED_SUSPEND_GAP_S
+
+
 class LoopHeartbeat:
     """Queryable record of the asyncio event loop's own responsiveness.
 
@@ -98,9 +115,19 @@ class LoopHeartbeat:
         self.last_beat_at: float = 0.0
         self.last_drift_seconds: float = 0.0
         self.worst_drift_seconds: float = 0.0
+        self.suspected_suspend_resumes: int = 0
 
     def beat(self, drift: float) -> None:
         self.last_beat_at = time.time()
+        if is_suspend_gap(drift):
+            # The process was asleep, not stuck - it was never actually
+            # blocked on anything while there were no CPU cycles to block
+            # with. Recording the raw gap as a "drift" would permanently
+            # poison worst_drift_seconds with a suspend's length instead of
+            # this loop's own worst real scheduling delay.
+            self.last_drift_seconds = 0.0
+            self.suspected_suspend_resumes += 1
+            return
         self.last_drift_seconds = max(0.0, drift)
         if self.last_drift_seconds > self.worst_drift_seconds:
             self.worst_drift_seconds = self.last_drift_seconds
@@ -118,6 +145,7 @@ class LoopHeartbeat:
             "last_beat_at": self.last_beat_at,
             "last_drift_seconds": self.last_drift_seconds,
             "worst_drift_seconds": self.worst_drift_seconds,
+            "suspected_suspend_resumes": self.suspected_suspend_resumes,
             "stale": stale,
         }
 

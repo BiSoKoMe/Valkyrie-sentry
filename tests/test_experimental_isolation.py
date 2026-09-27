@@ -89,6 +89,20 @@ def main() -> int:
     for route in ("/api/compliance/report", "/api/vpn/status"):
         _check(f"API route {route} removed", f'"{route}"' not in web_src)
 
+    # Checking only server.py let both UI surfaces keep calling /api/vpn/status
+    # long after the route was frozen out: every poll spent a guaranteed 404 and
+    # the Electron privacy page rendered "Encrypted transport (VPN): Not
+    # configured" forever, because the failure fell back to an empty object. A
+    # zombie caller is worse than a leftover route - it answers.
+    ui_files = [_ROOT / "electron" / "src" / "renderer" / "app.js"]
+    ui_files += sorted((_ROOT / "valkyrie" / "web").glob("*.html"))
+    for route in ("/api/compliance/report", "/api/vpn/status"):
+        callers = [f.name for f in ui_files
+                   if f.exists() and route in f.read_text(encoding="utf-8", errors="replace")]
+        _check(f"no UI still calls {route}"
+               + (f" (called by {', '.join(callers)})" if callers else ""),
+               not callers)
+
     print("\n" + "=" * 52)
     if _FAILURES:
         print(f"FAILED: {len(_FAILURES)} check(s)")

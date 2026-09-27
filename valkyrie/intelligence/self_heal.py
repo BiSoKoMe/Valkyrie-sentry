@@ -16,6 +16,7 @@ import time
 from typing import Callable, Optional
 
 from ..config import SELF_HEAL_INTERVAL
+from ..telemetry_watchdog import is_suspend_gap
 
 
 def _should_log_failure(consecutive: int) -> bool:
@@ -181,9 +182,24 @@ class SelfHealing:
 
     def _loop(self) -> None:
         while self._running:
+            t0 = time.monotonic()
             time.sleep(self._interval)
             if not self._running:
                 break
+            overrun = time.monotonic() - t0 - self._interval
+            if is_suspend_gap(overrun):
+                # This thread was just suspended along with the whole process
+                # (laptop lid close / Modern Standby), not merely delayed -
+                # time.sleep() does not return late by minutes on a live,
+                # scheduled thread. Every check_fn would be judging state from
+                # before the gap, which is exactly the failure mode that used
+                # to force-restart the service on the "event_loop" component:
+                # loop_is_alive() compares wall-clock staleness, so the async
+                # heartbeat looks hours-stale to whichever thread asks first
+                # after resume, even though the loop is fine. Skip this one
+                # cycle so the async loop's own ~1s heartbeat gets a chance to
+                # beat again before anything is judged on pre-sleep state.
+                continue
             try:
                 self.check_now()
             except BaseException:

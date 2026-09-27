@@ -25,6 +25,26 @@ The unified privacy/security consequence rule is **implemented and
 synthetically measured, not live validated**. It remains dry-run and
 policy/authority gated.
 
+## Fast review
+
+Valkyrie is a systems-research project, not a feature list. For a quick,
+evidence-first review:
+
+1. Read the [application engineering narrative](docs/APPLICATION_ENGINEERING_NARRATIVE.md)
+   for the problem, design reversals, and personal engineering decisions.
+2. Run the safe, in-memory [provenance demonstration](tools/provenance_demo.py):
+
+   ```powershell
+   python tools/provenance_demo.py
+   ```
+
+3. Inspect the [causal-authority experiment](docs/CAUSAL_AUTHORITY_RESEARCH_PAPER.md)
+   and its [raw clean-Windows evidence](docs/evidence/authority-windows-6113502.json).
+   It reports what the fixed synthetic corpus proves, and what it does not.
+4. Read the [implementation status](docs/IMPLEMENTATION_STATUS_2026-09-07.md)
+   for the release gates that remain open. Those limits are part of the project,
+   not fine print.
+
 ## The research question
 
 Most endpoint products evaluate individual alerts: a process launched, a

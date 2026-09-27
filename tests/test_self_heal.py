@@ -135,6 +135,58 @@ check("raiser marked failed", h5.status()["b"]["ok"] is False)
 check("neighbours stay ok", h5.status()["a"]["ok"] and h5.status()["c"]["ok"])
 
 
+# --- Test 6: a suspend-scale sleep overrun skips that cycle instead of
+#     judging components on pre-sleep state. This is the exact shape that
+#     used to force-restart the whole service on laptop wake: the
+#     "event_loop" component's check reads wall-clock staleness, which looks
+#     hours-stale to whichever thread asks first after an OS suspend, even
+#     though nothing actually hung. See telemetry_watchdog.is_suspend_gap.
+print("\n-- Suspend/resume gap skips one check cycle, not a stall ------")
+import valkyrie.intelligence.self_heal as _sh_mod
+
+_interval = 0.01
+_mono_calls = {"n": 0, "next": 1000.0}
+
+
+def _fake_monotonic():
+    _mono_calls["n"] += 1
+    n = _mono_calls["n"]
+    if n == 1:
+        return 0.0
+    if n == 2:
+        return 1000.0   # ~1000s overrun on iteration 1 -> suspend, must skip
+    _mono_calls["next"] += _interval   # every later pair is exactly interval
+    return _mono_calls["next"]         # apart -> zero overrun -> real check
+
+fired_at = {"n": None}
+
+
+def _check_fn():
+    fired_at["n"] = _mono_calls["n"]
+    h6.stop()
+    return True
+
+
+h6 = SelfHealing(store=None, interval=_interval)
+h6.register("only", _check_fn)
+
+real_monotonic = time.monotonic
+_sh_mod.time.monotonic = _fake_monotonic
+try:
+    h6.start()
+    h6._thread.join(timeout=2.0)
+finally:
+    _sh_mod.time.monotonic = real_monotonic
+    h6.stop()
+
+check("watchdog thread exited after the check fired",
+      not h6._thread.is_alive())
+check("the first real check fired on the cycle AFTER the suspend-scale "
+      "gap (4 monotonic reads: 2 skipped-iteration + 2 real-iteration), "
+      "never on the gap's own cycle (which would be 2)",
+      fired_at["n"] == 4, detail=f"fired_at={fired_at['n']}")
+
+
 # --- Summary ---
 print(f"\n{'=' * 50}")
 print(f"  {PASS} passed  /  {FAIL} failed")

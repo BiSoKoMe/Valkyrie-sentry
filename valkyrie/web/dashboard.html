@@ -824,33 +824,6 @@
         </div>
       </div>
 
-      <!-- Multi-hop VPN -->
-      <div class="sidebar-panel" style="flex:0 0 auto;border-bottom:1px solid var(--border)">
-        <div class="section-hdr">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
-               stroke="var(--text-secondary)" stroke-width="2"
-               stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"/>
-            <path d="M2 12h20M12 2a15.3 15.3 0 010 20M12 2a15.3 15.3 0 000 20"/>
-          </svg>
-          <span class="section-title">Multi-hop VPN</span>
-        </div>
-        <div class="system-body">
-          <div class="info-row">
-            <span>Hop 1</span>
-            <span class="info-val" id="vpn-hop1">—</span>
-          </div>
-          <div class="info-row">
-            <span>Hop 2</span>
-            <span class="info-val" id="vpn-hop2">—</span>
-          </div>
-          <div class="info-row">
-            <span>Kill switch</span>
-            <span class="info-val" id="vpn-ks">—</span>
-          </div>
-        </div>
-      </div>
-
       <!-- System / Telemetry + Zero-log -->
       <div class="sidebar-panel system-panel">
         <div class="section-hdr">
@@ -1369,25 +1342,6 @@ function wireMacButtons() {
   }
 }
 
-// ── VPN Status ────────────────────────────────────────────────────────────
-
-async function loadVpnStatus() {
-  try {
-    const res  = await fetch('/api/vpn/status');
-    const data = await res.json();
-    const h1 = document.getElementById('vpn-hop1');
-    const h2 = document.getElementById('vpn-hop2');
-    const ks = document.getElementById('vpn-ks');
-    if (h1) h1.textContent = data.hop1_conf_exists ? 'configured' : 'not set';
-    if (h2) h2.textContent = data.hop2_conf_exists ? 'configured' : 'not set';
-    // kill_switch_configured only reflects that the PostUp/PreDown iptables
-    // rule is present in the generated config files on disk — it is NOT a
-    // live check that a tunnel is up or that the rule is loaded into the
-    // kernel, which this dashboard cannot verify remotely.
-    if (ks) ks.textContent = data.kill_switch_configured ? 'configured (not verified live)' : 'not configured';
-  } catch (_) {}
-}
-
 // ── Zero-log Status ───────────────────────────────────────────────────────
 
 async function loadZeroLogStatus() {
@@ -1569,7 +1523,6 @@ document.addEventListener('DOMContentLoaded', () => {
   wireTelemetryButton();
   loadMacStatus();
   wireMacButtons();
-  loadVpnStatus();
   loadZeroLogStatus();
   loadIntelligenceStatus();
   wireSystemControl();

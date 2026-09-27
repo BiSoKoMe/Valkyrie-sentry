@@ -863,7 +863,7 @@ class EdrEngine:
         with self._corr_lock:
             existing = self._edr.find_open_incident(
                 entity=det.entity, category=det.category,
-                process_name=det.process_name, within_seconds=self._window)
+                within_seconds=self._window)
             if existing is None:
                 inc = Incident(
                     title=det.title, severity=det.severity, category=det.category,
@@ -1011,19 +1011,10 @@ class EdrEngine:
         # per child process.
         origin = (chain.get("actors") or [actor])[0]
         span = f" across {procs} linked processes" if procs > 1 else ""
-        # entity is the underlying killchain chain_id, NOT the origin's display
-        # name. Found via real-data audit: find_open_incident folds detections
-        # together when EITHER entity OR process_name matches, so giving two
-        # genuinely different chains (different chain_id - killchain's own
-        # union-find already keeps them structurally separate) the same
-        # process_name/entity (the shared origin display name, e.g. an IDE
-        # that is the first-observed actor of many unrelated terminal
-        # sessions) silently re-merged them into one ever-growing incident at
-        # the STORE layer, undoing killchain's own correlation. process_name
-        # is left blank for the same reason - a non-empty value here would
-        # re-open the identical hole through find_open_incident's OTHER
-        # match clause. The human-readable origin name is still fully
-        # available via details["chain"]["actors"] and the title text.
+        # The underlying chain id, rather than the origin display name, is the
+        # correlation entity. That preserves the killchain correlator's
+        # separate structural lineages as separate cases. The title and chain
+        # details retain the human-readable origin.
         chain_det = Detection(
             source="edr.killchain",
             severity=chain["severity"],
@@ -1085,7 +1076,15 @@ class EdrEngine:
         self._bus.subscribe(cb)
 
     def delivery_status(self) -> dict:
-        return self._bus.stats()
+        status = self._bus.stats()
+        queue = self._store.queue_stats()
+        write_errors = self._store.write_errors()
+        status["evidence_delivery"] = {
+            "overall": "DEGRADED" if queue["dropped"] or write_errors else "HEALTHY",
+            "queue": queue,
+            "write_errors": write_errors,
+        }
+        return status
 
     def unsubscribe(self, cb: Callable[[dict], None]) -> None:
         self._bus.unsubscribe(cb)

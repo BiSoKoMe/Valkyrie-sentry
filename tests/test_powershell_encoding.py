@@ -51,8 +51,14 @@ _QUOTE_LIKE = "\u201c\u201d\u2018\u2019"
 
 
 def _scripts() -> list[Path]:
+    # Dot-directories are tooling, not this checkout's source: an agent worktree
+    # under .kilo/ held a stale copy of a script whose em-dash had already been
+    # fixed here, and failed this test against a file no build ever ships. The
+    # named skips above are the same idea, one directory at a time; anything
+    # starting with "." is git-ignored scaffolding by convention.
     return [p for p in _ROOT.rglob("*.ps1")
-            if not any(part in _SKIP_DIRS for part in p.parts)]
+            if not any(part in _SKIP_DIRS or part.startswith(".")
+                       for part in p.relative_to(_ROOT).parts)]
 
 
 def main() -> int:

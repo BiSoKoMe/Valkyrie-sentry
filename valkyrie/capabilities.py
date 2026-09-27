@@ -50,7 +50,7 @@ _CONTRACT = {
                 "privacy-exposure-inference",
                 "policy-gated-request-rewrite",
             ],
-            "independent_host_enforcement": False,
+            "independent_enforcement": False,
             "implementation_status": "experimental-opt-in",
             "evidence": [
                 "tests/test_nyx_rewrite_contract.py",
@@ -76,13 +76,30 @@ _CONTRACT = {
                 "tests/test_edr.py",
             ],
         },
+        {
+            "id": "warden",
+            "name": "Warden",
+            "role": "network-presence-privacy",
+            "owns": [
+                "per-network-identity-management",
+                "tcp-ip-fingerprint-reduction",
+                "local-network-exposure-reduction",
+            ],
+            "independent_enforcement": False,
+            "implementation_status": "foundation",
+            "evidence": [
+                "tests/test_mac.py",
+                "tests/test_mac_identity.py",
+            ],
+        },
     ],
     "excluded_from_release_claims": [
         "unsigned-kernel-driver",
         "fleet-cloud-management",
         "cross-endpoint-correlation",
+        "network-trust-adaptive-posture",
     ],
-    "reviewed_at": "2026-09-07",
+    "reviewed_at": "2026-09-11",
 }
 
 

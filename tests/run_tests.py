@@ -108,6 +108,14 @@ _SAFE = {
     "test_web_api_nonblocking.py": "ASGI clients with a slow fake store",
     "test_thread_resilience.py": "AST scan and workers whose OS work is replaced with errors",
     "test_powershell_encoding.py": "read-only source and PowerShell parser checks",
+    "test_self_heal.py": "in-memory watchdog with fake check/recover callables; no real components",
+    "test_telemetry_watchdog.py": "pure staleness/heartbeat math over fake collector status dicts",
+    "test_quiet_proactor_reset.py": "calls the handler directly with fake loop/context dicts; no real socket",
+    "test_resolver_trust_anchor.py": "temporary paths; subprocess.run monkeypatched, never invoked for real",
+    "test_dns_interceptor_serve_loop.py": "calls _serve_loop directly against a scripted fake socket; no real network",
+    "test_mac.py": "pure address math + mocked subprocess/winreg for the apply/cycle path; no real adapter touched",
+    "test_settings_api.py": "temporary config dir; DATA_DIR + control token monkeypatched, no real settings file touched",
+    "test_persistence_telemetry.py": "in-memory collector with a fake emit sink and monkeypatched snapshot(); no real registry/filesystem access",
 }
 
 # Some unit tests accept a --quick flag to skip optional network downloads.

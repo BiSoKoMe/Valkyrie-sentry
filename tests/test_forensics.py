@@ -5,7 +5,7 @@
   [2] Manifest hashes verify (chain-of-custody integrity round-trip)
   [3] Event slice: only events inside the ±window are captured
   [4] Artifact failure is recorded, not fatal (partial triage)
-  [5] Tamper detection: modified artifact fails verify_bundle
+  [5] Tamper and ZIP-structure detection: altered, undeclared, and duplicate entries fail
   [6] Collection benchmark
 """
 
@@ -110,7 +110,7 @@ def main() -> int:
         finally:
             F.collect_asep_snapshot = real
 
-        print("\n[5] Tamper detection")
+        print("\n[5] Tamper and ZIP-structure detection")
         tampered = tdp / "tampered.zip"
         with zipfile.ZipFile(bundle) as zin, \
              zipfile.ZipFile(tampered, "w") as zout:
@@ -122,6 +122,19 @@ def main() -> int:
         vt = verify_bundle(tampered)
         _check("tampered artifact detected",
                not vt["ok"] and "incident.json" in vt["mismatched"])
+
+        ambiguous = tdp / "ambiguous.zip"
+        with zipfile.ZipFile(bundle) as zin, \
+             zipfile.ZipFile(ambiguous, "w") as zout:
+            for name in zin.namelist():
+                zout.writestr(name, zin.read(name))
+            zout.writestr("undeclared.json", b"{}")
+            zout.writestr("incident.json", zin.read("incident.json"))
+        va = verify_bundle(ambiguous)
+        _check("undeclared and duplicate entries rejected",
+               not va["ok"]
+               and va["unexpected"] == ["undeclared.json"]
+               and va["duplicates"] == ["incident.json"])
 
         print("\n[6] Collection benchmark")
         t0 = time.perf_counter()

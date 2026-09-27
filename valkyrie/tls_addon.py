@@ -319,12 +319,12 @@ class ValkyrieAddon:
 
         # 6. Tracking pixel / beacon paths
         if _is_tracker_path(path):
-            self._block(flow, domain, url, proc, f"tracking pixel/beacon path: {path}", category="tracker_pixel")
+            self._block(flow, domain, url, proc, "tracking pixel/beacon path", category="tracker_pixel")
             return
 
         # 7. Fingerprinting scripts
         if _is_fingerprint_path(path):
-            self._block(flow, domain, url, proc, f"fingerprinting script: {path}", category="fingerprint")
+            self._block(flow, domain, url, proc, "fingerprinting script", category="fingerprint")
             return
 
         # 8. Data exfiltration heuristic - large POST body to a flagged domain
@@ -691,7 +691,7 @@ class ValkyrieAddon:
         )
         self._log(domain, url, proc, "blocked", reason, category=category)
 
-    def _log(self, domain: str, url: str, proc: str, decision: str, reason: str, category: str) -> None:
+    def _log(self, domain: str, _url: str, proc: str, decision: str, reason: str, category: str) -> None:
         event = DnsEvent.now(
             domain       = domain,
             decision     = decision,
@@ -701,7 +701,9 @@ class ValkyrieAddon:
             reason       = reason,
             suspicion    = 0.9 if decision == "blocked" else 0.0,
             raw_category = category,
-            url          = url,
+            # Full URLs are used only while enforcing this request.  The
+            # telemetry store already has the destination domain.
+            url          = "",
         )
         self.store.log(event)
 
