@@ -61,7 +61,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
-from .dns_tunnel import registrable_base
+from .psl import site_of
 from .nyx import first_party_of
 from .persona import Persona, current_persona, persona_for_site
 
@@ -179,7 +179,7 @@ def _resolve_persona(headers: Optional[dict]) -> Persona:
     no Referer (some background pings genuinely omit one)."""
     h = headers or {}
     host = str(h.get("Host") or h.get("host") or "").split(":", 1)[0]
-    third_party = registrable_base(host) if host else ""
+    third_party = site_of(host) if host else ""
     first_party = first_party_of(h)
     return persona_for_site(first_party, third_party)
 

@@ -116,6 +116,7 @@ _SAFE = {
     "test_mac.py": "pure address math + mocked subprocess/winreg for the apply/cycle path; no real adapter touched",
     "test_settings_api.py": "temporary config dir; DATA_DIR + control token monkeypatched, no real settings file touched",
     "test_persistence_telemetry.py": "in-memory collector with a fake emit sink and monkeypatched snapshot(); no real registry/filesystem access",
+    "test_nyx_disclosure_gate.py": "pure nyx/psl calls on fabricated requests; persona store pointed at a temp dir; no proxy, no network",
 }
 
 # Some unit tests accept a --quick flag to skip optional network downloads.

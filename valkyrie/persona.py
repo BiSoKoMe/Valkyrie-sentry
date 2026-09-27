@@ -493,7 +493,12 @@ class PersonaStore:
         cache key or derived seed merely because a domain happened to contain
         the join character - the length prefix pins exactly where one part
         ends and the next begins, independent of what characters it contains.
+
+        Parts are case-folded first: hostnames are case-insensitive, and a key
+        that was not would hand ONE site two unrelated fake identities
+        depending only on how a caller happened to spell it.
         """
+        parts = tuple(str(p).strip().lower() for p in parts)
         site_key = "\x1e".join(f"{len(p)}:{p}" for p in parts)
         with self._lock:
             cached = self._site_personas.get(site_key)

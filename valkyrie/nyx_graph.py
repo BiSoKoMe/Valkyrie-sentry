@@ -25,7 +25,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .dns_tunnel import registrable_base
+from .nyx import UNATTRIBUTED_SUBJECT
+from .psl import site_of
 
 # raw_category / decision -> the channel a tracker was seen on.
 _CHANNEL = {
@@ -43,8 +44,13 @@ _CHANNEL = {
 
 # Nyx's own sentences are "<first_party> sent your <label> to an unrelated
 # server (<dest>)" - a format this module owns, so parsing it back is reliable.
+# A cross-site disclosure whose page withheld its address uses a fixed subject
+# phrase instead of a site; it is parsed to an EMPTY first party, so it counts
+# toward the tracker's hits/categories but never inflates its reach with a
+# made-up "site".
 _SENTENCE = re.compile(
-    r"^(?P<fp>\S+) sent your (?P<cat>.+?) to an unrelated server \((?P<dest>[^)]+)\)")
+    r"^(?P<fp>" + re.escape(UNATTRIBUTED_SUBJECT) + r"|\S+) sent your (?P<cat>.+?)"
+    r" to an unrelated server \((?P<dest>[^)]+)\)")
 _FAKE_SENTENCE = re.compile(
     r"fake data for your (?P<cat>.+?) to (?P<dest>\S+)")
 
@@ -80,13 +86,13 @@ class TrackerGraph:
 
     def observe(self, tracker_host: str, first_party: str = "",
                 channel: str = "", category: str = "", ts: str = "") -> None:
-        base = registrable_base(tracker_host) if tracker_host else ""
+        base = site_of(tracker_host) if tracker_host else ""
         if not base:
             return
         r = self._t.setdefault(base, _Record())
         r.hits += 1
         r.hosts.add(tracker_host.lower())
-        fp = registrable_base(first_party) if first_party else ""
+        fp = site_of(first_party) if first_party else ""
         if fp and fp != base:                 # a tracker on its OWN site is not "reach"
             r.first_parties.add(fp)
         if channel:
@@ -100,7 +106,7 @@ class TrackerGraph:
                 r.last_seen = ts
 
     def reach(self, tracker_host: str) -> int:
-        r = self._t.get(registrable_base(tracker_host))
+        r = self._t.get(site_of(tracker_host))
         return len(r.first_parties) if r else 0
 
     def top_trackers(self, n: int = 10) -> list[dict]:
@@ -142,7 +148,7 @@ def _channel_and_category(rc: str, dec: str, reason: str) -> tuple[str, str, str
     fp = category = ""
     m = _SENTENCE.match(reason or "")
     if m:
-        fp = m.group("fp")
+        fp = "" if m.group("fp") == UNATTRIBUTED_SUBJECT else m.group("fp")
         category = m.group("cat")
     else:
         m = _FAKE_SENTENCE.search(reason or "")

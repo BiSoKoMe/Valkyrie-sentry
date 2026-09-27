@@ -20,20 +20,24 @@ across one corpus in a single pass.
 
 ## Corpus
 
-24 synthetic scenarios: 7 authorized (first-party), 13 unauthorized
-(third-party disclosure), 4 benign (third-party, no personal data). Every
-request is fabricated; nothing here is a live browser capture.
+31 synthetic scenarios: 12 authorized (7 first-party, plus 5 cross-site
+flows the user chose: an OIDC token exchange and authorize redirect, an OAuth
+callback, a link clicked in webmail, and the app's own signed-in backend), 14
+unauthorized (third-party disclosure, one of them the named gap below), and 5
+benign (third-party, no personal data). Every request is fabricated; nothing
+here is a live browser capture. (24 scenarios before 2026-09-24; see the
+disclosure-gate section at the end.)
 
 ## Result
 
 | Metric | Value |
 |---|---:|
-| Authorized flows left byte-identical | 100% (7/7) |
-| Benign flows left byte-identical | 100% (4/4) |
-| Unauthorized disclosures deceived (scored subset) | 91.7% (11/12) |
+| Authorized flows left byte-identical | 100% (12/12) |
+| Benign flows left byte-identical | 100% (5/5) |
+| Unauthorized disclosures deceived (scored subset) | 92.3% (12/13) |
 | Tracking cookie ever entered the act path | never (by design) |
 | Raw sentinel value retained after a claimed fake | never |
-| p99 latency (inspect + fake, per request) | < 0.4 ms |
+| p99 latency (inspect + fake, per request) | < 1 ms |
 
 The one scored-but-undeceived case is `unauth-tracking-cookie`: a
 third-party tracking cookie is deliberately excluded from the rewrite path,
@@ -59,15 +63,16 @@ unauthorized scenario now, not a named gap.
 
 ## Named gaps (not folded into the pass rate)
 
-One scenario is still filed separately rather than averaged into the 91.7%,
+One scenario is still filed separately rather than averaged into the 92.3%,
 because doing so would hide a real, deliberate limitation inside a passing
 number:
 
 - **`gap-no-referer-context`** -- a request with no `Referer`/`Origin`
-  header gives Nyx no first party to compare against, so it stays silent by
-  design (`nyx.first_party_of`). A real device-id disclosure over such a
-  connection is invisible to Nyx today, and there is no proposed fix here --
-  without a first party, there is nothing to judge "third party" against.
+  header AND no Fetch Metadata (an older browser or a native app) gives Nyx
+  no evidence the request crossed sites at all, so it stays silent by design.
+  Narrowed on 2026-09-24: the same disclosure from a current browser, which
+  sends `Sec-Fetch-Site: cross-site`, is now caught and scored as
+  `unauth-no-referer-fetch-metadata` (see below).
 
 ## Limitations
 
@@ -89,3 +94,37 @@ benign flow completes unchanged, within the same sub-millisecond budget
 measured here. That is the "big missing piece is enforcement" gap the
 research plan names -- this scorecard is the mechanism-level prerequisite
 for it, not a replacement for it.
+
+## Follow-up 2026-09-24: the disclosure gate (ADR 0062)
+
+With the settings API, the one-click "active protection" toggle made
+`NYX_ACT` an ordinary user's choice. Running realistic cross-site shapes
+through the real pipeline showed that act mode rewrote the `client_id` or
+authorization `code` of OIDC/OAuth sign-ins (MSAL, Auth0 and Cognito shapes),
+the token in a password-reset link clicked in webmail, a row id in an app's own
+signed-in backend call, and the path of a UUID-named image. Each of those
+breaks the thing the user was doing. The site test itself ("last two labels")
+made `bbc.co.uk` and `tracker.co.uk` the same first party.
+
+`nyx._disclosure()` now decides "is this a third-party disclosure at all" for
+observe and both act paths. It uses the Public Suffix List for "site",
+`Sec-Fetch-Dest: document` for navigations, `Authorization: Bearer` for
+signed-in backends, the protocols' own required parameters for OAuth/OIDC/SAML,
+and `Sec-Fetch-Site: cross-site` to close the no-Referer gap for current
+browsers. Act now rewrites only identifiers the request names as one. Details,
+evidence and the honest boundaries (notably, bounce tracking through top-level
+redirects is left to the blocker layer) are in
+`docs/adr/0062-nyx-disclosure-gate.md`.
+
+The expanded 31-scenario corpus, scored against both versions of `nyx.py`
+(the unmodified HEAD was scored from a scratch copy, measured, not inferred):
+
+| Metric | Before the gate | After |
+|---|---:|---:|
+| Authorized flows left byte-identical | 58.3% (7/12) | 100% (12/12) |
+| Benign flows left byte-identical | 80% (4/5) | 100% (5/5) |
+| Unauthorized disclosures deceived | 84.6% (11/13) | 92.3% (12/13) |
+
+Before the gate, each of the five new cross-site authorized scenarios was
+rewritten, as was the UUID-named image. The Fetch-Metadata version of the old
+gap went through untouched.

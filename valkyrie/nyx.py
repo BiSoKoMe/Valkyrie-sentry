@@ -39,7 +39,13 @@ import re
 from dataclasses import dataclass
 from urllib.parse import parse_qsl, quote, urlsplit, urlunsplit
 
-from .dns_tunnel import registrable_base
+from . import psl as _psl
+from .psl import site_of
+
+# Parse the Public Suffix List now (proxy startup) rather than inside whichever
+# live request happens to be first - the one-time parse is tens of ms, every
+# lookup after it ~10 us.
+_psl.status()
 
 # Nyx runs on EVERY outbound request, so it must stay fast. Personal-data leaks
 # live in small beacon / analytics payloads (a real tracker POST is 1-8 KB); a
@@ -242,13 +248,172 @@ def _host_of(url: str) -> str:
 
 
 def first_party_of(headers) -> str:
-    """Registrable domain of the page that issued the request, from Referer or
-    Origin. Empty string when neither is present - the caller then stays silent
-    (nothing can be judged "third party" without a first party)."""
+    """Site (eTLD+1) of the page that issued the request, from Referer or
+    Origin. Empty string when neither names one (absent, or ``Origin: null``)
+    - see ``_disclosure`` for what happens then."""
     h = _lower_headers(headers)
     ref = h.get("referer") or h.get("origin") or ""
     host = _host_of(ref)
-    return registrable_base(host) if host else ""
+    return site_of(host) if host else ""
+
+
+# --- the disclosure gate ------------------------------------------------------
+# ONE decision, shared by observe (inspect_outbound) and both act paths
+# (fake_outbound, fake_outbound_headers), so the two can never disagree about
+# what counts as a disclosure. It used to be three copies of "Referer/Origin
+# registrable domain != destination", which a 2026-09-24 audit showed was wrong
+# in both directions - mostly in the one that BREAKS things once NYX_ACT is on,
+# which the one-click Settings toggle made an ordinary user's choice rather
+# than a hand-edited config file (full list: docs/adr/0062):
+#
+#   * a top-level navigation (clicking a password-reset or magic link in
+#     webmail) was scored as the webmail "sending" the link's token to the
+#     destination, and ACT rewrote the token - the link stopped working;
+#   * an OAuth/OIDC sign-in (the MSAL / Auth0 / Cognito token exchange a
+#     single-page app does straight from the browser, or the authorize
+#     redirect itself) had its client_id / authorization code rewritten -
+#     "Sign in with Microsoft" failed;
+#   * an app's own authenticated API on another domain (Supabase, an API
+#     gateway) had a row id rewritten - a write silently hit nothing;
+#   * and in the other direction, a tracker on a page whose Referrer-Policy
+#     withholds the page's address was invisible, the scorecard's one named
+#     gap ("gap-no-referer-context").
+#
+# The browser already knows most of this and says so: Fetch Metadata request
+# headers (Sec-Fetch-Site / -Mode / -Dest; Chromium 80+, Firefox 90+, Safari
+# 16.4+) are the browser's own statement of a request's context, and a page's
+# script cannot forge them - every "Sec-" header is a forbidden header name for
+# fetch()/XHR. Requests without them (older clients, native apps) keep the
+# previous Referer/Origin behaviour exactly.
+
+# The sentence subject for a cross-site disclosure whose page withheld its own
+# address. nyx_graph parses sentences back, so it imports this rather than
+# re-typing it.
+UNATTRIBUTED_SUBJECT = "A page that withheld its address"
+
+# Persona key for unattributed disclosures: per-tracker stable (a tracker never
+# sees two different fake ids from the same machine), and never shared across
+# trackers - unlike the bare machine persona, which every tracker would get.
+_UNATTRIBUTED_PERSONA_KEY = "\x00unattributed"
+
+# Parameter sets that DEFINE an identity-protocol message (RFC 6749 / OpenID
+# Connect Core / SAML 2.0 bindings). A request carrying one is the user
+# authenticating to a provider they chose - an authorized disclosure by
+# construction - and rewriting any of it (client_id, code, login_hint) breaks
+# the sign-in. Recognised by the protocol's own REQUIRED parameters, not by a
+# provider list, so a provider Nyx has never heard of is still recognised.
+_OAUTH_GRANTS = frozenset({
+    "authorization_code", "refresh_token", "client_credentials", "password",
+    "implicit",
+})
+
+
+# Everything an authorization RESPONSE's query may carry (RFC 6749 4.1.2 /
+# 4.1.2.1, RFC 9207 iss, OIDC session_state, and the extras Google and MSAL
+# append). The response is only recognised when the query is made of NOTHING
+# else: "code" and "state" alone are ordinary words - a promo code and a US
+# state copied out of a checkout form to a tracker must not be waved through.
+_OAUTH_RESPONSE_KEYS = frozenset({
+    "code", "state", "error", "error_description", "error_uri", "iss",
+    "session_state", "scope", "authuser", "prompt", "hd", "client_info",
+})
+
+
+def _is_identity_protocol(pairs, query: str = "") -> bool:
+    keys = {k.strip().lower(): v for k, v in pairs}
+    if "samlrequest" in keys or "samlresponse" in keys:
+        return True
+    grant = keys.get("grant_type", "").strip().lower()
+    if grant and (grant in _OAUTH_GRANTS or grant.startswith("urn:ietf:params:oauth:grant-type:")
+                  or grant.startswith("urn:openid:params:grant-type:")):
+        return True
+    if "client_id" in keys and "response_type" in keys:          # authorization request
+        return True
+    # Authorization response: a navigation to the redirect_uri, so normally
+    # already exempt via Sec-Fetch-Dest; this covers clients that send no
+    # Fetch Metadata. URL query only, and only a pure response query.
+    try:
+        qkeys = {k.strip().lower() for k, _ in parse_qsl(query, keep_blank_values=True)}
+    except ValueError:
+        qkeys = set()
+    if ("state" in qkeys and ({"code", "error"} & qkeys)
+            and qkeys <= _OAUTH_RESPONSE_KEYS):
+        return True
+    return False
+
+
+@dataclass(frozen=True)
+class _Disclosure:
+    first_party: str        # site of the sending page; "" = page withheld it
+    dest_site: str
+
+
+def _disclosure(url: str, h: dict, first_party_origin: str | None) -> "_Disclosure | None":
+    """Is this request a disclosure to a third party at all? ``h`` is the
+    lower-cased header dict. None means stay silent (and never rewrite).
+
+    Order matters and each step is the browser's or the protocol's own fact,
+    not a guess:
+      1. no destination                      -> silent
+      2. Sec-Fetch-Dest: document            -> silent: a top-level navigation
+         is the user GOING to that site; it becomes the first party. (Frames,
+         images, beacons and fetches are still judged - a tracker iframe is
+         Dest: iframe.)
+      3. Authorization: Bearer / DPoP        -> silent: the request carries the
+         user's own session credential for that server - the app's backend,
+         which the user is signed in to. Basic credentials do NOT qualify; a
+         static write key sent as Basic auth is how some tracker SDKs
+         (RudderStack) authenticate their beacons.
+      4. first party = explicit caller value, else Referer/Origin site
+      5. none of those, but Sec-Fetch-Site: cross-site -> the browser vouches
+         the request crossed sites, only the page's address was withheld:
+         judge it, attributed to UNATTRIBUTED_SUBJECT.
+      6. first party == destination site     -> silent (the user's own site)
+    Identity-protocol messages are excluded by the callers once they have
+    parsed the parameters (``_is_identity_protocol``).
+    """
+    dest_host = _host_of(url)
+    if not dest_host:
+        return None
+    if h.get("sec-fetch-dest", "").strip().lower() == "document":
+        return None
+    auth = h.get("authorization", "").strip().lower()
+    if auth.startswith("bearer ") or auth.startswith("dpop "):
+        return None
+    dest_site = site_of(dest_host)
+    fp = (first_party_origin or "").strip()
+    if fp:
+        fp = site_of(_host_of(fp) or fp)
+    else:
+        fp = first_party_of(h)
+    if not fp:
+        if h.get("sec-fetch-site", "").strip().lower() != "cross-site":
+            return None
+        return _Disclosure(first_party="", dest_site=dest_site)
+    if fp == dest_site:
+        return None
+    return _Disclosure(first_party=fp, dest_site=dest_site)
+
+
+def _id_blob(query: str, body_text: str, pairs) -> str:
+    """Where an UNKEYED identifier may be looked for: the payload (raw query,
+    body, decoded values) - never the scheme/host/path of the URL."""
+    return query + " " + body_text + " " + " ".join(v for _, v in pairs)
+
+
+def _request_pairs(url: str, h: dict, body) -> tuple[list, str, str]:
+    """(key/value pairs from query + body, decoded body text, raw query).
+    Shared by observe and act so both read the request identically."""
+    try:
+        query = urlsplit(url).query
+    except ValueError:
+        query = ""
+    try:
+        query_pairs = parse_qsl(query, keep_blank_values=True)
+    except ValueError:
+        query_pairs = []
+    body_pairs, body_text = _decode_body(body, h.get("content-type", ""))
+    return query_pairs + body_pairs, body_text, query
 
 
 def _lower_headers(headers) -> dict:
@@ -330,31 +495,26 @@ def inspect_outbound(method: str, url: str, headers=None, body=None,
     """Read one outbound request and report any personal data crossing to a
     third party. Pure: same input -> same output, no side effects, never blocks.
     """
-    dest_host = _host_of(url)
-    if not dest_host:
-        return []
-    dest_base = registrable_base(dest_host)
-
     h = _lower_headers(headers)
-    first_party = (first_party_origin or "").strip() or first_party_of(headers)
-    # THIRD-PARTY GATE: no first party to compare, or same registrable domain ->
-    # this is the user talking to their own site. Not a leak. Stay silent.
-    if not first_party or first_party == dest_base:
+    # THIRD-PARTY GATE (see _disclosure): not a disclosure -> the user talking
+    # to their own site, navigating, or using their own signed-in API. Silent.
+    disc = _disclosure(url, h, first_party_origin)
+    if disc is None:
         return []
+    dest_host = _host_of(url)
+    first_party = disc.first_party
 
     # Gather everything readable: query params + parsed body + a flat text blob.
-    try:
-        query_pairs = parse_qsl(urlsplit(url).query, keep_blank_values=True)
-    except ValueError:
-        query_pairs = []
-    body_pairs, body_text = _decode_body(body, h.get("content-type", ""))
-    pairs = query_pairs + body_pairs
+    pairs, body_text, query = _request_pairs(url, h, body)
+    if _is_identity_protocol(pairs, query):
+        return []
     # Scan the DECODED values too - a percent-encoded email (alice%40x.com) is
     # invisible in the raw body text but present once parse_qsl decodes it.
     blob = url + " " + body_text + " " + " ".join(v for _, v in pairs)
 
     seen: set[str] = set()          # one observation per category per request
     out: list[Observation] = []
+    subject = first_party or UNATTRIBUTED_SUBJECT
 
     def add(cat: str, sample: str) -> None:
         if cat in seen:
@@ -365,18 +525,21 @@ def inspect_outbound(method: str, url: str, headers=None, body=None,
             destination_host=dest_host,
             first_party_origin=first_party,
             masked_sample=_mask(sample),
-            sentence=(f"{first_party} sent your {_LABEL[cat]} to an unrelated "
+            sentence=(f"{subject} sent your {_LABEL[cat]} to an unrelated "
                       f"server ({dest_host})"),
         ))
 
     # 1) Advertising / device identifier - keyed id with an id-shaped value,
-    #    or a bare UUID anywhere in the payload.
+    #    or a bare UUID anywhere in the PAYLOAD (query or body). Not the URL
+    #    path: a path ADDRESSES a resource (an S3 upload named by UUID, a REST
+    #    row), it does not carry the user's id - scanning it reported "notion.so
+    #    sent your device ID to s3.amazonaws.com" for an ordinary image.
     for k, v in pairs:
         if _ID_KEY.search(k) and (_UUID.search(v) or _LONG_TOKEN.match(v.strip())):
             add(CAT_IDENTIFIER, v)
             break
     if CAT_IDENTIFIER not in seen:
-        m = _UUID.search(blob)
+        m = _UUID.search(_id_blob(query, body_text, pairs))
         if m:
             add(CAT_IDENTIFIER, m.group(0))
     # ...and in an id-ish request HEADER (a tracker SDK's "X-Device-Id: <uuid>").
@@ -475,24 +638,20 @@ def _personal_values(url, headers, body, first_party_origin=None):
     """The raw third-party personal values to overwrite. Same gate + signals as
     inspect_outbound; returns (category, kind, raw_value) tuples. Used only to
     rewrite them away - the raw value is never logged."""
-    dest_host = _host_of(url)
-    if not dest_host:
-        return []
-    dest_base = registrable_base(dest_host)
     h = _lower_headers(headers)
-    fp = (first_party_origin or "").strip() or first_party_of(headers)
-    if not fp or fp == dest_base:
+    if _disclosure(url, h, first_party_origin) is None:
         return []
-    try:
-        query_pairs = parse_qsl(urlsplit(url).query, keep_blank_values=True)
-    except ValueError:
-        query_pairs = []
-    body_pairs, body_text = _decode_body(body, h.get("content-type", ""))
-    pairs = query_pairs + body_pairs
+    pairs, body_text, query = _request_pairs(url, h, body)
+    if _is_identity_protocol(pairs, query):
+        return []
     blob = url + " " + body_text + " " + " ".join(v for _, v in pairs)
 
     found: list[tuple[str, str, str]] = []
-    # identifier
+    # identifier - ONLY one the request itself names as an id (an id-shaped
+    # key). inspect_outbound also REPORTS an unkeyed UUID in the payload, but
+    # a bare UUID is as often a resource id (a REST row, a project) as a
+    # person's, and rewriting the wrong one corrupts the app's own request -
+    # observe can afford to be broader than act; act cannot.
     idv = None
     for k, v in pairs:
         vs = v.strip()
@@ -500,10 +659,6 @@ def _personal_values(url, headers, body, first_party_origin=None):
             m = _UUID.search(v)
             idv = m.group(0) if m else vs
             break
-    if idv is None:
-        m = _UUID.search(blob)
-        if m:
-            idv = m.group(0)
     if idv:
         found.append((CAT_IDENTIFIER, "", idv))
     # location - the actual lat and lon value strings
@@ -701,15 +856,18 @@ def _site_persona(url, headers, first_party_origin, persona):
     identity is scoped to (first-party, third-party) so two unrelated sites
     embedding the same tracker cannot compare notes on a fake ad_id any more
     than they could on a real one - see persona.py's SITE-SCOPED PERSONAS
-    note. Falls back to the bare machine persona when there is no first party
-    to key on, matching this module's own third-party gate elsewhere."""
+    note. A cross-site disclosure whose page withheld its address is keyed on
+    the tracker alone, so it still gets a per-tracker identity rather than the
+    one machine persona every such tracker would otherwise share."""
     if persona is not None:
         return persona
-    from .persona import persona_for_site
-    dest_host = _host_of(url)
-    dest_base = registrable_base(dest_host) if dest_host else ""
-    fp = (first_party_origin or "").strip() or first_party_of(headers)
-    return persona_for_site(fp, dest_base)
+    from .persona import default_store, persona_for_site
+    disc = _disclosure(url, _lower_headers(headers), first_party_origin)
+    if disc is None:
+        return persona_for_site("", "")
+    if not disc.first_party:
+        return default_store().persona_for(_UNATTRIBUTED_PERSONA_KEY, disc.dest_site)
+    return persona_for_site(disc.first_party, disc.dest_site)
 
 
 # Header names inspect_outbound() itself refuses to scan for an identifier,
@@ -733,17 +891,13 @@ def fake_outbound_headers(method, url, headers=None, body=None, persona=None,
     without special-casing "nothing changed". Pure aside from reading the
     current persona, same as fake_outbound().
     """
-    dest_host = _host_of(url)
-    if not dest_host:
-        return {}, []
-    dest_base = registrable_base(dest_host)
     h = _lower_headers(headers)
-    fp = (first_party_origin or "").strip() or first_party_of(headers)
-    if not fp or fp == dest_base:
+    if _disclosure(url, h, first_party_origin) is None:
         return {}, []
-    if persona is None:
-        from .persona import persona_for_site
-        persona = persona_for_site(fp, dest_base)
+    pairs, _body_text, query = _request_pairs(url, h, body)
+    if _is_identity_protocol(pairs, query):
+        return {}, []
+    persona = _site_persona(url, headers, first_party_origin, persona)
 
     changed: dict = {}
     for key, value in dict(headers or {}).items():

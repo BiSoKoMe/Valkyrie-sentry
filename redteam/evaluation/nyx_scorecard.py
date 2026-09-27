@@ -47,6 +47,14 @@ _RAW_LAT, _RAW_LON = "40.7128", "-74.0060"
 
 _JSON_HDR = {"Content-Type": "application/json"}
 _FORM_HDR = {"Content-Type": "application/x-www-form-urlencoded"}
+# Fetch Metadata exactly as a current browser sends it (a page script cannot
+# set or forge any Sec- header).
+_FETCH_CORS = {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors",
+               "Sec-Fetch-Dest": "empty"}
+_FETCH_NAVIGATE = {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate",
+                   "Sec-Fetch-Dest": "document", "Sec-Fetch-User": "?1"}
+_IDP_TOKEN = "https://login.idp.example/oauth2/v2.0/token"
+_IDP_AUTHORIZE = "https://login.idp.example/oauth2/v2.0/authorize"
 
 
 @dataclass(frozen=True)
@@ -110,6 +118,32 @@ def build_scenarios() -> tuple[Scenario, ...]:
         _hdr(FIRST_PARTY, **_JSON_HDR),
         json.dumps({"latitude": _RAW_LAT, "longitude": _RAW_LON}).encode())
 
+    # --- AUTHORIZED, but CROSS-SITE: the user deliberately talking to a
+    # party other than the page -- signing in with an identity provider,
+    # following a link, using the app's own signed-in backend. Every one of
+    # these carries an id-shaped value to a different site, and every one was
+    # rewritten by NYX_ACT before the 2026-09-24 disclosure gate (see
+    # nyx._disclosure), which broke the sign-in / link / write in question.
+    add("auth-oidc-token-exchange", "login", "authorized", "POST", _IDP_TOKEN,
+        {"Origin": FIRST_PARTY, **_FORM_HDR, **_FETCH_CORS},
+        (f"client_id={_RAW_ADID}&grant_type=authorization_code&code=0.AXYZ"
+         f"&redirect_uri=https%3A%2F%2Fapp.example%2Fcb&code_verifier=v1").encode())
+    add("auth-oidc-authorize", "login", "authorized", "GET",
+        f"{_IDP_AUTHORIZE}?client_id={_RAW_ADID}&response_type=code&scope=openid"
+        f"&login_hint={_RAW_EMAIL}&state=s1",
+        {"Referer": FIRST_PARTY, **_FETCH_NAVIGATE}, b"")
+    add("auth-oauth-callback", "login", "authorized", "GET",
+        f"{FIRST_PARTY}/callback?code={_RAW_ADID}&state=s1",
+        {"Referer": _IDP_AUTHORIZE, **_FETCH_NAVIGATE}, b"")
+    add("auth-emailed-link", "login", "authorized", "GET",
+        f"https://accounts.service.example/reset?token={_RAW_ADID}",
+        {"Referer": "https://mail.webmail.example/", **_FETCH_NAVIGATE}, b"")
+    add("auth-signed-in-backend", "sync", "authorized", "PATCH",
+        f"https://proj.baas.example/rest/v1/todos?id=eq.{_RAW_ADID}",
+        {"Origin": FIRST_PARTY, **_JSON_HDR, **_FETCH_CORS,
+         "Authorization": "Bearer eyJhbGciOiJIUzI1NiJ9.e30.sig"},
+        json.dumps({"owner_email": _RAW_EMAIL, "done": True}).encode())
+
     # --- UNAUTHORIZED: the same personal-data shapes, to an unrelated third
     # party. This is the disclosure Nyx exists to catch.
     add("unauth-adid", "background", "unauthorized", "POST", THIRD_PARTY,
@@ -142,6 +176,14 @@ def build_scenarios() -> tuple[Scenario, ...]:
         f"{THIRD_PARTY}?idfa={_RAW_ADID}", {"Referer": FIRST_PARTY}, b"")
     add("unauth-multi-tab", "sync", "unauthorized", "POST", THIRD_PARTY,
         _hdr(SIBLING_EMBED), f"adid={_RAW_ADID}".encode())
+    # The page's Referrer-Policy withheld its address (no Referer, Origin:
+    # null), but a current browser still vouches, via Fetch Metadata, that
+    # the request crossed sites. This used to be the named gap below; it is
+    # scored like any other disclosure now.
+    add("unauth-no-referer-fetch-metadata", "background", "unauthorized", "GET",
+        f"{THIRD_PARTY}?device_id={_RAW_ADID}",
+        {"Origin": "null", "Sec-Fetch-Site": "cross-site",
+         "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Dest": "image"}, b"")
 
     # --- BENIGN: cross-site, but carrying nothing personal. Must stay silent
     # and untouched -- flagging these is the false-positive failure mode.
@@ -151,13 +193,21 @@ def build_scenarios() -> tuple[Scenario, ...]:
         f"{THIRD_PARTY}?q=weather", {"Referer": FIRST_PARTY}, b"")
     add("benign-upload-large", "upload", "benign", "POST", THIRD_PARTY,
         _hdr(FIRST_PARTY), b"y" * 4096)
+    # An ordinary image whose FILE NAME is a UUID (a user upload on a CDN).
+    # The path addresses a resource; it is not the user's id. This was
+    # reported as "sent your device ID" -- and rewritten, breaking the image.
+    add("benign-uuid-asset-path", "upload", "benign", "GET",
+        f"https://cdn.assets.example/uploads/{_RAW_ADID}.jpg",
+        {"Referer": FIRST_PARTY, "Sec-Fetch-Site": "cross-site",
+         "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Dest": "image"}, b"")
     # This one is NOT benign: a real device id, to a real third party. It is
     # filed as "unauthorized" and expected to survive as a named structural
     # gap (see structural_gaps in the report) rather than folded into
     # "benign" traffic, where an unbroken request would misleadingly read as
-    # a pass. Without a Referer/Origin, Nyx has no first party to compare
-    # against and stays silent by design (see nyx.first_party_of) -- honest,
-    # but it means this exact disclosure is invisible to the mechanism.
+    # a pass. No Referer/Origin AND no Fetch Metadata -- an older browser or
+    # a native app -- leaves Nyx no evidence the request crossed sites at
+    # all, so it stays silent rather than guess. (The same disclosure from a
+    # current browser is scored above as unauth-no-referer-fetch-metadata.)
     add("gap-no-referer-context", "background", "unauthorized", "POST",
         THIRD_PARTY, _FORM_HDR, f"adid={_RAW_ADID}".encode())
     add("benign-first-party-idlike", "login", "benign", "POST",
@@ -230,8 +280,9 @@ def score(scenarios: Iterable[Scenario]) -> dict:
     # misleadingly read as a failure or get averaged away and hidden inside a
     # passing aggregate.
     _GAP_REASONS = {
-        "gap-no-referer-context": "no Referer/Origin means no first party to "
-            "compare against; Nyx stays silent by design rather than guess",
+        "gap-no-referer-context": "no Referer/Origin and no Fetch Metadata (an "
+            "older browser or a native app) leaves no evidence the request "
+            "crossed sites; Nyx stays silent by design rather than guess",
     }
     structural_gaps = [r for r in unauthorized_all if r.scenario_id in _GAP_REASONS]
     unauthorized = [r for r in unauthorized_all if r not in structural_gaps]

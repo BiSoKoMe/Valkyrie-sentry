@@ -298,9 +298,18 @@ def _build_nyx() -> dict:
         trackers, tracker_summary = [], {}
 
     s = store.stats()
+    try:
+        from ..psl import status as _psl_status
+        site_list = _psl_status()
+    except Exception as exc:
+        site_list = {"loaded": False, "error": repr(exc)}
     return {
         "watched_24h":     s.get("total_24h", 0),
         "mode":            "acting" if acting else "watching",
+        # Whether the third-party gate is using the real Public Suffix List
+        # or the degraded last-two-labels fallback (a build missing the data
+        # file) - so the degraded state is visible, never silent.
+        "site_list":       site_list,
         "leak_count":      len(leaks),
         "leaks":           leaks[:50],   # most recent first (recent_events is DESC)
         "fake_count":      len(faked),
